@@ -120,7 +120,7 @@ Native mobile · load testing · non-GitHub SCM integrations beyond CLI + API ke
 
 ## 8. Open questions
 
-1. Which two open-source apps for the benchmark? (Candidates: RealWorld "Conduit" implementation, an OSS e-commerce storefront — decide in M0 on license, stack, and seedability.)
+1. ~~Which two open-source apps for the benchmark?~~ **Resolved (ADR-0020):** RealWorld Conduit (Angular + Nitro/Prisma/Zod) first, in M0; Medusa second, in M3, confirmed by a spike at M3 start.
 2. **Chromium sandbox on Lambda** (decision gate) plus packaging and startup-hygiene overhead — spike in M1; outcome selects Lambda or Fargate for hosted runs.
 3. Clerk client-only auth in a Next.js static export — proven by the M7 skeleton task.
 4. Pixel-diff baselines for deterministic visual checks: where baseline images live (repo vs artifact store) — decide in M2.
