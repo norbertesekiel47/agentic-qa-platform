@@ -27,3 +27,5 @@ Trigger option 1 with install option 1: `.claude/hooks/fallow-gate.sh` is upstre
 
 ## Amendment (2026-09-28)
 CI now runs `fallow audit` on every pull request as the required `fallow` check (`.github/workflows/ci.yml`, ADR-0019). This covers people and other agents, not only Claude Code. The Action is pinned by commit SHA (v3.30.0) and the CLI through its `version` input (3.30.0). When the dashboard pins `fallow` in `package.json` (M7), keep the two equal, or drop the `version` input so `package.json` decides. Upgrading fallow now also means updating both pins in the workflow.
+
+The ignore for vendored benchmark apps is `bench/apps/**` rather than `bench/**`, set in `.fallowrc.json`. Only the vendored apps are third-party; the harness around them is ours (ADR-0021).

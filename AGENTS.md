@@ -71,6 +71,7 @@ pnpm -C apps/dashboard gen:client   # regenerate TS client from OpenAPI
 - **End-of-turn scan:** the whole tree is re-checked for the refused patterns, which catches files written by scripts or other tools; `python3 .claude/hooks/policy_guard.py --scan` runs the same scan (exit 1 on violations). Other agents don't run Claude Code hooks, but the rules still apply to them.
 - **fallow gate (ADR-0018):** before `git commit` or `git push`, `.claude/hooks/fallow-gate.sh` runs `fallow audit` and blocks a `fail` verdict (dead code, duplication or complexity that the change introduces). Agents without the hook run `fallow audit --format json --quiet --explain` before committing and fix any `fail`. Fix findings; `fallow-ignore` comments are suppressions under rule 1.
 - **CI (ADR-0019):** every pull request must pass `guardrails` (guard tests, lint, types, `--scan`), `secrets` (gitleaks over full history) and `fallow` (`fallow audit`). `main` accepts changes only through pull requests with those checks green, for admins too. A new CI job must also be added to the required checks.
+- **Vendored apps (ADR-0021):** `bench/apps/` holds third-party code with planted bugs, so policy_guard and fallow skip it. gitleaks still scans it: add a `file:rule:line` entry to `.gitleaksignore` only for an upstream finding you have reviewed and confirmed is not a real secret. Everything else under `bench/` is ours and fully policed.
 - Tests: `python3 -m unittest discover -s .claude/hooks`.
 
 ## 6. Project-specific guardrails
