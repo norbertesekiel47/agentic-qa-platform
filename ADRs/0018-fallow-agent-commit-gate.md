@@ -24,3 +24,6 @@ Trigger option 1 with install option 1: `.claude/hooks/fallow-gate.sh` is upstre
 - M0 vendors third-party benchmark apps with planted bugs under `bench/`, possibly the first TS/JS in the repo. Before committing them, add `bench/**` to fallow's `ignorePatterns` (a config change the user approves), or the gate will judge third-party code and the planted bugs.
 - At the M7 dashboard scaffold: pin `fallow` as an exact devDependency (the Action installs the version pinned in `package.json`, keeping CI and local runs on one scanner), and generate `.fallowrc.json` with `fallow recommend` (a config change, so the user approves the initial bar). Keep the global install at the same version, because the gate prefers `PATH`.
 - Upgrading fallow means re-copying the gate script from the new tag, re-verifying it, and updating this ADR's version and hash.
+
+## Amendment (2026-09-28)
+CI now runs `fallow audit` on every pull request as the required `fallow` check (`.github/workflows/ci.yml`, ADR-0019). This covers people and other agents, not only Claude Code. The Action is pinned by commit SHA (v3.30.0) and the CLI through its `version` input (3.30.0). When the dashboard pins `fallow` in `package.json` (M7), keep the two equal, or drop the `version` input so `package.json` decides. Upgrading fallow now also means updating both pins in the workflow.
