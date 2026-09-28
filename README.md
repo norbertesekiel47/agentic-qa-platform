@@ -72,4 +72,4 @@ aqa report
 
 ## License
 
-Apache-2.0.
+Apache-2.0; see [LICENSE](LICENSE) (ADR-0016).
