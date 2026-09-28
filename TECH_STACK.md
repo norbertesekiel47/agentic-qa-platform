@@ -81,7 +81,7 @@ Notes:
 | Dashboard hosting | S3 + CloudFront (Next.js static export; ADR-0017) |
 | Keys | KMS customer-managed key (BYOK envelope encryption) |
 | Identity | Clerk (external) |
-| CI for this repo | GitHub Actions (OIDC to AWS for deploys — no long-lived AWS keys) |
+| CI for this repo | GitHub Actions on GitHub-hosted runners; runner label read from repo variable `CI_RUNNER`, so moving to Blacksmith once the repo is in an organization needs no workflow edit (ADR-0019). OIDC to AWS for deploys — no long-lived AWS keys |
 | Observability | CloudWatch (logs/metrics/alarms), LangSmith (non-customer traces) |
 
 ## 5. AWS services and cost

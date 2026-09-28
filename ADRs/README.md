@@ -23,7 +23,8 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | [0015](0015-benchmark-design.md) | Benchmark on real OSS apps with planted bugs and benign changes | Accepted (amended 2026-09-27) |
 | [0016](0016-build-order-and-license.md) | Core-first build order; Apache-2.0 | Accepted |
 | [0017](0017-dashboard-hosting-static-export.md) | Dashboard hosting: Next.js static export on S3 + CloudFront | Accepted |
-| [0018](0018-fallow-agent-commit-gate.md) | fallow as the TypeScript codebase-intelligence gate, enforced at agent commit/push | Accepted |
+| [0018](0018-fallow-agent-commit-gate.md) | fallow as the TypeScript codebase-intelligence gate, enforced at agent commit/push | Accepted (amended 2026-09-28) |
+| [0019](0019-ci-switchable-runner.md) | CI on GitHub Actions with a switchable runner (Blacksmith-ready) | Accepted |
 
 ## Template
 

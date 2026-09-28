@@ -573,6 +573,18 @@ class ContractTests(GuardTestCase):
         )
         self.assert_allowed(result)
 
+    def test_internal_error_fails_open_visibly(self) -> None:
+        # A malformed tool_input crashes the guard: exit 1 is non-blocking, not a refusal.
+        payload = {
+            "tool_name": "Bash",
+            "tool_input": "not a mapping",
+            "cwd": str(self.project),
+        }
+        result = self.run_mode("", payload)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("policy_guard.py failed open", result.stderr)
+        self.assertIn("Traceback", result.stderr)
+
     def test_other_tools_pass_through(self) -> None:
         self.assert_allowed(
             self.run_hook("Read", {"file_path": str(self.project / "a.py")})

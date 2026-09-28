@@ -86,8 +86,9 @@ import sys
 from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 
 # --- scope ---------------------------------------------------------------------
@@ -458,7 +459,7 @@ def shorten(line: str, limit: int = 120) -> str:
     return line if len(line) <= limit else line[: limit - 1] + "…"
 
 
-@lru_cache(maxsize=None)
+@cache
 def adr_exists(project: Path, number: str) -> bool:
     return any((project / "ADRs").glob(f"{number}-*.md"))
 
@@ -917,9 +918,16 @@ def main(argv: list[str]) -> int:
     return pre_tool_use(payload)
 
 
+def fail_open(
+    kind: type[BaseException], error: BaseException, trace: TracebackType | None
+) -> None:
+    """Uncaught errors exit 1, which Claude Code treats as non-blocking: say so."""
+    sys.stderr.write(
+        "policy_guard.py failed open (the tool call proceeds unchecked):\n"
+    )
+    sys.__excepthook__(kind, error, trace)
+
+
 if __name__ == "__main__":
-    try:
-        sys.exit(main(sys.argv))
-    except Exception as error:
-        sys.stderr.write(f"policy_guard.py failed open: {error!r}\n")
-        sys.exit(1)
+    sys.excepthook = fail_open
+    sys.exit(main(sys.argv))
