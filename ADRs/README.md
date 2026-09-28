@@ -25,6 +25,7 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | [0017](0017-dashboard-hosting-static-export.md) | Dashboard hosting: Next.js static export on S3 + CloudFront | Accepted |
 | [0018](0018-fallow-agent-commit-gate.md) | fallow as the TypeScript codebase-intelligence gate, enforced at agent commit/push | Accepted (amended 2026-09-28) |
 | [0019](0019-ci-switchable-runner.md) | CI on GitHub Actions with a switchable runner (Blacksmith-ready) | Accepted |
+| [0020](0020-benchmark-apps-conduit-medusa.md) | Benchmark apps: RealWorld Conduit first, Medusa second | Accepted |
 
 ## Template
 

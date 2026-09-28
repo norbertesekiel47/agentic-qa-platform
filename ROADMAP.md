@@ -8,7 +8,7 @@ Last updated: 2026-09-27 (revised after external review). **Core first, then Saa
 - **Release 1.0 — "SaaS"** after M8.
 
 ## M0 — Benchmark pilot (development only)
-- Choose the two open-source apps (license, realistic flows, easy seeding); vendor **the first** under `bench/apps/`.
+- Choose the two open-source apps (license, realistic flows, easy seeding); vendor **the first** under `bench/apps/`. *Chosen (ADR-0020): Conduit first, Medusa at M3.*
 - Feature-flag harness and ground-truth manifest format (`bench/manifest.v1.json`, keyed by case ID).
 - **Pilot:** ~5 planted bugs + 2 benign UI changes on one app, with specs written to the expectation-coverage rules (probes where UI alone can't establish a clause). Pilot cases are dev-only.
 - **Exit:** pilot cases toggle reliably; specs pass a dry compile-rules review; apps run via `docker compose`.
