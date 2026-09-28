@@ -95,8 +95,10 @@ from typing import Any
 
 # Project-relative directories that are never checked: the guard's own tests
 # quote every pattern, .scratch/ is gitignored local scratch space (AGENTS.md
-# rule 9), and the dashboard's API client is generated (pnpm gen:client).
-EXEMPT_DIRS = (".claude/hooks", ".scratch", "apps/dashboard/src/client")
+# rule 9), the dashboard's API client is generated (pnpm gen:client), and
+# bench/apps/ holds vendored third-party apps whose planted bugs are the point
+# (ADR-0021; gitleaks still scans it for secrets).
+EXEMPT_DIRS = (".claude/hooks", ".scratch", "apps/dashboard/src/client", "bench/apps")
 
 # Prose quotes the rule 1 and 2 patterns when it describes the rules.
 DOC_SUFFIXES = frozenset({".md", ".mdx", ".markdown", ".rst", ".txt", ".adoc"})
