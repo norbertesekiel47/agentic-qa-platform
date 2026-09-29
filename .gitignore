@@ -9,3 +9,6 @@ __pycache__/
 
 # fallow's machine-local analysis cache
 .fallow/
+
+# The maintainer's personal workflow notes, not project docs
+/WORKFLOW.md
