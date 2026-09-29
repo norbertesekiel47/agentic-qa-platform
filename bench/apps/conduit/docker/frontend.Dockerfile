@@ -10,3 +10,8 @@ RUN bun install --frozen-lockfile --ignore-scripts \
 FROM nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist/angular-conduit/browser /usr/share/nginx/html
+# Benchmark flags (ADR-0022): index.html is rendered from this pristine copy on
+# every start, with the active flag ids from BENCH_FLAGS.
+RUN mv /usr/share/nginx/html/index.html /usr/share/nginx/index.template.html
+COPY --chmod=0755 docker/bench-flags.sh /usr/local/bin/bench-flags
+COPY --chmod=0755 docker/frontend-flags.sh /docker-entrypoint.d/40-bench-flags.sh

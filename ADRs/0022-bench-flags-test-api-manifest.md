@@ -60,3 +60,8 @@ Recreating both Conduit containers with `docker compose up -d --force-recreate -
 - **The spec `reset` hook works over HTTP,** and `docker compose restart backend` remains a full reset too.
 - **Re-vendoring upstream** means re-applying our additions and the planted edits, as README "Updating upstream" already says for the four upstream changes.
 - **Medusa (M3)** uses the same contract: `BENCH_FLAGS`, `/test-api/*` on its origin, and cases in the same manifest.
+
+## Amendment (2026-09-28): switch time and the self-test flag
+- **Switching now takes 2.67 s** (median of 20 verified switches, range 2.62–2.87 s), down from 6.7 s. Both health checks poll every 250 ms while starting (`start_interval`) instead of waiting for the 2 s interval.
+- **`0000` is reserved for the harness self-test.** `flags.py selftest` alternates it with the clean app and verifies both tiers each time. No app code checks it, so it proves delivery only; each case's own on/off check proves its planted change. The manifest validator rejects `0000` for cases.
+- **Every switch forces a recreate** (`--force-recreate`): Compose would otherwise skip containers whose configuration is unchanged, and the database would not be reseeded. The harness checks that both container IDs changed.

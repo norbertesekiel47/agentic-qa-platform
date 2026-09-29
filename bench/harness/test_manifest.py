@@ -249,6 +249,12 @@ class CaseFieldTest(ManifestTestCase):
             "flag 'k3q9' is used by conduit-benign-001, conduit-bug-001",
         )
 
+    def test_selftest_flag_is_reserved(self) -> None:
+        self.assert_error(
+            self.mutate("conduit-bug-001", flag="0000"),
+            "conduit-bug-001: flag '0000' is reserved for the harness self-test",
+        )
+
     def test_summary_is_one_nonempty_line(self) -> None:
         self.assert_error(
             self.mutate("conduit-bug-001", summary="  "), "conduit-bug-001: summary"

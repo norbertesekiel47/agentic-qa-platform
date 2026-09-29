@@ -15,4 +15,11 @@ Planted bugs and benign UI changes in vendored open-source apps, used to measure
 python3 bench/harness/manifest.py                   # validate the manifest and the split freeze
 python3 bench/harness/manifest.py --split-hash      # print the hash after a deliberate split change
 python3 -m unittest discover -s bench/harness       # harness tests (CI runs these in guardrails)
+
+python3 bench/harness/flags.py set <case-id>        # switch the case's app to that case (recreates, reseeds, verifies)
+python3 bench/harness/flags.py clean <app>          # the clean app
+python3 bench/harness/flags.py show <app>           # which case is on; fails if the tiers disagree
+python3 bench/harness/flags.py selftest <app>       # alternate the reserved flag 0000 and clean, 10 cycles
 ```
+
+The flag commands need the app's stack built (`docker compose build` in `apps/<app>/`). The self-test proves flag delivery to both tiers; each case's own on/off check proves its planted change.

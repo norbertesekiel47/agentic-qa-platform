@@ -1,6 +1,9 @@
 # Conduit benchmark app (ADR-0020). From this directory: docker compose up --build --wait
 # The app is served at http://127.0.0.1:4100, bound to loopback only.
 # Reset the app state: docker compose restart backend
+# Switch benchmark cases with bench/harness/flags.py (ADR-0022). It sets BENCH_FLAGS
+# (comma-separated opaque flag ids; empty = the clean app) and recreates both
+# containers. A plain `docker compose up` takes BENCH_FLAGS from your shell.
 name: conduit-bench
 
 services:
@@ -14,6 +17,7 @@ services:
     environment:
       # Fixture signing key for a local, throwaway app; not a secret.
       JWT_SECRET: conduit-bench-jwt-fixture
+      BENCH_FLAGS: ${BENCH_FLAGS:-}
     tmpfs:
       - /data
     healthcheck:
@@ -21,11 +25,16 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+      # Poll fast while starting, so a case switch isn't gated on the 2 s interval.
+      start_period: 30s
+      start_interval: 250ms
 
   frontend:
     build:
       context: .
       dockerfile: docker/frontend.Dockerfile
+    environment:
+      BENCH_FLAGS: ${BENCH_FLAGS:-}
     ports:
       - "127.0.0.1:4100:80"
     depends_on:
@@ -36,3 +45,6 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+      # Poll fast while starting, so a case switch isn't gated on the 2 s interval.
+      start_period: 30s
+      start_interval: 250ms
