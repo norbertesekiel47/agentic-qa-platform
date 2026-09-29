@@ -97,3 +97,17 @@ pnpm -C apps/dashboard gen:client   # regenerate TS client from OpenAPI
 - Docs and ADRs updated.
 - UI changes: before/after screenshots at 390px and 1440px.
 - Cost impact stated if relevant.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `norbertesekiel47/agentic-qa-platform`, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: a root `CONTEXT.md` glossary (created lazily), and ADRs in `ADRs/`, not `docs/adr/`. See `docs/agents/domain.md`.
