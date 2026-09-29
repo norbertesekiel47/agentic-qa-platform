@@ -7,7 +7,7 @@ Versions are the latest stable releases as of **2026-09-27** (checked on PyPI/np
 | Concern | Choice | Version | Why |
 |---|---|---|---|
 | Language | Python | 3.14 | Matches existing tooling; flagship in the language most AI-engineer postings require (ADR-0005) |
-| Package/env | uv | 0.11.x | Fast, lockfile-based |
+| Package/env | uv, and its build backend `uv_build` | 0.11.x | Fast, lockfile-based; one workspace (ADR-0027) |
 | Browser automation | Playwright for Python | 1.63.0 | Accessibility snapshots, tracing, robust locators |
 | Agent orchestration | LangGraph | 1.2.12 | Run graph and checkpointing (interrupts deferred past v1; ADR-0006) |
 | Checkpointer | Local runs (M1): LangGraph's in-memory saver. Uploaded and hosted runs (M4 onward): a custom `BaseCheckpointSaver` over our API | — | Runners have no DB access (ADR-0008) |

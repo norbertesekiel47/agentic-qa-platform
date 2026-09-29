@@ -1,0 +1,87 @@
+# The uv workspace root (ADR-0027). A virtual project: `uv sync` installs its
+# dependencies (every workspace member) and the dev group, and never builds the
+# root itself. Versions are pinned to TECH_STACK.md §1.
+[project]
+name = "aqa-workspace"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = ["aqa-bench-harness", "aqa-cli", "aqa-core", "aqa-runner"]
+
+[dependency-groups]
+dev = [
+    "hypothesis==6.168.2",
+    "mypy==2.3.1",
+    "pytest==9.1.1",
+    "respx==0.23.1",
+    "ruff==0.16.9",
+    "vcrpy==8.3.0",
+]
+
+[tool.uv]
+package = false
+required-version = ">=0.11.15,<0.12"
+# Never install litellm, not even as a transitive dependency: its PyPI releases
+# were compromised in March 2026, and we vendor its price map instead (ADR-0007
+# amendment). No version is below 0, so any resolution that pulls it in fails.
+constraint-dependencies = ["litellm<0"]
+
+[tool.uv.workspace]
+members = ["packages/*", "bench/harness"]
+
+# Shared by every member (uv applies root sources workspace-wide).
+[tool.uv.sources]
+aqa-bench-harness = { workspace = true }
+aqa-cli = { workspace = true }
+aqa-core = { workspace = true }
+aqa-runner = { workspace = true }
+
+# The tool settings below only point the tools at our code (ADR-0027). The
+# thresholds and the Ruff rule set belong to CONSTRAINTS.md (#59).
+
+[tool.ruff]
+target-version = "py314"
+# The vendored benchmark apps are third-party code (ADR-0021), skipped even
+# when a path inside them is passed explicitly.
+extend-exclude = ["bench/apps"]
+force-exclude = true
+
+[tool.ruff.per-file-target-version]
+# Code that runs on interpreters older than the workspace's 3.14 must not be
+# rewritten into 3.14-only syntax (such as PEP 758's unparenthesized except).
+# The guard runs on whatever python3 Claude Code finds, so it keeps Ruff's
+# default (3.10); toggle_checks.py runs in the checks image's Python 3.12.
+".claude/hooks/**" = "py310"
+"bench/harness/**" = "py312"
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+files = ["packages", "bench/harness", ".claude/hooks"]
+exclude = ["^bench/apps/"]
+# Module names come from these bases, not from the directory layout: each
+# package's src, and the script directories whose modules import each other by
+# bare name. Package tests sit outside every base, so they are named by their
+# path (packages.cli.tests.test_version) and may share a basename.
+explicit_package_bases = true
+mypy_path = [
+    "packages/core/src",
+    "packages/runner/src",
+    "packages/cli/src",
+    "bench/harness",
+    ".claude/hooks",
+]
+
+[tool.pytest]
+testpaths = ["packages", "bench/harness"]
+# importlib mode lets test files in different packages share a basename
+# (pytest's advice for new projects). The harness's tests import each other by
+# bare name, as under unittest, so its directory is on the path, and namespace
+# resolution imports each of its modules once, under that name.
+addopts = ["--import-mode=importlib"]
+consider_namespace_packages = true
+pythonpath = ["bench/harness"]
+# pytest's defaults, plus the vendored apps (ADR-0021).
+norecursedirs = [
+    "*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}",
+    "bench/apps",
+]
