@@ -12,7 +12,7 @@ Last updated: 2026-09-27 (revised after external review). **Core first, then Saa
 - Feature-flag harness and ground-truth manifest format (`bench/manifest.v1.json`, keyed by case ID).
 - **Pilot:** ~5 planted bugs + 2 benign UI changes on one app, with specs written to the expectation-coverage rules (probes where UI alone can't establish an expectation). Pilot cases are dev-only.
 - **Exit:** pilot cases toggle reliably; specs pass a dry compile-rules review; apps run via `docker compose`.
-  *Met 2026-09-28:* 7 dev-split pilot cases (5 bugs, 2 benign) in `bench/manifest.v1.json`, proved by `bench/harness/toggle.py`; 5 specs with `bench/apps/conduit/qa/REVIEW.md`; Conduit under Compose. The evidence and its SHAs are in PRs #7–#14. Findings to carry into M1/M2 are in `qa/REVIEW.md` and the LAB_NOTES watch list.
+  *Met 2026-09-28, re-verified 2026-09-29:* 7 dev-split pilot cases (5 bugs, 2 benign) in `bench/manifest.v1.json`, proved by `bench/harness/toggle.py`, which runs every case's check under every flag; 5 specs with `bench/apps/conduit/qa/REVIEW.md`; Conduit under Compose. The evidence and its SHAs are in PRs #7–#14 and #22 (the final review). Findings to carry into M1–M3 are in `qa/REVIEW.md`, the LAB_NOTES watch list and issues #18–#21.
 
 ## M1 — Local explore & compile
 - Repo scaffold (uv, Ruff, mypy strict, pytest, CI gates, AGENTS.md rules live).
