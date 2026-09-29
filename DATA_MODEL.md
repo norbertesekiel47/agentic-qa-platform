@@ -187,10 +187,10 @@ Free-form notes for humans (ignored by the agent unless referenced).
   },
   "probe_baselines": { "orders_count": { "capture_before_seq": 9, "json_path": "$.count" } },
   "steps": [
-    { "seq": 1, "action": "navigate", "url": "/login", "replay_safe": true },
-    { "seq": 2, "action": "fill", "target": "email_input", "value": "returning@example.test", "replay_safe": true },
-    { "seq": 3, "action": "fill_secret", "target": "password_input", "secret": "TEST_PASSWORD", "replay_safe": true },
-    { "seq": 4, "action": "click", "target": "sign_in", "replay_safe": true },
+    { "seq": 1, "action": "navigate", "url": "/login", "side_effect": false },
+    { "seq": 2, "action": "fill", "target": "email_input", "value": "returning@example.test", "side_effect": false },
+    { "seq": 3, "action": "fill_secret", "target": "password_input", "secret": "TEST_PASSWORD", "side_effect": false },
+    { "seq": 4, "action": "click", "target": "sign_in", "side_effect": false },
     { "seq": 9, "action": "click", "target": "pay_button", "side_effect": true }
   ],
   "assertions": [
@@ -208,14 +208,15 @@ Free-form notes for humans (ignored by the agent unless referenced).
 - **Every `expect` item maps to ≥ 1 assertion** (`expect_index`). If the compiler can't produce a check that actually establishes a clause, compilation **fails and names the clause** — it never substitutes a weaker proxy (e.g., "no confirmation heading" is not accepted as "no order created"). The author either adds a probe/observable or rewrites the clause as the UI condition it really is.
 - **Check types:** `text_visible`, `text_in_target`, `not_visible`, `url_matches`, `network_none` / `network_seen` (method + URL pattern + status class, from the browser's own traffic), `probe_equals_baseline` / `probe_equals` (read-only GET to a declared probe on an allowed origin), deterministic visual checks — `visible_unoccluded` (hit-test at the element's center returns the element or a descendant; in viewport; minimum size), `pixel_diff` (region vs committed baseline image, threshold), `contrast_min` — and `model_verify` (only for `visual: model`; rejected in `strict` mode).
 - **Targets** are resolved by trying locators in order; the first unique, actionable match wins.
+- **Every step carries `side_effect`:** `true` for a step that changes app state (submit, purchase, delete), `false` for a **replay-safe** step (navigation, reads, idempotent fills). The flag is required and never defaulted — a missing flag fails validation, because a default of `false` would let a continuation re-execute a purchase (ADR-0006 amendment).
 
 ### Replay outcomes
 - **Binding unresolved:** no locator resolves a target (for a step *or* an assertion) within the wait budget → drift → heal path.
 - **Expectation failed:** the target resolved and the check evaluated false → `expectation_violated` (after invariants and all assertions are evaluated, so the report is complete).
 
 ### What a heal patch may change (validator-enforced)
-- **Allowed:** `/targets/<id>/locators` (re-binding what an element *is* to how to find it), and actions/values of steps whose `side_effect` is `false` (including inserting or removing `replay_safe` steps, e.g., dismissing a new modal).
-- **Forbidden:** anything under `/assertions`; any target's `semantic`; any `side_effect` step other than via its target's locators; adding or removing `side_effect` steps; changing any `replay_safe` / `side_effect` flag; `spec_hash`; invariants; probes.
+- **Allowed:** `/targets/<id>/locators` (re-binding what an element *is* to how to find it), and actions/values of steps whose `side_effect` is `false` (including inserting or removing replay-safe steps, e.g., dismissing a new modal).
+- **Forbidden:** anything under `/assertions`; any target's `semantic`; any `side_effect` step other than via its target's locators; adding or removing `side_effect` steps; changing any step's `side_effect` flag; `spec_hash`; invariants; probes.
 - A heal is valid only if, after the patch, **every assertion evaluates** (none unresolved) **and passes**, and every invariant holds.
 
 ## 8. Benchmark manifest

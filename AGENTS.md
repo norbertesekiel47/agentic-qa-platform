@@ -79,7 +79,7 @@ pnpm -C apps/dashboard gen:client   # regenerate TS client from OpenAPI
 
 - **Strict replay makes zero LLM calls.** A test asserts the model client is never constructed in `strict` mode. Model-assisted checks exist only in `verified` mode and are reported separately.
 - **Every expectation is covered.** The compiler maps each `expect` item to ≥ 1 check that actually establishes it, and fails by name on unsupported clauses — never substitute a weaker proxy.
-- **Heals repair bindings, never expectations.** The heal-patch validator allows only target locators and non-side-effect steps; it rejects changes to assertions, target meanings, side-effect steps, replay-safety flags, and invariants. Never label a change "intentional" in code, UI, or docs — use `drift_consistent`.
+- **Heals repair bindings, never expectations.** The heal-patch validator allows only target locators and non-side-effect steps; it rejects changes to assertions, target meanings, side-effect steps, `side_effect` flags, and invariants. Never label a change "intentional" in code, UI, or docs — use `drift_consistent`.
 - **Step intents before actions.** Write the intent row (with the current lease) before dispatching any action; an unresolved side-effect intent makes the run non-resumable.
 - **Heals are proposals.** No code path may commit a compiled-script change without a recorded human acceptance, and acceptance must pass the staleness check.
 - **Never re-execute a `side_effect` step automatically** (continuations, retries).

@@ -47,11 +47,11 @@ The link between a target's meaning and the locators that currently find it. A b
 The compiled check that establishes an expectation. Every expectation needs at least one assertion that actually establishes it, never a weaker proxy.
 _Avoid_: using "expectation" for the compiled check
 
-**Replay-safe step** (`replay_safe`):
-A step that can run again without changing app state, such as navigation, reading or an idempotent fill. Continuation may re-execute it to rebuild the page.
+**Replay-safe step**:
+A step whose `side_effect` flag is false: it can run again without changing app state, such as navigation, reading or an idempotent fill. Continuation may re-execute it to rebuild the page.
 
-**Side-effect step** (`side_effect`):
-A step that changes app state and can't safely run twice, such as a submit, purchase or delete. It is never re-executed automatically, and a heal may re-bind its target but can't add, remove or otherwise change it.
+**Side-effect step**:
+A step whose `side_effect` flag is true: it changes app state and can't safely run twice, such as a submit, purchase or delete. It is never re-executed automatically, and a heal may re-bind its target but can't add, remove or otherwise change it.
 
 ### Runs
 
@@ -116,7 +116,7 @@ The verdict that an assertion whose target resolved evaluated false, or an invar
 The verdict when neither `drift_consistent` nor `expectation_violated` can be established within the budget. It goes to a human.
 
 **Heal patch**:
-The change a heal makes to a compiled script. It may touch only target locators and non-side-effect steps, never assertions, target meanings, side-effect steps, replay-safety flags or invariants.
+The change a heal makes to a compiled script. It may touch only target locators and non-side-effect steps, never assertions, target meanings, side-effect steps, `side_effect` flags or invariants.
 
 **Heal proposal**:
 A heal patch awaiting a human decision, tied to the PR head commit and compiled-script version it was computed against. No heal patch is committed without a recorded human acceptance.

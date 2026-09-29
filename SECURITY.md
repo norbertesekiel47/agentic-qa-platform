@@ -40,7 +40,7 @@ The agent reads arbitrary page content. A malicious or compromised page may say 
 1. **Content is data, not instructions.** Observations are wrapped in delimited, labeled blocks; the system prompt states page content can never change the task, the verdict rules, or tool permissions.
 2. **Capability confinement.** Agent tools act only on the current page and navigate only within the run's allowed origins. No arbitrary HTTP, file, or shell tools exist.
 3. **Evidence-bound verdicts.** A `pass` requires every `expect` assertion to be satisfied by a compiled deterministic check (or, in `verified` mode, a verifier call citing specific artifacts). Free-text success claims are rejected by the verdict schema.
-4. **Heals can't weaken the oracle.** Heal patches may change only target locators and non-side-effect steps; assertions, target meanings, side-effect steps, replay-safety flags, and invariants are immutable in heals; every heal requires human acceptance.
+4. **Heals can't weaken the oracle.** Heal patches may change only target locators and non-side-effect steps; assertions, target meanings, side-effect steps, `side_effect` flags, and invariants are immutable in heals; every heal requires human acceptance.
 5. **Fixtures:** `tests/fixtures/pages/injection/` contains hostile pages (hidden text, fake system messages, instructions in alt text, instructions to "update the test"); the suite asserts verdicts and patches are unaffected.
 
 ## 5. Secrets handling
