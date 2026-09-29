@@ -38,3 +38,38 @@ Residual risk (a sandbox-escaping browser exploit persisting in a warm environme
 ### Amendment addendum — 2026-09-27 (verification review): sandbox decision gate
 
 Playwright launches Chromium without its sandbox unless `chromium_sandbox=True`, and community evidence indicates the sandbox usually can't start on Lambda ("No usable sandbox!"). Without it, a renderer exploit runs with the runner's privileges, and warm-environment reuse could expose a later tenant's run. **The M1 spike is therefore a decision gate:** if sandboxed Chromium is proven on Lambda, hosted runs stay on Lambda; otherwise hosted multi-tenant runs move to a **Fargate one-task-per-run** adapter (fresh microVM per run, Spot pricing, ~30–60 s startup) and this ADR is superseded by a new one. Cross-tenant hosted execution isn't offered until one of these holds.
+
+## Amendment (2026-09-29): the spike tests three candidates against one predicate
+
+**New facts, checked 2026-09-29:**
+- **Lambda functions:** function code can't create user namespaces (aws/containers-roadmap#2102, open), so Chromium's sandbox fails there.
+- **Fargate:** a task may add only `SYS_PTRACE` (ECS `KernelCapabilities`), with no privileged mode and no custom seccomp profile (aws/containers-roadmap#1957, open). The documented fallback most likely fails too.
+- **Lambda MicroVMs** reached general availability on 2026-06-22. Each session gets its own Firecracker VM with its own kernel and full operating-system capabilities. Starts come from snapshots, and a session can last up to 8 hours.
+
+**Predicate.** Hosted compute qualifies only if both hold:
+1. Chromium runs with its sandbox on. The launch succeeds, and compared with the browser process, a renderer shows its own namespaces and seccomp filtering.
+2. Every run gets a fresh VM.
+
+What that means per candidate:
+- **Lambda function:** can't win even if its sandbox works, because it reuses execution environments across invocations. It is measured only for the record.
+- **ECS on EC2:** qualifies only with a fresh instance per run.
+- **No candidate qualifies:** hosted runs wait.
+
+**Candidates.** A Lambda MicroVM, a Fargate task and a Lambda function all run one probe program, packaged separately for each platform. MicroVM images build from a Lambda-managed base image.
+
+**Measurements.**
+- Time until the browser is ready, cold and warm.
+- Peak memory.
+- Cost per 60-second run, including snapshot storage and snapshot reads.
+
+**Logistics.**
+- The spike runs first in M1, right after the scaffold.
+- Code lives in `spikes/hosted-chromium/`, under our gates.
+- AWS CLI scripts only; Terraform arrives in M4.
+- Region us-east-1, with a budget alarm set up first and a teardown script.
+- No AWS resource is created without the maintainer's go-ahead.
+- The outcome, with its commands and SHA, goes in a new ADR that supersedes this ADR's choice of Lambda.
+
+**If MicroVMs win.** A run can last up to 8 hours in one VM, so the 15-minute cap no longer forces continuation. M6 decides what continuation keeps (#28).
+
+**Unchanged.** One runner image in two locations, and runners holding no data-plane credentials.

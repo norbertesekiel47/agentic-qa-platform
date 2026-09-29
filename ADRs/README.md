@@ -12,8 +12,8 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | [0004](0004-specs-in-repo.md) | Structured natural-language specs; repo is the source of truth | Accepted |
 | [0005](0005-python-backend-nextjs-dashboard.md) | Python backend + Next.js dashboard with generated client | Accepted |
 | [0006](0006-langgraph-run-graph.md) | LangGraph for the run graph with an API-backed checkpointer | Accepted (amended 2026-09-27, 2026-09-28) |
-| [0007](0007-model-agnostic-role-routing.md) | Model-agnostic, role-based model routing | Accepted |
-| [0008](0008-runner-image-lambda.md) | One runner image, two locations; Lambda for hosted runs | Accepted (amended 2026-09-27) |
+| [0007](0007-model-agnostic-role-routing.md) | Model-agnostic, role-based model routing | Accepted (amended 2026-09-29) |
+| [0008](0008-runner-image-lambda.md) | One runner image, two locations; Lambda for hosted runs | Accepted (amended 2026-09-27, 2026-09-29) |
 | [0009](0009-rds-postgres-rls.md) | RDS PostgreSQL with row-level security; fck-nat | Accepted |
 | [0010](0010-clerk-organizations.md) | Clerk Organizations for identity and tenancy | Accepted |
 | [0011](0011-byok-envelope-encryption.md) | BYOK only, with KMS envelope encryption | Accepted |
@@ -29,6 +29,9 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | [0021](0021-bench-apps-gate-carve-out.md) | Vendored benchmark apps (`bench/apps/`): a narrow gate carve-out | Accepted |
 | [0022](0022-bench-flags-test-api-manifest.md) | Benchmark feature flags, test-only endpoints and the ground-truth manifest | Accepted (amended 2026-09-28, 2026-09-29) |
 | [0023](0023-bench-pilot-toggle-checks-dry-review.md) | Benchmark pilot: browser toggle checks and a written dry compile review | Accepted (amended 2026-09-28, 2026-09-29) |
+| [0024](0024-explore-runs.md) | Explore runs: coverage plan, stateless navigator and confirmation replay | Accepted |
+| [0025](0025-compiled-targets-checks-flags.md) | Compiled scripts: meanings, locators, checks and step flags | Accepted |
+| [0026](0026-local-ci-browser-boundary.md) | The browser boundary for local and CI runs: sandbox, egress and test secrets | Accepted |
 
 ## Template
 

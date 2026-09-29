@@ -1,6 +1,6 @@
 # Roadmap — Agentic QA Platform
 
-Last updated: 2026-09-27 (revised after external review). **Core first, then SaaS** (ADR-0016): prove the agent on the benchmark before building the platform around it. Each milestone is one vertical slice, one PR series, with an explicit exit criterion. No dates — quality over speed; milestones are sequential.
+Last updated: 2026-09-29 (M1 design decisions, ADR-0024–0026). **Core first, then SaaS** (ADR-0016): prove the agent on the benchmark before building the platform around it. Each milestone is one vertical slice, one PR series, with an explicit exit criterion. No dates — quality over speed; milestones are sequential.
 
 **Release checkpoints** (added after review): full v1 scope is unchanged, but two public, independently defensible releases ship along the way so the strongest hiring signal doesn't wait for the whole SaaS:
 - **Release 0.1 — "CLI + benchmark"** after M3: open-source CLI, frozen benchmark, local run viewer, measured test-split numbers.
@@ -15,19 +15,53 @@ Last updated: 2026-09-27 (revised after external review). **Core first, then Saa
   *Met 2026-09-28, re-verified 2026-09-29:* 7 dev-split pilot cases (5 bugs, 2 benign) in `bench/manifest.v1.json`, proved by `bench/harness/toggle.py`, which runs every case's check under every flag; 5 specs with `bench/apps/conduit/qa/REVIEW.md`; Conduit under Compose. The evidence and its SHAs are in PRs #7–#14 and #22 (the final review). Findings to carry into M1–M3 are in `qa/REVIEW.md`, the LAB_NOTES watch list and issues #18–#21.
 
 ## M1 — Local explore & compile
-- Repo scaffold (uv, Ruff, mypy strict, pytest, CI gates, AGENTS.md rules live).
-- Spec parser + schema; **browser wrapper with the full egress contract** (local egress proxy with validated-IP connects, Playwright HTTP + WebSocket routing installed before page creation, service workers blocked) and **sandbox-enabled launch with a startup check**; accessibility snapshot with element refs.
-- LangGraph explore loop with navigator role; tools; compiler producing targets + assertions with expectation coverage (unsupported expectations fail by name) and a required `side_effect` flag on every step.
-- Model router with capability validation and cost accounting.
-- **Spike (decision gate):** headless Chromium in a Lambda container image — memory, cold start, startup-hygiene time, and **whether Chromium's sandbox runs**. Outcome recorded in an ADR: Lambda (sandbox works) or the Fargate one-task-per-run adapter for hosted runs.
-- **Exit:** `aqa explore` compiles all pilot specs; egress tests (redirects, rebinding, WebSockets, service workers) pass; the sandbox gate is decided.
+Design: ADR-0024 (explore runs), ADR-0025 (compiled scripts), ADR-0026 (the browser boundary for local and CI runs), and the 2026-09-29 amendments to ADR-0007 and ADR-0008.
+- **Repo scaffold:** uv workspace (`packages/core`, `packages/runner`, `packages/cli`), Ruff, mypy strict, pytest, CI gates, AGENTS.md rules live. `bench/harness` joins the workspace under pytest.
+- **Spike (decision gate), first after the scaffold.** Sandboxed Chromium on a Lambda MicroVM, a Fargate task and a Lambda function, measured against one rule: sandboxed Chromium **and** a fresh VM per run (ADR-0008 amendment). It records time to a ready browser, peak memory and cost per run, and an ADR records the outcome. Its logistics, including the maintainer's go-ahead before any AWS resource is created, are in the ADR-0008 amendment.
+- **Spec parser and project config.** Strict parsing (`seed` removed; `start_url` must be a path), and `qa/config.yaml` with roles, browser settings, subresource and expected-blocked hosts, private origins, secret bindings and budgets (DATA_MODEL §9).
+- **Browser wrapper with the full egress contract (ADR-0026):**
+  - the local egress proxy: validated-IP connects pinned per run, the IP policy by location, no UDP bypass;
+  - Playwright HTTP and WebSocket routing installed before page creation, and service workers blocked;
+  - allowed-origin checks before each observation and action;
+  - egress blocks and expected-blocked hosts;
+  - a sandbox-enabled launch with a startup check, and a minimal browser environment;
+  - an accessibility snapshot with element refs;
+  - browser settings pinned for every run (ADR-0025).
+- **Moved up from M2** (the pilot signs in, and explore uses a model):
+  - `fill_secret` with origin and field binding, and secret-value redaction of observations;
+  - evidence masking (screenshots masked; bodies, HAR files and Playwright traces are never saved; network evidence is metadata only);
+  - the four invariant observers;
+  - a minimal strict executor (locator resolution per use, step-scoped waits, assertion evaluation);
+  - a local record of side-effect dispatches.
+- **LangGraph explore loop (ADR-0024):**
+  - a frozen coverage plan written from the spec alone;
+  - stateless navigator steps over the accessibility tree only;
+  - tools, including `reload` and `restart`;
+  - path selection that keeps the plan's required conditions;
+  - a confirmation replay with no model calls, and unconfirmed scripts when a reset hook is missing;
+  - outcomes and exit codes, and budgets.
+- **Compiler (ADR-0025):**
+  - label-free meanings, and the locator grammar with scopes and per-use resolution;
+  - `text` and `pattern` checks, with every expectation covered (unsupported ones fail by name);
+  - `side_effect` set on positive evidence only, with its basis;
+  - the `browser`, `coverage` and `confirmed` fields.
+- **Model router:** capability validation and cost accounting from the pinned price map, and Sonnet 5.5 defaults (ADR-0007 amendment).
+- **Injection fixtures aimed at exploring:** task hijack, decoy success, decoy binding after a failed confirmation, and steering of navigation, documents and secrets.
+- **Exit:**
+  - `aqa explore` compiles and confirms all five pilot specs. Their compiled assertions are checked against `bench/apps/conduit/qa/REVIEW.md`, once #31 reconciles its `read-article` row 5: a checklist in the PR, plus a test that none of its "Not acceptable" proxies appear.
+  - Each compiled pilot script replays 3 times on the clean app with no model calls.
+  - Under each of the 7 case flags, the M1 executor reproduces the manifest: each bug fails exactly the expectations and invariants it names. Each benign case's broken bindings are listed, and a hand-written rebinding patch restores every pass without touching an assertion.
+  - The egress tests pass: redirects, rebinding, WebSockets, WebRTC/UDP, service workers and document origins.
+  - The sandbox gate is decided.
 
 ## M2 — Replay, heal & verdicts
-- `strict` replay with multi-strategy locators, bounded waits, and deterministic visual checks (`visible_unoccluded`, `pixel_diff`, `contrast_min`); `verified` mode behind a flag.
-- Invariant checks (console, 5xx, exceptions, broken images).
+- `strict` replay built on M1's executor: verdicts and full deterministic visual checks (`visible_unoccluded`, `pixel_diff`, `contrast_min`); `verified` mode behind a flag.
+- Define how specs with `visual: model` expectations compile and confirm before verified mode ships (M1 rejects them as a spec error).
+- **Before any verdict ships:** decide what a fallback-locator match means (verdict, safeguards for side-effect steps, benign scoring), before M3's numbers (#25).
 - Step intents before dispatch with lease fencing; non-resumable detection for unresolved side-effect intents.
-- Heal subgraph: observe → classify (`drift_consistent` / `expectation_violated` / `inconclusive`) → binding/step patch or finding; binding-unresolved vs expectation-failed distinction for assertions; heal-patch validator (target locators and non-side-effect steps only); `fill_secret` with origin/field binding; secret-value redaction of observations in every model-using mode.
-- Hybrid perception: screenshot verification and vision fallback.
+- Heal subgraph: observe → classify (`drift_consistent` / `expectation_violated` / `inconclusive`) → binding/step patch or finding; binding-unresolved vs expectation-failed distinction for assertions; heal-patch validator (target locators and non-side-effect steps only; `browser` and `coverage` immutable); redaction in heal and verified modes.
+- Hybrid perception: screenshot verification and vision fallback, with screenshot masking and OCR checks before any image reaches a model or leaves the machine.
+- Injection fixtures aimed at healing ("update the test").
 - Local HTML report viewer (`aqa report`).
 - **Exit:** `aqa run` produces correct verdict types on fixture pages; strict replay makes zero LLM calls (asserted); hostile-page fixtures pass.
 
@@ -51,15 +85,15 @@ Last updated: 2026-09-27 (revised after external review). **Core first, then Saa
 - App registration, webhooks with dedupe, one check run per spec + summary check.
 - Accept heal via Checks requested actions (short opaque identifiers), staleness checks, fork fallback (`aqa heal apply`).
 - Spec indexing on push; dashboard edit → PR (API side).
-- Docker-based GitHub Action using the runner image.
+- GitHub Action using the runner image. First decide how it runs Chromium's sandbox (Docker actions run as root under Docker's default seccomp profile, #26) and which config revision a CI run trusts for secret bindings (#27).
 - **Exit:** end-to-end on a sandbox repo: PR → check run → Accept heal → re-run passes; stale proposals rejected.
 
 ## M6 — Hosted runners
-- Hosted compute per the M1 sandbox gate: **Lambda** (outside VPC, startup hygiene) if sandboxed Chromium works there, otherwise the **Fargate one-task-per-run** adapter; dispatcher with per-org concurrency, continuation leases, and hosted-execution tokens (`secrets:read`).
+- Hosted compute per the M1 spike's ADR: sandboxed Chromium with a fresh VM per run (ADR-0008 amendment). A Lambda MicroVM is the likely winner. Dispatcher with per-org concurrency, continuation leases (their scope decided once the compute is chosen, #28), and hosted-execution tokens (`secrets:read`). Hosted policy for subresource hosts (#29).
 - Domain verification (DNS TXT + well-known) with periodic re-checks; SSRF guard with pinned resolution.
 - BYOK: KMS envelope encryption, key delivery to runners, rotation. Hosted test secrets.
 - Continuation per the replay-safe rules; storage-state restore; WebSocket live events with `run_events` catch-up on reconnect.
-- **Exit:** a hosted run on a verified domain streams live; a forced cutoff on a replay-safe spec resumes; an unresolved side-effect intent ends `non_resumable`; isolation tests pass on the chosen compute (crash-reuse on Lambda, or fresh-task verification on Fargate); **10-step replay time measured on the chosen hosted compute**.
+- **Exit:** a hosted run on a verified domain streams live; a forced cutoff on a replay-safe spec resumes; an unresolved side-effect intent ends `non_resumable`; isolation tests pass on the chosen compute (a fresh VM per run, verified); **10-step replay time measured on the chosen hosted compute**.
 
 ## M7 — Dashboard
 - **First task:** deploy an authenticated skeleton (Next.js static export on S3 + CloudFront, Clerk sign-in, one API call through the generated client) — proves hosting and auth before any screen is built (ADR-0017).
@@ -78,7 +112,7 @@ Last updated: 2026-09-27 (revised after external review). **Core first, then Saa
 - **Exploratory mode:** spec-less bug hunting.
 - **Accessibility mode:** keyboard/screen-reader-style traversal.
 - **Export to Playwright** (`.spec.ts`) for portability.
-- **Fargate one-task-per-run compute adapter** as an option for customers requiring a hard isolation boundary (if the M1 gate chose Lambda).
+- ~~**Fargate one-task-per-run compute adapter** as an option for a hard isolation boundary~~: no longer needed. The M1 spike's rule already gives every hosted run a fresh VM (ADR-0008 amendment, 2026-09-29).
 - **Interactive agent interrupts** in live dashboard runs (persisted interrupt records, response endpoint, expiry, and the same side-effect-safe continuation rules).
 - **Stripe billing** (per-seat or per-run tiers); platform-paid LLM credits option.
 - GitLab/Bitbucket apps; Slack notifications.
@@ -92,9 +126,9 @@ Last updated: 2026-09-27 (revised after external review). **Core first, then Saa
 |---|---|---|
 | Heal classification accuracy below target | Core claim weak | M3 before SaaS; iterate on dev split; publish test-split results honestly |
 | Small test split → wide intervals | Less impressive-looking numbers | Report honestly; grow the test set in v2 |
-| Chromium's sandbox unavailable on Lambda (likely, per community evidence) | Lambda unsafe for multi-tenant hosted runs | M1 decision gate; Fargate one-task-per-run adapter behind the compute interface |
+| Chromium's sandbox unavailable on Lambda functions (no user namespaces) and most likely on Fargate (no custom seccomp) | No hosted compute qualifies | M1 spike tests Lambda MicroVMs (a VM per session) against the fresh-VM rule; ECS on EC2 with a VM per run is the last resort; otherwise hosted runs wait (ADR-0008 amendment) |
 | Full benchmark authored before the compiler is proven | Wasted mutation work | M0 pilot on one app first; full benchmark at M3 |
 | Continuation limits (non-replay-safe specs) | Some long specs can't resume | Most specs fit in one invocation; `reset` hooks; clear `non_resumable` status |
 | Clerk client-only auth in a static export | Dashboard auth friction | Proven by the M7 skeleton before screens are built |
-| LLM price changes | Misstated cost metrics | Cost from live price map; figures re-measured per release |
+| LLM price changes | Misstated cost metrics | Cost from the pinned price map (refreshed in reviewed PRs; each cost record cites its version); figures re-measured per release |
 | Scope (SaaS + GitHub App + dashboard) | Long build | Release checkpoints 0.1 and 0.2 ship defensible artifacts early |
