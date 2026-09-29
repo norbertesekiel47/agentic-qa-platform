@@ -11,6 +11,7 @@ A multi-tenant SaaS + CLI + GitHub App for agentic E2E testing: an agent explore
 | Question | Doc |
 |---|---|
 | Why does this exist? | [VISION.md](VISION.md) |
+| What does a domain term mean? | [CONTEXT.md](CONTEXT.md) |
 | What must it do? Targets? | [PRD.md](PRD.md) |
 | How is it built? | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | Which libraries/versions/costs? | [TECH_STACK.md](TECH_STACK.md) |
@@ -110,4 +111,4 @@ Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-
 
 ### Domain docs
 
-Single-context: a root `CONTEXT.md` glossary (created lazily), and ADRs in `ADRs/`, not `docs/adr/`. See `docs/agents/domain.md`.
+Single-context: a root `CONTEXT.md` glossary, and ADRs in `ADRs/`, not `docs/adr/`. See `docs/agents/domain.md`.
