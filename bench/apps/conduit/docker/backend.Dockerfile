@@ -8,12 +8,14 @@ RUN bun install --frozen-lockfile \
  && bun run build
 
 # Seed a pristine database once, at build time. Every container start copies it
-# into /data (a tmpfs), so restarting the backend resets the app state.
+# into /data (a tmpfs), so restarting the backend resets the app state, and
+# POST /test-api/reset?fixture=seed restores it in place (ADR-0022).
 COPY seed/ ./bench-seed/
 ARG CONDUIT_SEED_PASSWORD
 RUN test -n "$CONDUIT_SEED_PASSWORD" \
- && DATABASE_URL=file:/app/seed.db bun x prisma db push \
- && DATABASE_URL=file:/app/seed.db bun bench-seed/seed.ts
+ && mkdir -p /app/fixtures \
+ && DATABASE_URL=file:/app/fixtures/seed.db bun x prisma db push \
+ && DATABASE_URL=file:/app/fixtures/seed.db bun bench-seed/seed.ts
 
 COPY --chmod=0755 docker/bench-flags.sh /usr/local/bin/bench-flags
 COPY docker/backend-entrypoint.sh /usr/local/bin/conduit-backend

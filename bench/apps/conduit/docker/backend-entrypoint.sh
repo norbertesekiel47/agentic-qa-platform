@@ -3,5 +3,5 @@
 set -eu
 bench-flags >/dev/null # refuse to start with an invalid BENCH_FLAGS (ADR-0022)
 mkdir -p /data
-cp /app/seed.db /data/conduit.db
+cp /app/fixtures/seed.db /data/conduit.db
 exec bun /app/.output/server/index.mjs
