@@ -30,7 +30,7 @@ This file holds no ground truth: which case breaks which expectation lives only 
 | 2 | Publication date January 4, 2026 | `text_in_target` on the **banner's** date | **`text_visible` "January 4, 2026"**: reader's comment on this article shows the same date, so that check passes even when the article's own date is wrong |
 | 3 | Body includes "Most flaky tests are really flaky data." | `text_in_target` on the article body | — |
 | 4 | Tagged "testing" | `text_in_target` on the article's tag list | `text_visible` "testing": the title "Testing without flakes" matches it |
-| 5 | reader's comment "Deterministic data helped us most." is shown | `text_in_target` on the comment card that holds that text, which must also contain "reader" | — |
+| 5 | reader's comment "Deterministic data helped us most." is shown | `text_in_target` on the comment list | — |
 | 6 | Visitors are invited to sign in or sign up to comment | `text_in_target` "Sign in or sign up to add comments on this article" on the signed-out comment prompt | `text_visible` "to add comments on this article": it still passes when the "Sign in" and "sign up" links are gone. `text_visible` "Sign in": the header has that link too |
 
 ### `post-comment`
@@ -66,5 +66,10 @@ This file holds no ground truth: which case breaks which expectation lives only 
 On the clean app, a Playwright 1.63.0 walk-through of every spec (a throwaway script, not committed) evaluated each expectation above with its listed check. It also recorded all four invariants (`console_errors`, `js_exceptions`, `http_5xx`, `broken_images`). **44 of 44 checks held:** 24 expectation checks, including the date trap in `read-article` expectation 2, and 20 invariant checks. The SHA and the date are in the pull request that added this file.
 
 Because the script was never committed, these counts can't be re-run from the repository. The committed, repeatable evidence for the planted changes is `bench/harness/toggle.py`, and at M1 the compiled assertions replace this table. Later, `login` expectations 1 and 2 were reworded to drop words that no check establishes (subject and claim). Their checks didn't change, so this evidence still covers them.
+
+`read-article` row 5 later dropped its author check (#31):
+- "reader's comment" is the expectation's subject, so replays don't re-check it, just as `post-comment` row 2 doesn't re-check jake.
+- Its target moved from the card holding the text to the comment list, the same target `post-comment` row 0 uses. Finding the card by the text the check verifies would be circular (ADR-0025).
+- The walk-through's check (a card with that text that also contained "reader") implies the new one, so this evidence still covers it.
 
 `read-article` expectation 6 got its current check after a review showed that the old one (`text_visible` "to add comments on this article") still passes when the "Sign in" and "sign up" links are gone. A walk through that spec's steps (Playwright 1.63.0) found the prompt's whole sentence, with both links inside it, on the clean app and under each of the 7 flags: **8 of 8**. The SHA, the date and the script are in the pull request that changed this check.
