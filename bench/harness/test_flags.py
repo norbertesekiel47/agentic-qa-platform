@@ -49,6 +49,8 @@ class FakeDocker:
             return env_value + "\n"
         if args[0] == "port":
             return "127.0.0.1:4100\n"
+        if args[0] == "build":
+            return ""
         raise AssertionError(f"unexpected compose call {args}")
 
     def fetch(self, url: str) -> str:
@@ -131,6 +133,15 @@ class SwitchTest(unittest.TestCase):
             flags.FlagError, "backend container was not recreated"
         ):
             flags.switch(self.root, "conduit", ("k3q9",), self.docker)
+
+    def test_build_builds_the_app_images(self) -> None:
+        flags.build(self.root, "conduit", self.docker)
+        self.assertEqual(self.docker.calls, [("conduit", ("build", "--quiet"), {})])
+
+    def test_build_unknown_app(self) -> None:
+        with self.assertRaisesRegex(flags.FlagError, "no stack for app 'shop'"):
+            flags.build(self.root, "shop", self.docker)
+        self.assertEqual(self.docker.calls, [])
 
 
 class ManifestBackedTest(unittest.TestCase):

@@ -1,10 +1,13 @@
-"""Prove that each benchmark case's flag switches its planted change (ADR-0023).
+"""Prove that each benchmark case's flag switches its planted change, and only it (ADR-0023).
 
-In each cycle, the app is switched to clean and every case's check runs, and
-each must report "clean". Then the app is switched to each case in turn, and
-that case's check must report "planted". The run ends on the clean app. The
-checks (toggle_checks.py) run in the checks image (checks.Dockerfile) on the
-app's Compose network, as a non-root user with Chromium's sandbox on.
+The app's images are built from the working tree first, so the evidence can't
+come from stale images. In each cycle, every case's check runs on the clean
+app, and each must report "clean". Then the app is switched to each case in
+turn and every check runs again: that case's must report "planted" and every
+other one "clean", so a flag that also switches another case's change fails.
+The run ends on the clean app. The checks (toggle_checks.py) run in the checks
+image (checks.Dockerfile) on the app's Compose network, as a non-root user
+with Chromium's sandbox on.
 
 Run: python3 bench/harness/toggle.py conduit [--cycles N] [--case CASE_ID ...]
 """
@@ -45,10 +48,16 @@ class Result:
 
 @dataclass(frozen=True)
 class Row:
+    """One check's result, with the case whose flag was on (None: the clean app)."""
+
     cycle: int
     case: str
-    flag_on: bool
+    active: str | None
     result: Result
+
+    @property
+    def flag_on(self) -> bool:
+        return self.active == self.case
 
     @property
     def ok(self) -> bool:
@@ -167,34 +176,39 @@ def toggle(
     checks: Checks,
     only: Sequence[str] = (),
 ) -> list[Row]:
-    """Every check's result over ``cycles`` cycles; ends on the clean app."""
+    """Every check on the clean app and under each case's flag, ``cycles`` times.
+
+    ``only`` limits which flags are switched on; every check still runs in every
+    state. Builds the app's images first and ends on the clean app.
+    """
     cases = sorted(c.id for c in manifest.load(root).cases.values() if c.app == app)
     unknown = sorted(set(only) - set(cases))
     if unknown:
         raise ToggleError(f"no case {', '.join(unknown)} for app {app}")
-    cases = [c for c in cases if not only or c in only]
     if not cases:
         raise ToggleError(f"no cases for app {app} in {manifest.MANIFEST}")
     missing = sorted(set(cases) - set(checks.registered()))
     if missing:
         raise ToggleError(f"no toggle check for {', '.join(missing)}")
+    switched = [c for c in cases if not only or c in only]
 
+    flags.build(root, app, docker)
     rows: list[Row] = []
     for cycle in range(1, cycles + 1):
         flags.switch(root, app, (), docker)
-        rows += [Row(cycle, r.case, False, r) for r in checks.run(cases)]
-        for case_id in cases:
+        rows += [Row(cycle, r.case, None, r) for r in checks.run(cases)]
+        for case_id in switched:
             flags.set_case(root, case_id, docker)
-            rows += [Row(cycle, r.case, True, r) for r in checks.run([case_id])]
+            rows += [Row(cycle, r.case, case_id, r) for r in checks.run(cases)]
     flags.switch(root, app, (), docker)
     return rows
 
 
 def _describe(row: Row) -> str:
-    flag = "on " if row.flag_on else "off"
+    under = row.active or "the clean app"
     outcome = row.result.error or f"{row.result.state} {row.result.detail}"
     mark = "ok " if row.ok else "BAD"
-    return f"{mark} cycle {row.cycle}  {row.case:20} flag {flag}  {outcome}"
+    return f"{mark} cycle {row.cycle}  {row.case:20} under {under:20}  {outcome}"
 
 
 def _positive(text: str) -> int:
@@ -215,7 +229,12 @@ def main(
     )
     parser.add_argument("app")
     parser.add_argument("--cycles", type=_positive, default=3)
-    parser.add_argument("--case", action="append", default=[], help="only this case")
+    parser.add_argument(
+        "--case",
+        action="append",
+        default=[],
+        help="switch on only this case's flag (every check still runs)",
+    )
     args = parser.parse_args(argv)
     root: Path = args.root
     try:
