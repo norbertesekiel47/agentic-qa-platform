@@ -69,3 +69,8 @@ Recreating both Conduit containers with `docker compose up -d --force-recreate -
 ## Amendment (2026-09-28): invariant ground truth and spec-file checks
 - **An `expectation_violated` entry names what fails:** the violated `expect` indexes, the violated `invariants`, or both. Some bugs break no `expect` item and fail only an invariant, for example an uncaught exception on a page that still renders correctly (the `js_error` category). The invariant names are `console_errors`, `js_exceptions`, `http_5xx` and `broken_images` (DATA_MODEL §6).
 - **The validator reads each referenced spec file.** The file's `id` must match its name, and every `expect` index must exist in its `expect:` list. There is no YAML parser before M1, so this relies on the spec layout in DATA_MODEL §6: top-level keys at column 0, and each item a `  - ` line.
+
+## Amendment (2026-09-29): residual exposure, corrected
+The "Residual exposure" consequence understated what the page's own code reveals. The production bundle keeps each flag ID as a literal next to the code it switches. In the build at `f4531eb`, for example, it reads `this.dateZone=w("4o6x")?"-1200":void 0`. Together with the flag list in the served HTML, the page's source reveals the planted change, not only that some opaque flag is on. The same build ships no source maps, case IDs or ADR references.
+
+So the guarantee rests on the system under test never reading page or script source. The model gets the accessibility tree, screenshots, and console and network metadata, and no tool may fetch arbitrary URLs or read files (AGENTS.md §6). A future tool that returns response bodies or scripts must keep benchmark bundles out of the model's input.

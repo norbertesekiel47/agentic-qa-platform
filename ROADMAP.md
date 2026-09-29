@@ -10,14 +10,14 @@ Last updated: 2026-09-27 (revised after external review). **Core first, then Saa
 ## M0 — Benchmark pilot (development only)
 - Choose the two open-source apps (license, realistic flows, easy seeding); vendor **the first** under `bench/apps/`. *Chosen (ADR-0020): Conduit first, Medusa at M3.*
 - Feature-flag harness and ground-truth manifest format (`bench/manifest.v1.json`, keyed by case ID).
-- **Pilot:** ~5 planted bugs + 2 benign UI changes on one app, with specs written to the expectation-coverage rules (probes where UI alone can't establish a clause). Pilot cases are dev-only.
+- **Pilot:** ~5 planted bugs + 2 benign UI changes on one app, with specs written to the expectation-coverage rules (probes where UI alone can't establish an expectation). Pilot cases are dev-only.
 - **Exit:** pilot cases toggle reliably; specs pass a dry compile-rules review; apps run via `docker compose`.
   *Met 2026-09-28:* 7 dev-split pilot cases (5 bugs, 2 benign) in `bench/manifest.v1.json`, proved by `bench/harness/toggle.py`; 5 specs with `bench/apps/conduit/qa/REVIEW.md`; Conduit under Compose. The evidence and its SHAs are in PRs #7–#14. Findings to carry into M1/M2 are in `qa/REVIEW.md` and the LAB_NOTES watch list.
 
 ## M1 — Local explore & compile
 - Repo scaffold (uv, Ruff, mypy strict, pytest, CI gates, AGENTS.md rules live).
 - Spec parser + schema; **browser wrapper with the full egress contract** (local egress proxy with validated-IP connects, Playwright HTTP + WebSocket routing installed before page creation, service workers blocked) and **sandbox-enabled launch with a startup check**; accessibility snapshot with element refs.
-- LangGraph explore loop with navigator role; tools; compiler producing targets + assertions with expectation coverage (unsupported clauses fail by name) and a required `side_effect` flag on every step.
+- LangGraph explore loop with navigator role; tools; compiler producing targets + assertions with expectation coverage (unsupported expectations fail by name) and a required `side_effect` flag on every step.
 - Model router with capability validation and cost accounting.
 - **Spike (decision gate):** headless Chromium in a Lambda container image — memory, cold start, startup-hygiene time, and **whether Chromium's sandbox runs**. Outcome recorded in an ADR: Lambda (sandbox works) or the Fargate one-task-per-run adapter for hosted runs.
 - **Exit:** `aqa explore` compiles all pilot specs; egress tests (redirects, rebinding, WebSockets, service workers) pass; the sandbox gate is decided.

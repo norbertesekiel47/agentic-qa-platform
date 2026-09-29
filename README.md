@@ -2,7 +2,7 @@
 
 **Natural-language E2E tests that run as deterministic replays and self-heal on UI drift. CLI, GitHub App, and multi-tenant SaaS.**
 
-> **Status: design complete, pre-build.** This README is the public front page; sections marked *(planned)* will be filled with measured results as milestones land. No number appears here without the command and commit that produced it.
+> **Status: M0 (benchmark pilot) complete; M1 (local explore and compile) is next.** This README is the public front page; sections marked *(planned)* will be filled with measured results as milestones land. No number appears here without the command and commit that produced it.
 
 ## Why
 

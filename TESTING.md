@@ -6,7 +6,7 @@ Last updated: 2026-09-27 (revised after external review). Two different things a
 
 | Layer | Scope | Tools | Runs |
 |---|---|---|---|
-| Unit | Spec parser, **expectation-coverage compiler rules** (every `expect` item maps to ≥ 1 establishing check; unsupported clauses fail by name), target resolution, compiled-script patching + heal-patch validator (target locators and non-side-effect steps only), deterministic visual checks, network/probe checks, cost math, verdict schemas, token verification | pytest, Hypothesis | Every commit |
+| Unit | Spec parser, **expectation-coverage compiler rules** (every expectation maps to ≥ 1 establishing check; unsupported expectations fail by name), target resolution, compiled-script patching + heal-patch validator (target locators and non-side-effect steps only), deterministic visual checks, network/probe checks, cost math, verdict schemas, token verification | pytest, Hypothesis | Every commit |
 | Integration | API + Postgres (real RLS), checkpointer over HTTP, SQS dispatch, S3 presign | pytest + testcontainers (Postgres, LocalStack for S3/SQS) | Every commit |
 | Tenant isolation | Cross-org access attempts on every table and endpoint | pytest (parametrized over the table/endpoint registry) | Every commit — **blocking** |
 | Checkpointer conformance | Full saver interface (sync + async), pending writes, idempotent retries, HTTP failure injection, size limits | pytest, test cases ported from LangGraph's upstream Postgres saver suite | Every commit |
@@ -47,9 +47,11 @@ Written test-first (red → green → refactor): replay engine, locator resoluti
 
 ## 5. Benchmark
 
-Location: `bench/`. Two open-source apps with **60 planted bugs** behind feature flags across six categories (functional, visual/layout, backend 5xx, JS error, broken flow, data display) and **20 benign UI changes** (moved/restyled/relabeled elements, reordered nav — every `expect` still holds).
+Location: `bench/`. Two open-source apps with **60 planted bugs** behind feature flags across six categories (functional, visual/layout, backend 5xx, JS error, broken flow, data display) and **20 benign UI changes** (moved/restyled/relabeled elements, reordered nav — every expectation still holds).
 
 **Flags and ground truth (ADR-0022):** each case is one opaque flag, set through `BENCH_FLAGS` when the app's containers are recreated (which also reseeds the database). Specs reach app state only through the app's `/test-api/*` reset hook and narrow read-only probes. Ground truth lives only in `bench/manifest.v1.json`, keyed by case ID.
+
+**Browser time zone:** benchmark browsers run in UTC, as `bench/harness/toggle_checks.py` does. Apps render dates in the viewer's time zone, and Conduit's seeded article times (10:00 UTC) show their seeded dates only between UTC−10 and UTC+13, so a replay in another zone would fail the clean app.
 
 **Pilot first (M0):** one app, ~5 bugs and 2 benign changes, development-only — enough to validate the compiler, the expectation-coverage rules, and the heal contract before investing in the full benchmark. Pilot cases join the dev split. The full benchmark is written and its split frozen at the start of M3, before any tuning on it.
 

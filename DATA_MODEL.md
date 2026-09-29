@@ -154,14 +154,16 @@ tags: [checkout, payments]
 Free-form notes for humans (ignored by the agent unless referenced).
 ```
 
-**Invariants** are checked on every run on top of the `expect` items. `inherit: true` turns on all of them, and `disable` lists the ones a spec turns off:
+**Invariants** are checked on every run on top of the spec's expectations. `inherit: true` turns on all of them, and `disable` lists the ones a spec turns off:
 
 | Name | Fails when |
 |---|---|
-| `console_errors` | The page writes an error to the console |
+| `console_errors` | The console records an error-level message: the page's own `console.error` calls, and the browser's own error entries such as "Failed to load resource" for a 4xx or 5xx response |
 | `js_exceptions` | The page throws an uncaught exception or leaves a promise rejection unhandled |
 | `http_5xx` | Any response to the browser has a 5xx status |
 | `broken_images` | An image fails to load |
+
+`console_errors` and `js_exceptions` never overlap: an uncaught exception is not a console error, even though DevTools prints it in the console. In Playwright terms, `console_errors` counts `console` events of type `error` and `js_exceptions` counts `pageerror` events. The benchmark manifest's invariant ground truth (§8) relies on this split.
 
 **Layout** (the benchmark's validator reads it with no YAML parser before M1): top-level keys start at column 0, and each list item is a `  - ` line.
 
@@ -205,7 +207,8 @@ Free-form notes for humans (ignored by the agent unless referenced).
 ```
 
 ### Compilation rules
-- **Every `expect` item maps to ≥ 1 assertion** (`expect_index`). If the compiler can't produce a check that actually establishes a clause, compilation **fails and names the clause** — it never substitutes a weaker proxy (e.g., "no confirmation heading" is not accepted as "no order created"). The author either adds a probe/observable or rewrites the clause as the UI condition it really is.
+- **Every expectation maps to ≥ 1 assertion** (`expect_index`). If the compiler can't produce a check that actually establishes an expectation, compilation **fails and names it** — it never substitutes a weaker proxy (e.g., "no confirmation heading" is not accepted as "no order created"). The author either adds a probe/observable or rewrites the expectation as the UI condition it really is.
+- **Subject and claim.** An expectation's subject says what it is about ("jake's comment", "the Pay button"). That is a target's meaning: fixed when the spec is explored, and not re-checked on replay. Everything the expectation says about its subject (text, state, position, destination, count) is its claim, and its assertions must establish all of it. So an expectation that claims what no check can establish, such as "shown above the article list", fails compilation by name.
 - **Check types:** `text_visible`, `text_in_target`, `not_visible`, `url_matches`, `network_none` / `network_seen` (method + URL pattern + status class, from the browser's own traffic), `probe_equals_baseline` / `probe_equals` (read-only GET to a declared probe on an allowed origin), deterministic visual checks — `visible_unoccluded` (hit-test at the element's center returns the element or a descendant; in viewport; minimum size), `pixel_diff` (region vs committed baseline image, threshold), `contrast_min` — and `model_verify` (only for `visual: model`; rejected in `strict` mode).
 - **Targets** are resolved by trying locators in order; the first unique, actionable match wins.
 - **Every step carries `side_effect`:** `true` for a step that changes app state (submit, purchase, delete), `false` for a **replay-safe** step (navigation, reads, idempotent fills). The flag is required and never defaulted — a missing flag fails validation, because a default of `false` would let a continuation re-execute a purchase (ADR-0006 amendment).
@@ -223,19 +226,21 @@ Free-form notes for humans (ignored by the agent unless referenced).
 
 `bench/manifest.v1.json` is the only home of the benchmark's ground truth (ADR-0022). Traces carry the case ID as `eval.item_id` and never the answer (ARCHITECTURE §10). `bench/harness/manifest.py` validates the file, and CI runs its tests.
 
+The format, shown with a fictional `shop` app (these are not real cases):
+
 ```json
 {
   "schema_version": 1,
   "cases": {
-    "conduit-bug-001": {
-      "app": "conduit", "kind": "bug", "category": "data_display",
-      "split": "dev", "family": "conduit-article-meta", "flag": "k3q9",
-      "summary": "Favorites count on the article page is off by one",
-      "expected": [ { "spec": "favorite-article", "verdict": "expectation_violated", "expect": [1] } ]
+    "shop-bug-001": {
+      "app": "shop", "kind": "bug", "category": "data_display",
+      "split": "dev", "family": "shop-cart", "flag": "k3q9",
+      "summary": "The cart total leaves out the last line item",
+      "expected": [ { "spec": "checkout", "verdict": "expectation_violated", "expect": [1] } ]
     },
-    "conduit-benign-001": {
-      "app": "conduit", "kind": "benign",
-      "split": "dev", "family": "conduit-nav", "flag": "h3k8",
+    "shop-benign-001": {
+      "app": "shop", "kind": "benign",
+      "split": "dev", "family": "shop-nav", "flag": "h3k8",
       "summary": "Sign-in link relabeled",
       "expected": [ { "spec": "login", "verdict": "drift_consistent" } ]
     }
@@ -253,6 +258,6 @@ Free-form notes for humans (ignored by the agent unless referenced).
 | `family` | `<app>-<name>`: cases on the same code path |
 | `flag` | Opaque: 4 lowercase letters or digits, unique across the manifest. Never the case ID, because the frontend's flag list reaches the browser. `0000` is reserved for the harness self-test |
 | `summary` | One line, for people. It never reaches the system under test |
-| `expected` | One entry per scored spec: `spec` is a spec ID with a file at `bench/apps/<app>/qa/<spec>.spec.md`, and `verdict` is `expectation_violated` or `drift_consistent`. An `expectation_violated` entry names the violated `expect` indexes (0-based, as `expect_index` in §7), the violated `invariants` (§6), or both. Each index must exist in the spec file's `expect:` list, and the file's `id` must match its name. A bug needs at least one such entry, and it may also cause drift in other specs. List every spec in which the planted change violates an `expect` item or an invariant along that spec's steps. Leave out a spec where the change only blocks a step: its outcome depends on what healing may do, so it is not scored for that case (LAB_NOTES watch list). A benign case is `drift_consistent` in every entry |
+| `expected` | One entry per scored spec: `spec` is a spec ID with a file at `bench/apps/<app>/qa/<spec>.spec.md`, and `verdict` is `expectation_violated` or `drift_consistent`. An `expectation_violated` entry names the violated `expect` indexes (0-based, as `expect_index` in §7), the violated `invariants` (§6), or both. Each index must exist in the spec file's `expect:` list, and the file's `id` must match its name. A bug needs at least one such entry, and it may also cause drift in other specs. List every spec in which the planted change violates an expectation or an invariant along that spec's steps. Leave out a spec where the change only blocks a step: its outcome depends on what healing may do, so it is not scored for that case (LAB_NOTES watch list). A benign case is `drift_consistent` in every entry |
 
 Unknown keys and duplicate keys are errors. **Split freeze:** `bench/manifest.v1.split.sha256` holds the sha256 of the canonical JSON (sorted keys, no whitespace) of `{case_id: [split, family]}`. A test fails when the hash file and the manifest disagree, so moving a case is a deliberate edit in a reviewed pull request (`python3 bench/harness/manifest.py --split-hash` prints the new value).

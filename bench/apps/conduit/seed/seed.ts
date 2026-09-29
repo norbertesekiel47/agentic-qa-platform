@@ -23,7 +23,7 @@ type SeedArticle = {
   day: number;
 };
 
-/** A fixed instant in January 2026 (UTC), so rendered dates never drift. */
+/** A fixed instant in January 2026 (UTC). The app renders it in the viewer's time zone, so benchmark browsers run in UTC (TESTING.md §5). */
 const at = (day: number, hour = 10): Date => new Date(Date.UTC(2026, 0, day, hour));
 
 const USERS = [

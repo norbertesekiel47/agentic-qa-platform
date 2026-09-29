@@ -15,7 +15,7 @@ One observable claim in a spec's `expect` list about what must be true once the 
 _Avoid_: expect item, clause
 
 **Invariant**:
-A condition every run checks regardless of the spec's expectations: no console errors, uncaught exceptions, HTTP 5xx responses or broken images. A spec inherits all of them and can disable individual ones.
+A condition every run checks regardless of the spec's expectations: no console errors, no uncaught exceptions, no HTTP 5xx responses and no broken images. Each is a separate invariant, so an uncaught exception is not also a console error. A spec inherits all of them and can disable individual ones.
 
 **Probe**:
 A read-only endpoint a spec declares so it can check app state the UI can't show, such as "no order was created".
@@ -44,7 +44,7 @@ _Avoid_: selector
 The link between a target's meaning and the locators that currently find it. A binding either resolves or doesn't; heals repair bindings, never meanings.
 
 **Assertion**:
-The compiled check that establishes an expectation. Every expectation needs at least one assertion that actually establishes it, never a weaker proxy.
+The compiled check that establishes an expectation. What an expectation is about becomes a target's meaning; everything it claims about that target needs at least one assertion that actually establishes it, never a weaker proxy.
 _Avoid_: using "expectation" for the compiled check
 
 **Replay-safe step**:
@@ -175,14 +175,14 @@ _Avoid_: test case
 A deliberate defect in a benchmark app, in one of six categories, whose ground truth is `expectation_violated` in at least one spec.
 
 **Benign change**:
-A deliberate UI change in a benchmark app, such as a moved, restyled or relabeled element, under which every expectation still holds, so its ground truth is `drift_consistent` in every spec.
+A deliberate UI change in a benchmark app, such as a moved, restyled or relabeled element, under which every expectation still holds. Its ground truth is `drift_consistent` in each spec whose bindings it breaks.
 _Avoid_: intentional change
 
 **Flag**:
 The opaque ID that switches one case on. It never names the case, because the app's flag list reaches the browser.
 
 **Ground truth**:
-The verdict a case should produce in each spec it affects. It lives only in the benchmark manifest and never travels in traces or reaches the app under test.
+The verdict a case should produce in each spec it is scored on. A spec in which the case only blocks a step isn't scored, because its outcome depends on what healing may do. Ground truth lives only in the benchmark manifest and never travels in traces or reaches the app under test.
 
 **Split**:
 The partition a case belongs to: dev, for development and tuning, or test, frozen before tuning and run only for release numbers.
