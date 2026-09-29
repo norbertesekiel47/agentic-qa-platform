@@ -20,3 +20,25 @@ Each role declares required capabilities (tool calling, structured output, visio
 - The benchmark publishes a per-role model comparison — evidence that routing saves cost without losing accuracy.
 - Provider quirks (tool-call formats, structured-output support) must be covered by cassette tests per supported provider.
 - Prices are never hard-coded in logic; published cost figures are re-measured per release.
+
+## Amendment (2026-09-29): a pinned price map, Sonnet 5.5 defaults and no forced tool choice
+
+**Prices come from a vendored copy of LiteLLM's `model_prices_and_context_window.json`, not the `litellm` package.**
+- *How it's kept:* the copy is pinned to an upstream commit, with its sha256, and refreshed by a script in a reviewed pull request. Each cost record cites the version (`llm_calls.price_map_version`, DATA_MODEL §2), so a published cost figure names the prices it used.
+- *Why not the package:* LiteLLM's PyPI releases 1.82.7 and 1.82.8 were malicious (2026-03-24); 1.82.8 ran at interpreter start through a `.pth` file. The runner holds customers' provider keys, and we need one data file, not the package.
+
+**Capability validation reads the same file** (`supports_function_calling`, `supports_vision`, `supports_response_schema`). A model missing from it needs explicit capabilities and prices in the project config (`models`, DATA_MODEL §9), or it is rejected.
+
+**Every role defaults to Claude Sonnet 5.5** (`claude-sonnet-5-5`, $2 input / $10 output per million tokens). This covers the navigator, verifier, healer and vision fallback.
+- *Navigator:* moves up from Haiku 4.5. Exploring runs once per spec version, and the compiled script's quality decides every later result.
+- *Other roles:* move from Sonnet 5, at the same price.
+- *Benchmark:* M3's per-role ablation tests Haiku 4.5 and Opus 5.5 on the dev split.
+
+**Requests never force a tool choice.** Sonnet 5.5 and Opus 5.5 reject `tool_choice` set to `any` or `tool` with a 400.
+- Tools use `auto` with strict schemas.
+- The coverage plan (ADR-0024) uses structured output.
+- A structured-output helper can force a tool behind the scenes, so cassette tests check the pinned adapter's actual wire requests.
+
+**Refusals** (`stop_reason: "refusal"`) are recorded as their own outcome. The role's configured fallback model is used if there is one.
+
+"The live price map" in AGENTS.md §6 and TECH_STACK now means this pinned copy.

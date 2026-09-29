@@ -14,6 +14,12 @@ _Avoid_: test case, scenario
 One observable claim in a spec's `expect` list about what must be true once the goal is done. Only a human edit to the spec can change an expectation.
 _Avoid_: expect item, clause
 
+**Subject**:
+What an expectation is about, such as "jake's comment" or "the Pay button". It becomes a target's meaning when the spec is explored, and replays don't re-check it.
+
+**Claim**:
+Everything an expectation says about its subject: its text, state, position, destination or count. The expectation's assertions must establish all of it.
+
 **Invariant**:
 A condition every run checks regardless of the spec's expectations: no console errors, no uncaught exceptions, no HTTP 5xx responses and no broken images. Each is a separate invariant, so an uncaught exception is not also a console error. A spec inherits all of them and can disable individual ones.
 
@@ -21,10 +27,17 @@ A condition every run checks regardless of the spec's expectations: no console e
 A read-only endpoint a spec declares so it can check app state the UI can't show, such as "no order was created".
 
 **Reset hook**:
-An optional endpoint a spec declares to return the app to its starting state, so a non-resumable run can start again as a new attempt.
+An optional endpoint a spec declares to put the app in the spec's starting state. Every attempt starts by calling it, the first included, so a spec that declares one can run repeatedly.
 
 **Allowed origins**:
-The origins a run's browser may reach: the spec's start origin plus any it lists.
+The origins a run may navigate to and act on: the run's start origin, which comes from the invocation and never from the spec, plus any the spec lists. Test secrets can be bound only to allowed origins.
+
+**Subresource host**:
+A host the project lets pages load resources from, such as a CDN or font host, without making it an allowed origin: the agent can't navigate there, and no test secret can be bound to it.
+_Avoid_: calling it an allowed origin
+
+**Expected-blocked host**:
+A host the project declares that pages may try to reach but the browser must never load from, such as an analytics host. Its egress blocks are expected, so their direct symptoms don't count against invariants.
 
 ### Compiled scripts
 
@@ -33,25 +46,33 @@ The committed, deterministic result of a successful exploration of one spec: its
 _Avoid_: compiled spec, test script, Playwright script
 
 **Target**:
-A named element of the app under test, defined by its meaning ("Pay button on the payment step") together with its binding. The meaning is fixed once compiled; only the binding can be healed.
+A named element of the app under test, defined by its meaning together with its binding. A meaning says what the element is for and where it sits ("the payment step's submit button"), never its current label; it is fixed once compiled, and only the binding can be healed.
 _Avoid_: element, selector. Don't use "target" for the app or URL being tested; say "app under test".
 
 **Locator**:
-One way of finding a target on the page, such as by role and accessible name or by test ID. A target has several, tried in order until one gives a unique, actionable match.
+One way of finding a target on the page, such as by role and accessible name or by test ID. A target has several, tried in order until one gives the unique match its use needs: actionable for a step, present on the page for an assertion.
 _Avoid_: selector
+
+**Element ref**:
+A short-lived handle to one element in one accessibility snapshot, such as `e12`, that the agent's tools act on. Compiling turns each ref on the explored path into a target.
+_Avoid_: using "ref" for a locator or a target
 
 **Binding**:
 The link between a target's meaning and the locators that currently find it. A binding either resolves or doesn't; heals repair bindings, never meanings.
 
 **Assertion**:
-The compiled check that establishes an expectation. What an expectation is about becomes a target's meaning; everything it claims about that target needs at least one assertion that actually establishes it, never a weaker proxy.
+A compiled check that establishes all or part of an expectation's claim, never a weaker proxy.
 _Avoid_: using "expectation" for the compiled check
+
+**Coverage plan**:
+The first thing exploring a spec produces, from the spec alone and before the browser opens: each expectation's subject and the checks that would establish its claim, or why no check can, plus any condition the goal requires, such as checking after a reload. It stays fixed for the whole explore run, and an expectation it can't cover fails compilation by name.
+_Avoid_: test plan
 
 **Replay-safe step**:
 A step whose `side_effect` flag is false: it can run again without changing app state, such as navigation, reading or an idempotent fill. Continuation may re-execute it to rebuild the page.
 
 **Side-effect step**:
-A step whose `side_effect` flag is true: it changes app state and can't safely run twice, such as a submit, purchase or delete. It is never re-executed automatically, and a heal may re-bind its target but can't add, remove or otherwise change it.
+A step whose `side_effect` flag is true: it changes app state and can't safely run twice, such as a submit, purchase or delete. Within an attempt it is never re-executed automatically, a new attempt repeats it only after the spec's reset hook succeeds (the one exception is a single confirmation replay the person running explore allows with `--confirm-repeat` when the spec has no reset hook), and a heal may re-bind its target but can't add, remove or otherwise change it.
 
 ### Runs
 
@@ -59,7 +80,11 @@ A step whose `side_effect` flag is true: it changes app state and can't safely r
 One execution of one spec version in one mode (explore, strict or verified), whether in CI, on a hosted runner or locally.
 
 **Explore**:
-The mode for a spec that has no compiled script yet: the agent drives the browser until every expectation is verified, then compiles the path it took.
+The mode for a spec that has no compiled script yet: the agent drives the browser until every expectation's planned checks pass, then compiles the path it took and proves it with a confirmation replay.
+
+**Confirmation replay**:
+The strict replay that ends every explore run: in a fresh browser, after the spec's reset hook if it declares one, the newly compiled script must pass every assertion and every invariant the spec keeps enabled before it is written. A script whose path has side-effect steps but whose spec has no reset hook is written without one, marked unconfirmed, unless the person running explore allows the repeat.
+_Avoid_: verification run, since "verified" names a replay mode
 
 **Replay**:
 Executing a compiled script, in strict or verified mode.
@@ -76,7 +101,7 @@ The step-by-step view of any finished run, explore runs included, with its scree
 _Avoid_: replay, replay viewer, run replay
 
 **Step intent**:
-The record of an action a runner writes before dispatching it, under the current lease, and completes afterwards. An unresolved step intent on a side-effect step means its outcome is unknown.
+The record of an action a runner writes before dispatching it (under the current lease, when the run has one) and completes afterwards. An unresolved step intent on a side-effect step means its outcome is unknown.
 _Avoid_: bare "intent", since the healer can never observe author intent (see `drift_consistent`)
 
 **Lease**:
@@ -91,12 +116,12 @@ _Avoid_: retry
 The state of a run that can't safely continue because a side-effect step's outcome is unknown. The run ends as errored, with evidence.
 
 **Attempt**:
-One pass through a run from step 1. A reset hook starts a new attempt with a fresh browser, and the report keeps every attempt.
+One pass through a run from step 1, in a fresh browser and after the spec's reset hook if it declares one. The report keeps every attempt.
 
 ### Healing and verdicts
 
 **Drift**:
-A binding that doesn't resolve: no locator gives a unique, actionable match within the wait budget, for a step or for an assertion. Drift sends the run to heal and says nothing yet about whether the app is broken.
+A binding that doesn't resolve: within the wait budget, no locator gives the unique match its use needs, for a step or for an assertion. Drift sends the run to heal and says nothing yet about whether the app is broken.
 
 **Heal**:
 The part of a run that handles drift: it re-observes the page, repairs bindings and non-side-effect steps, and classifies the outcome as a verdict.
@@ -116,7 +141,7 @@ The verdict that an assertion whose target resolved evaluated false, or an invar
 The verdict when neither `drift_consistent` nor `expectation_violated` can be established within the budget. It goes to a human.
 
 **Heal patch**:
-The change a heal makes to a compiled script. It may touch only target locators and non-side-effect steps, never assertions, target meanings, side-effect steps, `side_effect` flags or invariants.
+The change a heal makes to a compiled script. It may touch only target locators and non-side-effect steps, never assertions, target meanings, side-effect steps, `side_effect` flags, browser settings, the coverage plan or invariants.
 
 **Heal proposal**:
 A heal patch awaiting a human decision, tied to the PR head commit and compiled-script version it was computed against. No heal patch is committed without a recorded human acceptance.
@@ -144,7 +169,7 @@ A person's judgment on a verdict (correct, should have been `expectation_violate
 A run on the customer's own CI, using the customer's LLM key. It can never retrieve test secrets or provider keys stored with us.
 
 **Hosted run**:
-A run on our runners, started from the dashboard. Its browser may only reach verified domains.
+A run on our runners, started from the dashboard. It may navigate to and act on verified domains only; which subresource hosts it may load from is decided at M6 (#29).
 
 **Runner**:
 The container that executes one run: the run graph plus a browser. It holds no database or cloud credentials and does all its I/O through the API.
@@ -153,7 +178,11 @@ The container that executes one run: the run graph plus a browser. It holds no d
 The short-lived credential a runner uses for one run under one lease. Only a hosted-execution token, issued for a hosted run, may also read that run's test secrets and provider key.
 
 **Verified domain**:
-A hostname the organization has proven it controls. Hosted runs may only reach verified domains.
+A hostname the organization has proven it controls. Hosted runs may navigate to and act on verified domains only.
+
+**Egress block**:
+A request from the run's browser to a host that is neither an allowed origin nor a subresource host, which the run refuses. Unless the host is expected-blocked, an egress block keeps the run from passing without making it a finding.
+_Avoid_: network error
 
 **Test secret**:
 A named test credential, bound to allowed origins and a field, that a spec references by name. The browser fills it only into that field on those origins, and our tools never give its value to a model.

@@ -1,6 +1,6 @@
 # API — Agentic QA Platform
 
-Last updated: 2026-09-27 (revised after external review). REST over HTTPS, JSON, base path `/v1`. The FastAPI app is the source of truth; its generated OpenAPI document produces the dashboard's typed client. This file is the design contract — update it in the same PR as any endpoint change.
+Last updated: 2026-09-29 (explore exit codes and flags, ADR-0024). REST over HTTPS, JSON, base path `/v1`. The FastAPI app is the source of truth; its generated OpenAPI document produces the dashboard's typed client. This file is the design contract — update it in the same PR as any endpoint change.
 
 ## 1. Conventions
 
@@ -150,7 +150,10 @@ Connections live ≤ 2 hours (API Gateway limit); clients reconnect with `since_
 
 ```
 aqa init                          # scaffold qa/config.yaml + example spec
-aqa explore <spec> --url <url>    # agentic exploration → qa/.compiled/<spec>.json
+aqa explore <spec> --url <url>    # coverage plan → exploration → confirmation replay → qa/.compiled/<spec id>.json (ADR-0024)
+            [--plan-only]         #   write the coverage plan and stop (no browser)
+            [--force]             #   overwrite an up-to-date compiled script
+            [--confirm-repeat]    #   allow one confirmation that repeats side effects when the spec has no reset hook
 aqa replay  [<spec>...] --url     # strict replay (default), no LLM; --mode verified for model-assisted visual checks
 aqa run     [<spec>...] --url     # replay; heal on drift; write proposals locally
 aqa heal    <spec> --url          # force a heal pass from the first failing step
@@ -160,7 +163,20 @@ aqa login                         # device-code auth to the SaaS
 aqa upload  <run_dir>             # upload a local run
 ```
 
-Exit codes: `0` all passed · `1` expectation violated (bug) · `2` heal proposals pending · `3` inconclusive · `4` non-resumable run · `10+` infrastructure errors.
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| `0` | All passed. For `explore`: compiled, including an unconfirmed script, which prints a warning |
+| `1` | Expectation violated (bug). Never returned by `explore` |
+| `2` | Heal proposals pending |
+| `3` | Inconclusive. For `explore`: gave up (attempts or budget exhausted, a model refusal with no fallback, or a flaky confirmation) |
+| `4` | Non-resumable run |
+| `5` | Spec error: the spec is invalid, or an expectation has no establishing check (ADR-0024) |
+| `6` | Policy: egress blocked. The page requested a host that is neither an allowed origin, a subresource host nor expected-blocked. No finding; the run record names the refused host (ADR-0026) |
+| `10+` | Infrastructure errors, e.g. no sandbox, a failed reset hook, a provider outage, or an unreachable start origin |
+
+The run's start origin is the `--url` origin, or the project config's `base_url` when `--url` is omitted (DATA_MODEL §9). A spec's `start_url` is only a path (ADR-0026). Test-secret values come from `AQA_SECRET_<NAME>` environment variables, and their bindings from the project config (DATA_MODEL §9).
 
 ## 8. GitHub Action
 
@@ -178,3 +194,7 @@ steps:
         TEST_PASSWORD=${{ secrets.TEST_PASSWORD }}
 ```
 Docker-based action (runs the same runner image). No SaaS secret needed — OIDC handles auth. Fork PRs don't receive OIDC tokens; the action then runs locally and reports results in the job log only.
+
+Each `secrets:` entry reaches the runner as `AQA_SECRET_<NAME>`, bound as the project config declares. Two questions are open for M5:
+- how the action runs Chromium's sandbox, since Docker actions run as root under Docker's default seccomp profile (#26);
+- which config revision a CI run trusts for secret bindings (#27).

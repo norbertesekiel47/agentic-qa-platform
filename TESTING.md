@@ -1,21 +1,22 @@
 # Testing — Agentic QA Platform
 
-Last updated: 2026-09-27 (revised after external review). Two different things are tested here: **the software is correct** (unit → E2E) and **the agent is good** (the benchmark). Both gate releases.
+Last updated: 2026-09-29 (M1 design decisions, ADR-0024–0026). Two different things are tested here: **the software is correct** (unit → E2E) and **the agent is good** (the benchmark). Both gate releases.
 
 ## 1. Test layers
 
 | Layer | Scope | Tools | Runs |
 |---|---|---|---|
-| Unit | Spec parser, **expectation-coverage compiler rules** (every expectation maps to ≥ 1 establishing check; unsupported expectations fail by name), target resolution, compiled-script patching + heal-patch validator (target locators and non-side-effect steps only), deterministic visual checks, network/probe checks, cost math, verdict schemas, token verification | pytest, Hypothesis | Every commit |
+| Unit | Spec parser (strict: unknown and duplicate keys, `id` vs file name), **expectation-coverage compiler rules** (every expectation maps to ≥ 1 establishing check; unsupported expectations fail by name; required conditions survive path selection), locator generation and resolution per use (action, assertion, negative check), text matching (case-insensitive, whole-word literals vs regex patterns), `side_effect` inference (positive evidence only), compiled-script patching + heal-patch validator (target locators and non-side-effect steps only; `browser` and `coverage` immutable), deterministic visual checks, network/probe checks, cost math from the pinned price map, verdict schemas, token verification | pytest, Hypothesis | Every commit |
+| **Pilot acceptance** (M1 exit) | Each compiled pilot script replayed by the M1 executor on the clean app 3 times (deterministic), then under each case's flag. Each bug case must fail exactly the expectations and invariants its manifest entry names. For each benign case, the broken bindings (or fallback resolutions) are listed, and a hand-written rebinding patch restores every pass without touching an assertion (ADR-0024) | `bench/` harness + the M1 executor | M1 exit; again when the compiler changes |
 | Integration | API + Postgres (real RLS), checkpointer over HTTP, SQS dispatch, S3 presign | pytest + testcontainers (Postgres, LocalStack for S3/SQS) | Every commit |
 | Tenant isolation | Cross-org access attempts on every table and endpoint | pytest (parametrized over the table/endpoint registry) | Every commit — **blocking** |
 | Checkpointer conformance | Full saver interface (sync + async), pending writes, idempotent retries, HTTP failure injection, size limits | pytest, test cases ported from LangGraph's upstream Postgres saver suite | Every commit |
-| Continuation & step intents | Forced cutoff mid-run: replay-safe resume succeeds; crash after dispatching a `side_effect` step but before completion → unresolved intent → `non_resumable`; stale-lease writes rejected; `reset` restarts as a new attempt | pytest + fixture app + fault injection | Every commit |
-| Binding vs expectation | An assertion whose target won't resolve → heal (binding repair); a resolved target whose check is false → `expectation_violated`; a heal patch touching `/assertions`, target meanings, side-effect steps, or `side_effect` flags is rejected | pytest + fixture pages | Every commit |
+| Continuation & step intents | Forced cutoff mid-run: replay-safe resume succeeds; crash after dispatching a `side_effect` step but before completion → unresolved intent → `non_resumable`; stale-lease writes rejected; `reset` restarts as a new attempt; no attempt (including an explore restart or confirmation replay) repeats a dispatched side-effect step unless the reset hook succeeded first or `--confirm-repeat` authorized that single confirmation | pytest + fixture app + fault injection | Every commit |
+| Binding vs expectation | An assertion whose target won't resolve → heal (binding repair); a resolved target whose check is false → `expectation_violated`; a covered target still resolves, so `visible_unoccluded` evaluates false; a heal patch touching `/assertions`, target meanings, side-effect steps, `side_effect` flags, `/browser` or `/coverage` is rejected | pytest + fixture pages | Every commit |
 | **Runner hygiene** | Crash mid-run with secrets loaded → next invocation in the same environment finds no processes, files, or profile residue | Lambda runtime emulator + fault injection | Every commit — **blocking** |
-| **Egress & secrets** | Through the egress proxy + routing: hostile pages attempting fetch/XHR/form/WebSocket exfiltration, redirect chains to disallowed hosts, DNS rebinding, service-worker registration, cross-origin iframes, non-HTTP schemes; secret reflection into text/attributes/pixels in explore, heal, and verified modes | pytest + fixture pages + local DNS fixture | Every commit — **blocking** |
-| **Browser sandbox** | Runner verifies Chromium's sandbox is active at startup; M1 spike records whether it works on Lambda (decision gate for hosted compute) | Spike harness + startup check | M1 spike; every runner start |
-| Strict-mode guarantee | Model client is never constructed in `strict` replay; `visual: model` assertions rejected in strict compile | pytest | Every commit |
+| **Egress & secrets** | Through the egress proxy and routing (ADR-0026):<ul><li>**Exfiltration:** hostile pages attempting fetch, XHR, form, WebSocket, WebRTC/UDP, QUIC and IPv6 exfiltration.</li><li>**Redirects:** chains to disallowed hosts and to subresource hosts.</li><li>**Documents:** reached by clicks, `location` changes and popups; the agent must not observe or act on them.</li><li>**DNS:** rebinding within a run, private addresses behind allowlisted hostnames, and DNS prefetch.</li><li>**Other paths:** service-worker registration, cross-origin iframes, non-HTTP schemes.</li><li>**Egress blocks:** undeclared hosts end the run `errored` with `egress_blocked` (exit 6), never as a finding; expected-blocked hosts' direct symptoms don't count.</li><li>**Secret reflection:** into text, attributes and pixels, in explore, heal and verified modes.</li><li>**Secret isolation:** secrets stay out of saved evidence (masked screenshots; no request or response bodies, HAR files or Playwright traces; network logs hold metadata only, and a saved `trace` is only our OpenTelemetry trace), and the browser's environment carries no secrets.</li></ul>Traffic is observed at the packet level | pytest + fixture pages + local DNS fixture | Every commit — **blocking** (from M1) |
+| **Browser sandbox** | The runner verifies at startup that Chromium's sandbox is active, comparing a renderer with the browser process, with negative controls. The M1 spike tests hosted candidates against the fresh-VM predicate (ADR-0008 amendment). Our CI records the runner's AppArmor state, then allows unprivileged user namespaces before the browser tests (ADR-0026) | Spike harness + startup check | M1 spike; every runner start |
+| Strict-mode guarantee | Model client is never constructed in `strict` replay, and the confirmation replay that ends an explore run makes no model calls; `visual: model` assertions rejected in strict compile | pytest | Every commit |
 | Agent unit | Graph transitions and tool handling with **recorded LLM responses** | VCR.py cassettes, fake chat model | Every commit |
 | Contract | OpenAPI schema vs generated TS client; runner ↔ API payloads; cross-project trace fixture (`contracts/agentic-qa-trace.v1`) | Schemathesis-style fuzzing, client type check, fixture validation | Every commit |
 | GitHub App | Checks limits (≤ 3 actions, ≤ 20-char identifiers), stale-proposal rejection, permission checks, fork fallback | pytest + recorded webhooks | Every commit |
@@ -25,11 +26,11 @@ Last updated: 2026-09-27 (revised after external review). Two different things a
 | E2E system | CLI → API → runner → GitHub (sandbox org) on a demo app | Playwright + GitHub test org | Nightly + pre-release |
 | Benchmark | Agent quality on the dev split (§5) | `bench/` harness | Smoke every PR; full dev split nightly |
 | Load | Concurrent hosted runs, API p95, WebSocket fan-out | k6 / Locust against staging | Pre-release |
-| Security | Authz matrix, injection fixtures, redaction, dependency audit | pytest, pip-audit, pnpm audit, Trivy | Every commit (audit weekly) |
+| Security | Authz matrix, injection fixtures (explore-focused from M1: task hijack, decoy success, decoy binding after a failed confirmation, navigation and secret steering; heal-focused from M2), redaction, dependency audit | pytest, pip-audit, pnpm audit, Trivy | Every commit (audit weekly) |
 
 ## 2. Test-driven development scope
 
-Written test-first (red → green → refactor): replay engine, locator resolution, deterministic visual checks, expectation-coverage compiler rules, heal-verdict schema and heal-patch validator (target locators and non-side-effect steps only), step intents and lease fencing, RLS policies and `set_config` context, token/OIDC/webhook verification, domain verification, API-key hashing, secret redaction and origin binding, egress enforcement, runner startup hygiene.
+Written test-first (red → green → refactor): replay engine (including M1's confirmation-replay executor), locator generation and resolution, deterministic visual checks, text matching, expectation-coverage compiler rules, `side_effect` inference, heal-verdict schema and heal-patch validator (target locators and non-side-effect steps only), step intents and lease fencing, RLS policies and `set_config` context, token/OIDC/webhook verification, domain verification, API-key hashing, secret redaction and origin binding, egress enforcement (including the IP policy and document-origin checks), runner startup hygiene.
 
 ## 3. Tenant isolation tests
 
@@ -42,6 +43,9 @@ Written test-first (red → green → refactor): replay engine, locator resoluti
 ## 4. Agent tests without spending money
 
 - **Cassettes:** LLM calls recorded once against real providers, played back in CI. Keyed by prompt hash; a changed prompt fails loudly and must be re-recorded deliberately (`make record-cassettes`, requires keys).
+  - *Why the keys stay stable:* the navigator's prompts depend only on graph state, and the coverage plan's prompt depends only on the spec (ADR-0024).
+  - *Wire requests:* per provider, cassette tests also check what each adapter actually sends. For example, no request forces a tool choice (ADR-0007 amendment).
+  - *Pages that change between runs:* a page whose content differs from run to run, such as one with a random slug, can't be replayed from a cassette. The pilot's full explores are live, recorded runs whose evidence cites the SHA.
 - **Fake model:** scripted chat model for graph-transition tests (e.g., "heal returns `expectation_violated`" → assert finding created, no patch).
 - **Fixture pages:** small static apps under `tests/fixtures/pages/` for each drift type (moved element, renamed label, removed element, new modal, canvas widget) and each hostile behavior (§1 Egress & secrets).
 
@@ -51,7 +55,7 @@ Location: `bench/`. Two open-source apps with **60 planted bugs** behind feature
 
 **Flags and ground truth (ADR-0022):** each case is one opaque flag, set through `BENCH_FLAGS` when the app's containers are recreated (which also reseeds the database). Specs reach app state only through the app's `/test-api/*` reset hook and narrow read-only probes. Ground truth lives only in `bench/manifest.v1.json`, keyed by case ID.
 
-**Browser time zone:** benchmark browsers run in UTC, as `bench/harness/toggle_checks.py` does. Apps render dates in the viewer's time zone, and Conduit's seeded article times (10:00 UTC) show their seeded dates only between UTC−10 and UTC+13, so a replay in another zone would fail the clean app.
+**Browser settings:** every run pins its browser settings (time zone UTC, locale en-US, viewport 1280×800), and the compiled script records the settings it was explored under (ADR-0025). Benchmark runs use the defaults, as `bench/harness/toggle_checks.py` does. Apps render dates in the viewer's time zone. Conduit's seeded article times (10:00 UTC) show their seeded dates only between UTC−10 and UTC+13, so a replay in another zone would fail the clean app.
 
 **Pilot first (M0):** one app, ~5 bugs and 2 benign changes, development-only — enough to validate the compiler, the expectation-coverage rules, and the heal contract before investing in the full benchmark. Pilot cases join the dev split. The full benchmark is written and its split frozen at the start of M3, before any tuning on it.
 
@@ -92,6 +96,7 @@ PR smoke: 8 dev-split cases (≈ 2 min, recorded cassettes). Nightly: full dev s
 
 - A replay that fails then passes on retry is recorded as **flaky**, not passed. Flakes are tracked per spec and surfaced in the dashboard.
 - No blanket retries in CI. Any retry is explicit, counted, and reported.
+- **Explore applies the same rule** (ADR-0024). If a confirmation replay fails and a later one passes with the identical compiled script, the spec is flaky: explore writes nothing and reports why.
 
 ## 7. Dashboard quality
 

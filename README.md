@@ -39,11 +39,11 @@ spec.md ──explore (LLM)──► compiled.json ──strict replay (no LLM)�
 - **Hybrid perception:** accessibility tree for precise actions, screenshots for visual verification, vision fallback for canvas/iframes.
 - **Specs live in your repo** (`qa/*.spec.md`), versioned with the code they test; heals arrive as locator-only PR commits you approve.
 - **Model-agnostic:** role-based routing (navigator / verifier / healer / vision fallback) across OpenRouter, OpenAI, Anthropic, DeepSeek, and more — bring your own keys.
-- **Runs anywhere:** the same runner image executes in your GitHub Actions (zero stored secrets via OIDC) or on AWS-hosted runners from the dashboard, with a sandboxed browser, per-run isolation, and connection-level egress restricted to verified domains.
+- **Runs anywhere:** the same runner image executes in your GitHub Actions (zero stored secrets via OIDC) or on AWS-hosted runners from the dashboard, with a sandboxed browser, per-run isolation, and connection-level egress control (hosted runs navigate and act only on verified domains).
 
 ## Architecture
 
-Python (FastAPI, LangGraph, Playwright) · Next.js dashboard (static, on S3 + CloudFront) · AWS (Lambda runners outside the VPC, RDS Postgres with row-level security, S3, SQS, KMS) · Clerk Organizations. Details: [ARCHITECTURE.md](ARCHITECTURE.md).
+Python (FastAPI, LangGraph, Playwright) · Next.js dashboard (static, on S3 + CloudFront) · AWS (hosted runners outside the VPC, one fresh VM per run, with the compute chosen by the M1 spike; RDS Postgres with row-level security, S3, SQS, KMS) · Clerk Organizations. Details: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Releases *(planned)*
 

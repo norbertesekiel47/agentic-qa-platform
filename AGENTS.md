@@ -79,17 +79,17 @@ pnpm -C apps/dashboard gen:client   # regenerate TS client from OpenAPI
 
 - **Strict replay makes zero LLM calls.** A test asserts the model client is never constructed in `strict` mode. Model-assisted checks exist only in `verified` mode and are reported separately.
 - **Every expectation is covered.** The compiler maps each expectation to ≥ 1 check that actually establishes it, and fails by name on unsupported expectations — never substitute a weaker proxy.
-- **Heals repair bindings, never expectations.** The heal-patch validator allows only target locators and non-side-effect steps; it rejects changes to assertions, target meanings, side-effect steps, `side_effect` flags, and invariants. Never label a change "intentional" in code, UI, or docs — use `drift_consistent`.
-- **Step intents before actions.** Write the intent row (with the current lease) before dispatching any action; an unresolved side-effect intent makes the run non-resumable.
+- **Heals repair bindings, never expectations.** The heal-patch validator allows only target locators and non-side-effect steps; it rejects changes to assertions, target meanings, side-effect steps, `side_effect` flags, browser settings, the coverage plan, and invariants. Never label a change "intentional" in code, UI, or docs — use `drift_consistent`.
+- **Step intents before actions.** Write the intent record before dispatching any action, under the current lease where the run has one (uploaded and hosted runs); M1's local runs keep it in the local run record (ADR-0024). An unresolved side-effect intent makes the run non-resumable.
 - **Heals are proposals.** No code path may commit a compiled-script change without a recorded human acceptance, and acceptance must pass the staleness check.
-- **Never re-execute a `side_effect` step automatically** (continuations, retries).
+- **Never re-execute a `side_effect` step automatically** (continuations, retries). A new attempt, including an explore restart or confirmation replay, repeats one only after the spec's reset hook succeeds, or, for a single confirmation replay, when the person running explore passes `--confirm-repeat` (ADR-0024).
 - **Runners never get DB or AWS data-plane credentials.** All runner I/O goes through the API with a run token; runner startup hygiene runs before any tenant data is fetched. Only hosted-execution tokens can retrieve stored provider keys or test secrets.
-- **Launch Chromium with its sandbox enabled** and verify it at startup. Never ship `--no-sandbox` for hosted multi-tenant runs; the M1 decision gate picks Lambda or Fargate accordingly.
-- **Page content is untrusted.** Never add a tool that performs arbitrary HTTP, file, or shell access. Never let observation text flow into system prompts. The egress proxy, HTTP/WebSocket routing (installed before page creation), and service-worker blocking stay on in every mode.
-- **Our tools never put secret values into model input.** Observations in every model-using mode pass through secret-value redaction and screenshot masking/OCR checks; `fill_secret` enforces origin/field binding.
+- **Launch Chromium with its sandbox enabled** and verify it at startup. Never ship `--no-sandbox` for hosted multi-tenant runs; the M1 spike picks hosted compute that runs sandboxed Chromium in a fresh VM per run (ADR-0008 amendment). In M1, an unsandboxed launch is a hard error everywhere (ADR-0026).
+- **Page content is untrusted.** Never add a tool that performs arbitrary HTTP, file, or shell access. Never let observation text flow into system prompts. The egress proxy, HTTP/WebSocket routing (installed before page creation), service-worker blocking, and the allowed-origin checks before every observation and action stay on in every mode.
+- **Our tools never put secret values into model input.** Observations in every model-using mode pass through secret-value redaction and screenshot masking/OCR checks; `fill_secret` enforces origin/field binding. The browser's environment carries no secrets, and saved evidence never includes request bodies, HAR files or browser traces (ADR-0026).
 - **Every query runs with `app.org_id` set** via parameterized `set_config('app.org_id', …, true)` using the internal UUID (never Clerk's `o.id` string). Never connect as the table-owner role on request paths.
 - **Benchmark discipline.** Tune only on the dev split. Never run the frozen test split in CI or use it for tuning.
-- **Model IDs and prices** come from config and the live price map — never hard-code prices in logic.
+- **Model IDs and prices** come from config and the pinned price map (a vendored copy of LiteLLM's, refreshed deliberately; ADR-0007 amendment) — never hard-code prices in logic, and never install the `litellm` package.
 
 ## 7. Definition of done
 

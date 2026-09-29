@@ -1,6 +1,6 @@
 # PRD — Agentic QA Platform (v1)
 
-Status: Draft (revised after external review) · Owner: Norbert Esekiel · Last updated: 2026-09-27
+Status: Draft (revised after external review) · Owner: Norbert Esekiel · Last updated: 2026-09-29
 
 Related: [VISION](VISION.md) · [ARCHITECTURE](ARCHITECTURE.md) · [DATA_MODEL](DATA_MODEL.md) · [API](API.md) · [UX_SPEC](UX_SPEC.md) · [ROADMAP](ROADMAP.md)
 
@@ -40,22 +40,35 @@ A multi-tenant SaaS, CLI, GitHub Action, and GitHub App that turns structured na
 
 ### 4.1 Specs
 - FR-1 Specs are Markdown files with YAML frontmatter under `qa/**/*.spec.md` (format in [DATA_MODEL §6](DATA_MODEL.md#6-spec-file-format)).
-- FR-2 Fields: `goal` (required), `preconditions` (test account refs, seed data, start URL, optional `reset` hook), optional `steps` hints, `expect` (≥1; each may declare `visual: deterministic|model`), `invariants`, optional `allowed_origins`.
+- FR-2 Fields: `goal` (required), `preconditions` (test account refs, start URL as a path, optional `reset` hook that runs before every attempt, optional read-only probes), optional `steps` hints, `expect` (≥1; each may declare `visual: deterministic|model`), `invariants`, optional `allowed_origins`, and optional `browser` settings. A project config next to the specs declares model roles, browser defaults, subresource and expected-blocked hosts, and test-secret bindings (DATA_MODEL §9).
 - FR-3 Default invariants: no uncaught JS exceptions, no console errors, no HTTP 5xx, no broken images. Each can be disabled per spec.
 - FR-4 Test credentials are referenced by name (`secret: TEST_PASSWORD`), never inlined.
 
 ### 4.2 Execution engine
-- FR-5 **Explore mode:** agent drives the browser (hybrid perception: accessibility tree for actions, screenshots for visual verification, vision fallback for canvas/iframes/unlabeled widgets) until all `expect` assertions are verified or it gives up with a reason.
-- FR-6 **Compile:** a successful exploration produces `qa/.compiled/<spec>.json` — **targets** (element meaning + multi-strategy locators), ordered steps that each carry a required `side_effect` flag (`false` marks a replay-safe step), and assertions. **Every expectation must map to ≥ 1 check that actually establishes it** (UI text/content, URL, the browser's network traffic, read-only state probes, deterministic visual checks); unsupported expectations fail compilation by name rather than being replaced by a weaker proxy.
+- FR-5 **Explore mode (ADR-0024).**
+  - *Coverage plan:* the agent first writes a coverage plan from the spec alone.
+  - *Driving the browser:* it then drives the browser until every planned check passes, or it gives up with a reason. Hybrid perception applies: the accessibility tree for actions, screenshots for visual verification, and vision fallback for canvas, iframes and unlabeled widgets. M1 uses the tree only.
+  - *Confirmation:* the compiled path is confirmed by a strict replay with no model calls before it is written. A path with side-effect steps whose spec has no reset hook is written unconfirmed, unless the person running explore authorizes one confirmation that repeats them. In M1, specs with `visual: model` expectations are rejected as a spec error; M2 defines how they compile and confirm.
+  - *Never a bug report:* explore never files findings. An expectation it saw fail is a reason it gave up.
+- FR-6 **Compile:** a successful exploration produces `qa/.compiled/<spec>.json`. It contains:
+  - **targets:** each element's meaning, which never names its current label, plus multi-strategy locators;
+  - ordered steps, each carrying a required `side_effect` flag (`false` marks a replay-safe step and needs positive evidence);
+  - assertions;
+  - the coverage plan and the browser settings it was explored under (ADR-0025).
+
+  **Every expectation must map to ≥ 1 check that actually establishes it** (UI text/content, URL, the browser's network traffic, read-only state probes, deterministic visual checks). Unsupported expectations fail compilation by name rather than being replaced by a weaker proxy.
 - FR-7 **Strict replay (default):** executes compiled steps with **zero LLM calls**. Every assertion must compile to a deterministic check, including deterministic visual checks (in viewport, not occluded, minimum size/contrast, optional baseline pixel-diff). **Verified replay (opt-in):** adds model-assisted checks for `visual: model` assertions; its cost and results are reported separately and never counted as strict replays.
-- FR-8 **Heal on drift:** when a step's or an assertion's target can't be resolved, the agent re-observes, repairs target bindings and/or non-side-effect steps, and emits: `drift_consistent` (after repair every assertion evaluates and passes and every invariant holds → patch proposal), `expectation_violated` (a resolved check evaluated false; finding with evidence), or `inconclusive` (escalate). Heal patches can never modify assertions, target meanings, side-effect steps, `side_effect` flags, or invariants. PR context may be supplied as hints; the platform never claims to know author intent.
+- FR-8 **Heal on drift:** when a step's or an assertion's target can't be resolved, the agent re-observes, repairs target bindings and/or non-side-effect steps, and emits: `drift_consistent` (after repair every assertion evaluates and passes and every invariant holds → patch proposal), `expectation_violated` (a resolved check evaluated false; finding with evidence), or `inconclusive` (escalate). Heal patches can never modify assertions, target meanings, side-effect steps, `side_effect` flags, browser settings, the coverage plan, or invariants. PR context may be supplied as hints; the platform never claims to know author intent.
 - FR-9 Every verdict carries evidence references: before/after screenshots, accessibility snapshot diff, network and console logs, and the model's rationale.
-- FR-10 **Step intents and continuation:** every action writes an intent record before dispatch and a completion after, fenced by the current lease. A run cut off by the hosted time limit resumes in a new invocation (new lease + token from the dispatcher, max 3) by restoring browser storage state and re-executing only replay-safe steps up to the last completed step; it never re-executes a `side_effect` step and never continues past an unresolved side-effect intent (`errored: non_resumable`). A declared `reset` hook restarts the run as a new attempt from step 1.
-- FR-11 Secrets are filled via `fill_secret` only into fields and origins the secret is bound to; our tools never give the model a secret value; in every model-using mode, text observations are scrubbed of secret values and screenshots are masked and OCR-checked (best effort — a hostile page can reflect a value in forms scanning may miss, which is documented).
+- FR-10 **Step intents and continuation:** every action writes an intent record before dispatch and a completion after, fenced by the current lease. A run cut off by the hosted time limit resumes in a new invocation (new lease + token from the dispatcher, max 3) by restoring browser storage state and re-executing only replay-safe steps up to the last completed step; it never re-executes a `side_effect` step and never continues past an unresolved side-effect intent (`errored: non_resumable`). A declared `reset` hook runs before every attempt; a new attempt from step 1 repeats side-effect steps only after the hook succeeds.
+- FR-11 Secrets are filled via `fill_secret` only into fields and origins the secret is bound to.
+  - *Where bindings live:* the project config for local and CI runs; the stored test secrets for hosted runs.
+  - *What the model sees:* our tools never give the model a secret value. In every model-using mode, text observations are scrubbed of secret values, and screenshots are masked and OCR-checked. This is best effort: a hostile page can reflect a value in forms that scanning may miss, which is documented.
+  - *What's saved:* request bodies, HAR files and browser traces are never saved.
 
 ### 4.3 Models
 - FR-12 Model-agnostic: any provider supported by the configured chat-model layer (OpenRouter, OpenAI, Anthropic, DeepSeek, …).
-- FR-13 Role-based routing: `navigator`, `verifier`, `healer`, `vision_fallback`. Each role declares required capabilities (tool calling, structured output, vision); config validation rejects incompatible models.
+- FR-13 Role-based routing: `navigator`, `verifier`, `healer`, `vision_fallback`. Each role declares required capabilities (tool calling, structured output, vision); config validation rejects incompatible models, reading capabilities and prices from a pinned copy of LiteLLM's price map (ADR-0007 amendment).
 - FR-14 Every LLM call records provider, model, role, mode, tokens, latency, and computed cost.
 
 ### 4.4 CLI & GitHub Action
@@ -69,8 +82,8 @@ A multi-tenant SaaS, CLI, GitHub Action, and GitHub App that turns structured na
 - FR-20 Dashboard spec edits open a PR; the repo remains the source of truth.
 
 ### 4.6 Hosted runs (SaaS)
-- FR-21 Dashboard-triggered runs execute on hosted runners chosen by the M1 **sandbox decision gate**: AWS Lambda if Chromium's sandbox is proven to run there (with startup hygiene every invocation, since Lambda reuses environments), otherwise a one-task-per-run Fargate adapter (fresh microVM per run). Browser egress goes through a local proxy that enforces the allowlist at the connection level. Isolation guarantees are stated precisely in [SECURITY §6](SECURITY.md#6-runner-isolation-precise-boundary).
-- FR-22 Hosted runs may only target **verified domains** (DNS TXT or `/.well-known/` file), and the browser's egress is restricted to the run's allowed origins. CI runs are unrestricted.
+- FR-21 Dashboard-triggered runs execute on hosted compute chosen by the M1 **sandbox decision gate**. The compute qualifies only if it runs sandboxed Chromium and gives every run a fresh VM. Candidates are a Lambda MicroVM, a Fargate task and, measured only for the record, a Lambda function (ADR-0008 amendment). Browser egress goes through a local proxy that enforces the allowlist at the connection level. Isolation guarantees are stated precisely in [SECURITY §6](SECURITY.md#6-runner-isolation-precise-boundary).
+- FR-22 Hosted runs may only target **verified domains** (DNS TXT or `/.well-known/` file). In every mode, the browser's egress is restricted to the run's allowed origins and the project's subresource hosts (ADR-0026). CI runs need no domain verification.
 - FR-23 Per-org rate limits and concurrency caps.
 - FR-24 BYOK: org provider keys encrypted with KMS envelope encryption; decrypted only in memory for the duration of a run.
 - FR-25 **Test secrets:** write-only, KMS-encrypted, scoped per project with allowed origins and field hints; decryptable only by dispatcher-issued hosted-execution tokens (never CI/upload tokens); every retrieval audited.
@@ -116,11 +129,12 @@ All results are published per bug category with confidence intervals (method and
 
 ## 7. Out of scope (v1)
 
-Native mobile · load testing · non-GitHub SCM integrations beyond CLI + API key · Stripe billing · exploratory (spec-less) mode · accessibility-audit mode · export to Playwright code · SSO/SCIM beyond what Clerk provides · hard per-run VM isolation (Fargate adapter is later).
+Native mobile · load testing · non-GitHub SCM integrations beyond CLI + API key · Stripe billing · exploratory (spec-less) mode · accessibility-audit mode · export to Playwright code · SSO/SCIM beyond what Clerk provides.
 
 ## 8. Open questions
 
 1. ~~Which two open-source apps for the benchmark?~~ **Resolved (ADR-0020):** RealWorld Conduit (Angular + Nitro/Prisma/Zod) first, in M0; Medusa second, in M3, confirmed by a spike at M3 start.
-2. **Chromium sandbox on Lambda** (decision gate) plus packaging and startup-hygiene overhead — spike in M1; outcome selects Lambda or Fargate for hosted runs.
+2. **Hosted compute with a sandboxed browser** (decision gate). The M1 spike tests a Lambda MicroVM, a Fargate task and a Lambda function against one rule: sandboxed Chromium and a fresh VM per run (ADR-0008 amendment, 2026-09-29). It also measures packaging, start time, memory and cost.
 3. Clerk client-only auth in a Next.js static export — proven by the M7 skeleton task.
 4. Pixel-diff baselines for deterministic visual checks: where baseline images live (repo vs artifact store) — decide in M2.
+5. What a fallback-locator match means for verdicts, side-effect steps and benign-case scoring — decide in M2, before M3's numbers (#25).
