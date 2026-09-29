@@ -1,0 +1,12 @@
+# The benchmark harness is a workspace member for its tools and tests
+# (ADR-0027), not a package: its scripts run from this directory. Playwright is
+# here for toggle_checks.py's types; that script runs in the checks image, which
+# pins its own hash-locked copy (checks.Dockerfile).
+[project]
+name = "aqa-bench-harness"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = ["playwright==1.63.0"]
+
+[tool.uv]
+package = false

@@ -1,0 +1,18 @@
+[project]
+name = "aqa-cli"
+version = "0.1.0"
+description = "The aqa command."
+requires-python = ">=3.14"
+dependencies = [
+    "aqa-core",
+    "aqa-runner",
+    "rich==15.0.0",
+    "typer==0.27.2",
+]
+
+[project.scripts]
+aqa = "aqa_cli.main:app"
+
+[build-system]
+requires = ["uv_build>=0.11.15,<0.12"]
+build-backend = "uv_build"

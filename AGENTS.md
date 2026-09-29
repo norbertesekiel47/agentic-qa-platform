@@ -40,6 +40,8 @@ tests/               Cross-package integration, isolation, fixtures (pages, inje
 docs/runbooks/       Operational runbooks
 ```
 
+The three `packages/` exist: uv workspace members with `src` layouts, imported as `aqa_core`, `aqa_runner` and `aqa_cli`. `bench/harness` is a member too (ADR-0027).
+
 ## 4. Commands
 
 To be filled in at scaffold (M1) and kept current. Expected shape:

@@ -161,6 +161,7 @@ aqa heal apply <proposal_id>      # apply a proposal locally (fork PRs)
 aqa report  [<run_id>]            # open the run viewer (local HTML)
 aqa login                         # device-code auth to the SaaS
 aqa upload  <run_dir>             # upload a local run
+aqa --version                     # print "aqa <version>" and exit
 ```
 
 Exit codes:
