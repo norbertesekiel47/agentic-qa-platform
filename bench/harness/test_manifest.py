@@ -58,6 +58,23 @@ def valid_data() -> dict[str, Any]:
     }
 
 
+def spec_text(spec_id: str) -> str:
+    """A spec file with three expect items, one of them a mapping (DATA_MODEL §6)."""
+    return (
+        "---\n"
+        f"id: {spec_id}\n"
+        "goal: A reader does something.\n"
+        "expect:\n"
+        "  - The first thing holds\n"
+        "  - text: The button is visible and not covered by any overlay\n"
+        "    visual: deterministic\n"
+        "  - The third thing holds\n"
+        "invariants: { inherit: true }\n"
+        "---\n\n"
+        "Notes for humans.\n"
+    )
+
+
 class Workspace:
     """A throwaway repo root with the app directory and spec files the cases reference."""
 
@@ -67,7 +84,7 @@ class Workspace:
         qa = self.root / "bench" / "apps" / "conduit" / "qa"
         qa.mkdir(parents=True)
         for spec in specs:
-            (qa / f"{spec}.spec.md").write_text("---\nid: x\n---\n")
+            (qa / f"{spec}.spec.md").write_text(spec_text(spec))
 
     def write_manifest(
         self, data: dict[str, Any], split_hash: str | None = None
@@ -115,6 +132,7 @@ class ValidManifestTest(ManifestTestCase):
         self.assertIsNone(benign.category)
         self.assertEqual(benign.expected[0].verdict, "drift_consistent")
         self.assertEqual(benign.expected[0].expect, ())
+        self.assertEqual(bug.expected[0].invariants, ())
         self.assertEqual(loaded.case_for_flag("h3k8"), benign)
         self.assertIsNone(loaded.case_for_flag("zzzz"))
 
@@ -313,13 +331,98 @@ class ExpectedTest(ManifestTestCase):
             "conduit-benign-001: expected[0]: a benign case is drift_consistent in every spec",
         )
 
-    def test_violation_names_expect_indexes(self) -> None:
+    def test_violation_names_expect_indexes_or_invariants(self) -> None:
         self.assert_error(
             self.with_expected(
                 "conduit-bug-001",
                 [{"spec": "login", "verdict": "expectation_violated"}],
             ),
-            "conduit-bug-001: expected[0]: missing key 'expect'",
+            "conduit-bug-001: expected[0]: an expectation_violated entry names "
+            "expect indexes, invariants or both",
+        )
+
+    def test_invariant_only_violation(self) -> None:
+        entry = {
+            "spec": "login",
+            "verdict": "expectation_violated",
+            "invariants": ["js_exceptions"],
+        }
+        self.assertEqual(
+            self.errors_for(self.with_expected("conduit-bug-001", [entry])), []
+        )
+
+    def test_invariants_are_known_distinct_names(self) -> None:
+        for bad in ([], ["exceptions"], ["http_5xx", "http_5xx"], "http_5xx"):
+            with self.subTest(invariants=bad):
+                self.assert_error(
+                    self.with_expected(
+                        "conduit-bug-001",
+                        [
+                            {
+                                "spec": "login",
+                                "verdict": "expectation_violated",
+                                "invariants": bad,
+                            }
+                        ],
+                    ),
+                    "conduit-bug-001: expected[0]: invariants must be a non-empty list "
+                    "of distinct names from console_errors, js_exceptions, http_5xx, "
+                    "broken_images",
+                )
+
+    def test_drift_has_no_invariants(self) -> None:
+        self.assert_error(
+            self.with_expected(
+                "conduit-benign-001",
+                [
+                    {
+                        "spec": "login",
+                        "verdict": "drift_consistent",
+                        "invariants": ["http_5xx"],
+                    }
+                ],
+            ),
+            "conduit-benign-001: expected[0]: invariants is only for expectation_violated",
+        )
+
+    def test_expect_index_must_exist_in_the_spec(self) -> None:
+        self.assert_error(
+            self.with_expected(
+                "conduit-bug-001",
+                [
+                    {
+                        "spec": "login",
+                        "verdict": "expectation_violated",
+                        "expect": [2, 3],
+                    }
+                ],
+            ),
+            "conduit-bug-001: expected[0]: expect index 3 is out of range: "
+            "spec 'login' has 3 expect items",
+        )
+
+    def test_spec_file_without_expect_list(self) -> None:
+        spec = self.ws.root / "bench" / "apps" / "conduit" / "qa" / "login.spec.md"
+        spec.write_text("---\nid: login\ngoal: x\n---\n")
+        self.assert_error(
+            self.with_expected(
+                "conduit-bug-001",
+                [{"spec": "login", "verdict": "expectation_violated", "expect": [0]}],
+            ),
+            "conduit-bug-001: expected[0]: bench/apps/conduit/qa/login.spec.md: "
+            "no expect list in its front matter",
+        )
+
+    def test_spec_file_id_must_match_its_name(self) -> None:
+        spec = self.ws.root / "bench" / "apps" / "conduit" / "qa" / "login.spec.md"
+        spec.write_text(spec_text("sign-in"))
+        self.assert_error(
+            self.with_expected(
+                "conduit-bug-001",
+                [{"spec": "login", "verdict": "expectation_violated", "expect": [0]}],
+            ),
+            "conduit-bug-001: expected[0]: bench/apps/conduit/qa/login.spec.md: "
+            "id 'sign-in' does not match the file name",
         )
 
     def test_drift_has_no_expect_indexes(self) -> None:
@@ -385,6 +488,21 @@ class ExpectedTest(ManifestTestCase):
             ),
             "conduit-bug-001: expected[0]: unknown key 'note'",
         )
+
+
+class SpecFrontMatterTest(unittest.TestCase):
+    def test_reads_id_and_counts_expect_items(self) -> None:
+        self.assertEqual(manifest.spec_front_matter(spec_text("login")), ("login", 3))
+
+    def test_expect_list_ends_at_the_next_top_level_key(self) -> None:
+        text = "---\nid: a\nexpect:\n  - one\n  - two\ntags: [x]\n---\n  - not front matter\n"
+        self.assertEqual(manifest.spec_front_matter(text), ("a", 2))
+
+    def test_no_front_matter(self) -> None:
+        self.assertEqual(manifest.spec_front_matter("# Just markdown\n"), (None, None))
+
+    def test_no_expect_list(self) -> None:
+        self.assertEqual(manifest.spec_front_matter("---\nid: a\n---\n"), ("a", None))
 
 
 class SplitHashTest(unittest.TestCase):

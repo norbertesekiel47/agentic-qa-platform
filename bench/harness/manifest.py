@@ -39,6 +39,8 @@ SPLITS = ("dev", "test")
 VIOLATED = "expectation_violated"
 DRIFT = "drift_consistent"
 VERDICTS = (VIOLATED, DRIFT)
+# What a run checks beyond a spec's expect items (DATA_MODEL.md §6).
+INVARIANTS = ("console_errors", "js_exceptions", "http_5xx", "broken_images")
 
 CASE_ID = re.compile(r"(?P<app>[a-z][a-z0-9]*)-(?P<kind>bug|benign)-\d{3}")
 FLAG = re.compile(r"[a-z0-9]{4}")
@@ -49,7 +51,13 @@ NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 CASE_REQUIRED = ("app", "kind", "split", "family", "flag", "summary", "expected")
 CASE_OPTIONAL = ("category",)
 ENTRY_REQUIRED = ("spec", "verdict")
-ENTRY_OPTIONAL = ("expect",)
+ENTRY_OPTIONAL = ("expect", "invariants")
+
+# Spec files (DATA_MODEL.md §6) start with YAML front matter. With no YAML parser
+# before M1, spec_front_matter relies on that section's layout: top-level keys at
+# column 0, and each expect item a "  - " line two spaces in.
+FRONT_MATTER = re.compile(r"\A---\n(.*?)\n---(?:\n|\Z)", re.DOTALL)
+TOP_LEVEL_KEY = re.compile(r"[A-Za-z_][\w-]*:")
 
 
 @dataclass(frozen=True)
@@ -59,6 +67,7 @@ class Expected:
     spec: str
     verdict: str
     expect: tuple[int, ...]
+    invariants: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -145,6 +154,56 @@ def _one_of(
     return [f"{where}: {key} '{value}' is not one of {', '.join(allowed)}"]
 
 
+def spec_front_matter(text: str) -> tuple[str | None, int | None]:
+    """A spec file's id and its number of expect items (None where absent)."""
+    match = FRONT_MATTER.match(text)
+    if match is None:
+        return None, None
+    spec_id: str | None = None
+    has_expect, count, in_expect = False, 0, False
+    for line in match[1].splitlines():
+        if TOP_LEVEL_KEY.match(line):
+            key, _, value = line.partition(":")
+            in_expect = key == "expect"
+            has_expect = has_expect or in_expect
+            if key == "id":
+                spec_id = value.strip()
+        elif in_expect and line.startswith("  - "):
+            count += 1
+    return spec_id, (count if has_expect else None)
+
+
+def _valid_invariants(value: object) -> bool:
+    if not isinstance(value, list) or not value:
+        return False
+    names = [n for n in value if isinstance(n, str) and n in INVARIANTS]
+    return len(names) == len(value) and len(set(names)) == len(names)
+
+
+def _check_spec_file(
+    root: Path, app: str, spec: str, expect: object, where: str
+) -> list[str]:
+    spec_file = APPS / app / "qa" / f"{spec}.spec.md"
+    path = root / spec_file
+    if not path.is_file():
+        return [f"{where}: no spec file {spec_file}"]
+    spec_id, count = spec_front_matter(path.read_text())
+    errors: list[str] = []
+    if spec_id != spec:
+        errors.append(
+            f"{where}: {spec_file}: id '{spec_id}' does not match the file name"
+        )
+    if count is None:
+        return [*errors, f"{where}: {spec_file}: no expect list in its front matter"]
+    if isinstance(expect, list) and _valid_indexes(expect):
+        errors.extend(
+            f"{where}: expect index {i} is out of range: spec '{spec}' has {count} expect items"
+            for i in expect
+            if i >= count
+        )
+    return errors
+
+
 def _valid_indexes(value: object) -> bool:
     if not isinstance(value, list) or not value:
         return False
@@ -164,20 +223,27 @@ def _validate_entry(
     errors += _one_of(verdict, "verdict", VERDICTS, where)
     if verdict == VIOLATED and kind == "benign":
         errors.append(f"{where}: a benign case is {DRIFT} in every spec")
-    if verdict == VIOLATED and "expect" not in entry:
-        errors.append(f"{where}: missing key 'expect'")
-    if verdict == DRIFT and "expect" in entry:
-        errors.append(f"{where}: expect is only for {VIOLATED}")
+    if verdict == VIOLATED and not any(k in entry for k in ENTRY_OPTIONAL):
+        errors.append(
+            f"{where}: an {VIOLATED} entry names expect indexes, invariants or both"
+        )
+    if verdict == DRIFT:
+        errors.extend(
+            f"{where}: {k} is only for {VIOLATED}" for k in ENTRY_OPTIONAL if k in entry
+        )
     if "expect" in entry and not _valid_indexes(entry["expect"]):
         errors.append(
             f"{where}: expect must be a non-empty list of distinct non-negative integers"
         )
+    if "invariants" in entry and not _valid_invariants(entry["invariants"]):
+        errors.append(
+            f"{where}: invariants must be a non-empty list of distinct names from "
+            + ", ".join(INVARIANTS)
+        )
     if spec is not None and not NAME.fullmatch(spec):
         errors.append(f"{where}: spec '{spec}' must be a kebab-case spec id")
     elif spec is not None and app is not None:
-        spec_file = APPS / app / "qa" / f"{spec}.spec.md"
-        if not (root / spec_file).is_file():
-            errors.append(f"{where}: no spec file {spec_file}")
+        errors += _check_spec_file(root, app, spec, entry.get("expect"), where)
     return errors
 
 
@@ -345,7 +411,12 @@ def load(root: Path = REPO_ROOT) -> Manifest:
             flag=c["flag"],
             summary=c["summary"],
             expected=tuple(
-                Expected(e["spec"], e["verdict"], tuple(e.get("expect", ())))
+                Expected(
+                    e["spec"],
+                    e["verdict"],
+                    tuple(e.get("expect", ())),
+                    tuple(e.get("invariants", ())),
+                )
                 for e in c["expected"]
             ),
         )

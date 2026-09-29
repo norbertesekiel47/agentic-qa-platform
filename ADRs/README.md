@@ -28,6 +28,7 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | [0020](0020-benchmark-apps-conduit-medusa.md) | Benchmark apps: RealWorld Conduit first, Medusa second | Accepted (amended 2026-09-28) |
 | [0021](0021-bench-apps-gate-carve-out.md) | Vendored benchmark apps (`bench/apps/`): a narrow gate carve-out | Accepted |
 | [0022](0022-bench-flags-test-api-manifest.md) | Benchmark feature flags, test-only endpoints and the ground-truth manifest | Accepted (amended 2026-09-28) |
+| [0023](0023-bench-pilot-toggle-checks-dry-review.md) | Benchmark pilot: browser toggle checks and a written dry compile review | Accepted |
 
 ## Template
 

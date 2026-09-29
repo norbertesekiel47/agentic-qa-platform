@@ -154,6 +154,17 @@ tags: [checkout, payments]
 Free-form notes for humans (ignored by the agent unless referenced).
 ```
 
+**Invariants** are checked on every run on top of the `expect` items. `inherit: true` turns on all of them, and `disable` lists the ones a spec turns off:
+
+| Name | Fails when |
+|---|---|
+| `console_errors` | The page writes an error to the console |
+| `js_exceptions` | The page throws an uncaught exception or leaves a promise rejection unhandled |
+| `http_5xx` | Any response to the browser has a 5xx status |
+| `broken_images` | An image fails to load |
+
+**Layout** (the benchmark's validator reads it with no YAML parser before M1): top-level keys start at column 0, and each list item is a `  - ` line.
+
 ## 7. Compiled script format
 
 `qa/.compiled/checkout-expired-card.json` (machine-written, human-reviewable diffs). **Targets** (what an element *means* + how to find it) are separated from **assertions** (what must be true), so heals can repair bindings without touching expectations.
@@ -241,6 +252,6 @@ Free-form notes for humans (ignored by the agent unless referenced).
 | `family` | `<app>-<name>`: cases on the same code path |
 | `flag` | Opaque: 4 lowercase letters or digits, unique across the manifest. Never the case ID, because the frontend's flag list reaches the browser. `0000` is reserved for the harness self-test |
 | `summary` | One line, for people. It never reaches the system under test |
-| `expected` | One entry per scored spec: `spec` is a spec ID with a file at `bench/apps/<app>/qa/<spec>.spec.md`, and `verdict` is `expectation_violated` or `drift_consistent`. An `expectation_violated` entry lists the violated `expect` indexes (0-based, as `expect_index` in §7). A bug needs at least one such entry, and it may also cause drift in other specs. A benign case is `drift_consistent` in every entry |
+| `expected` | One entry per scored spec: `spec` is a spec ID with a file at `bench/apps/<app>/qa/<spec>.spec.md`, and `verdict` is `expectation_violated` or `drift_consistent`. An `expectation_violated` entry names the violated `expect` indexes (0-based, as `expect_index` in §7), the violated `invariants` (§6), or both. Each index must exist in the spec file's `expect:` list, and the file's `id` must match its name. A bug needs at least one such entry, and it may also cause drift in other specs. A benign case is `drift_consistent` in every entry |
 
 Unknown keys and duplicate keys are errors. **Split freeze:** `bench/manifest.v1.split.sha256` holds the sha256 of the canonical JSON (sorted keys, no whitespace) of `{case_id: [split, family]}`. A test fails when the hash file and the manifest disagree, so moving a case is a deliberate edit in a reviewed pull request (`python3 bench/harness/manifest.py --split-hash` prints the new value).

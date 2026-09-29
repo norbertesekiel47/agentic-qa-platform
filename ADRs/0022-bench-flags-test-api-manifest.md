@@ -65,3 +65,7 @@ Recreating both Conduit containers with `docker compose up -d --force-recreate -
 - **Switching now takes 2.67 s** (median of 20 verified switches, range 2.62–2.87 s), down from 6.7 s. Both health checks poll every 250 ms while starting (`start_interval`) instead of waiting for the 2 s interval.
 - **`0000` is reserved for the harness self-test.** `flags.py selftest` alternates it with the clean app and verifies both tiers each time. No app code checks it, so it proves delivery only; each case's own on/off check proves its planted change. The manifest validator rejects `0000` for cases.
 - **Every switch forces a recreate** (`--force-recreate`): Compose would otherwise skip containers whose configuration is unchanged, and the database would not be reseeded. The harness checks that both container IDs changed.
+
+## Amendment (2026-09-28): invariant ground truth and spec-file checks
+- **An `expectation_violated` entry names what fails:** the violated `expect` indexes, the violated `invariants`, or both. Some bugs break no `expect` item and fail only an invariant, for example an uncaught exception on a page that still renders correctly (the `js_error` category). The invariant names are `console_errors`, `js_exceptions`, `http_5xx` and `broken_images` (DATA_MODEL §6).
+- **The validator reads each referenced spec file.** The file's `id` must match its name, and every `expect` index must exist in its `expect:` list. There is no YAML parser before M1, so this relies on the spec layout in DATA_MODEL §6: top-level keys at column 0, and each item a `  - ` line.
