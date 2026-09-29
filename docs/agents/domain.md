@@ -17,7 +17,7 @@ If `CONTEXT.md` doesn't exist, **proceed silently**. Don't flag its absence; don
 ```
 /
 ├── AGENTS.md        ← rules + single-owner doc table
-├── CONTEXT.md       ← glossary (created lazily)
+├── CONTEXT.md       ← glossary
 ├── ADRs/
 │   ├── README.md    ← index, template, amendment rules
 │   └── NNNN-slug.md
