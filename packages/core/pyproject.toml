@@ -2,6 +2,7 @@
 name = "aqa-core"
 version = "0.1.0"
 description = "Shared models for Agentic QA: spec, compiled script and verdicts."
+license = "Apache-2.0"
 requires-python = ">=3.14"
 dependencies = ["pydantic==2.13.5"]
 

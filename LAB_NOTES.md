@@ -37,6 +37,7 @@ Running log of non-obvious failures and their root causes. One entry per lesson;
 - LangGraph checkpoint serialization size through the API: the binding limit is Lambda's **6 MB** synchronous payload (not API Gateway's 10 MB); keep checkpoints ≤ 1 MB compressed and large values in S3.
 - Playwright request routing and service workers: service workers can bypass routing — keep them blocked; verify WebSocket routing coverage in the Playwright version pinned. Routing also misses redirect hops (2026-09-29 entry above).
 - Clerk client-only auth inside a Next.js static export (no middleware) — proven in the M7 skeleton.
+- Stubbing model providers in tests: respx 0.23.1 patches only `httpx`, but `anthropic` 1.9.0 and `openai` 3.22.0 send requests through `httpx2`, Pydantic's continuation of HTTPX. A respx stub never sees their calls, so a test can reach the real API with whatever key is set. Record provider traffic with VCR.py (8.3.0 patches `httpx2`) or give the SDK a test transport, and check this when the model router lands.
 
 ## Resolved during design review (2026-09-27)
 
