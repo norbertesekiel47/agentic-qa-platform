@@ -12,3 +12,6 @@ __pycache__/
 
 # The maintainer's personal workflow notes, not project docs
 /WORKFLOW.md
+
+# graft's local, regenerable code-graph cache (`graft build` adds this entry itself)
+graft/
