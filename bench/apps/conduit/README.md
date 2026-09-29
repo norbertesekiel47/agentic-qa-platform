@@ -33,8 +33,13 @@ Ours, for spec `reset` hooks and `probes` (DATA_MODEL.md §6, ADR-0022). They si
 |---|---|
 | `POST /test-api/reset?fixture=seed` | `204` after restoring the fixture's pristine database in place (flags untouched). An unknown fixture returns `404`. Resets run one at a time; a request in flight during a reset may fail, so reset between attempts |
 | `GET /test-api/articles/count?author=<username>` | `{"count": n}`: that user's articles (`0` for an unknown user). No `author` returns `400` |
+| `GET /test-api/comments/count?article=<slug>` | `{"count": n}`: that article's comments (`0` for an unknown slug). No `article` returns `400` |
 
 Probes are narrow and read-only: add one per question, in the same change as the spec that needs it.
+
+## Specs (`qa/`)
+
+The benchmark pilot specs (DATA_MODEL.md §6): `login`, `read-article`, `post-comment`, `favorite-article` and `publish-article`. `qa/REVIEW.md` is their dry compile-rules review (ADR-0023). Specs are system-under-test input, so neither they nor the review mention any case or planted change; ground truth lives only in `bench/manifest.v1.json`.
 
 ## Seeded data
 
