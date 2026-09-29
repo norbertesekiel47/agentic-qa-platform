@@ -206,3 +206,41 @@ Free-form notes for humans (ignored by the agent unless referenced).
 - **Allowed:** `/targets/<id>/locators` (re-binding what an element *is* to how to find it), and actions/values of steps whose `side_effect` is `false` (including inserting or removing `replay_safe` steps, e.g., dismissing a new modal).
 - **Forbidden:** anything under `/assertions`; any target's `semantic`; any `side_effect` step other than via its target's locators; adding or removing `side_effect` steps; changing any `replay_safe` / `side_effect` flag; `spec_hash`; invariants; probes.
 - A heal is valid only if, after the patch, **every assertion evaluates** (none unresolved) **and passes**, and every invariant holds.
+
+## 8. Benchmark manifest
+
+`bench/manifest.v1.json` is the only home of the benchmark's ground truth (ADR-0022). Traces carry the case ID as `eval.item_id` and never the answer (ARCHITECTURE §10). `bench/harness/manifest.py` validates the file, and CI runs its tests.
+
+```json
+{
+  "schema_version": 1,
+  "cases": {
+    "conduit-bug-001": {
+      "app": "conduit", "kind": "bug", "category": "data_display",
+      "split": "dev", "family": "conduit-article-meta", "flag": "k3q9",
+      "summary": "Favorites count on the article page is off by one",
+      "expected": [ { "spec": "favorite-article", "verdict": "expectation_violated", "expect": [1] } ]
+    },
+    "conduit-benign-001": {
+      "app": "conduit", "kind": "benign",
+      "split": "dev", "family": "conduit-nav", "flag": "h3k8",
+      "summary": "Sign-in link relabeled",
+      "expected": [ { "spec": "login", "verdict": "drift_consistent" } ]
+    }
+  }
+}
+```
+
+| Field | Rule |
+|---|---|
+| case ID (key) | `<app>-<bug\|benign>-NNN`, agreeing with `app` and `kind` |
+| `app` | A directory under `bench/apps/` |
+| `kind` | `bug` or `benign` |
+| `category` | Bugs only: one of the six `findings.category` values (§2) |
+| `split` | `dev` or `test`. Every case in a `family` shares one split (TESTING §5) |
+| `family` | `<app>-<name>`: cases on the same code path |
+| `flag` | Opaque: 4 lowercase letters or digits, unique across the manifest. Never the case ID, because the frontend's flag list reaches the browser |
+| `summary` | One line, for people. It never reaches the system under test |
+| `expected` | One entry per scored spec: `spec` is a spec ID with a file at `bench/apps/<app>/qa/<spec>.spec.md`, and `verdict` is `expectation_violated` or `drift_consistent`. An `expectation_violated` entry lists the violated `expect` indexes (0-based, as `expect_index` in §7). A bug needs at least one such entry, and it may also cause drift in other specs. A benign case is `drift_consistent` in every entry |
+
+Unknown keys and duplicate keys are errors. **Split freeze:** `bench/manifest.v1.split.sha256` holds the sha256 of the canonical JSON (sorted keys, no whitespace) of `{case_id: [split, family]}`. A test fails when the hash file and the manifest disagree, so moving a case is a deliberate edit in a reviewed pull request (`python3 bench/harness/manifest.py --split-hash` prints the new value).
