@@ -6,6 +6,10 @@ import {definePrivateEventHandler} from "~/auth-event-handler";
 export default definePrivateEventHandler(async (event, {auth}) => {
     const slug = getRouterParam(event, "slug");
 
+    // conduit-bug-003 (ADR-0022 flag): reads the user id from an auth shape that no longer
+    // exists, so every favorite fails with a TypeError (HTTP 500).
+    const userId: number = benchFlag('7ozy') ? (auth as any).user.id : auth.id;
+
     const existing = await usePrisma().article.findUnique({ where: { slug } });
     if (!existing) {
         throw new HttpException(404, {errors: {article: ['not found']}});
@@ -18,7 +22,7 @@ export default definePrivateEventHandler(async (event, {auth}) => {
         data: {
             favoritedBy: {
                 connect: {
-                    id: auth.id,
+                    id: userId,
                 },
             },
         },

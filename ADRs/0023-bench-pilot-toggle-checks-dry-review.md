@@ -33,3 +33,8 @@ M0 ends when "pilot cases toggle reliably; specs pass a dry compile-rules review
 - **Pins move together:** the Playwright image, CI's `playwright` package, and TECH_STACK.
 - **Pilot flows change state** (comments, favorites, articles), so every check starts from a reset.
 - **The review table is superseded at M1** by compiled output. Any disagreement between the two is an M1 finding about either the spec or the compiler.
+
+## Amendment (2026-09-28): the checks image and Chromium's sandbox
+- **Playwright's Python image `v1.63.0-noble` ships the browsers but not the `playwright` package.** `bench/harness/checks.Dockerfile` builds on it, pinned by digest, and installs `playwright==1.63.0` from `checks-requirements.txt`, which is hash-locked (`--require-hashes`).
+- **The checks run with Chromium's sandbox on** (AGENTS.md §6). As root or under Docker's default seccomp profile, a sandboxed launch fails ("Chromium sandboxing failed!"). So the container runs as `pwuser` with Playwright's seccomp profile for that release, vendored as `bench/harness/chromium-seccomp.json` (Apache-2.0, `microsoft/playwright` at `v1.63.0`, `utils/docker/seccomp_profile.json`, sha256 `cc3e61ca…1cc7849`). It is Docker's default profile plus the namespace syscalls the sandbox needs, which is narrower than `--cap-add=SYS_ADMIN`. `chromium_sandbox=True` makes a launch that can't sandbox fail instead of silently falling back.
+- **Upgrading Playwright** means moving the image tag and digest, the lock, and the seccomp profile together.

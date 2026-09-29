@@ -7,6 +7,7 @@ import { ArticlesService } from '../../services/articles.service';
 import { UserService } from '../../../../core/auth/services/user.service';
 import { ListErrorsComponent } from '../../../../shared/components/list-errors.component';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { benchFlag } from '../../../../bench/flags';
 
 interface ArticleForm {
   title: FormControl<string>;
@@ -92,5 +93,11 @@ export default class EditorComponent implements OnInit {
         this.isSubmitting.set(false);
       },
     });
+
+    if (benchFlag('czfm') && !slug) {
+      // conduit-bug-004 (ADR-0022 flag): a second subscription to the cold HTTP observable
+      // sends the create request again, so every new article is saved twice.
+      observable.subscribe();
+    }
   }
 }

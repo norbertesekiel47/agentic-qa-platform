@@ -38,7 +38,9 @@ jobs:
         with:
           python-version: "3.14"
       - name: Install pinned tools (versions from TECH_STACK.md)
-        run: python -m pip install --disable-pip-version-check ruff==0.16.9 mypy==2.3.1
+        # playwright is installed for its types only (bench/harness/toggle_checks.py,
+        # ADR-0023); no browsers are downloaded and no checks run here.
+        run: python -m pip install --disable-pip-version-check ruff==0.16.9 mypy==2.3.1 playwright==1.63.0
       - name: Guard tests
         run: python -m unittest discover -s .claude/hooks
       - name: Bench harness tests (ADR-0022)
