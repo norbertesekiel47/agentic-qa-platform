@@ -204,6 +204,61 @@ class FixturePasswordTest(unittest.TestCase):
             toggle.fixture_password(ws.root, "conduit")
 
 
+class RecordingDockerChecks(toggle.DockerChecks):
+    """DockerChecks with the docker CLI replaced by a recorder."""
+
+    def __init__(self, root: Path, app: str) -> None:
+        super().__init__(root, app)
+        self.commands: list[tuple[list[str], dict[str, str]]] = []
+
+    def _docker(self, args: Sequence[str], env: dict[str, str] | None = None) -> str:
+        self.commands.append((list(args), dict(env or {})))
+        if args[0] == "build":
+            return ""
+        case_ids = list(args[args.index("toggle_checks.py") + 1 :])
+        if case_ids == ["--list"]:
+            return json.dumps(["conduit-bug-001"])
+        return "".join(
+            json.dumps({"case": c, "state": "clean", "detail": "''"}) + "\n"
+            for c in case_ids
+        )
+
+
+class DockerChecksTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.ws = Workspace()
+        self.addCleanup(self.ws.close)
+        compose = self.ws.root / "bench" / "apps" / "conduit" / "compose.yaml"
+        compose.write_text("args:\n  CONDUIT_SEED_PASSWORD: fake-fixture-pw\n")
+        self.checks = RecordingDockerChecks(self.ws.root, "conduit")
+
+    def networks(self) -> list[str]:
+        runs = [args for args, _ in self.checks.commands if args[0] == "run"]
+        return [args[args.index("--network") + 1] for args in runs]
+
+    def test_listing_the_checks_needs_no_app_network(self) -> None:
+        # toggle() lists the checks before its first switch creates the network.
+        self.assertEqual(self.checks.registered(), ["conduit-bug-001"])
+        self.assertEqual(self.networks(), ["none"])
+
+    def test_checks_run_on_the_app_network(self) -> None:
+        self.checks.run(["conduit-bug-001"])
+        self.assertEqual(self.networks(), ["conduit-bench_default"])
+
+    def test_builds_the_checks_image_once(self) -> None:
+        self.checks.registered()
+        self.checks.run(["conduit-bug-001"])
+        builds = [args for args, _ in self.checks.commands if args[0] == "build"]
+        self.assertEqual(len(builds), 1)
+
+    def test_password_travels_in_the_environment_only(self) -> None:
+        self.checks.run(["conduit-bug-001"])
+        for args, _ in self.checks.commands:
+            self.assertNotIn("fake-fixture-pw", " ".join(args))
+        run_envs = [env for args, env in self.checks.commands if args[0] == "run"]
+        self.assertEqual(run_envs, [{"BENCH_FIXTURE_PASSWORD": "fake-fixture-pw"}])
+
+
 class CliTest(ToggleTestCase):
     def run_cli(self, *args: str) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()

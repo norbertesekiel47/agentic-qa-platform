@@ -130,7 +130,7 @@ class DockerChecks:
             )
         return result.stdout
 
-    def _run(self, args: Sequence[str]) -> str:
+    def _run(self, args: Sequence[str], network: str) -> str:
         harness = self.root / HARNESS
         if not self.built:
             dockerfile = str(harness / "checks.Dockerfile")
@@ -142,7 +142,7 @@ class DockerChecks:
             "run",
             "--rm",
             "--network",
-            self.stack.network,
+            network,
             "--security-opt",
             f"seccomp={harness / 'chromium-seccomp.json'}",
             "-e",
@@ -161,11 +161,13 @@ class DockerChecks:
         return self._docker(command, env)
 
     def registered(self) -> list[str]:
-        names: list[str] = json.loads(self._run(["--list"]))
+        # Listing the checks needs no app, so it works before the stack (and its
+        # network) exists: toggle() asks before its first switch.
+        names: list[str] = json.loads(self._run(["--list"], "none"))
         return names
 
     def run(self, case_ids: Sequence[str]) -> list[Result]:
-        return parse_results(self._run(case_ids), case_ids)
+        return parse_results(self._run(case_ids, self.stack.network), case_ids)
 
 
 def toggle(
