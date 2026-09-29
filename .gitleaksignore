@@ -1,0 +1,8 @@
+# Reviewed upstream findings in vendored benchmark apps (ADR-0021).
+# Format: file:rule:line, without the commit, so entries survive rebase merges.
+# An upstream update that moves a line makes CI fail until it is re-reviewed.
+
+# jwt.io's public example token ("sub": "1234567890", "name": "John Doe") in an upstream unit test.
+bench/apps/conduit/frontend/src/app/core/auth/services/jwt.service.spec.ts:jwt:133
+# The same public example token's prefix, padded for an upstream "long token" unit test.
+bench/apps/conduit/frontend/src/app/core/auth/services/jwt.service.spec.ts:generic-api-key:85

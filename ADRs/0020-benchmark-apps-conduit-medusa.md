@@ -47,3 +47,15 @@ PRD open question #1: which two open-source apps host the benchmark (ADR-0015). 
 - **Our gates will flag vendored third-party code:** upstream suppressions, skipped tests, possible test keys, and deliberately planted dead code. `bench/apps/` needs a deliberate, narrow carve-out in `policy_guard.py`, fallow's `ignorePatterns` (ADR-0018) and gitleaks before vendoring. That is the next change.
 - **Credibility:** the Nitro backend is young (few stars). Its standing comes from being the RealWorld organization's spec-compliant reference backend. Running the RealWorld API spec suite against our vendored copy with every flag off shows that the vendoring didn't change behaviour.
 - **Medusa at M3:** use the npm packages, never the Enterprise Edition materials. Localize the seed images (currently on a public S3 bucket). Add a fake card provider for payment-failure specs. Plant backend bugs through `pnpm patch` or workflow hooks.
+
+## Amendment (2026-09-28): localization scope, corrected
+The spike's external-host check searched only for `https?://` URLs, and it missed protocol-relative ones. Vendoring found a third runtime dependency: **Ionicons**, loaded from `//code.ionicframework.com`. The Google Fonts link is protocol-relative too, which is why the build also fetched from the network (Angular inlines Google Fonts at build time).
+
+All three runtime dependencies are localized:
+- **API:** same-origin `/api`.
+- **Fonts:** self-hosted woff2 files, with their OFL licenses.
+- **Ionicons:** vendored from the npm tarball, whose integrity matches the registry and whose files are byte-identical to the CDN copy.
+
+The upstream backend's hard-coded development `JWT_SECRET` was also replaced with a fixture reference. Details and the Chromium evidence (every request to the app's own origin) are in `bench/apps/conduit/README.md`.
+
+Lesson for the Medusa spike at M3: check for external hosts in a real browser, not with a grep.
