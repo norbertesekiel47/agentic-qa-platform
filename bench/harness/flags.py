@@ -40,14 +40,31 @@ FLAG_ELEMENT = re.compile(
 
 @dataclass(frozen=True)
 class Stack:
-    """An app's Compose services: the backend reads BENCH_FLAGS, the frontend serves it."""
+    """An app's Compose stack. The backend reads BENCH_FLAGS; the frontend serves it.
+
+    ``network`` and ``internal_url`` are where the toggle checks reach the app
+    from a container, and ``password_arg`` names the build argument in
+    compose.yaml that holds the seeded accounts' public fixture password.
+    """
 
     backend: str
     frontend: str
     frontend_port: int
+    network: str
+    internal_url: str
+    password_arg: str
 
 
-STACKS = {"conduit": Stack(backend="backend", frontend="frontend", frontend_port=80)}
+STACKS = {
+    "conduit": Stack(
+        backend="backend",
+        frontend="frontend",
+        frontend_port=80,
+        network="conduit-bench_default",
+        internal_url="http://frontend",
+        password_arg="CONDUIT_SEED_PASSWORD",
+    )
+}
 
 
 class FlagError(Exception):
@@ -110,7 +127,7 @@ def served_flags(html: str) -> tuple[str, ...]:
     return tuple(ids)
 
 
-def _stack(app: str) -> Stack:
+def stack_for(app: str) -> Stack:
     stack = STACKS.get(app)
     if stack is None:
         raise FlagError(f"no stack for app '{app}'")
@@ -137,7 +154,7 @@ def _frontend_flags(app_dir: Path, stack: Stack, docker: Docker) -> tuple[str, .
 
 def switch(root: Path, app: str, flag_ids: Sequence[str], docker: Docker) -> Switch:
     """Recreate ``app`` with exactly ``flag_ids`` on, and verify both tiers."""
-    stack = _stack(app)
+    stack = stack_for(app)
     for flag in flag_ids:
         if not manifest.FLAG.fullmatch(flag):
             raise FlagError(f"invalid flag id '{flag}'")
@@ -185,7 +202,7 @@ def selftest(root: Path, app: str, cycles: int, docker: Docker) -> list[Switch]:
 
 def show(root: Path, app: str, docker: Docker) -> str:
     """Which case is on, after checking that both tiers agree."""
-    stack = _stack(app)
+    stack = stack_for(app)
     app_dir = root / manifest.APPS / app
     backend = tuple(f for f in _backend_env(app_dir, stack, docker).split(",") if f)
     served = _frontend_flags(app_dir, stack, docker)

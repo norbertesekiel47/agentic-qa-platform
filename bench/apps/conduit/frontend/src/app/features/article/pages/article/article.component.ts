@@ -21,6 +21,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FavoriteButtonComponent } from '../../components/favorite-button.component';
 import { FollowButtonComponent } from '../../../profile/components/follow-button.component';
 import { DefaultImagePipe } from '../../../../shared/pipes/default-image.pipe';
+import { benchFlag } from '../../../../bench/flags';
 
 @Component({
   selector: 'app-article-page',
@@ -80,6 +81,11 @@ export default class ArticleComponent implements OnInit {
         this.comments.set(comments);
         this.currentUser.set(currentUser);
         this.canModify.set(currentUser?.username === article.author.username);
+        if (benchFlag('66jd')) {
+          // conduit-bug-002 (ADR-0022 flag): the latest commenter's bio may be null, and
+          // there may be no comment at all, so this throws after the page has rendered.
+          void comments[comments.length - 1].author.bio!.trim();
+        }
       });
   }
 

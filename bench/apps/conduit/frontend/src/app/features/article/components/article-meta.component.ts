@@ -3,6 +3,7 @@ import { Article } from '../models/article.model';
 import { RouterLink } from '@angular/router';
 import { DatePipe } from '@angular/common';
 import { DefaultImagePipe } from '../../../shared/pipes/default-image.pipe';
+import { benchFlag } from '../../../bench/flags';
 
 @Component({
   selector: 'app-article-meta',
@@ -17,7 +18,7 @@ import { DefaultImagePipe } from '../../../shared/pipes/default-image.pipe';
           {{ article.author.username }}
         </a>
         <span class="date">
-          {{ article.createdAt | date: 'longDate' }}
+          {{ article.createdAt | date: 'longDate' : dateZone }}
         </span>
       </div>
 
@@ -29,4 +30,7 @@ import { DefaultImagePipe } from '../../../shared/pipes/default-image.pipe';
 })
 export class ArticleMetaComponent {
   @Input() article!: Article;
+
+  // conduit-bug-001 (ADR-0022 flag): dates render in a hard-coded UTC-12 zone, a day early.
+  readonly dateZone = benchFlag('4o6x') ? '-1200' : undefined;
 }

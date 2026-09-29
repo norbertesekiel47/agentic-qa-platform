@@ -18,6 +18,7 @@ Running log of non-obvious failures and their root causes. One entry per lesson;
 
 ## Watch list (known risks to verify early)
 
+- A heal can route around a broken UI path and still satisfy every `expect`. In the pilot, `conduit-bug-005` covers the header's "New Article" link, so `publish-article` can't click it; a heal that replaces the click with `navigate("/editor")` passes every clause while real users stay stuck. Decide at M2 whether the heal-patch validator may replace an interaction step with direct navigation. Until then, the manifest leaves such specs unscored (DATA_MODEL §8).
 - Headless Chromium inside a Python Lambda container image: memory floor, cold start, required launch flags, startup-hygiene overhead (M1 spike).
 - Warm Lambda environment reuse: `/tmp` and surviving processes persist across invocations (and timeouts don't clear `/tmp`) — startup hygiene must run before any tenant data is fetched; crash-reuse tests must pass on real Lambda, not only the emulator.
 - LangGraph checkpoint serialization size through the API: the binding limit is Lambda's **6 MB** synchronous payload (not API Gateway's 10 MB); keep checkpoints ≤ 1 MB compressed and large values in S3.

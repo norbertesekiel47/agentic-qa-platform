@@ -1,4 +1,67 @@
 {
   "schema_version": 1,
-  "cases": {}
+  "cases": {
+    "conduit-bug-001": {
+      "app": "conduit",
+      "kind": "bug",
+      "category": "data_display",
+      "split": "dev",
+      "family": "conduit-article-meta",
+      "flag": "4o6x",
+      "summary": "Article dates render in a hard-coded UTC-12 zone, one day early",
+      "expected": [
+        { "spec": "read-article", "verdict": "expectation_violated", "expect": [2] }
+      ]
+    },
+    "conduit-bug-002": {
+      "app": "conduit",
+      "kind": "bug",
+      "category": "js_error",
+      "split": "dev",
+      "family": "conduit-article-page",
+      "flag": "66jd",
+      "summary": "After rendering, the article page throws a TypeError when the latest commenter has no bio or there are no comments",
+      "expected": [
+        { "spec": "read-article", "verdict": "expectation_violated", "invariants": ["js_exceptions"] },
+        { "spec": "favorite-article", "verdict": "expectation_violated", "invariants": ["js_exceptions"] },
+        { "spec": "publish-article", "verdict": "expectation_violated", "invariants": ["js_exceptions"] }
+      ]
+    },
+    "conduit-bug-003": {
+      "app": "conduit",
+      "kind": "bug",
+      "category": "backend_5xx",
+      "split": "dev",
+      "family": "conduit-favorites",
+      "flag": "7ozy",
+      "summary": "Favoriting an article fails with HTTP 500 (a TypeError in the handler)",
+      "expected": [
+        { "spec": "favorite-article", "verdict": "expectation_violated", "expect": [0, 1], "invariants": ["console_errors", "http_5xx"] }
+      ]
+    },
+    "conduit-bug-004": {
+      "app": "conduit",
+      "kind": "bug",
+      "category": "functional",
+      "split": "dev",
+      "family": "conduit-editor",
+      "flag": "czfm",
+      "summary": "Publishing sends the create request twice, so every new article is saved twice",
+      "expected": [
+        { "spec": "publish-article", "verdict": "expectation_violated", "expect": [4] }
+      ]
+    },
+    "conduit-bug-005": {
+      "app": "conduit",
+      "kind": "bug",
+      "category": "visual",
+      "split": "dev",
+      "family": "conduit-header",
+      "flag": "f9ts",
+      "summary": "The logo link is stretched over the navbar and covers the header's nav links",
+      "expected": [
+        { "spec": "login", "verdict": "expectation_violated", "expect": [4] }
+      ]
+    }
+  }
 }
