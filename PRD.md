@@ -20,16 +20,16 @@ A multi-tenant SaaS, CLI, GitHub Action, and GitHub App that turns structured na
 
 **Authoring**
 - As Priya, I write a spec in `qa/checkout.spec.md` describing a goal, preconditions, and expected outcomes in plain English, and commit it with my feature.
-- As Priya, I run `aqa explore qa/checkout.spec.md --url http://localhost:3000` locally and get a compiled script plus a replay report.
+- As Priya, I run `aqa explore qa/checkout.spec.md --url http://localhost:3000` locally and get a compiled script plus a run report.
 
 **CI / GitHub**
 - As Priya, when I open a PR, the GitHub Action replays all compiled specs in strict mode against my preview deployment and posts a check run per spec.
 - As Priya, when a step breaks because an element moved but every expectation still holds, I see the evidence and click **Accept heal** to commit the locator update to my branch.
-- As Priya, when an expectation is violated, the check fails and links to a replay showing exactly what happened.
+- As Priya, when an expectation is violated, the check fails and links to the run viewer, showing exactly what happened.
 - As Priya, if I intentionally changed what the app should do, I edit the spec's expectations in my PR — heals never change expectations.
 
 **Dashboard**
-- As Marcus, I watch a hosted run live, then scrub through its replay step by step.
+- As Marcus, I watch a hosted run live, then scrub through it step by step in the run viewer.
 - As Marcus, I triage an inbox of bugs and pending heal proposals with keyboard shortcuts.
 - As Dana, I see LLM spend by project, model role, mode, and day, and the share of runs that cost $0.
 
@@ -76,7 +76,7 @@ A multi-tenant SaaS, CLI, GitHub Action, and GitHub App that turns structured na
 - FR-25 **Test secrets:** write-only, KMS-encrypted, scoped per project with allowed origins and field hints; decryptable only by dispatcher-issued hosted-execution tokens (never CI/upload tokens); every retrieval audited.
 
 ### 4.7 Dashboard
-- FR-26 Nine screens: Onboarding, Projects, Runs, Live run, Run replay, Triage inbox, Specs, Usage & cost, Settings (details in [UX_SPEC](UX_SPEC.md)).
+- FR-26 Nine screens: Onboarding, Projects, Runs, Live run, Run viewer, Triage inbox, Specs, Usage & cost, Settings (details in [UX_SPEC](UX_SPEC.md)).
 - FR-27 Triage actions (accept heal / reject / not a bug) are recorded as labeled data for evaluation.
 
 ### 4.8 Tenancy & identity

@@ -3,7 +3,7 @@
 Last updated: 2026-09-27 (revised after external review). **Core first, then SaaS** (ADR-0016): prove the agent on the benchmark before building the platform around it. Each milestone is one vertical slice, one PR series, with an explicit exit criterion. No dates — quality over speed; milestones are sequential.
 
 **Release checkpoints** (added after review): full v1 scope is unchanged, but two public, independently defensible releases ship along the way so the strongest hiring signal doesn't wait for the whole SaaS:
-- **Release 0.1 — "CLI + benchmark"** after M3: open-source CLI, frozen benchmark, local replay viewer, measured test-split numbers.
+- **Release 0.1 — "CLI + benchmark"** after M3: open-source CLI, frozen benchmark, local run viewer, measured test-split numbers.
 - **Release 0.2 — "CI-native"** after M5: GitHub Action + GitHub App with Accept heal on real PRs.
 - **Release 1.0 — "SaaS"** after M8.
 
@@ -37,7 +37,7 @@ Last updated: 2026-09-27 (revised after external review). **Core first, then Saa
 - Iterate on heal classification **using the dev split only**; ablations on dev (tree-only vs vision-only vs hybrid; per-role models; strict vs verified).
 - Run the frozen test split once for release numbers.
 - **Exit (local targets):** a test-split results file with measured detection, false positives, heal accuracy, flake metrics (pooled rate under a stated independence assumption + per-spec incidence), strict replay cost, heal cost, and local replay time — published honestly including misses. Hosted replay time is deferred to M6.
-- **Release 0.1:** CLI on PyPI, benchmark repo, replay viewer, README with cited numbers.
+- **Release 0.1:** CLI on PyPI, benchmark repo, run viewer, README with cited numbers.
 
 ## M4 — SaaS foundation
 - Terraform: VPC, RDS, fck-nat, S3 (+ lifecycle), KMS, API Gateway (HTTP + WebSocket), Lambdas, SQS, Budgets alarm.
@@ -58,21 +58,21 @@ Last updated: 2026-09-27 (revised after external review). **Core first, then Saa
 - Hosted compute per the M1 sandbox gate: **Lambda** (outside VPC, startup hygiene) if sandboxed Chromium works there, otherwise the **Fargate one-task-per-run** adapter; dispatcher with per-org concurrency, continuation leases, and hosted-execution tokens (`secrets:read`).
 - Domain verification (DNS TXT + well-known) with periodic re-checks; SSRF guard with pinned resolution.
 - BYOK: KMS envelope encryption, key delivery to runners, rotation. Hosted test secrets.
-- Continuation per the replay-safe rules; storage-state restore; WebSocket live events with `run_events` replay.
+- Continuation per the replay-safe rules; storage-state restore; WebSocket live events with `run_events` catch-up on reconnect.
 - **Exit:** a hosted run on a verified domain streams live; a forced cutoff on a replay-safe spec resumes; an unresolved side-effect intent ends `non_resumable`; isolation tests pass on the chosen compute (crash-reuse on Lambda, or fresh-task verification on Fargate); **10-step replay time measured on the chosen hosted compute**.
 
 ## M7 — Dashboard
 - **First task:** deploy an authenticated skeleton (Next.js static export on S3 + CloudFront, Clerk sign-in, one API call through the generated client) — proves hosting and auth before any screen is built (ADR-0017).
-- Screens: Onboarding, Projects, Runs, Live run, **Run replay**, **Triage inbox**, Specs, Usage & cost, Settings.
+- Screens: Onboarding, Projects, Runs, Live run, **Run viewer**, **Triage inbox**, Specs, Usage & cost, Settings.
 - Visual snapshots at 390/1440 (dark + light); axe checks.
-- **Exit:** full onboarding-to-triage flow works for a new org; replay + triage meet the polish bar.
+- **Exit:** full onboarding-to-triage flow works for a new org; the run viewer and triage inbox meet the polish bar.
 
 ## M8 — Hardening & launch → **Release 1.0**
 - Load test (concurrency, API p95, WebSocket fan-out); fix bottlenecks.
 - Security pass: authz matrix, injection/egress/secret fixtures, redaction audit, dependency/image scans, SBOM.
 - Public read-only demo org seeded with benchmark runs; rate-limited.
 - README with measured headline numbers (each cited to a test-split results file + SHA), architecture diagram, 2-minute demo video.
-- **Exit:** a stranger can go from the README to a replay in one click, and reproduce the benchmark with one command.
+- **Exit:** a stranger can go from the README to a run in the run viewer in one click, and reproduce the benchmark with one command.
 
 ## Later (not v1)
 - **Exploratory mode:** spec-less bug hunting.

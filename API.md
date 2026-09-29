@@ -6,7 +6,7 @@ Last updated: 2026-09-27 (revised after external review). REST over HTTPS, JSON,
 
 - **Errors:** RFC 9457 Problem Details (`application/problem+json`) with a stable `type` URI and `code` (e.g. `domain_not_verified`, `rate_limited`, `org_not_found`, `proposal_stale`).
 - **Pagination:** cursor-based — `?limit=50&cursor=<opaque>`; responses include `next_cursor`.
-- **Idempotency:** `Idempotency-Key` header required on `POST /runs` and result ingestion; replays return the original response for 24 h.
+- **Idempotency:** `Idempotency-Key` header required on `POST /runs` and result ingestion; a repeated request returns the original response for 24 h.
 - **Rate limits:** per org and per credential; `429` with `Retry-After` and `RateLimit-*` headers.
 - **Payload limits:** API Gateway → Lambda synchronous invocations cap request/response payloads at **6 MB**; ingestion endpoints accept ≤ 1 MB bodies (batched), and anything larger goes to S3 via presigned URLs.
 - **Versioning:** additive changes within `/v1`; breaking changes → `/v2`.
@@ -141,7 +141,7 @@ Connections live ≤ 2 hours (API Gateway limit); clients reconnect with `since_
 ## 6. GitHub App
 
 - **Permissions (least privilege):** Checks: write · Contents: write (heal commits, spec PRs) · Pull requests: write · Metadata: read. No admin, no secrets, no workflows permission.
-- **One check run per spec** (`agentic-qa / <spec_id>`), plus a summary check. Output includes the result table, cost, and a link to the replay (`details_url`).
+- **One check run per spec** (`agentic-qa / <spec_id>`), plus a summary check. Output includes the result table, cost, and a link to the run viewer (`details_url`).
 - **Heal action:** a spec with a pending proposal gets `conclusion: action_required` and one action: `{label: "Accept heal", description: "Commit the locator update", identifier: "ah_<12 chars>"}` — within GitHub's limits (≤ 3 actions per check run; label and identifier ≤ 20 characters; description ≤ 40).
 - **On `requested_action`:** verify signature → verify the clicking user has write permission → load proposal by `action_token` → **staleness check** (the PR's current **head** SHA — not the merge/execution SHA — and the compiled blob SHA must equal the proposal's `base_head_sha` / `base_compiled_blob_sha`; otherwise mark `stale` and request a new run) → commit authored by the App, message `chore(qa): heal <spec_id> (<proposal_id>)`, co-authored-by the accepting user.
 - **Fork PRs:** the App can't push; the check output shows the patch and `aqa heal apply <proposal_id>` for the author.
@@ -155,7 +155,7 @@ aqa replay  [<spec>...] --url     # strict replay (default), no LLM; --mode veri
 aqa run     [<spec>...] --url     # replay; heal on drift; write proposals locally
 aqa heal    <spec> --url          # force a heal pass from the first failing step
 aqa heal apply <proposal_id>      # apply a proposal locally (fork PRs)
-aqa report  [<run_id>]            # open local HTML replay
+aqa report  [<run_id>]            # open the run viewer (local HTML)
 aqa login                         # device-code auth to the SaaS
 aqa upload  <run_dir>             # upload a local run
 ```

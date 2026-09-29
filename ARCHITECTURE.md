@@ -121,7 +121,7 @@ Page content is **untrusted data**: observations enter the model context inside 
 
 ### 4.3 Checks and Accept heal
 - Each spec gets its own check run (`agentic-qa / <spec_id>`), keeping every heal within GitHub's limit of 3 actions per check run and 20-character action identifiers.
-- A spec with a heal proposal gets `conclusion: action_required` and one action: label **Accept heal**, identifier `ah_<12-char token>` (opaque, mapped server-side to the proposal). "Open replay" is an ordinary link in the check output / `details_url`, not an action.
+- A spec with a heal proposal gets `conclusion: action_required` and one action: label **Accept heal**, identifier `ah_<12-char token>` (opaque, mapped server-side to the proposal). "Open run" is an ordinary link in the check output / `details_url`, not an action.
 - On click (`check_run.requested_action` webhook): verify signature → verify the clicking user has write access → load proposal → **reject if stale**: the proposal is bound to the PR head SHA it was computed on and the compiled file's blob SHA; if either changed, the proposal is marked `stale` and a new run is requested → commit the patch via the GitHub App.
 - **Fork PRs** (App can't push to the fork): the check output includes the patch and a one-line CLI command (`aqa heal apply <proposal>`) for the author to apply.
 - The heal commit triggers CI again, which replays the healed script in strict mode — closing the loop deterministically.
@@ -162,7 +162,7 @@ Credentials that arrive before the tenant is known (API keys, OIDC exchanges, Gi
 | Duplicate SQS delivery | Idempotency key on dispatch; runner claims the run atomically |
 | GitHub webhook redelivery | `webhook_events` dedupe by delivery ID |
 | Flaky page load | Bounded waits on network idle + element stability; flake counted, never silently retried away |
-| WebSocket disconnect | Client reconnects with `since_seq`; missed events replayed from `run_events` |
+| WebSocket disconnect | Client reconnects with `since_seq`; missed events re-sent from `run_events` |
 
 ## 7. Realtime design
 

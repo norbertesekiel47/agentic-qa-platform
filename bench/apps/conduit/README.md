@@ -117,7 +117,7 @@ Everything else is ours and sits outside the upstream trees: `seed/`, `docker/` 
 **Open item: the 26 E2E failures are not explained yet.**
 - They are deterministic (the same set every run), and fresh seed data doesn't change them.
 - By file: `error-handling` 16, `user-fetch-errors` 5, `social` 3, `comments` 1, `navigation` 1.
-- Replaying one failing test (a mocked 400 on registration) step by step outside the suite passes: the mock fires and both errors render.
+- Re-running one failing test (a mocked 400 on registration) step by step outside the suite passes: the mock fires and both errors render.
 - Upstream's CI passed this suite on 2026-09-11, but with the Angular dev server against the public demo backend, not a production build against this backend.
 
 Until the cause is known, **pilot specs avoid error-handling flows**. If these are real bugs in the clean app, a spec over those flows would count them as false positives.

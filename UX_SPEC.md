@@ -9,7 +9,7 @@ Last updated: 2026-09-27. Covers the dashboard (9 screens), GitHub surfaces, CLI
 - **Status color system:** passed (green), expectation violated/bug (red), heal proposed — UI drift, expectations hold (violet), inconclusive (amber), non-resumable/errored (gray-red), running (blue), queued (gray). Never rely on color alone — every status has an icon and label.
 - **Wording rule:** the UI never says a change was "intentional." It says what the evidence shows: "UI moved; all expectations still pass after updating the locator."
 - **Evidence is the hero.** Screens exist to answer "what happened, and why does the agent think so?"
-- **Polish budget:** Run replay (5) and Triage inbox (6) get the highest polish — they are the public-demo path and what failing PR comments link to. Other screens are functional and clean.
+- **Polish budget:** Run viewer (5) and Triage inbox (6) get the highest polish — they are the public-demo path and what failing PR comments link to. Other screens are functional and clean.
 
 ## 2. Global layout
 
@@ -32,14 +32,14 @@ Skippable steps show what is blocked until completed (e.g. "Hosted runs need a v
 Cards/table: project name, repo, pass rate (7-day sparkline), last run status, open bugs, pending heals, LLM cost this month. Empty state explains CLI-only usage.
 
 ### 3.3 Runs list
-Filterable table: status, spec, branch, PR, trigger (CI/hosted), duration, cost, started. Live status badges update via WebSocket. Row click → Run replay (or Live run if running). Saved filters in URL query.
+Filterable table: status, spec, branch, PR, trigger (CI/hosted), duration, cost, started. Live status badges update via WebSocket. Row click → Run viewer (or Live run if running). Saved filters in URL query.
 
 ### 3.4 Live run
 - Left: current screenshot (updates per step), with the target element outlined.
 - Right: streaming step timeline + agent thoughts (collapsible), current model role, running cost.
 - Footer: cancel button. (Interactive "agent needs input" interrupts are deferred to a later release — v1 runs never wait on a human mid-run.)
 
-### 3.5 Run replay (hero screen)
+### 3.5 Run viewer (hero screen)
 - **Header:** spec goal, verdict chip, commit/PR links, duration, cost, model config.
 - **Scrubbable step timeline** (horizontal on desktop, vertical on mobile): each step shows action, locator used, outcome; keyboard `←/→` to move.
 - **Main panel tabs** for the selected step:
@@ -54,7 +54,7 @@ Filterable table: status, spec, branch, PR, trigger (CI/hosted), duration, cost,
 
 ### 3.6 Triage inbox
 - Two lists (tabs): **Bugs** and **Heal proposals**; counts in tabs.
-- Keyboard-first: `j/k` move, `a` accept heal, `r` reject, `n` not a bug, `o` open replay, `?` shortcuts help.
+- Keyboard-first: `j/k` move, `a` accept heal, `r` reject, `n` not a bug, `o` open run, `?` shortcuts help.
 - Each item: spec, verdict summary, one-line rationale, thumbnail of the failing step, age.
 - Actions record `triage_labels` (ground truth for evaluation); toast with undo for 5 s.
 - Accepting a heal shows the resulting commit link when the GitHub App finishes.
@@ -85,7 +85,7 @@ Agentic QA — 5 specs · 3 passed · 1 heal proposed · 1 expectation violated
 | signup                  | 🟣 heal proposed                    | 21s  | $0.03    |
 ```
 
-**Spec check with a heal** (`conclusion: action_required`): output explains *"Step 4: 'Create account' moved into a modal. After updating the locator, all 3 expectations and all invariants pass (evidence: 3 items)."* One action button — **Accept heal** (description "Commit the locator update"). "Open replay" is a normal link (`details_url`), not an action. If the PR head changed since the proposal, clicking returns a *"Proposal is stale — re-running"* result. Fork PRs show the patch and `aqa heal apply <id>` instead of the button.
+**Spec check with a heal** (`conclusion: action_required`): output explains *"Step 4: 'Create account' moved into a modal. After updating the locator, all 3 expectations and all invariants pass (evidence: 3 items)."* One action button — **Accept heal** (description "Commit the locator update"). "Open run" is a normal link (`details_url`), not an action. If the PR head changed since the proposal, clicking returns a *"Proposal is stale — re-running"* result. Fork PRs show the patch and `aqa heal apply <id>` instead of the button.
 
 ## 5. CLI output
 
@@ -95,7 +95,7 @@ Agentic QA — 5 specs · 3 passed · 1 heal proposed · 1 expectation violated
 
 ## 6. Local report viewer
 
-`aqa report` opens a self-contained HTML file (no network needed) with the same replay layout as screen 3.5 — this is also what the public demo links to for runs without signing in.
+`aqa report` opens a self-contained HTML file (no network needed) with the same layout as the run viewer (screen 3.5) — this is also what the public demo links to for runs without signing in.
 
 ## 7. Accessibility
 

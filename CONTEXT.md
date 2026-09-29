@@ -62,13 +62,18 @@ One execution of one spec version in one mode (explore, strict or verified), whe
 The mode for a spec that has no compiled script yet: the agent drives the browser until every expectation is verified, then compiles the path it took.
 
 **Replay**:
-Executing a compiled script, in strict or verified mode. The dashboard's Run replay screen is a separate thing: step-by-step playback of any finished run, including explore runs.
+Executing a compiled script, in strict or verified mode.
+_Avoid_: "replay" for looking back at a finished run (that's the run viewer) or for re-sending events or requests
 
 **Strict replay**:
 The default replay mode, used in CI. It makes zero LLM calls, so every assertion must be deterministic.
 
 **Verified replay**:
 An opt-in replay mode that adds model-assisted visual checks for expectations that ask for them. Its cost and results are always reported apart from strict replays.
+
+**Run viewer**:
+The step-by-step view of any finished run, explore runs included, with its screenshots, evidence and verdicts. It is a dashboard screen, and `aqa report` opens the same view locally.
+_Avoid_: replay, replay viewer, run replay
 
 **Step intent**:
 The record of an action a runner writes before dispatching it, under the current lease, and completes afterwards. An unresolved step intent on a side-effect step means its outcome is unknown.

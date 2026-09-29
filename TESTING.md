@@ -19,7 +19,7 @@ Last updated: 2026-09-27 (revised after external review). Two different things a
 | Agent unit | Graph transitions and tool handling with **recorded LLM responses** | VCR.py cassettes, fake chat model | Every commit |
 | Contract | OpenAPI schema vs generated TS client; runner ↔ API payloads; cross-project trace fixture (`contracts/agentic-qa-trace.v1`) | Schemathesis-style fuzzing, client type check, fixture validation | Every commit |
 | GitHub App | Checks limits (≤ 3 actions, ≤ 20-char identifiers), stale-proposal rejection, permission checks, fork fallback | pytest + recorded webhooks | Every commit |
-| Realtime | Subscribe authorization, membership revocation, `since_seq` replay, stale connection cleanup | pytest + API Gateway emulation | Every commit |
+| Realtime | Subscribe authorization, membership revocation, `since_seq` catch-up, stale connection cleanup | pytest + API Gateway emulation | Every commit |
 | Dashboard | Components and pages | Vitest, Playwright Test | Every commit |
 | Visual | Screens at 390px and 1440px, dark + light | Playwright screenshots, reviewed in PR | UI PRs |
 | E2E system | CLI → API → runner → GitHub (sandbox org) on a demo app | Playwright + GitHub test org | Nightly + pre-release |
@@ -41,7 +41,7 @@ Written test-first (red → green → refactor): replay engine, locator resoluti
 
 ## 4. Agent tests without spending money
 
-- **Cassettes:** LLM calls recorded once against real providers, replayed in CI. Keyed by prompt hash; a changed prompt fails loudly and must be re-recorded deliberately (`make record-cassettes`, requires keys).
+- **Cassettes:** LLM calls recorded once against real providers, played back in CI. Keyed by prompt hash; a changed prompt fails loudly and must be re-recorded deliberately (`make record-cassettes`, requires keys).
 - **Fake model:** scripted chat model for graph-transition tests (e.g., "heal returns `expectation_violated`" → assert finding created, no patch).
 - **Fixture pages:** small static apps under `tests/fixtures/pages/` for each drift type (moved element, renamed label, removed element, new modal, canvas widget) and each hostile behavior (§1 Egress & secrets).
 
