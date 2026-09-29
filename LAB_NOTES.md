@@ -10,7 +10,10 @@ Running log of non-obvious failures and their root causes. One entry per lesson;
 
 ## Log
 
-_No entries yet._
+- [2026-09-28] Running the RealWorld E2E suite against the vendored Conduit created users and articles, XSS payloads included, on the **public** demo API, and 49 tests failed → the suite's helpers take `API_BASE` from the environment and default to `https://api.realworld.show/api` → always set `API_BASE` to the local stack (`http://frontend/api`); the command is in `bench/apps/conduit/README.md`.
+- [2026-09-28] A scraped E2E summary said a spec file "passed 15" while it also failed 16, leading to a wrong conclusion → Playwright's line reporter writes cursor-control codes (`ESC[1A ESC[2K`) even when output isn't a terminal, so `^\s+N failed` never matched → take counts from `--reporter=json` (`.stats.expected` / `.stats.unexpected`), never from scraped text.
+- [2026-09-28] An audit of Conduit's external hosts (a grep of the build output for `https?://`) reported only Google Fonts and the demo API, and missed Ionicons → both stylesheet links in `index.html` are protocol-relative (`//host/...`), and Angular inlines Google Fonts at build time but leaves other links alone, so Ionicons never appeared in the output → audit a vendored app's network use in a real browser (a Playwright request log per page, asserting that every request hits the app's origin); if you must grep, match `(https?:)?//`.
+- [2026-09-28] gitleaks did not report a planted fake GitHub token (`ghp_` followed by `A1b2` repeated) → gitleaks drops matches below each rule's entropy threshold, and a repeated pattern has almost none → test secret scanners with random, realistic fakes. The flip side: obviously fake fixtures don't need allowlisting.
 
 ## Watch list (known risks to verify early)
 

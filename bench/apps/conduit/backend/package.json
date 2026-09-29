@@ -1,0 +1,26 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "nitro build",
+    "dev": "nitro dev",
+    "prepare": "nitro prepare",
+    "preview": "bun .output/server/index.mjs",
+    "start": "bun .output/server/index.mjs",
+    "db:generate": "bun x prisma generate",
+    "db:push": "bun x prisma db push",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@ngneat/falso": "^5.0.0",
+    "nitropack": "^2.13.0",
+    "prisma": "^7.0.0"
+  },
+  "dependencies": {
+    "@prisma/adapter-libsql": "^7.0.0",
+    "@prisma/client": "^7.0.0",
+    "bcryptjs": "^3.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "slugify": "^1.6.6",
+    "zod": "^3.24.0"
+  }
+}
