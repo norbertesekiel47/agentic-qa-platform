@@ -48,7 +48,7 @@ Design: ADR-0024 (explore runs), ADR-0025 (compiled scripts), ADR-0026 (the brow
 - **Model router:** capability validation and cost accounting from the pinned price map, and Sonnet 5.5 defaults (ADR-0007 amendment).
 - **Injection fixtures aimed at exploring:** task hijack, decoy success, decoy binding after a failed confirmation, and steering of navigation, documents and secrets.
 - **Exit:**
-  - `aqa explore` compiles and confirms all five pilot specs. Their compiled assertions are checked against `bench/apps/conduit/qa/REVIEW.md`, once #31 reconciles its `read-article` row 5: a checklist in the PR, plus a test that none of its "Not acceptable" proxies appear.
+  - `aqa explore` compiles and confirms all five pilot specs. Their compiled assertions are checked against `bench/apps/conduit/qa/REVIEW.md`: a checklist in the PR, plus a test that none of its "Not acceptable" proxies appear.
   - Each compiled pilot script replays 3 times on the clean app with no model calls.
   - Under each of the 7 case flags, the M1 executor reproduces the manifest: each bug fails exactly the expectations and invariants it names. Each benign case's broken bindings are listed, and a hand-written rebinding patch restores every pass without touching an assertion.
   - The egress tests pass: redirects, rebinding, WebSockets, WebRTC/UDP, service workers and document origins.
