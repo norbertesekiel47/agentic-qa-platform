@@ -11,7 +11,7 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | [0003](0003-explore-compile-heal.md) | Explore once, compile, replay without LLM, heal on drift | Accepted (amended 2026-09-27) |
 | [0004](0004-specs-in-repo.md) | Structured natural-language specs; repo is the source of truth | Accepted |
 | [0005](0005-python-backend-nextjs-dashboard.md) | Python backend + Next.js dashboard with generated client | Accepted |
-| [0006](0006-langgraph-run-graph.md) | LangGraph for the run graph with an API-backed checkpointer | Accepted (amended 2026-09-27) |
+| [0006](0006-langgraph-run-graph.md) | LangGraph for the run graph with an API-backed checkpointer | Accepted (amended 2026-09-27, 2026-09-28) |
 | [0007](0007-model-agnostic-role-routing.md) | Model-agnostic, role-based model routing | Accepted |
 | [0008](0008-runner-image-lambda.md) | One runner image, two locations; Lambda for hosted runs | Accepted (amended 2026-09-27) |
 | [0009](0009-rds-postgres-rls.md) | RDS PostgreSQL with row-level security; fck-nat | Accepted |

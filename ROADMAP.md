@@ -17,7 +17,7 @@ Last updated: 2026-09-27 (revised after external review). **Core first, then Saa
 ## M1 — Local explore & compile
 - Repo scaffold (uv, Ruff, mypy strict, pytest, CI gates, AGENTS.md rules live).
 - Spec parser + schema; **browser wrapper with the full egress contract** (local egress proxy with validated-IP connects, Playwright HTTP + WebSocket routing installed before page creation, service workers blocked) and **sandbox-enabled launch with a startup check**; accessibility snapshot with element refs.
-- LangGraph explore loop with navigator role; tools; compiler producing targets + assertions with expectation coverage (unsupported clauses fail by name) and `replay_safe`/`side_effect` flags.
+- LangGraph explore loop with navigator role; tools; compiler producing targets + assertions with expectation coverage (unsupported clauses fail by name) and a required `side_effect` flag on every step.
 - Model router with capability validation and cost accounting.
 - **Spike (decision gate):** headless Chromium in a Lambda container image — memory, cold start, startup-hygiene time, and **whether Chromium's sandbox runs**. Outcome recorded in an ADR: Lambda (sandbox works) or the Fargate one-task-per-run adapter for hosted runs.
 - **Exit:** `aqa explore` compiles all pilot specs; egress tests (redirects, rebinding, WebSockets, service workers) pass; the sandbox gate is decided.

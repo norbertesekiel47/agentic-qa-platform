@@ -29,3 +29,10 @@ Option 1, used where its features genuinely fit:
 - **A checkpoint is not a browser.** Continuation restores Playwright storage state and re-executes only `replay_safe` steps; it never re-executes a `side_effect` step automatically. Specs that can't meet this end `errored: non_resumable` unless they declare a `reset` hook. Each continuation gets a new run token and lease from the dispatcher; runners never renew their own tokens.
 - **Step intents (verification review):** every action writes a lease-fenced intent row before dispatch and a completion after; an unresolved side-effect intent makes the run non-resumable (a checkpoint alone can't tell whether a submit happened). `reset` restarts as a new attempt from step 1.
 - **Interrupts deferred:** interactive "agent needs input" interrupts are removed from v1; runs never wait on a human mid-run. They return later with persisted interrupt records, a response endpoint, expiry, and the same side-effect-safe continuation rules.
+
+## Amendment (2026-09-28): one required `side_effect` flag per step
+
+- **Decision.** Every compiled step carries a single required boolean, `side_effect`. A **replay-safe** step is one with `side_effect: false`; `replay_safe` is no longer a field. The flag is never defaulted: a missing flag fails validation, because a default of `false` would let a continuation re-execute a purchase.
+- **Why.** The format stored `replay_safe` and `side_effect` as two independent booleans, which could say "both" or "neither" even though every step is exactly one of the two (ARCHITECTURE §3.3). One boolean makes both states unwritable and matches the existing `run_steps.side_effect` column and the heal validator's wording.
+- **Options not taken.** An enum (`effect: "replay_safe" | "side_effect"`) keeps both names visible in the file, but `run_steps.side_effect` would have to mirror it. Keeping both flags with an exactly-one-true rule changes the fewest docs but leaves the invalid states writable.
+- **Scope.** ADR-0003's "replay-safety flags" (addendum item 4) now means this flag. Nothing had produced compiled scripts yet, so `schema_version` stays 1 and nothing needs migrating.
