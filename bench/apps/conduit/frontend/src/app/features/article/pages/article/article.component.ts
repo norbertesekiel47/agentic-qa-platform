@@ -56,6 +56,12 @@ export default class ArticleComponent implements OnInit {
 
   isSubmitting = signal(false);
   isDeleting = signal(false);
+
+  // conduit-benign-001 (ADR-0022 flag): the comment button is relabeled.
+  readonly commentButtonLabel = benchFlag('ilzf') ? 'Add Comment' : 'Post Comment';
+  // conduit-benign-002 (ADR-0022 flag): the favorites count moves out of the Favorite
+  // button into a label beside it ("3 favorites").
+  readonly countBesideButton = benchFlag('zhwm');
   destroyRef = inject(DestroyRef);
 
   constructor(

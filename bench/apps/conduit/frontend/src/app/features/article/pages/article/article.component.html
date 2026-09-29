@@ -34,8 +34,15 @@
 
               <app-favorite-button [article]="a" (toggle)="onToggleFavorite($event)">
                 {{ a.favorited ? 'Unfavorite' : 'Favorite' }} Article
-                <span class="counter">({{ a.favoritesCount }})</span>
+                @if (!countBesideButton) {
+                  <span class="counter">({{ a.favoritesCount }})</span>
+                }
               </app-favorite-button>
+              @if (countBesideButton) {
+                <span class="favorites-count">
+                  {{ a.favoritesCount }} {{ a.favoritesCount === 1 ? 'favorite' : 'favorites' }}
+                </span>
+              }
             </span>
           }
         </app-article-meta>
@@ -81,8 +88,15 @@
 
               <app-favorite-button [article]="a" (toggle)="onToggleFavorite($event)">
                 {{ a.favorited ? 'Unfavorite' : 'Favorite' }} Article
-                <span class="counter">({{ a.favoritesCount }})</span>
+                @if (!countBesideButton) {
+                  <span class="counter">({{ a.favoritesCount }})</span>
+                }
               </app-favorite-button>
+              @if (countBesideButton) {
+                <span class="favorites-count">
+                  {{ a.favoritesCount }} {{ a.favoritesCount === 1 ? 'favorite' : 'favorites' }}
+                </span>
+              }
             </span>
           }
         </app-article-meta>
@@ -104,7 +118,7 @@
                 </div>
                 <div class="card-footer">
                   <img [src]="currentUser()?.image | defaultImage" class="comment-author-img" />
-                  <button class="btn btn-sm btn-primary" type="submit">Post Comment</button>
+                  <button class="btn btn-sm btn-primary" type="submit">{{ commentButtonLabel }}</button>
                 </div>
               </fieldset>
             </form>
