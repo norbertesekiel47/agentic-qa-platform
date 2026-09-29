@@ -9,6 +9,7 @@ cd bench/apps/conduit
 docker compose up --build --wait     # first build takes a few minutes; later starts take seconds
 open http://127.0.0.1:4100           # bound to loopback only
 docker compose restart backend       # reset to the seeded state (about 2 s)
+curl -X POST 'http://127.0.0.1:4100/test-api/reset?fixture=seed'   # the same reset in place (a few ms)
 docker compose down
 ```
 
@@ -22,11 +23,22 @@ python3 bench/harness/flags.py show conduit          # which case is on
 
 The harness doesn't rebuild images, so run `docker compose build` here after changing app code. A plain `docker compose up` takes `BENCH_FLAGS` from your shell; unset means the clean app.
 
-The whole app is served from one origin: nginx serves the Angular build and proxies `/api` to the backend. No request leaves the Compose network.
+The whole app is served from one origin: nginx serves the Angular build and proxies `/api` and `/test-api` to the backend. No request leaves the Compose network.
+
+## Test-only endpoints (`/test-api/*`)
+
+Ours, for spec `reset` hooks and `probes` (DATA_MODEL.md §6, ADR-0022). They sit outside upstream's `/api`, and flags are never exposed over HTTP.
+
+| Endpoint | Returns |
+|---|---|
+| `POST /test-api/reset?fixture=seed` | `204` after restoring the fixture's pristine database in place (flags untouched). An unknown fixture returns `404`. Resets run one at a time; a request in flight during a reset may fail, so reset between attempts |
+| `GET /test-api/articles/count?author=<username>` | `{"count": n}`: that user's articles (`0` for an unknown user). No `author` returns `400` |
+
+Probes are narrow and read-only: add one per question, in the same change as the spec that needs it.
 
 ## Seeded data
 
-`seed/seed.ts` runs once, when the backend image is built. It writes a pristine SQLite database, and every backend start copies that database into a `tmpfs`, so a restart is a full reset. Slugs, timestamps (January 2026, UTC) and insertion order are all fixed, so ids and rendered dates never change between runs.
+`seed/seed.ts` runs once, when the backend image is built. It writes a pristine SQLite database (`/app/fixtures/seed.db`, the `seed` fixture), and every backend start copies that database into a `tmpfs`, so a restart is a full reset. Slugs, timestamps (January 2026, UTC) and insertion order are all fixed, so ids and rendered dates never change between runs.
 
 | Account | Email | Notes |
 |---|---|---|
@@ -64,12 +76,14 @@ The two apps pin different `realworld` commits, so each carries only the subset 
 2. **`frontend/src/index.html`**: the Ionicons and Google Fonts stylesheets load from `vendor/` instead of `code.ionicframework.com` and `fonts.googleapis.com`. This also removes the build's own network fetch: Angular inlines Google Fonts at build time.
 3. **`frontend/angular.json`**: one asset entry copies `src/vendor/` into the build.
 4. **`backend/Makefile`**: upstream's `run` and `test-*` targets hard-code a random 44-character `JWT_SECRET`. It is replaced with `${JWT_SECRET:-conduit-bench-jwt-fixture}`, so a live-looking key is never republished here. The Compose setup does not use these targets.
+5. **`backend/server/utils/prisma.ts`**: `closePrisma()` is added (and the client variable may now be `undefined`), so `/test-api/reset` can close the client before restoring the database file (ADR-0022).
 
 ## Our additions inside the upstream trees
 
 New files only (ADR-0022); planted changes will add flag checks to upstream files and are listed per case in the manifest.
 
 - **`backend/server/utils/bench-flags.ts`** (+ `bench-flags.test.ts`): `benchFlag(id)`, read once from `BENCH_FLAGS` at start. Nitro auto-imports it into routes.
+- **`backend/server/routes/test-api/`**: the test-only endpoints above.
 - **`frontend/src/app/bench/flags.ts`**: `benchFlag(id)`, read from the `<script id="app-flags" type="application/json">` element that the frontend container writes into `index.html` at start.
 
 Everything else is ours and sits outside the upstream trees: `seed/`, `docker/` (including `bench-flags.sh`, which validates `BENCH_FLAGS` in both images, and `frontend-flags.sh`, which renders `index.html`), `compose.yaml`, `.dockerignore` and this README.
@@ -79,6 +93,7 @@ Everything else is ours and sits outside the upstream trees: `seed/`, `docker/` 
 - **Build and start:** `docker compose up --build --wait` reaches healthy on both services.
 - **Through the single origin:** the SPA and deep links, the self-hosted fonts and icons, the 12 seeded articles, fixture login, and the tags all work.
 - **Reset:** a write followed by `restart backend` returns byte-identical article data.
+- **In-place reset (2026-09-28):** 20 rounds of writes (create and delete an article, comment, favorite, follow, edit a profile, register a user), each followed by `POST /test-api/reset?fixture=seed`, restored a fingerprint of 21 state entries (every article, comment list, tag, profile, and one user's feed and settings) to its pristine value every time. Median reset: 2 ms.
 - **Flags (2026-09-28):** `flags.py selftest conduit --cycles 10` made 20 verified switches (median 2.67 s). A switch after creating an article returned jake's article count from 6 to 5. An invalid `BENCH_FLAGS` (uppercase, an empty item, `*`, `;`) stops the backend and the frontend from starting, and `bun test server/utils/bench-flags.test.ts` passes.
 - **In Chromium** (Playwright 1.63 in a container on the Compose network), visiting `/`, an article, a profile and `/login`:
   - 131 requests, **all to the app's own origin**, with no failed requests and no console errors
@@ -89,8 +104,8 @@ Everything else is ours and sits outside the upstream trees: `seed/`, `docker/` 
 
 | Suite | Result |
 |---|---|
-| Backend API spec suite (Hurl 7.1.0; upstream's backend CI gate) | **13/13 files, 154/154 requests pass** |
-| Backend unit tests (`bun test`) | 11/11 pass |
+| Backend API spec suite (Hurl 7.1.0; upstream's backend CI gate) | **13/13 files, 154/154 requests pass**, except that **`pagination.hurl` is flaky upstream**. Over 30 full runs each, it failed 8 times at `24d0009` (before `/test-api` existed) and 8 times with `/test-api`, including an interleaved A/B of 20 runs each; no other file ever failed. Its two articles are created back to back, often in the same millisecond, and upstream lists articles by `createdAt desc` with no tiebreak; every failure had equal timestamps (LAB_NOTES.md) |
+| Backend unit tests (`bun test`) | 13/13 pass (upstream's 11 plus our 2 for `bench-flags.ts`) |
 | Frontend unit tests (Vitest) | **Broken upstream.** `src/test-setup.ts` imports `zone.js`, which `package.json` never declares. The pristine upstream clone fails the same way, and upstream CI doesn't run these tests. |
 | Frontend E2E suite (Playwright 1.60; upstream's frontend CI gate) | **113/139 pass; 26 fail.** No retries, both as one run and file by file on fresh seed data. |
 
@@ -122,6 +137,6 @@ Use the JSON reporter for counts. The line reporter writes cursor-control codes 
 
 ## Updating upstream
 
-Re-export each tree at the new commit with the same exclusions, then re-apply the four changes above and restore our additions and planted changes. After that:
+Re-export each tree at the new commit with the same exclusions, then re-apply the five changes above and restore our additions and planted changes. After that:
 - Re-run the seed, the checks above, and `gitleaks dir .`.
 - An upstream change that moves a reviewed finding makes CI fail until its `.gitleaksignore` entry is re-reviewed (ADR-0021).
