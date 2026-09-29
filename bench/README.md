@@ -22,7 +22,7 @@ python3 bench/harness/flags.py clean <app>          # the clean app
 python3 bench/harness/flags.py show <app>           # which case is on; fails if the tiers disagree
 python3 bench/harness/flags.py selftest <app>       # alternate the reserved flag 0000 and clean, 10 cycles
 
-python3 bench/harness/toggle.py <app> --cycles 5    # every case: change absent when clean, present with its flag
+python3 bench/harness/toggle.py <app> --cycles 5    # every check on the clean app and under each case's flag
 ```
 
-The flag commands need the app's stack built (`docker compose build` in `apps/<app>/`). The self-test proves flag delivery to both tiers. `toggle.py` proves each case's planted change (ADR-0023): it builds the checks image, runs `toggle_checks.py` as a non-root user with Chromium's sandbox on, and fails when a case has no check or a check sees anything other than the exact clean or planted state. A pull request that adds or changes cases includes its output.
+The flag commands need the app's images built (`docker compose build` in `apps/<app>/`). The self-test proves flag delivery to both tiers. `toggle.py` proves each case's planted change, and that the case's flag switches nothing else (ADR-0023). It builds the app's images from the working tree and the checks image, then runs every case's check (`toggle_checks.py`, as a non-root user with Chromium's sandbox on) on the clean app and under each case's flag. It fails when a case has no check, or when a check sees anything other than its exact expected state: planted under its own flag, clean otherwise. A pull request that adds or changes cases includes its output.

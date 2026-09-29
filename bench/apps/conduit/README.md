@@ -21,7 +21,7 @@ python3 bench/harness/flags.py clean conduit         # the clean app
 python3 bench/harness/flags.py show conduit          # which case is on
 ```
 
-The harness doesn't rebuild images, so run `docker compose build` here after changing app code. A plain `docker compose up` takes `BENCH_FLAGS` from your shell; unset means the clean app.
+`flags.py` doesn't rebuild images, so run `docker compose build` here after changing app code (`toggle.py` builds them itself). A plain `docker compose up` takes `BENCH_FLAGS` from your shell; unset means the clean app.
 
 The whole app is served from one origin: nginx serves the Angular build and proxies `/api` and `/test-api` to the backend. No request leaves the Compose network.
 

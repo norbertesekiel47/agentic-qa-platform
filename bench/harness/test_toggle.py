@@ -31,6 +31,8 @@ class FakeChecks:
         self.runs: list[list[str]] = []
         self.always_planted: set[str] = set()
         self.failing: set[str] = set()
+        # A case whose flag also plants another case's change: {case: other case}.
+        self.cross_wired: dict[str, str] = {}
 
     def registered(self) -> list[str]:
         return list(self.cases)
@@ -44,7 +46,12 @@ class FakeChecks:
             if case_id in self.failing:
                 results.append(toggle.Result(case_id, None, "", "TimeoutError: boom"))
                 continue
-            on = flag_of[case_id] in active or case_id in self.always_planted
+            wired = [src for src, dst in self.cross_wired.items() if dst == case_id]
+            on = (
+                flag_of[case_id] in active
+                or case_id in self.always_planted
+                or any(flag_of[src] in active for src in wired)
+            )
             state = toggle.PLANTED if on else toggle.CLEAN
             results.append(toggle.Result(case_id, state, "'observed'", None))
         return results
@@ -67,7 +74,8 @@ class ToggleTestCase(unittest.TestCase):
 class ToggleRunTest(ToggleTestCase):
     def test_every_case_toggles_in_every_cycle(self) -> None:
         rows = self.run_toggle(cycles=2)
-        self.assertEqual(len(rows), 8)  # 2 cycles x 2 cases x (off, on)
+        # 2 cycles x (2 checks on the clean app + 2 flags x 2 checks)
+        self.assertEqual(len(rows), 12)
         self.assertTrue(all(row.ok for row in rows))
         on = [(r.cycle, r.case) for r in rows if r.flag_on]
         self.assertEqual(
@@ -80,16 +88,25 @@ class ToggleRunTest(ToggleTestCase):
             ],
         )
 
-    def test_clean_app_runs_every_check_at_once_then_one_per_flag(self) -> None:
+    def test_every_check_runs_on_the_clean_app_and_under_each_flag(self) -> None:
         self.run_toggle(cycles=1)
+        both = ["conduit-benign-001", "conduit-bug-001"]
+        self.assertEqual(self.checks.runs, [both, both, both])
         self.assertEqual(
-            self.checks.runs,
+            [env for _, env in self.docker.up_calls()],
             [
-                ["conduit-benign-001", "conduit-bug-001"],
-                ["conduit-benign-001"],
-                ["conduit-bug-001"],
+                {"BENCH_FLAGS": ""},
+                {"BENCH_FLAGS": "h3k8"},
+                {"BENCH_FLAGS": "k3q9"},
+                {"BENCH_FLAGS": ""},
             ],
         )
+
+    def test_builds_the_app_images_before_switching(self) -> None:
+        self.run_toggle(cycles=1)
+        self.assertEqual(self.docker.calls[0], ("conduit", ("build", "--quiet"), {}))
+        builds = [args for _, args, _ in self.docker.calls if args[0] == "build"]
+        self.assertEqual(len(builds), 1)
 
     def test_ends_on_the_clean_app(self) -> None:
         self.run_toggle(cycles=1)
@@ -99,8 +116,16 @@ class ToggleRunTest(ToggleTestCase):
     def test_change_present_on_the_clean_app_fails(self) -> None:
         self.checks.always_planted.add("conduit-bug-001")
         rows = self.run_toggle()
-        bad = [(r.case, r.flag_on) for r in rows if not r.ok]
-        self.assertEqual(bad, [("conduit-bug-001", False)])
+        bad = [(r.case, r.active) for r in rows if not r.ok]
+        self.assertEqual(
+            bad, [("conduit-bug-001", None), ("conduit-bug-001", "conduit-benign-001")]
+        )
+
+    def test_flag_that_also_switches_another_case_fails(self) -> None:
+        self.checks.cross_wired["conduit-benign-001"] = "conduit-bug-001"
+        rows = self.run_toggle()
+        bad = [(r.case, r.active) for r in rows if not r.ok]
+        self.assertEqual(bad, [("conduit-bug-001", "conduit-benign-001")])
 
     def test_check_error_fails(self) -> None:
         self.checks.failing.add("conduit-benign-001")
@@ -115,9 +140,13 @@ class ToggleRunTest(ToggleTestCase):
             self.run_toggle()
         self.assertEqual(self.docker.calls, [])
 
-    def test_only_selected_cases(self) -> None:
+    def test_only_switches_the_selected_flags_but_runs_every_check(self) -> None:
         rows = self.run_toggle(only=["conduit-bug-001"])
-        self.assertEqual({r.case for r in rows}, {"conduit-bug-001"})
+        self.assertEqual({r.active for r in rows}, {None, "conduit-bug-001"})
+        self.assertEqual(
+            {r.case for r in rows}, {"conduit-benign-001", "conduit-bug-001"}
+        )
+        self.assertTrue(all(r.ok for r in rows))
 
     def test_unknown_selected_case(self) -> None:
         with self.assertRaisesRegex(
@@ -189,13 +218,14 @@ class CliTest(ToggleTestCase):
     def test_all_as_expected(self) -> None:
         code, out, _ = self.run_cli("--cycles", "2")
         self.assertEqual(code, 0)
-        self.assertIn("8 checks over 2 cycles, all as expected", out)
+        self.assertIn("12 checks over 2 cycles, all as expected", out)
 
     def test_failure_exits_1(self) -> None:
         self.checks.failing.add("conduit-bug-001")
         code, out, _ = self.run_cli("--cycles", "1")
         self.assertEqual(code, 1)
-        self.assertIn("2 of 4 checks not as expected", out)
+        # bug-001's check fails in all 3 states: the clean app and both flags.
+        self.assertIn("3 of 6 checks not as expected", out)
 
     def test_setup_error_exits_1(self) -> None:
         self.checks.cases = []

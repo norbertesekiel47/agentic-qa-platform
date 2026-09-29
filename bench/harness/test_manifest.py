@@ -59,7 +59,7 @@ def valid_data() -> dict[str, Any]:
 
 
 def spec_text(spec_id: str) -> str:
-    """A spec file with three expect items, one of them a mapping (DATA_MODEL §6)."""
+    """A spec file with three expectations, one of them a mapping (DATA_MODEL §6)."""
     return (
         "---\n"
         f"id: {spec_id}\n"
@@ -287,6 +287,14 @@ class CaseFieldTest(ManifestTestCase):
             "conduit-bug-001: split must be a string",
         )
 
+    def test_null_is_not_a_string(self) -> None:
+        # mutate() treats None as "remove the key", so set JSON null directly.
+        for key in ("app", "kind", "category", "split", "family", "flag", "summary"):
+            with self.subTest(key=key):
+                data = valid_data()
+                data["cases"]["conduit-bug-001"][key] = None
+                self.assert_error(data, f"conduit-bug-001: {key} must be a string")
+
     def test_all_errors_are_reported_together(self) -> None:
         data = self.mutate("conduit-bug-001", split="train", flag="BAD")
         errors = self.errors_for(data)
@@ -305,6 +313,15 @@ class ExpectedTest(ManifestTestCase):
             self.with_expected("conduit-bug-001", []),
             "conduit-bug-001: expected must be a non-empty list",
         )
+
+    def test_null_spec_or_verdict_is_not_a_string(self) -> None:
+        for key in ("spec", "verdict"):
+            with self.subTest(key=key):
+                data = valid_data()
+                data["cases"]["conduit-bug-001"]["expected"][0][key] = None
+                self.assert_error(
+                    data, f"conduit-bug-001: expected[0]: {key} must be a string"
+                )
 
     def test_unknown_verdict(self) -> None:
         self.assert_error(
@@ -398,7 +415,7 @@ class ExpectedTest(ManifestTestCase):
                 ],
             ),
             "conduit-bug-001: expected[0]: expect index 3 is out of range: "
-            "spec 'login' has 3 expect items",
+            "spec 'login' has 3 expectations",
         )
 
     def test_spec_file_without_expect_list(self) -> None:
@@ -594,6 +611,17 @@ class CheckTest(ManifestTestCase):
         with self.assertRaises(manifest.ManifestError) as caught:
             manifest.load(self.ws.root)
         self.assertTrue(any("split 'train'" in e for e in caught.exception.errors))
+
+    def test_load_rejects_a_null_spec(self) -> None:
+        data = valid_data()
+        data["cases"]["conduit-bug-001"]["expected"][0]["spec"] = None
+        self.ws.write_manifest(data)
+        with self.assertRaises(manifest.ManifestError) as caught:
+            manifest.load(self.ws.root)
+        self.assertIn(
+            "conduit-bug-001: expected[0]: spec must be a string",
+            caught.exception.errors,
+        )
 
 
 class CliTest(ManifestTestCase):

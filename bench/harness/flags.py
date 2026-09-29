@@ -152,6 +152,12 @@ def _frontend_flags(app_dir: Path, stack: Stack, docker: Docker) -> tuple[str, .
     return served_flags(docker.fetch(f"http://{address}/"))
 
 
+def build(root: Path, app: str, docker: Docker) -> None:
+    """Build ``app``'s images from the working tree (quick when nothing changed)."""
+    stack_for(app)
+    docker.compose(root / manifest.APPS / app, ["build", "--quiet"])
+
+
 def switch(root: Path, app: str, flag_ids: Sequence[str], docker: Docker) -> Switch:
     """Recreate ``app`` with exactly ``flag_ids`` on, and verify both tiers."""
     stack = stack_for(app)

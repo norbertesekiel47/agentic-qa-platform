@@ -39,7 +39,7 @@ SPLITS = ("dev", "test")
 VIOLATED = "expectation_violated"
 DRIFT = "drift_consistent"
 VERDICTS = (VIOLATED, DRIFT)
-# What a run checks beyond a spec's expect items (DATA_MODEL.md §6).
+# What a run checks beyond a spec's expectations (DATA_MODEL.md §6).
 INVARIANTS = ("console_errors", "js_exceptions", "http_5xx", "broken_images")
 
 CASE_ID = re.compile(r"(?P<app>[a-z][a-z0-9]*)-(?P<kind>bug|benign)-\d{3}")
@@ -55,7 +55,7 @@ ENTRY_OPTIONAL = ("expect", "invariants")
 
 # Spec files (DATA_MODEL.md §6) start with YAML front matter. With no YAML parser
 # before M1, spec_front_matter relies on that section's layout: top-level keys at
-# column 0, and each expect item a "  - " line two spaces in.
+# column 0, and each expectation a "  - " line two spaces in.
 FRONT_MATTER = re.compile(r"\A---\n(.*?)\n---(?:\n|\Z)", re.DOTALL)
 TOP_LEVEL_KEY = re.compile(r"[A-Za-z_][\w-]*:")
 
@@ -137,9 +137,11 @@ def _keys(
 
 
 def _string(obj: dict[str, Any], key: str, where: str, errors: list[str]) -> str | None:
-    value = obj.get(key)
-    if value is None:
+    # An absent key is reported by _keys; a present one must be a string, so an
+    # explicit null can't slip past the checks that need the value.
+    if key not in obj:
         return None
+    value = obj[key]
     if not isinstance(value, str):
         errors.append(f"{where}: {key} must be a string")
         return None
@@ -155,7 +157,7 @@ def _one_of(
 
 
 def spec_front_matter(text: str) -> tuple[str | None, int | None]:
-    """A spec file's id and its number of expect items (None where absent)."""
+    """A spec file's id and its number of expectations (None where absent)."""
     match = FRONT_MATTER.match(text)
     if match is None:
         return None, None
@@ -197,7 +199,7 @@ def _check_spec_file(
         return [*errors, f"{where}: {spec_file}: no expect list in its front matter"]
     if isinstance(expect, list) and _valid_indexes(expect):
         errors.extend(
-            f"{where}: expect index {i} is out of range: spec '{spec}' has {count} expect items"
+            f"{where}: expect index {i} is out of range: spec '{spec}' has {count} expectations"
             for i in expect
             if i >= count
         )

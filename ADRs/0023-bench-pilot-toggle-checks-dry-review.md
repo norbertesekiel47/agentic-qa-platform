@@ -38,3 +38,10 @@ M0 ends when "pilot cases toggle reliably; specs pass a dry compile-rules review
 - **Playwright's Python image `v1.63.0-noble` ships the browsers but not the `playwright` package.** `bench/harness/checks.Dockerfile` builds on it, pinned by digest, and installs `playwright==1.63.0` from `checks-requirements.txt`, which is hash-locked (`--require-hashes`).
 - **The checks run with Chromium's sandbox on** (AGENTS.md §6). As root or under Docker's default seccomp profile, a sandboxed launch fails ("Chromium sandboxing failed!"). So the container runs as `pwuser` with Playwright's seccomp profile for that release, vendored as `bench/harness/chromium-seccomp.json` (Apache-2.0, `microsoft/playwright` at `v1.63.0`, `utils/docker/seccomp_profile.json`, sha256 `cc3e61ca…1cc7849`). It is Docker's default profile plus the namespace syscalls the sandbox needs, which is narrower than `--cap-add=SYS_ADMIN`. `chromium_sandbox=True` makes a launch that can't sandbox fail instead of silently falling back.
 - **Upgrading Playwright** means moving the image tag and digest, the lock, and the seccomp profile together.
+
+## Amendment (2026-09-29): every check under every flag, and fresh images
+A review found two ways `toggle.py` could pass on bad evidence:
+- **Cross-case contamination.** A case's flag was checked only against its own check, and the other checks ran only with every flag off, so a flag that also switched another case's change passed. Now every check runs on the clean app and under each case's flag. Under a flag, that case's check must report planted and every other check clean. A cycle runs n + n² checks for n cases: 56 for the 7 pilot cases.
+- **Stale images.** `toggle.py` now builds the app's images from the working tree before its first switch (`docker compose build`, quick when nothing changed), so its evidence can't come from images of older code.
+
+Also, the `conduit-bug-004` check now reads the article count until it stops changing (`bench/harness/polling.py`). It used to wait for Playwright's "networkidle", which has already fired by the time of a client-side navigation.

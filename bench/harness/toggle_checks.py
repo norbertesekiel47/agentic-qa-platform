@@ -26,6 +26,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 
 from playwright.sync_api import Browser, Error, Page, Playwright, sync_playwright
+from polling import NotSettledError, settled
 
 CLEAN = "clean"
 PLANTED = "planted"
@@ -159,10 +160,11 @@ def articles_saved_per_publish(session: Session) -> Observation:
         page.get_by_placeholder("Write your article (in markdown)").fill("Body.")
         page.get_by_role("button", name="Publish Article").click()
         page.wait_for_url(re.compile(r"/article/"))
-        # A duplicate create request is still in flight when the page navigates.
-        page.wait_for_load_state("networkidle")
-        created = session.probe("/test-api/articles/count?author=jake") - 5
-        return classify(created, 1, 2)
+        # A duplicate create request can still be in flight after the page has
+        # navigated, and "networkidle" has usually fired long before this
+        # client-side navigation, so read the count until it stops changing.
+        count = settled(lambda: session.probe("/test-api/articles/count?author=jake"))
+        return classify(count - 5, 1, 2)
 
 
 @check("conduit-bug-005")
@@ -219,7 +221,7 @@ def main(argv: list[str]) -> int:
                 session.reset()
                 observation = CHECKS[case_id](session)
                 result |= {"state": observation.state, "detail": observation.detail}
-            except (UnexpectedStateError, Error) as exc:
+            except (UnexpectedStateError, NotSettledError, Error) as exc:
                 result["error"] = f"{type(exc).__name__}: {exc}"[:500]
             print(json.dumps(result), flush=True)
         browser.close()
