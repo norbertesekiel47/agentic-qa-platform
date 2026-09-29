@@ -15,6 +15,7 @@ RUN test -n "$CONDUIT_SEED_PASSWORD" \
  && DATABASE_URL=file:/app/seed.db bun x prisma db push \
  && DATABASE_URL=file:/app/seed.db bun bench-seed/seed.ts
 
+COPY --chmod=0755 docker/bench-flags.sh /usr/local/bin/bench-flags
 COPY docker/backend-entrypoint.sh /usr/local/bin/conduit-backend
 ENV DATABASE_URL=file:/data/conduit.db HOST=0.0.0.0 PORT=3000
 EXPOSE 3000

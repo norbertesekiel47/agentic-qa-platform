@@ -239,7 +239,7 @@ Free-form notes for humans (ignored by the agent unless referenced).
 | `category` | Bugs only: one of the six `findings.category` values (§2) |
 | `split` | `dev` or `test`. Every case in a `family` shares one split (TESTING §5) |
 | `family` | `<app>-<name>`: cases on the same code path |
-| `flag` | Opaque: 4 lowercase letters or digits, unique across the manifest. Never the case ID, because the frontend's flag list reaches the browser |
+| `flag` | Opaque: 4 lowercase letters or digits, unique across the manifest. Never the case ID, because the frontend's flag list reaches the browser. `0000` is reserved for the harness self-test |
 | `summary` | One line, for people. It never reaches the system under test |
 | `expected` | One entry per scored spec: `spec` is a spec ID with a file at `bench/apps/<app>/qa/<spec>.spec.md`, and `verdict` is `expectation_violated` or `drift_consistent`. An `expectation_violated` entry lists the violated `expect` indexes (0-based, as `expect_index` in §7). A bug needs at least one such entry, and it may also cause drift in other specs. A benign case is `drift_consistent` in every entry |
 

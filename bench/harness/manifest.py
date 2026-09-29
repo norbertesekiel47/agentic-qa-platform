@@ -42,6 +42,8 @@ VERDICTS = (VIOLATED, DRIFT)
 
 CASE_ID = re.compile(r"(?P<app>[a-z][a-z0-9]*)-(?P<kind>bug|benign)-\d{3}")
 FLAG = re.compile(r"[a-z0-9]{4}")
+# The harness self-test switches this flag, and no app code checks it (flags.py).
+SELFTEST_FLAG = "0000"
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 CASE_REQUIRED = ("app", "kind", "split", "family", "flag", "summary", "expected")
@@ -241,6 +243,8 @@ def _validate_case(case_id: str, case: object, root: Path) -> list[str]:
     flag = _string(case, "flag", case_id, errors)
     if flag is not None and not FLAG.fullmatch(flag):
         errors.append(f"{case_id}: flag '{flag}' must be 4 lowercase letters or digits")
+    if flag == SELFTEST_FLAG:
+        errors.append(f"{case_id}: flag '{flag}' is reserved for the harness self-test")
     summary = _string(case, "summary", case_id, errors)
     if summary is not None and (not summary.strip() or "\n" in summary):
         errors.append(f"{case_id}: summary must be one non-empty line")
