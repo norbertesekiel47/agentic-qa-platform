@@ -179,6 +179,28 @@ def header_links_covered(session: Session) -> Observation:
         return classify(covered, [False, False, False], [True, True, True])
 
 
+@check("conduit-benign-001")
+def comment_button_label(session: Session) -> Observation:
+    with session.page("reader@conduit.test") as page:
+        page.goto("/article/welcome-to-conduit")
+        label = text(page, "form.comment-form button[type=submit]")
+        return classify(label, "Post Comment", "Add Comment")
+
+
+@check("conduit-benign-002")
+def favorites_count_placement(session: Session) -> Observation:
+    with session.page() as page:
+        page.goto("/article/flaky-tests-are-bugs")
+        button = text(page, ".banner app-favorite-button button")
+        beside = page.locator(".banner .favorites-count")
+        label = " ".join(beside.inner_text().split()) if beside.count() else None
+        return classify(
+            (button, label),
+            ("Favorite Article (0)", None),
+            ("Favorite Article", "0 favorites"),
+        )
+
+
 def main(argv: list[str]) -> int:
     if argv == ["--list"]:
         print(json.dumps(sorted(CHECKS)))
