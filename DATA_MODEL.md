@@ -50,7 +50,7 @@ webhook_events · oidc_exchanges (global, service role only)
 |---|---|
 | `runs` | `id`, `org_id`, `project_id`, `spec_version_id`, `trigger` (`ci`\|`hosted`\|`local_upload`), `mode` (`explore`\|`strict`\|`verified`), `status` (`queued`\|`running`\|`passed`\|`failed`\|`heal_proposed`\|`errored`\|`cancelled`), `error_code` (e.g. `non_resumable`), `target_url`, `execution_sha` (the commit actually tested — for `pull_request` workflows, GitHub's merge commit), `head_sha` (the PR head commit, used for heal staleness), `pr_number`, `runner_location` (`ci`\|`hosted`), `attempt` (increments on `reset`), `continuations`, `lease_id`, `started_at`, `finished_at`, `llm_cost_usd`, `idempotency_key` (unique per org) |
 | `run_steps` | `id`, `org_id`, `run_id`, `attempt`, `seq`, `lease_id`, `kind` (`action`\|`assert`\|`observe`\|`heal`), `action` (jsonb), `target_used`, `locator_used`, `side_effect` (bool), `state` (`intent`\|`completed`\|`failed`\|`skipped`), `intent_at`, `completed_at`, `duration_ms`, `error` — the **intent** row is written before the action is dispatched; completion updates it; writes carrying a stale `lease_id` are rejected |
-| `run_events` | `run_id`, `seq` (per-run monotonic), `org_id`, `type`, `payload` (jsonb), `created_at` — realtime replay; 7-day retention |
+| `run_events` | `run_id`, `seq` (per-run monotonic), `org_id`, `type`, `payload` (jsonb), `created_at` — catch-up for reconnecting live clients; 7-day retention |
 | `artifacts` | `id`, `org_id`, `run_id`, `step_id` (nullable), `type` (`screenshot`\|`a11y_snapshot`\|`console_log`\|`network_har`\|`trace`\|`report_html`), `s3_key`, `bytes`, `sha256`, `expires_at` |
 | `checkpoints` | `org_id`, `run_id`, `thread_id`, `checkpoint_ns`, `checkpoint_id`, `parent_checkpoint_id`, `type`, `checkpoint` (bytea, serialized, ≤ 1 MB compressed), `metadata` (jsonb) — PK `(thread_id, checkpoint_ns, checkpoint_id)` |
 | `checkpoint_writes` | `org_id`, `thread_id`, `checkpoint_ns`, `checkpoint_id`, `task_id`, `idx`, `channel`, `type`, `value` (bytea) — PK `(thread_id, checkpoint_ns, checkpoint_id, task_id, idx)`; upserts are idempotent |
@@ -111,7 +111,7 @@ CREATE POLICY tenant_isolation ON runs
 |---|---|---|
 | Artifacts (S3) | 30 days (lifecycle rule) | 7–90 days per project |
 | Run rows & verdicts | 180 days | Yes |
-| Run events (realtime replay) | 7 days | No |
+| Run events (reconnect catch-up) | 7 days | No |
 | Checkpoints, checkpoint writes, storage states | Deleted when the run completes (storage states) / 7 days after (checkpoints) | No |
 | LLM call records | 13 months (cost reporting) | No |
 | Audit events | 1 year | No |

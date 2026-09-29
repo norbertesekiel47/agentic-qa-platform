@@ -47,7 +47,7 @@ Python (FastAPI, LangGraph, Playwright) · Next.js dashboard (static, on S3 + Cl
 
 ## Releases *(planned)*
 
-- **0.1 — CLI + benchmark:** open-source CLI, frozen benchmark, local replay viewer, measured numbers.
+- **0.1 — CLI + benchmark:** open-source CLI, frozen benchmark, local run viewer, measured numbers.
 - **0.2 — CI-native:** GitHub Action + GitHub App with Accept heal.
 - **1.0 — SaaS:** hosted runs, dashboard, multi-tenant orgs.
 
