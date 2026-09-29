@@ -49,6 +49,8 @@ Written test-first (red → green → refactor): replay engine, locator resoluti
 
 Location: `bench/`. Two open-source apps with **60 planted bugs** behind feature flags across six categories (functional, visual/layout, backend 5xx, JS error, broken flow, data display) and **20 benign UI changes** (moved/restyled/relabeled elements, reordered nav — every `expect` still holds).
 
+**Flags and ground truth (ADR-0022):** each case is one opaque flag, set through `BENCH_FLAGS` when the app's containers are recreated (which also reseeds the database). Specs reach app state only through the app's `/test-api/*` reset hook and narrow read-only probes. Ground truth lives only in `bench/manifest.v1.json`, keyed by case ID.
+
 **Pilot first (M0):** one app, ~5 bugs and 2 benign changes, development-only — enough to validate the compiler, the expectation-coverage rules, and the heal contract before investing in the full benchmark. Pilot cases join the dev split. The full benchmark is written and its split frozen at the start of M3, before any tuning on it.
 
 ### Splits (frozen before any tuning)
@@ -58,7 +60,7 @@ Location: `bench/`. Two open-source apps with **60 planted bugs** behind feature
 | **test (frozen)** | 40 | 14 | Release numbers only; never run in CI, never used for tuning |
 
 - Related bugs (same code path or same "family") are assigned to the same split so the test set isn't leaked through near-duplicates.
-- The split manifest is committed with a hash before M1. Once test results influence a design decision, that test set is **burned**: the next release uses a freshly written test set (v2), and the README says which version produced its numbers.
+- The split manifest is committed with a hash before M1: `bench/manifest.v1.split.sha256` covers each case's split and family, and a unit test recomputes it (ADR-0022). Once test results influence a design decision, that test set is **burned**: the next release uses a freshly written test set (v2), and the README says which version produced its numbers.
 
 ### Procedure
 1. Explore each spec on the clean app → compiled scripts committed to `bench/apps/<app>/qa/.compiled/`.
