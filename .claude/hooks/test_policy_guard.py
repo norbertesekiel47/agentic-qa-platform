@@ -174,6 +174,7 @@ class SuppressionTests(GuardTestCase):
             "g.tsx": "/* eslint-disable */",
             "h.py": "if x:  # pragma: no cover",
             "i.ts": "/* istanbul ignore next */",
+            "j.py": "if x:  # pragma: no branch",
         }
         for rel, line in cases.items():
             with self.subTest(rel=rel):
@@ -256,6 +257,10 @@ class SkippedTestTests(GuardTestCase):
             "it.skipIf(isCI)('x', () => {})",
             "xit('x', () => {})",
             "@pytest.mark.flaky(reruns=3)",
+            "        self.skipTest('later')",
+            "    raise unittest.SkipTest('later')",
+            "__test__ = False",
+            'collect_ignore = ["test_a.py"]',
         ]
         for line in lines:
             with self.subTest(line=line):
@@ -309,6 +314,12 @@ class AssertionTests(GuardTestCase):
         self.assert_asks(result)
         self.assertIn("1 assertion(s) where there were 2", result.stdout)
 
+    def test_renaming_a_test_away_asks(self) -> None:
+        self.put("tests/test_a.py", self.TEST_A)
+        result = self.edit("tests/test_a.py", "def test_a", "def _test_a")
+        self.assert_asks(result)
+        self.assertIn("0 test(s) where there were 1", result.stdout)
+
     def test_adding_assertions_is_allowed(self) -> None:
         self.put("tests/test_a.py", self.TEST_A)
         added = "    assert f(2) == 3\n    assert f(3) == 4\n"
@@ -344,12 +355,19 @@ class StubTests(GuardTestCase):
             "packages/runner/src/aqa_runner/heal.py": "    raise NotImplementedError('M2')",
             "apps/dashboard/src/runs.ts": 'throw new Error("Not implemented");',
             "apps/dashboard/src/specs.tsx": "throw new Error('TODO: not implemented yet');",
+            "apps/dashboard/src/jobs.ts": "throw new Error(`Not implemented`);",
         }
         for rel, line in cases.items():
             with self.subTest(rel=rel):
                 result = self.edit(rel, "", line)
                 self.assert_blocked(result)
-                self.assertIn("CONSTRAINTS.md", result.stderr)
+                self.assertIn("no unimplemented stubs", result.stderr)
+
+    def test_shell_writes_of_stubs_are_judged_by_their_target(self) -> None:
+        stub = "<<'EOF'\ndef f() -> int:\n    raise NotImplementedError\nEOF"
+        self.assert_blocked(self.bash(f"cat > packages/core/a.py {stub}"))
+        # A fake in a test may raise it; the command still asks, as it writes a test.
+        self.assert_asks(self.bash(f"cat > tests/test_fake.py {stub}"))
 
     def test_stubs_in_tests_or_citing_an_adr_pass(self) -> None:
         self.assert_allowed(
@@ -428,6 +446,9 @@ class GateConfigTests(GuardTestCase):
     def test_shell_writes_to_gate_configs_ask(self) -> None:
         self.assert_asks(self.bash("sed -i '' 's/90/50/' pyproject.toml"))
         self.assert_asks(self.bash("git restore --source=main pyproject.toml"))
+        self.assert_asks(
+            self.bash("git -C /work/aqa restore --source=main pyproject.toml")
+        )
         self.assert_allowed(self.bash("cat pyproject.toml"))
         self.assert_allowed(self.bash("git commit -m 'bump package.json'"))
 
@@ -437,6 +458,9 @@ class GateConfigTests(GuardTestCase):
         self.assertIn("+| Coverage, overall | ≥ 90% |", reason)
         self.assert_asks(self.bash("sed -i '' 's/94/90/' CONSTRAINTS.md"))
         self.assert_asks(self.bash("git checkout main -- CONSTRAINTS.md"))
+        self.assert_asks(
+            self.bash("sed -i '' 's/94/90/' CONSTRAINTS.md && git commit -am x")
+        )
         self.assert_allowed(self.bash("cat CONSTRAINTS.md"))
 
     def test_uv_table_changes_ask(self) -> None:
@@ -444,6 +468,15 @@ class GateConfigTests(GuardTestCase):
         ban = 'constraint-dependencies = ["litellm<0"]\n'
         reason = self.ask_reason(self.edit("pyproject.toml", ban, ""))
         self.assertIn('-constraint-dependencies = ["litellm<0"]', reason)
+
+    def test_uv_sources_other_than_workspace_members_ask(self) -> None:
+        self.put("pyproject.toml", PYPROJECT_UV)
+        member = "aqa-core = { workspace = true }"
+        source = 'litellm = { git = "https://github.com/BerriAI/litellm" }'
+        reason = self.ask_reason(
+            self.edit("pyproject.toml", member, f"{member}\n{source}")
+        )
+        self.assertIn(f"+{source}", reason)
 
     def test_uv_workspace_tables_pass(self) -> None:
         self.put("pyproject.toml", PYPROJECT_UV)
@@ -469,6 +502,9 @@ class TamperTests(GuardTestCase):
     def test_shell_writes_to_the_guard_ask(self) -> None:
         self.assert_asks(self.bash("sed -i '' 's/Stop/Nope/' .claude/settings.json"))
         self.assert_asks(self.bash("rm .claude/hooks/policy_guard.py"))
+        self.assert_asks(
+            self.bash("git commit -qm wip ; rm .claude/hooks/policy_guard.py")
+        )
 
     def test_reading_and_testing_the_guard_is_allowed(self) -> None:
         self.assert_allowed(self.bash("python3 -m unittest discover -s .claude/hooks"))
@@ -576,7 +612,7 @@ class SwallowedExceptionTests(GuardTestCase):
             with self.subTest(rel=rel):
                 result = self.edit(rel, "", line)
                 self.assert_blocked(result)
-                self.assertIn("CONSTRAINTS.md", result.stderr)
+                self.assertIn("no swallowed exceptions", result.stderr)
 
     def test_narrow_or_excused_suppress_passes(self) -> None:
         lines = [
@@ -602,12 +638,26 @@ class TestFileShellTests(GuardTestCase):
             "git checkout main -- tests/test_a.py",
             "git restore --source=main packages/cli/tests",
             "git clean -fd tests/",
+            "git -C /work/aqa checkout main -- tests/test_a.py",
+            "rm apps/web/test/setup.ts",
+            "git rm tests/test_a.py && git commit -m 'drop obsolete test'",
+            "sed -i '' '/assert/d' tests/test_a.py && git commit -am 'simplify'",
         ]
         for command in commands:
             with self.subTest(command=command):
                 result = self.bash(command)
                 self.assert_asks(result)
                 self.assertIn("test file", result.stdout)
+
+    def test_messages_that_name_tests_or_gate_files_are_allowed(self) -> None:
+        commands = [
+            "git commit -m 'rm tests/old; lower CONSTRAINTS.md; remove # noqa'",
+            "git commit -q -F - <<'EOF'\nfix: drop tests/test_a.py\n\nsed -i pyproject.toml\nEOF",
+            'gh pr create --title "Remove tests/" --body "rm tests/test_a.py"',
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+                self.assert_allowed(self.bash(command))
 
     def test_reading_and_running_tests_is_allowed(self) -> None:
         commands = [
@@ -661,8 +711,9 @@ class TreeScanTests(GuardTestCase):
             "packages/core/b.py", "x = f()  # type: ignore[attr-defined]  # ADR-0008\n"
         )
         self.put(".scratch/anthropic", FAKE_ANTHROPIC)
-        self.put(".gitignore", "local/\n")
+        self.put(".gitignore", "local/\ncache/  \n")
         self.put("local/a.py", "x = f()  # type: ignore\n")
+        self.put("cache/a.py", "x = f()  # type: ignore\n")
         result = self.run_mode("--scan")
         self.assertEqual(result.returncode, 0, result.stdout)
 
@@ -677,6 +728,25 @@ class TreeScanTests(GuardTestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("packages/core/a.py:2: unimplemented stub", result.stdout)
         self.assertNotIn("tests/test_a.py", result.stdout)
+
+    def test_scan_defaults_to_the_working_directory(self) -> None:
+        # CI runs a bare --scan from the checkout, with no CLAUDE_PROJECT_DIR.
+        self.put("packages/core/a.py", "y = f()  # type: ignore\n")
+        environ = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in {"AQA_POLICY_GUARD", "CLAUDE_PROJECT_DIR"}
+        }
+        result = subprocess.run(
+            [sys.executable, str(HOOK), "--scan"],
+            cwd=self.project,
+            capture_output=True,
+            text=True,
+            env=environ,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("packages/core/a.py:1", result.stdout)
 
     def test_scan_flags_credentials_in_docs_without_echoing_them(self) -> None:
         self.put("docs/setup.md", f"token: {FAKE_GITHUB}\n")

@@ -31,12 +31,12 @@ Refused
 Escalated to the user
 ---------------------
 4. Any change to a quality-gate config: ruff / mypy / pytest / coverage /
-   pyright settings, ``[tool.uv]`` (the litellm ban), CONSTRAINTS.md, tsconfig,
-   eslint, vitest and fallow configs, pre-commit, gate scripts in package.json,
-   gate steps in CI workflows. Tightening prompts too:
+   pyright settings, ``[tool.uv]`` and ``[tool.uv.sources]`` (the litellm ban),
+   CONSTRAINTS.md, tsconfig, eslint, vitest and fallow configs, pre-commit, gate
+   scripts in package.json, gate steps in CI workflows. Tightening prompts too:
    the bar moves only with a human in the loop. Creating one of these files
    prompts once, which is how the initial bar gets approved.
-5. A test-file edit that leaves fewer assertions than before, and a shell
+5. A test-file edit that leaves fewer assertions or tests, and a shell
    command that may delete, move or rewrite a test file.
 6. Edits to this guard or the settings that load it (``.claude/hooks/``,
    ``.claude/settings*.json``), including shell writes that name them and
@@ -69,8 +69,9 @@ Known gaps, stated rather than hidden
   ``PASSWORD=...`` detection runs on shell commands only.
 * Shell writes are recognised heuristically. The Stop scan backstops rules
   1-3; rules 4-6 have no backstop for a write through an opaque script. A
-  test file deleted by ``find -delete``, a glob or a script goes unseen, and
-  any mutating command that names a test path asks, a formatter run included.
+  test file deleted by ``find -delete``, a glob or a script goes unseen, as
+  does quoted text in a command that commits. A mutating command that names a
+  test path asks, even a formatter run or test output sent to ``tee``.
 * This is a guardrail, not a security boundary. Other agents (Codex, Cursor)
   do not run Claude Code hooks, and CI runs only ``--scan``, which sees file
   contents but not deleted tests, dropped assertions or changed gate configs.
@@ -202,18 +203,20 @@ CONTENT_RULES = (
     _rule(
         "coverage pragma",
         SUPPRESSION,
-        r"#\s*pragma:\s*no\s*cover\b|\b(?:istanbul|c8|v8)\s+ignore\b",
+        r"#\s*pragma:\s*no\s*(?:cover|branch)\b|\b(?:istanbul|c8|v8)\s+ignore\b",
     ),
     _rule(
         "pytest skip/xfail",
         SKIPPED_TEST,
         r"\bpytest\.mark\.(?:skip|skipif|xfail)\b"
-        r"|\bpytest\.(?:skip|xfail|importorskip)\s*\(",
+        r"|\bpytest\.(?:skip|xfail|importorskip)\s*\("
+        r"|\b__test__\s*=\s*False\b|\bcollect_ignore(?:_glob)?\b",
     ),
     _rule(
         "unittest skip",
         SKIPPED_TEST,
-        r"\bunittest\.(?:skip|skipIf|skipUnless|expectedFailure)\b",
+        r"\bunittest\.(?:skip|skipIf|skipUnless|expectedFailure|SkipTest)\b"
+        r"|\bself\.skipTest\(",
     ),
     _rule(
         "skipped or focused JS test",
@@ -350,11 +353,13 @@ GATE_WHOLE_FILE = re.compile(
 )
 GATE_SECTION_FILES = frozenset({"pyproject.toml", "setup.cfg", "tox.ini"})
 SECTION_HEADER = re.compile(r"^\[\[?\s*([A-Za-z_][\w.:\s\"-]*?)\s*\]\]?\s*(?:#.*)?$")
-# [tool.uv] holds the litellm ban; its workspace and sources tables don't gate.
+# [tool.uv] holds the litellm ban, which a [tool.uv.sources] entry can override;
+# a workspace member's entry can't, so it doesn't gate.
 GATE_SECTION = re.compile(
-    r"^(?:tool\.(?:ruff|mypy|pytest|coverage|pyright|basedpyright)\b|tool\.uv$"
+    r"^(?:tool\.(?:ruff|mypy|pytest|coverage|pyright|basedpyright)\b|tool\.uv(?:\.sources)?$"
     r"|mypy\b|tool:pytest\b|pytest\b|coverage:|flake8\b)"
 )
+WORKSPACE_MEMBER = re.compile(r"^\s*[\w.-]+\s*=\s*\{\s*workspace\s*=\s*true\s*\}\s*$")
 PACKAGE_GATE_SCRIPT = re.compile(
     r'^\s*"(?:lint|typecheck|type-check|tsc|test|check|coverage|ci|verify|format:check)'
     r'(?::[\w:.-]+)?"\s*:'
@@ -371,6 +376,8 @@ ASSERTION = re.compile(
     r"^\s*assert\b|\bself\.assert\w+\(|\bpytest\.raises\(|\bexpect\(|\bassert\.\w+\(",
     re.MULTILINE,
 )
+# Counted too: renaming a test away drops it without touching an assertion.
+TEST_DEF = re.compile(r"^\s*(?:async\s+)?def\s+test|\b(?:it|test)\(", re.MULTILINE)
 
 # --- shell heuristics ---------------------------------------------------------------
 
@@ -394,7 +401,7 @@ FILE_MUTATOR = re.compile(
     r"|\beslint\b[^|;&\n]*--fix"
     r"|\bcurl\b[^|;&\n]*\s(?:-[a-zA-Z]*[oO]\b|--output\b|--remote-name\b)"
     r"|\bwget\b"
-    r"|\bgit\s+(?:checkout|restore|clean)\b"
+    r"|\bgit(?:\s+-[Cc]\s+\S+|\s+--[\w-]+(?:=\S+)?)*\s+(?:checkout|restore|clean)\b"
 )
 # Installers that rewrite .claude/settings.json and AGENTS.md without naming them.
 AGENT_CONFIG_INSTALLER = re.compile(
@@ -407,6 +414,10 @@ BROWSER_LAUNCH = re.compile(
 )
 TEXT_BODY = re.compile(
     r"\bgit\s+commit\b|\bgh\s+(?:pr|issue|release)\s+(?:create|edit|comment)\b"
+)
+# A message quotes patterns and paths: blank its quoted strings and heredoc bodies.
+MESSAGE = re.compile(
+    r"""'[^']*'|"(?:\\.|[^"\\])*"|<<-?\s*(['"]?)(\w+)\1\n.*?\n\s*\2\b""", re.DOTALL
 )
 ADD_NOQA = re.compile(r"\bruff\b[^;&|\n]*\s--add-noqa\b")
 PROTECTED_IN_SHELL = re.compile(r"\.claude/(?:hooks\b|settings(?:\.local)?\.json\b)")
@@ -612,7 +623,7 @@ def gate_lines(rel: str, text: str) -> list[str] | None:
             header = SECTION_HEADER.match(line)
             if header:
                 inside = bool(GATE_SECTION.match(header.group(1)))
-            if inside:
+            if inside and not WORKSPACE_MEMBER.match(line):
                 selected.append(line)
     elif name == "package.json":
         selected = [line for line in lines if PACKAGE_GATE_SCRIPT.match(line)]
@@ -642,13 +653,14 @@ def gate_change(rel: str, before: str, after: str) -> str | None:
 def assertion_drop(rel: str, before: str, after: str) -> str | None:
     if not TEST_FILE.search(rel):
         return None
-    old, new = len(ASSERTION.findall(before)), len(ASSERTION.findall(after))
-    if new >= old:
-        return None
-    return (
-        f"{rel}: this edit leaves {new} assertion(s) where there were {old}. "
-        "Approve only if the removed checks are obsolete, not inconvenient."
-    )
+    for what, pattern in (("assertion", ASSERTION), ("test", TEST_DEF)):
+        old, new = len(pattern.findall(before)), len(pattern.findall(after))
+        if new < old:
+            return (
+                f"{rel}: this edit leaves {new} {what}(s) where there were {old}. "
+                "Approve only if the removed checks are obsolete, not inconvenient."
+            )
+    return None
 
 
 # --- verdicts -----------------------------------------------------------------------
@@ -726,15 +738,16 @@ def check_file_edit(
 def check_bash(command: str, project: Path) -> Verdict:
     verdict = Verdict(target="", secrets=find_secrets(command))
     if TEXT_BODY.search(command):
-        return verdict
+        command = MESSAGE.sub("''", command)
     if ADD_NOQA.search(command):
         verdict.findings.append(("`ruff --add-noqa`", SUPPRESSION, ""))
     writes = SHELL_WRITE.search(command) is not None
     mutates = writes or FILE_MUTATOR.search(command) is not None
     launches = BROWSER_LAUNCH.search(command) is not None
+    tests = TEST_PATH_IN_SHELL.search(command) is not None
     verdict.findings.extend(
         finding
-        for finding in added_findings("", command, project, tests=False)
+        for finding in added_findings("", command, project, tests=tests)
         if writes or (launches and finding[1] == SANDBOX)
     )
     if mutates and PROTECTED_IN_SHELL.search(command):
@@ -752,7 +765,7 @@ def check_bash(command: str, project: Path) -> Verdict:
             "this shell command may modify a quality-gate config, which the "
             "per-edit diff check cannot see through a shell write."
         )
-    if mutates and TEST_PATH_IN_SHELL.search(command):
+    if mutates and tests:
         verdict.asks.append(
             "this shell command may delete, move or rewrite a test file, which the "
             "per-edit assertion check cannot see."
