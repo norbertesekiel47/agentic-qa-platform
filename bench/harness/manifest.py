@@ -2,7 +2,7 @@
 
 Validates the manifest against the format in DATA_MODEL.md §8, checks the
 split-freeze hash (TESTING.md §5) and loads typed cases for the harness.
-Standard library only until M1 brings Pydantic.
+Standard library only, so a bare python3 runs it (bench/README.md).
 
 Run: python3 bench/harness/manifest.py [--root DIR] [--split-hash]
 """
