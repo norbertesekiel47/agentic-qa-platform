@@ -73,3 +73,21 @@ What that means per candidate:
 **If MicroVMs win.** A run can last up to 8 hours in one VM, so the 15-minute cap no longer forces continuation. M6 decides what continuation keeps (#28).
 
 **Unchanged.** One runner image in two locations, and runners holding no data-plane credentials.
+
+## Amendment (2026-09-30): how the spike's trial measures (#37)
+
+The program every candidate runs is the **trial**, since CONTEXT.md already gives "probe" another meaning. Its code, its packages and its commands are in `spikes/hosted-chromium/` (README). The spike's code is under the gates: mypy, pytest and coverage include `spikes/`.
+
+- **The predicate's first half.** The trial launches Chromium through `aqa_runner.sandbox.launch`, so the sandbox check (ADR-0026) is what proves the sandbox. A sandbox that can't start, or that the check can't prove, is reported with its reason, never raised: it is the finding the spike looks for.
+- **Fresh-VM evidence.** Each trial reports:
+  - a random run ID;
+  - the run IDs a marker file in `/tmp` already held;
+  - the kernel's boot ID.
+
+  An environment used again shows earlier run IDs. The boot ID separates VMs on Fargate and Lambda, but not on MicroVMs: every MicroVM restored from one snapshot reads the same boot ID (Firecracker, `docs/snapshotting/random-for-clones.md`). So a MicroVM's evidence is the marker plus its MicroVM ID.
+- **Time to a ready browser.** Inside the trial: from asking Playwright to launch until the sandbox check passes. The platform's start latency comes on top.
+- **Peak memory.** The summed PSS of the trial's process and its descendants, sampled every 50 ms. PSS counts memory that Chromium's processes share once, so the sum is comparable across candidates. The trial's only page is the sandbox check's blank page, so its peak is a lower bound for a real run.
+- **One base for all three packages:** the container base Lambda publishes for MicroVMs, `public.ecr.aws/lambda/microvms:al2023-minimal` (Amazon Linux 2023, arm64 only). Lambda MicroVMs run on arm64 only, so every candidate is measured on arm64.
+  - The alternative, Playwright's Ubuntu image for Fargate and the Lambda function, would measure two operating systems.
+  - Lambda's Python base image has no package manager to add Chromium's libraries with, so the Lambda function runs the shared image through awslambdaric, the runtime interface client.
+- **MicroVMs launch Chromium after the restore.** Lambda snapshots a MicroVM image with every running process once its `/ready` hook answers, and restores that snapshot into each MicroVM. So the trial's server starts no browser before a request: a browser in the snapshot would be one browser, its memory and random state included, in every MicroVM. The image keeps the default OS capabilities; `["ALL"]` isn't measured.
