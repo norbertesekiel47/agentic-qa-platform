@@ -1,14 +1,18 @@
 """The sandbox check and the sandboxed launch (ADR-0026, SECURITY.md §6)."""
 
 import asyncio
+import os
+import subprocess
 import sys
 from dataclasses import replace
+from typing import override
 
 import pytest
 from aqa_runner.sandbox import (
     LinuxProcess,
     MacProcess,
     SandboxUnavailableError,
+    check_processes,
     check_sandbox,
     compare_linux,
     compare_macos,
@@ -56,9 +60,9 @@ def test_renderer_sharing_a_browser_namespace_fails(namespace: str) -> None:
     ]
 
 
-# Under Docker's default profile every process, the browser included, already
-# has a filter (and seccomp mode 2), so only a count above the browser's shows
-# the renderer's own.
+# In a container whose seccomp profile lets the sandbox start, such as
+# Playwright's, every process, the browser included, already has a filter (and
+# seccomp mode 2), so only a count above the browser's shows the renderer's own.
 @pytest.mark.parametrize(
     ("browser_filters", "renderer_filters"),
     [(0, 0), (1, 1)],
@@ -80,6 +84,17 @@ def test_renderer_without_a_seccomp_filter_of_its_own_fails(
 
 def test_no_renderer_fails_on_linux() -> None:
     assert compare_linux(LINUX_BROWSER, []) == ["no renderer process to check"]
+
+
+def test_every_renderer_is_compared_on_linux() -> None:
+    unsandboxed = LinuxProcess(
+        pid=78, namespaces=LINUX_BROWSER.namespaces, seccomp_filters=0
+    )
+
+    problems = compare_linux(LINUX_BROWSER, [LINUX_RENDERER, unsandboxed])
+
+    assert problems, "a sandboxed renderer vouched for an unsandboxed one"
+    assert all(problem.startswith("renderer 78 ") for problem in problems), problems
 
 
 def test_container_renderer_with_its_own_seccomp_filter_passes() -> None:
@@ -105,6 +120,14 @@ def test_unsandboxed_renderer_fails_on_macos() -> None:
     assert compare_macos(MAC_BROWSER, [renderer]) == ["renderer 4686 isn't sandboxed"]
 
 
+def test_every_renderer_is_compared_on_macos() -> None:
+    unsandboxed = MacProcess(pid=4687, sandboxed=False)
+
+    assert compare_macos(MAC_BROWSER, [MAC_RENDERER, unsandboxed]) == [
+        "renderer 4687 isn't sandboxed"
+    ]
+
+
 # A browser that is itself sandboxed leaves nothing to compare the renderer with.
 def test_sandboxed_browser_fails_on_macos() -> None:
     browser = replace(MAC_BROWSER, sandboxed=True)
@@ -121,20 +144,76 @@ def test_no_renderer_fails_on_macos() -> None:
     assert compare_macos(MAC_BROWSER, []) == ["no renderer process to check"]
 
 
+# macOS's sandbox_check answers "sandboxed" for a PID with no running process,
+# so a renderer that exits during the check must stop it, on every OS.
+@pytest.mark.parametrize("reaped", [True, False], ids=["reaped", "zombie"])
+def test_renderer_that_has_exited_stops_the_check(reaped: bool) -> None:
+    child = subprocess.Popen([sys.executable, "-c", ""])
+    # WNOWAIT waits for the exit but leaves the child a zombie.
+    os.waitid(os.P_PID, child.pid, os.WEXITED | (0 if reaped else os.WNOWAIT))
+    try:
+        with pytest.raises((ProcessLookupError, FileNotFoundError)):
+            check_processes(os.getpid(), [child.pid])
+    finally:
+        child.wait()
+
+
 # The browser tests below launch real Chromium on the OS that runs them: Linux
 # in CI, macOS locally.
 
 
+class RecordingChromium:
+    """Real Chromium that records what `launch` asks for and what it launched."""
+
+    def __init__(self, chromium: BrowserType) -> None:
+        self.chromium = chromium
+        self.requested: list[bool] = []
+        self.launched: list[Browser] = []
+
+    async def launch(self, *, chromium_sandbox: bool) -> Browser:
+        self.requested.append(chromium_sandbox)
+        browser = await self.start(chromium_sandbox=chromium_sandbox)
+        self.launched.append(browser)
+        return browser
+
+    async def start(self, *, chromium_sandbox: bool) -> Browser:
+        return await self.chromium.launch(chromium_sandbox=chromium_sandbox)
+
+
+class UnsandboxedChromium(RecordingChromium):
+    """Real Chromium that ignores `launch`'s sandbox request: however the
+    sandbox ends up off, `launch` must refuse the browser."""
+
+    @override
+    async def start(self, *, chromium_sandbox: bool) -> Browser:
+        return await self.chromium.launch(
+            chromium_sandbox=False,  # ADR-0026: a negative control for launch
+        )
+
+
 def test_launched_browser_passes_the_sandbox_check() -> None:
-    async def scenario() -> list[str]:
+    async def scenario() -> tuple[list[bool], int, list[str]]:
         async with async_playwright() as playwright:
-            browser = await launch(playwright.chromium)
+            chromium = RecordingChromium(playwright.chromium)
+            browser = await launch(chromium)
             try:
-                return await check_sandbox(browser)
+                contexts = len(browser.contexts)
+                return chromium.requested, contexts, await check_sandbox(browser)
             finally:
                 await browser.close()
 
-    assert asyncio.run(scenario()) == []
+    requested, contexts, problems = asyncio.run(scenario())
+
+    assert requested == [True], "launch didn't ask for the sandbox"
+    assert contexts == 0, "launch left the sandbox check's context open"
+    assert problems == []
+
+
+# What each OS's check reports about a renderer launched without its sandbox.
+UNSANDBOXED_ON = {
+    "linux": "shares the browser's pid namespace",
+    "darwin": "isn't sandboxed",
+}
 
 
 def test_check_reports_failure_when_the_sandbox_is_off() -> None:
@@ -150,7 +229,9 @@ def test_check_reports_failure_when_the_sandbox_is_off() -> None:
 
     problems = asyncio.run(scenario())
 
-    assert problems, "the check passed a browser launched without its sandbox"
+    assert any(UNSANDBOXED_ON[sys.platform] in problem for problem in problems), (
+        problems
+    )
     assert all(problem.startswith("renderer ") for problem in problems), problems
 
 
@@ -160,24 +241,6 @@ HOST_FIX_ON = {
     "linux": "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
     "darwin": "start the runner outside it",
 }
-
-
-class UnsandboxedChromium:
-    """Real Chromium that ignores `launch`'s sandbox request: however the
-    sandbox ends up off, `launch` must refuse the browser."""
-
-    def __init__(self, chromium: BrowserType) -> None:
-        self.chromium = chromium
-        self.requested: list[bool] = []
-        self.launched: list[Browser] = []
-
-    async def launch(self, *, chromium_sandbox: bool) -> Browser:
-        self.requested.append(chromium_sandbox)
-        browser = await self.chromium.launch(
-            chromium_sandbox=False,  # ADR-0026: a negative control for launch
-        )
-        self.launched.append(browser)
-        return browser
 
 
 def test_launch_refuses_a_browser_whose_sandbox_is_off() -> None:
@@ -193,7 +256,7 @@ def test_launch_refuses_a_browser_whose_sandbox_is_off() -> None:
 
     assert requested == [True], "launch didn't ask for the sandbox"
     assert error.exit_code >= 10  # an infrastructure error (API.md §7)
-    assert "renderer " in str(error), str(error)
+    assert UNSANDBOXED_ON[sys.platform] in str(error), str(error)
     assert HOST_FIX_ON[sys.platform] in str(error), str(error)
     assert connected == [False], "launch left the refused browser running"
 
@@ -201,19 +264,24 @@ def test_launch_refuses_a_browser_whose_sandbox_is_off() -> None:
 def test_launch_refuses_an_os_with_no_sandbox_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def scenario() -> SandboxUnavailableError:
+    async def scenario() -> tuple[SandboxUnavailableError, list[bool]]:
         async with async_playwright() as playwright:
-            # Only for the launch: the driver starts and stops as on this OS.
+            chromium = RecordingChromium(playwright.chromium)
+            # Only around launch: the driver starts and stops as on this OS.
             monkeypatch.setattr(sys, "platform", "win32")
-            with pytest.raises(SandboxUnavailableError) as refused:
-                await launch(playwright.chromium)
-            monkeypatch.undo()
-            return refused.value
+            try:
+                with pytest.raises(SandboxUnavailableError) as refused:
+                    await launch(chromium)
+            finally:
+                monkeypatch.undo()
+            connected = [browser.is_connected() for browser in chromium.launched]
+            return refused.value, connected
 
-    error = asyncio.run(scenario())
+    error, connected = asyncio.run(scenario())
 
     assert error.exit_code >= 10  # an infrastructure error (API.md §7)
     assert "no sandbox check exists for win32" in str(error), str(error)
+    assert connected == [False], "launch left the refused browser running"
 
 
 # The error Playwright 1.63 raised on Linux when Chromium's sandbox couldn't
@@ -243,9 +311,7 @@ class FailingChromium:
         raise Error(self.message)
 
 
-def test_launch_that_cannot_start_the_sandbox_is_an_infrastructure_error_naming_the_host_fix() -> (
-    None
-):
+def test_launch_that_cannot_start_the_sandbox_names_the_host_fix() -> None:
     chromium = FailingChromium(NO_USABLE_SANDBOX)
 
     with pytest.raises(SandboxUnavailableError) as refused:
@@ -253,9 +319,7 @@ def test_launch_that_cannot_start_the_sandbox_is_an_infrastructure_error_naming_
 
     assert chromium.requested == [True]
     assert refused.value.exit_code >= 10  # an infrastructure error (API.md §7)
-    assert "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0" in str(
-        refused.value
-    )
+    assert HOST_FIX_ON["linux"] in str(refused.value), str(refused.value)
 
 
 def test_other_launch_errors_pass_through() -> None:
