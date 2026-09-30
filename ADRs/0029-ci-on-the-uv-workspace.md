@@ -43,7 +43,7 @@
   - `secrets` and `fallow` are unchanged.
 - **The mypy split** (the maintainer's ticket comment):
   - `[tool.mypy]` checks `packages` and `tests`, with only the three `src` folders on `mypy_path`. A test proves that a module importing `manifest` or `policy_guard` fails with `import-not-found`.
-  - The scripts run as `mypy --strict --no-explicit-package-bases .claude/hooks bench/harness`, which names each file as a top-level module. Without that flag the same command finds 16 errors, at `295c707`.
+  - The scripts run as `mypy --strict --no-explicit-package-bases .claude/hooks bench/harness`, which names each file as a top-level module. Without that flag the same command finds 16 errors, at `9f1a1db`.
   - pytest's `pythonpath = ["bench/harness"]` stays: mypy checks package tests too, so a leaked import fails there first.
 - **Weekly runs** (the maintainer's call): a `schedule:` trigger runs the workflow every Monday at 06:17 UTC, so a new advisory against an unchanged `uv.lock` still fails a run. Every job but `fallow`, which runs on pull requests only, runs then.
 - **The guard sees all of CI** (the maintainer's call):
