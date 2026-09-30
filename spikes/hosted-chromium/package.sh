@@ -42,7 +42,9 @@ trap 'rm -rf "$context"' EXIT
 git archive HEAD -- "${paths[@]}" | tar -x -C "$context"
 mv "$context/spikes/hosted-chromium/Dockerfile" "$context/Dockerfile"
 
-docker build --platform linux/arm64 --target "$candidate" \
+# Lambda accepts only images built without a provenance attestation.
+# https://docs.aws.amazon.com/lambda/latest/dg/python-image.html#python-alt-create
+docker build --platform linux/arm64 --provenance=false --target "$candidate" \
   --tag "aqa-spike-trial:$candidate" \
   --label "org.opencontainers.image.revision=$commit" "$context"
 
