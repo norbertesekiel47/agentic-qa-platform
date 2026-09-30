@@ -29,7 +29,7 @@ A refused line passes when it cites an existing `ADR-NNNN`, so write the ADR fir
 
 ## Thresholds
 
-Every row holds at the local gate run, [AGENTS.md §4](AGENTS.md#4-commands), which runs the same commands as CI (ADR-0029).
+Every row holds at the local gate run, [AGENTS.md §4](AGENTS.md#4-commands), which runs the same gates as CI (ADR-0029).
 
 | Dimension | Threshold | Measured as | Enforced by | Why this number |
 |---|---|---|---|---|

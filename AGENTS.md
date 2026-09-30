@@ -46,22 +46,22 @@ The three `packages/` exist: uv workspace members with `src` layouts, imported a
 
 ## 4. Commands
 
-Run them from the repository root. You need uv, which installs the Python in `.python-version`. The last three gates also need osv-scanner (with jq), gitleaks and fallow, at the versions `.github/workflows/ci.yml` pins. TESTING.md §8 lists the gates and CONSTRAINTS.md holds their thresholds.
+Run every command from the repository root. You need uv, which installs the Python in `.python-version`, and a `python3` of that version: the first two gates run on a bare interpreter, as in CI. The last three gates also need osv-scanner, gitleaks and fallow, at the versions `.github/workflows/ci.yml` pins, and the audit needs jq. TESTING.md §8 lists the gates and the CI job that runs each; CONSTRAINTS.md holds their thresholds.
 
 ```bash
 uv sync --locked                     # install the workspace from uv.lock, as CI does
 
-# The gates, in CI's job order, with the job in brackets. A change is done when all pass (rule 1).
-python3 -m unittest discover -s .claude/hooks                                  # [guardrails] guard tests
-env -u AQA_POLICY_GUARD python3 .claude/hooks/policy_guard.py --scan           # [guardrails] policy scan
-uv run ruff check .                                                            # [python] lint
-uv run ruff format --check .                                                   # [python] format
-uv run mypy                                                                    # [python] types: packages and tests
-uv run mypy --strict --no-explicit-package-bases .claude/hooks bench/harness   # [python] types: scripts
-uv run pytest --cov                                                            # [python] every test, and the coverage floor
-.github/scripts/audit-lockfile.sh osv-scanner uv.lock                          # [dependency-audit] high or critical advisories
-gitleaks git --no-banner --redact --verbose .                                  # [secrets] full history
-fallow audit --format json --quiet --explain                                   # [fallow] what the branch changes
+# The gates, in CI's order. A change is done when all pass (rule 1).
+python3 -m unittest discover -s .claude/hooks                                  # guard tests
+env -u AQA_POLICY_GUARD python3 .claude/hooks/policy_guard.py --scan           # policy scan
+uv run ruff check .                                                            # lint
+uv run ruff format --check .                                                   # format
+uv run mypy                                                                    # types: packages and tests
+uv run mypy --strict --no-explicit-package-bases .claude/hooks bench/harness   # types: scripts
+uv run pytest --cov                                                            # every test, and the coverage floor
+.github/scripts/audit-lockfile.sh osv-scanner uv.lock                          # dependency audit: high or critical advisories
+gitleaks git --no-banner --redact --verbose .                                  # secret scan, full history
+fallow audit --format json --quiet --explain                                   # fallow: what the branch changes
 
 # Narrower test runs, without --cov: the coverage floor holds for the whole suite only.
 uv run pytest tests/test_constraints.py                                        # one file: CONSTRAINTS.md's threshold checks
