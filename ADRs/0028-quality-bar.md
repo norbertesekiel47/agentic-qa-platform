@@ -5,7 +5,7 @@
 
 ## Context
 #59 writes the quality bar down in CONSTRAINTS.md and makes each number fail a local run when it's crossed. ADR-0027 left it the Ruff rule set, pytest's strict mode and every threshold. The maintainer settled the coverage floor, the complexity checker, the rule set and the floor guard in an interview on 2026-09-29, and four more choices while it was built. Measurements:
-- **Coverage,** at `2d8e328`: `uv run pytest --cov` measures 94.09%. Removing `toggle_checks.py` from `omit` gives 84.02%. Removing `patch = ["subprocess"]` gives 57.71%, with the guard at 0%, because its tests run it as a subprocess.
+- **Coverage,** at `4d372fd`: `uv run pytest --cov` measures 94.09%. Removing `toggle_checks.py` from `omit` gives 84.02%. Removing `patch = ["subprocess"]` gives 57.71%, with the guard at 0%, because its tests run it as a subprocess.
 - **Complexity,** at `c54d955`: `ruff check --select C901 --config 'lint.mccabe.max-complexity=9' .` finds two functions at 10, `check_file_edit` and `_validate_case`, and none above. `uvx complexipy@8.0.1 packages bench/harness .claude/hooks` finds six functions with a cognitive complexity above 15, the highest at 24.
 - **Ruff,** at `c54d955`: `ruff check --select ALL .` gives 754 findings. `ruff check --show-settings` lists 413 rules in Ruff 0.16.9's default set, BLE001 and S110 among them (LAB_NOTES, 2026-09-29).
 
