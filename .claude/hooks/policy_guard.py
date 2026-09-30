@@ -725,8 +725,9 @@ def render(verdict: Verdict) -> str:
         lines.append(f"BLOCKED by .claude/hooks/policy_guard.py: {where}")
         for label, _, example in verdict.findings:
             lines.append(f"  - {label}" + (f": {example}" if example else ""))
-        for kind in dict.fromkeys(kind for _, kind, _ in verdict.findings):
-            lines.append(GUIDANCE[kind])
+        lines.extend(
+            GUIDANCE[kind] for kind in dict.fromkeys(k for _, k, _ in verdict.findings)
+        )
         lines.append(ADR_HINT)
     if verdict.secrets:
         if verdict.target:
@@ -770,8 +771,8 @@ def emit(verdict: Verdict | None) -> int:
 def gitignored(project: Path) -> frozenset[str]:
     """Plain root .gitignore entries; globs and negations are left to git."""
     entries = set()
-    for line in read_text(project / ".gitignore").splitlines():
-        line = line.strip()
+    for raw in read_text(project / ".gitignore").splitlines():
+        line = raw.strip()
         if (
             line
             and not line.startswith(("#", "!"))
@@ -864,7 +865,7 @@ def scan(project: Path) -> list[str]:
 def pre_tool_use(payload: dict[str, Any]) -> int:
     tool_name = payload.get("tool_name") or ""
     tool_input = payload.get("tool_input") or {}
-    cwd = payload.get("cwd") or os.getcwd()
+    cwd = payload.get("cwd") or str(Path.cwd())
     project = project_dir(cwd)
     if tool_name == "Bash":
         return emit(check_bash(tool_input.get("command") or "", project))
@@ -874,7 +875,7 @@ def pre_tool_use(payload: dict[str, Any]) -> int:
 
 
 def stop(payload: dict[str, Any]) -> int:
-    problems = scan(project_dir(payload.get("cwd") or os.getcwd()))
+    problems = scan(project_dir(payload.get("cwd") or str(Path.cwd())))
     if not problems:
         return 0
     listing = "\n".join(problems[:20])
@@ -907,7 +908,7 @@ def main(argv: list[str]) -> int:
     mode = argv[1] if len(argv) > 1 else "--pre-tool-use"
     if mode == "--scan":
         return scan_cli(
-            Path(argv[2]).resolve() if len(argv) > 2 else project_dir(os.getcwd())
+            Path(argv[2]).resolve() if len(argv) > 2 else project_dir(str(Path.cwd()))
         )
     try:
         payload = json.load(sys.stdin)

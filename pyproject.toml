@@ -35,8 +35,9 @@ aqa-cli = { workspace = true }
 aqa-core = { workspace = true }
 aqa-runner = { workspace = true }
 
-# The tool settings below only point the tools at our code (ADR-0027). The
-# thresholds and the Ruff rule set belong to CONSTRAINTS.md (#59).
+# The tool settings below point the tools at our code (ADR-0027). Their
+# thresholds and the Ruff rule set mirror CONSTRAINTS.md, which owns them
+# (ADR-0028); tests/test_constraints.py fails when the two drift apart.
 
 [tool.ruff]
 target-version = "py314"
@@ -53,10 +54,56 @@ force-exclude = true
 ".claude/hooks/**" = "py310"
 "bench/harness/**" = "py312"
 
+[tool.ruff.lint]
+# An explicit list, so a Ruff upgrade can't move it. The last line keeps the
+# rules of Ruff's own default set that the families above leave out.
+select = [
+    "F", "E", "W", "I", "N", "UP", "B", "A", "C4", "C90", "DTZ", "T10", "T20", "ISC",
+    "LOG", "G", "PIE", "PT", "RET", "SIM", "TID", "ARG", "PTH", "ERA", "PL", "TRY",
+    "FLY", "PERF", "FURB", "RUF", "BLE", "S", "FIX", "SLF", "ASYNC", "FAST",
+    "YTT", "EXE", "INT", "FA", "PYI", "PGH005", "TC004", "TC005", "TC007", "TC010", "D419",
+]
+ignore = [
+    "E501",     # ruff format owns line length; it leaves long strings whole
+    "PLR2004",  # a literal compared inline (an exit code, a count) reads better than a name
+    "TRY003",   # the message at the raise is the context; no exception class per message
+    "S603",     # flags every subprocess call; S602 and S604 still catch shell=True
+    "S607",     # git, docker and uv resolve from PATH by design
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The guard's and the harness's tests are unittest by design: they run under a
+# bare `python3 -m unittest`, so pytest's assert style doesn't apply.
+".claude/hooks/test_*.py" = ["PT009"]
+"bench/harness/test_*.py" = ["PT009", "PT027"]
+# pytest tests assert with a plain `assert`.
+"packages/*/tests/**" = ["S101"]
+"tests/**" = ["S101"]
+# T20: scripts whose interface is stdout. In package code T20 stays on, because
+# a print bypasses structlog's redaction. S104, S105: the secret detector names
+# what it looks for, a local host list and the guidance texts for secrets.
+".claude/hooks/policy_guard.py" = ["T20", "S104", "S105"]
+"bench/harness/**" = ["T20"]
+# `password_arg` names a Docker build argument, and fetch() reads the local
+# benchmark app over plain http.
+"bench/harness/flags.py" = ["S106", "S310"]
+# A fake keeps the signature of the protocol it stands in for.
+"bench/harness/test_flags.py" = ["ARG002"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-args = 6
+max-positional-args = 5
+max-returns = 6
+max-branches = 12
+max-statements = 50
+
 [tool.mypy]
 python_version = "3.14"
 strict = true
-files = ["packages", "bench/harness", ".claude/hooks"]
+files = ["packages", "bench/harness", ".claude/hooks", "tests"]
 exclude = ["^bench/apps/"]
 # Module names come from these bases, not from the directory layout: each
 # package's src, and the script directories whose modules import each other by

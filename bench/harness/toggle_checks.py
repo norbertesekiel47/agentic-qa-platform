@@ -203,6 +203,14 @@ def favorites_count_placement(session: Session) -> Observation:
         )
 
 
+def observe(session: Session, case_id: str) -> Observation:
+    """Run the case's check on a freshly reset app."""
+    if case_id not in CHECKS:
+        raise UnexpectedStateError("no check for this case")
+    session.reset()
+    return CHECKS[case_id](session)
+
+
 def main(argv: list[str]) -> int:
     if argv == ["--list"]:
         print(json.dumps(sorted(CHECKS)))
@@ -216,10 +224,7 @@ def main(argv: list[str]) -> int:
         for case_id in argv:
             result: dict[str, str] = {"case": case_id}
             try:
-                if case_id not in CHECKS:
-                    raise UnexpectedStateError("no check for this case")
-                session.reset()
-                observation = CHECKS[case_id](session)
+                observation = observe(session, case_id)
                 result |= {"state": observation.state, "detail": observation.detail}
             except (UnexpectedStateError, NotSettledError, Error) as exc:
                 result["error"] = f"{type(exc).__name__}: {exc}"[:500]

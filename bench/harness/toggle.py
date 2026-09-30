@@ -176,6 +176,7 @@ def toggle(
     cycles: int,
     docker: flags.Docker,
     checks: Checks,
+    *,
     only: Sequence[str] = (),
 ) -> list[Row]:
     """Every check on the clean app and under each case's flag, ``cycles`` times.
@@ -246,7 +247,7 @@ def main(
             args.cycles,
             docker or flags.LocalDocker(),
             checks or DockerChecks(root, args.app),
-            args.case,
+            only=args.case,
         )
     except (ToggleError, flags.FlagError, manifest.ManifestError) as exc:
         print(f"error: {exc}", file=sys.stderr)

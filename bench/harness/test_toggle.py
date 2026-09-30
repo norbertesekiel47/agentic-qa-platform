@@ -67,7 +67,7 @@ class ToggleTestCase(unittest.TestCase):
 
     def run_toggle(self, cycles: int = 1, only: Sequence[str] = ()) -> list[toggle.Row]:
         return toggle.toggle(
-            self.ws.root, "conduit", cycles, self.docker, self.checks, only
+            self.ws.root, "conduit", cycles, self.docker, self.checks, only=only
         )
 
 
