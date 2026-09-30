@@ -91,8 +91,20 @@ jobs:
       # a run of their own (ADR-0029).
       - name: Types (scripts)
         run: uv run mypy --strict --no-explicit-package-bases .claude/hooks bench/harness
+      # The browser tests launch Playwright's headless shell with Chromium's
+      # sandbox on. GitHub's ubuntu-24.04 runners block that sandbox through
+      # AppArmor, so the job logs the setting, then relaxes it on this
+      # throwaway runner (ADR-0026). A runner without the setting fails the
+      # job here: check these steps on it first (LAB_NOTES.md watch list).
+      - name: Install Playwright's headless shell
+        run: uv run playwright install --with-deps --only-shell chromium
+      - name: Record the runner's AppArmor setting for user namespaces
+        run: sysctl kernel.apparmor_restrict_unprivileged_userns
+      - name: Allow unprivileged user namespaces (ADR-0026)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # The packages, bench/harness, the guard's tests and tests/, including
-      # CONSTRAINTS.md's threshold checks and the coverage floor.
+      # the browser tests, CONSTRAINTS.md's threshold checks and the coverage
+      # floor.
       - name: Tests and coverage
         run: uv run pytest --cov
 
