@@ -21,18 +21,17 @@ RUN dnf install -y --setopt=install_weak_deps=0 \
     && dnf clean all
 
 # Python 3.14 (.python-version) comes from uv, since AL2023 doesn't ship it.
-# HOME is /tmp, the one directory a Lambda function may write.
 ENV UV_PYTHON_INSTALL_DIR=/opt/python \
     UV_PROJECT_ENVIRONMENT=/opt/trial \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
-    PATH=/opt/trial/bin:$PATH \
-    HOME=/tmp
+    PATH=/opt/trial/bin:$PATH
 
 # uv.lock's versions, installed as wheels, so the sources go once they are.
 # The check covers the libraries the shell loads at run time (EGL, GLES,
-# SwiftShader) as well as the shell itself.
+# SwiftShader) as well as the shell itself. Every trial's run marker starts
+# from this /tmp, so the build fails unless it leaves /tmp empty.
 COPY . /build
 RUN cd /build \
     && uv sync --locked --no-dev --no-editable --package aqa-hosted-chromium-spike \
@@ -40,11 +39,14 @@ RUN cd /build \
     && cd /opt/ms-playwright/chromium_headless_shell-*/*/ \
     && ldd chrome-headless-shell *.so* > /tmp/ldd.txt \
     && ! grep 'not found' /tmp/ldd.txt \
-    && rm -rf /build /tmp/ldd.txt /root/.cache
+    && rm -rf /build /root/.cache /tmp/* \
+    && test -z "$(ls -A /tmp)"
 
-# Chromium won't sandbox a browser that runs as root.
+# Chromium won't sandbox a browser that runs as root. HOME is /tmp, the one
+# directory a Lambda function may write.
 RUN useradd --system --no-create-home trial
 USER trial
+ENV HOME=/tmp
 
 FROM trial AS fargate
 CMD ["python", "-m", "aqa_hosted_chromium_spike"]

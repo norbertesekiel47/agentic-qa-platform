@@ -34,6 +34,9 @@ def server(address: tuple[str, int], trial: Callable[[], Report]) -> HTTPServer:
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
+            # The body goes unused, but it is read: closing a connection with
+            # unread bytes resets it, and the reset can lose the reply.
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
             # /ready tells Lambda to take the snapshot; /run, that this MicroVM
             # may receive traffic.
             if self.path in LIFECYCLE_HOOKS:
