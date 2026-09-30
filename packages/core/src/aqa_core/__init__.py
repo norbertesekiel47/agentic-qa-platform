@@ -1,1 +1,2 @@
 """Shared models for Agentic QA: spec, compiled script and verdicts."""
+import os
