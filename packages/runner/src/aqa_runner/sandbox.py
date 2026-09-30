@@ -20,6 +20,9 @@ NAMESPACES = ("user", "pid", "net")
 # With nothing to compare, the check fails rather than passing by default.
 NO_RENDERER = "no renderer process to check"
 
+# libproc's buffer size for a process's executable path (<sys/proc_info.h>).
+PROC_PIDPATHINFO_MAXSIZE = 4096
+
 # How to fix a host where Chromium can't sandbox, by OS (ADR-0026).
 LINUX_FIX = (
     "On Linux, Chromium's sandbox needs unprivileged user namespaces. On a "
@@ -150,7 +153,7 @@ async def check_sandbox(browser: Browser) -> list[str]:
     try:
         await context.new_page()
         browser_pid, renderer_pids = await _process_ids(browser)
-        return _check_processes(browser_pid, renderer_pids)
+        return check_processes(browser_pid, renderer_pids)
     finally:
         await context.close()
 
@@ -174,7 +177,11 @@ async def _process_ids(browser: Browser) -> tuple[int, list[int]]:
     return browser_pid, [pid for kind, pid in processes if kind == "renderer"]
 
 
-def _check_processes(browser_pid: int, renderer_pids: list[int]) -> list[str]:
+def check_processes(browser_pid: int, renderer_pids: list[int]) -> list[str]:
+    """Why the renderer processes can't be shown to be sandboxed, compared
+    with the browser process; empty when they are. The PIDs are this host's,
+    so the browser must have been launched here, not connected to. A process
+    that has exited stops the check with an `OSError`."""
     if sys.platform == "linux":
         return compare_linux(
             _read_linux(browser_pid), [_read_linux(pid) for pid in renderer_pids]
@@ -205,9 +212,18 @@ def _read_linux(pid: int) -> LinuxProcess:
 def _read_macos(pid: int) -> MacProcess:
     # sandbox_check(pid, NULL, SANDBOX_FILTER_NONE) is 1 when the process is
     # sandboxed. libSystem exports it but Apple doesn't document it (ADR-0026
-    # amendment): if its answers change, the comparison fails, never passes.
+    # amendment), and it also answers 1 for a PID with no running process: a
+    # zombie, or one already reaped. So the process must still be running
+    # once it has answered, which proc_pidpath reports.
     libsystem = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
     sandbox_check = libsystem.sandbox_check
     sandbox_check.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int)
     sandbox_check.restype = ctypes.c_int
-    return MacProcess(pid=pid, sandboxed=sandbox_check(pid, None, 0) == 1)
+    proc_pidpath = libsystem.proc_pidpath
+    proc_pidpath.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32)
+    proc_pidpath.restype = ctypes.c_int
+    sandboxed = sandbox_check(pid, None, 0) == 1
+    path = ctypes.create_string_buffer(PROC_PIDPATHINFO_MAXSIZE)
+    if proc_pidpath(pid, path, PROC_PIDPATHINFO_MAXSIZE) <= 0:
+        raise ProcessLookupError(f"process {pid} exited during the sandbox check")
+    return MacProcess(pid=pid, sandboxed=sandboxed)
