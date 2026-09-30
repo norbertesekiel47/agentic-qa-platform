@@ -16,15 +16,15 @@ M1's decision gate (ADR-0008 amendment, 2026-09-29): which hosted compute runs C
 
 ## The trial's report
 
-Each trial launches Chromium through `aqa_runner.sandbox.launch`, which runs the sandbox check (ADR-0026), then closes the browser and reports one JSON object:
+Each trial launches Chromium through `aqa_runner.sandbox.launch`, which runs the sandbox check (ADR-0026). It times the launch with nothing else running, then samples its memory for a second with a blank page open, closes the browser and reports one JSON object:
 
 | Field | Meaning |
 |---|---|
 | `sandbox` | `{"on": true}` when the sandbox check proved the sandbox. Otherwise `{"on": false, "error": …}`, with `launch`'s reason and host fix. Every other error stops the trial |
 | `ready_seconds` | From asking Playwright to launch until the sandbox check passed; `null` when it didn't |
-| `peak_memory_bytes` | The largest sample of the summed PSS of the trial's process and all its descendants, sampled every 50 ms from before the launch until the browser closed. A lower bound for a real run: the only page is the sandbox check's blank one |
+| `peak_memory_bytes` | The largest sample of the summed PSS of the trial's process and all its descendants, sampled every 50 ms for 1 s after the launch, with a blank page open in the browser. A lower bound for a real run, whose pages hold content. Without a browser, the trial's own |
 | `run_id` | This trial's random ID |
-| `earlier_runs` | The run IDs of trials this environment ran before, from a marker file in the temporary directory (`/tmp`) |
+| `earlier_runs` | The run IDs of trials this environment ran before, in the order they ran, from a marker file in the temporary directory (`/tmp`) |
 | `boot_id` | `/proc/sys/kernel/random/boot_id` |
 
 A run had a fresh VM only if `earlier_runs` is empty and the platform's own ID for the run is new. A boot ID can't separate MicroVMs restored from one snapshot (ADR-0008 amendment, 2026-09-30).
