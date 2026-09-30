@@ -59,7 +59,7 @@
 - **Runner labels:** a `CI_RUNNER` label must be Linux x64, because the jobs download linux x64 builds. The audit script uses `jq`, which GitHub's Ubuntu images include; check it on a Blacksmith image before switching. The tests need `jq` too, as macOS 15 and later ship it.
 - **What the audit sees:** osv-scanner reads OSV's database, which includes GitHub's advisories and PyPI's. It doesn't catch a malicious package with no advisory yet (SECURITY.md §11).
 - **Weekly failures:** GitHub notifies whoever last changed the cron line. GitHub also turns off scheduled workflows in a public repository after 60 days without activity.
-- **Every CI edit asks** in Claude Code, a rename of the workflow aside.
+- **Every CI edit asks** in Claude Code, except a comment or a plain rename of the workflow.
 - **Cost:** on GitHub-hosted runners, public repositories run free. On Blacksmith, the `python` and `dependency-audit` jobs' minutes would be paid (ADR-0019).
 - **Not yet in CI:**
   - the dashboard's gates and its dependency audit, at M7;
