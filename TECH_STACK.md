@@ -24,7 +24,7 @@ Versions are the latest stable releases as of **2026-09-27** (checked on PyPI/np
 | JWT verification | PyJWT | 2.15.0 | Clerk JWKS + run tokens |
 | AWS SDK | boto3 | 1.43.x | KMS, SQS, S3, Lambda invoke |
 
-**Quality tooling:** Ruff 0.16.9, mypy 2.3.1 (strict), pytest 9.1.1, testcontainers 4.15.0, Hypothesis 6.168.2, VCR.py 8.3.0 (recorded LLM/HTTP fixtures), respx 0.23.1.
+**Quality tooling:** Ruff 0.16.9, mypy 2.3.1 (strict), pytest 9.1.1, pytest-cov 7.1.0 with coverage 7.16.2, testcontainers 4.15.0, Hypothesis 6.168.2, VCR.py 8.3.0 (recorded LLM/HTTP fixtures), respx 0.23.1.
 
 ## 2. Dashboard (TypeScript)
 

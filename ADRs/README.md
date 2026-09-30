@@ -32,7 +32,8 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | [0024](0024-explore-runs.md) | Explore runs: coverage plan, stateless navigator and confirmation replay | Accepted |
 | [0025](0025-compiled-targets-checks-flags.md) | Compiled scripts: meanings, locators, checks and step flags | Accepted |
 | [0026](0026-local-ci-browser-boundary.md) | The browser boundary for local and CI runs: sandbox, egress and test secrets | Accepted |
-| [0027](0027-python-workspace.md) | The Python workspace: layout, pins and tool settings | Accepted |
+| [0027](0027-python-workspace.md) | The Python workspace: layout, pins and tool settings | Accepted (amended 2026-09-29) |
+| [0028](0028-quality-bar.md) | The quality bar: coverage, complexity, the Ruff rule set and the floor guard | Accepted |
 
 ## Template
 

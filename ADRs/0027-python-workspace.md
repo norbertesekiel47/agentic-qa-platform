@@ -47,3 +47,11 @@ A measured fact forced the last choice: with the workspace at `>=3.14`, Ruff ref
 - The Ruff rule set, pytest's strict mode and every threshold belong to CONSTRAINTS.md (#59), and moving CI onto uv is #60. Until then, CI's pip-installed tools read these settings too, and its checks pass unchanged.
 - Ruff 0.16's default `include` covers Markdown, so `ruff format --check .` also formats the Python code blocks in our docs. Once CI runs that command (#60), an unformatted Python snippet in a doc fails it. #59 decides whether to keep that or to narrow `include` to Python files.
 - Pydantic's mypy plugin needs Pydantic installed wherever mypy runs, so adding it waits for CI to install from the lockfile (#60). mypy fails outright when it can't import a configured plugin.
+
+## Amendment (2026-09-29): #59 settles the bar
+
+ADR-0028 settles the two consequences above that were left to #59:
+- the Ruff rule set, pytest's strict mode and every threshold now live in CONSTRAINTS.md, which `pyproject.toml` mirrors;
+- Markdown stays in Ruff's `include`.
+
+mypy's `files` gain `tests`, and pytest's `testpaths` gain `.claude/hooks` and `tests`, so `uv run pytest --cov` measures the guard.
