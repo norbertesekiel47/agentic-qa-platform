@@ -32,10 +32,11 @@ Escalated to the user
 ---------------------
 4. Any change to a quality-gate config: ruff / mypy / pytest / coverage /
    pyright settings, ``[tool.uv]`` and ``[tool.uv.sources]`` (the litellm ban),
-   CONSTRAINTS.md, tsconfig, eslint, vitest and fallow configs, pre-commit, gate
-   scripts in package.json, gate steps in CI workflows. Tightening prompts too:
-   the bar moves only with a human in the loop. Creating one of these files
-   prompts once, which is how the initial bar gets approved.
+   CONSTRAINTS.md, tsconfig, eslint, vitest and fallow configs, osv-scanner
+   waivers, pre-commit, gate scripts in package.json, gate steps in CI
+   workflows. Tightening prompts too: the bar moves only with a human in the
+   loop. Creating one of these files prompts once, which is how the initial bar
+   gets approved.
 5. A test-file edit that leaves fewer assertions or tests, and a shell
    command that may delete, move or rewrite a test file.
 6. Edits to this guard or the settings that load it (``.claude/hooks/``,
@@ -350,7 +351,7 @@ GATE_WHOLE_FILE = re.compile(
     r"(?:^|/)(?:\.?ruff\.toml|\.?mypy\.ini|pytest\.ini|\.coveragerc|pyrightconfig\.json"
     r"|\.pre-commit-config\.ya?ml|eslint\.config\.[cm]?[jt]s|\.eslintrc(?:\.\w+)?"
     r"|vitest\.(?:config|workspace)\.[cm]?[jt]s|tsconfig[\w.-]*\.json"
-    r"|\.fallowrc(?:\.jsonc?)?|\.?fallow\.toml|CONSTRAINTS\.md)$"
+    r"|\.fallowrc(?:\.jsonc?)?|\.?fallow\.toml|osv-scanner\.toml|CONSTRAINTS\.md)$"
 )
 GATE_SECTION_FILES = frozenset({"pyproject.toml", "setup.cfg", "tox.ini"})
 SECTION_HEADER = re.compile(r"^\[\[?\s*([A-Za-z_][\w.:\s\"-]*?)\s*\]\]?\s*(?:#.*)?$")
@@ -429,7 +430,7 @@ GATE_FILE_IN_SHELL = re.compile(
     r"|setup\.cfg|tox\.ini|pyrightconfig\.json|tsconfig[\w.-]*\.json"
     r"|eslint\.config\.[cm]?[jt]s|\.eslintrc|vitest\.(?:config|workspace)\.[cm]?[jt]s"
     r"|\.pre-commit-config\.ya?ml|package\.json|\.github/workflows/"
-    r"|\.fallowrc(?:\.jsonc?)?|\.?fallow\.toml|CONSTRAINTS\.md)"
+    r"|\.fallowrc(?:\.jsonc?)?|\.?fallow\.toml|osv-scanner\.toml|CONSTRAINTS\.md)"
 )
 # A test file or directory named in a shell command: TEST_FILE's shapes.
 TEST_PATH_IN_SHELL = re.compile(
