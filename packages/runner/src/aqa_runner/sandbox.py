@@ -147,8 +147,9 @@ async def launch(chromium: Chromium) -> Browser:
 
 async def check_sandbox(browser: Browser) -> list[str]:
     """Why the browser's renderers can't be shown to be sandboxed; empty when
-    they are. A renderer exists only once a page does, so the check opens a
-    blank page in a context of its own and closes it before returning."""
+    they are. The browser must have been launched on this host, not connected
+    to. A renderer exists only once a page does, so the check opens a blank
+    page in a context of its own and closes it before returning."""
     context = await browser.new_context()
     try:
         await context.new_page()

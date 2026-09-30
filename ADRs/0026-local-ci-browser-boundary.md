@@ -100,20 +100,21 @@ The start origin comes only from the invocation (`aqa explore --url`) or the pro
 
 The Decision's "startup check" is called the **sandbox check** (CONTEXT.md), so it can't be confused with startup hygiene (SECURITY §6).
 
-- **When it runs.** `aqa_runner.sandbox.launch` asks for `chromium_sandbox=True`, then opens a blank page in a context of its own, because a renderer exists only once a page does. It checks every renderer alive at that moment and closes the context before it returns the browser. Later renderers come from the same zygote with the same sandbox and aren't checked again.
-- **Process IDs** come from CDP's `SystemInfo.getProcessInfo`, an experimental domain that lists the browser's and each renderer's PID as the host sees them. The alternative, walking the process tree from Playwright's driver, has to work around the zygote (a renderer's parent) and can't tell two browsers apart.
+- **When it runs.** `aqa_runner.sandbox.launch` asks for `chromium_sandbox=True`, then opens a blank page in a context of its own, because a renderer exists only once a page does. It checks every renderer alive at that moment and closes the context before it returns the browser. Later renderers start with the same sandbox (on Linux, from the same zygote) and aren't checked again.
+- **Process IDs** come from CDP's `SystemInfo.getProcessInfo`, an experimental domain that lists the browser's and each renderer's PID as the host sees them. That holds only for a browser launched on this host, never one connected to, which is why `launch` runs the check. The alternative, walking the process tree from Playwright's driver, has to work around the zygote (a renderer's parent) and can't tell two browsers apart.
 - **Linux: strict.**
   - The renderer must be in its own user, pid and net namespaces.
   - It must carry more seccomp filters than the browser (`Seccomp_filters` in `/proc/<pid>/status`, Linux 5.9 and later).
-  - The seccomp mode can't serve: under Docker's default profile every process, the browser included, is in mode 2.
+  - The seccomp mode can't serve. In a container whose seccomp profile lets the sandbox start, such as Playwright's, every process, the browser included, is already in mode 2 (measured: 1 filter on the browser, 2 on the renderer).
   - Chromium's setuid sandbox, which Playwright's builds don't ship, would fail this check, and a kernel too old to report the count stops it with an error of its own. Neither ever passes.
 - **macOS.** The check calls libSystem's `sandbox_check(pid, NULL, 0)`, which Apple exports but doesn't document.
   - The renderer must be sandboxed and the browser not. The browser's "no" also shows the call can answer no.
+  - It also answers "sandboxed" for a PID with no running process, a zombie or one already reaped. So the process must still be running once it has answered (`proc_pidpath` finds it), or the check stops with an error.
   - If Apple changes the call, the comparison fails and the launch is refused. It can't pass.
 - **Other operating systems** have no sandbox check, so their launches are refused.
 - **Failures.** Both cases raise `SandboxUnavailableError`, with exit code 10 (API.md §7): a launch whose sandbox can't start (Chromium's `No usable sandbox!`, passed through in Playwright's error), and a launch whose sandbox the check can't prove.
   - The message names the host fix. On Linux: the AppArmor sysctl for throwaway hosts, Chromium's AppArmor profile for machines you keep, and Playwright's seccomp profile in containers.
   - An error while reading the processes (a kernel without the count, a renderer that exits mid-check) propagates as it is. The browser is closed first, so nothing passes.
   - The CLI maps the error to its exit code once a command launches a browser (#53).
-- **Nothing skips the check.** `launch` takes no option and reads no setting or environment variable. The check measures the renderer itself, so every way of turning the sandbox off fails it. The negative controls in `packages/runner/tests/test_sandbox.py` launch without the sandbox, the only place allowed to.
+- **Nothing skips the check.** `launch` takes no option and reads no setting or environment variable. The check measures the renderer itself, so every way of turning the sandbox off fails it, for every browser launched through `launch`. Every run's browser must be: #36's session launches through it. Nothing yet stops other code from calling Playwright's launch directly. The negative controls in `packages/runner/tests/test_sandbox.py` launch without the sandbox, the only place allowed to.
 - **CI.** The `python` job installs Playwright's headless shell, logs `kernel.apparmor_restrict_unprivileged_userns`, sets it to 0, and runs the browser tests within `pytest --cov`. A runner without the setting fails the job.

@@ -9,7 +9,9 @@
 #
 # Supply chain: third-party actions are pinned by commit SHA (SECURITY.md) and
 # the repository only allows GitHub-owned actions plus fallow-rs/fallow, so
-# tools come as release binaries checked against a pinned sha256. Jobs get a
+# tools come as release binaries checked against a pinned sha256. The one
+# exception is Playwright's headless shell and its system packages: the
+# locked playwright package fetches them itself (browser tests). Jobs get a
 # read-only token; nothing here needs a secret, so fork PRs run the same checks
 # with the same (lack of) privileges.
 
