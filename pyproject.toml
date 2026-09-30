@@ -38,8 +38,8 @@ aqa-core = { workspace = true }
 aqa-runner = { workspace = true }
 
 # The tool settings below point the tools at our code (ADR-0027). Their
-# thresholds and the Ruff rule set mirror CONSTRAINTS.md, which owns them
-# (ADR-0028); tests/test_constraints.py fails when the two drift apart.
+# thresholds mirror CONSTRAINTS.md, which owns them, and tests/test_constraints.py
+# fails when the two drift apart. The Ruff rule set is chosen here (ADR-0028).
 
 [tool.ruff]
 target-version = "py314"

@@ -21,11 +21,11 @@ Always enforced. Each rule has exactly one enforcer.
 | No unimplemented stubs outside tests (`raise NotImplementedError`, `throw new Error("Not implemented")`) | policy_guard, refused | Same |
 | No empty bodies in functions that return a value (`...` or `pass`) | mypy's `empty-body` | `uv run mypy` |
 | No `TODO`, `FIXME`, `XXX` or `HACK` comments | Ruff `FIX` | `uv run ruff check .` |
-| No broad exception handlers: a bare `except`, or an `except Exception` or `BaseException` that swallows the error (`pass`, `continue`, no re-raise) | Ruff `E722`, `BLE001`, `S110`, `S112` | `uv run ruff check .` |
+| No broad exception handlers that swallow the error: a bare `except`, `except Exception` or `except BaseException` that doesn't re-raise | Ruff `E722`, `BLE001`, `S110`, `S112` | `uv run ruff check .` |
 | No `suppress(Exception)` or `suppress(BaseException)`, the rewrite Ruff's `SIM105` suggests for `try`-`except`-`pass` | policy_guard, refused | Each edit and shell write in Claude Code; the Stop hook's tree scan; `--scan` |
-| No deleted test files, stripped assertions, or changed gate configs or thresholds without the maintainer's approval | policy_guard, asks | Each edit and shell command in Claude Code only, until the `--diff` follow-up brings it to CI |
+| No deleted or renamed-away tests, stripped assertions, or changed gate configs or thresholds without the maintainer's approval | policy_guard, asks | Each edit and shell command in Claude Code only, until the `--diff` follow-up brings it to CI |
 
-A refused line passes when it cites an existing `ADR-NNNN`, so write the ADR first. Abstract and Protocol methods use `...` as their body, which mypy allows.
+A refused line passes when it cites an existing `ADR-NNNN`, so write the ADR first. Abstract and Protocol methods use `...` as their body, which mypy allows. Ruff's `PLR0124` and `PLR0133` also flag a comparison of a value with itself or of two constants, wherever it appears, so the `x == x` form of a tautological assertion has a second, broader check.
 
 ## Thresholds
 
@@ -54,10 +54,11 @@ Recorded now, enforced once the code or the pipeline they need exists.
 | Coverage of each test-first module (TESTING.md §2) | 100% line and branch, via `uv run coverage report --include=<the module's paths> --fail-under=100` | The ticket that adds the first test-first module, which also adds the command |
 | Dependency audit | No new high or critical advisory | #60 |
 | Mutation testing | Chosen then | The replay engine, the first test-first module |
+| The floor in CI: deleted tests, stripped assertions, changed gate configs | `policy_guard.py --diff <base>` finds none, or the maintainer approved them | A follow-up ticket, which first splits the guard (995 lines) |
 
 ## Exceptions
 
 | ID | Rule | Path | Reason | Owner | Expires |
 |---|---|---|---|---|---|
 
-None yet. An exception names its rule, path, reason, owner and an expiry at most 90 days out, and changes this file, so it needs the maintainer's approval.
+None yet. An exception is a temporary waiver of a floor rule or a threshold: it names its rule, path, reason, owner and an expiry at most 90 days out, and changes this file, so it needs the maintainer's approval. A reviewed false positive that stays one, such as the guard's `S104`, is a per-file ignore in `pyproject.toml` with its reason instead.
