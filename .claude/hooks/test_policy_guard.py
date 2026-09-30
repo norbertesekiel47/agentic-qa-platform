@@ -40,6 +40,24 @@ ignore = [
 [tool.coverage.report]
 fail_under = 90
 """
+PYPROJECT_UV = """\
+[tool.uv]
+package = false
+constraint-dependencies = ["litellm<0"]
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+aqa-core = { workspace = true }
+"""
+CONSTRAINTS_MD = """\
+# Constraints
+
+| Dimension | Threshold |
+|---|---|
+| Coverage, overall | ≥ 94% |
+"""
 PACKAGE_JSON = """\
 {
   "scripts": {
@@ -128,6 +146,11 @@ class GuardTestCase(unittest.TestCase):
         return str(
             json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"]
         )
+
+    def ask_reason(self, result: Result) -> str:
+        self.assert_asks(result)
+        output = json.loads(result.stdout)["hookSpecificOutput"]
+        return str(output["permissionDecisionReason"])
 
     def assert_blocked(self, result: Result) -> None:
         self.assertEqual(self.decision(result), "deny", result.stdout)
@@ -314,6 +337,46 @@ class SandboxTests(GuardTestCase):
         self.assert_allowed(self.edit("runner.py", "", line))
 
 
+class StubTests(GuardTestCase):
+    def test_added_stubs_are_blocked(self) -> None:
+        cases = {
+            "packages/core/src/aqa_core/replay.py": "    raise NotImplementedError",
+            "packages/runner/src/aqa_runner/heal.py": "    raise NotImplementedError('M2')",
+            "apps/dashboard/src/runs.ts": 'throw new Error("Not implemented");',
+            "apps/dashboard/src/specs.tsx": "throw new Error('TODO: not implemented yet');",
+        }
+        for rel, line in cases.items():
+            with self.subTest(rel=rel):
+                result = self.edit(rel, "", line)
+                self.assert_blocked(result)
+                self.assertIn("CONSTRAINTS.md", result.stderr)
+
+    def test_stubs_in_tests_or_citing_an_adr_pass(self) -> None:
+        self.assert_allowed(
+            self.edit("tests/test_replay.py", "", "        raise NotImplementedError")
+        )
+        self.assert_allowed(
+            self.edit(
+                "apps/dashboard/src/a.test.ts", "", 'throw new Error("not implemented")'
+            )
+        )
+        self.assert_allowed(
+            self.edit(
+                "packages/core/a.py", "", "    raise NotImplementedError  # ADR-0008"
+            )
+        )
+
+    def test_stub_lookalikes_pass(self) -> None:
+        lines = [
+            "        return NotImplemented",
+            "    except NotImplementedError:",
+            'throw new Error("unsupported locator kind");',
+        ]
+        for line in lines:
+            with self.subTest(line=line):
+                self.assert_allowed(self.edit("packages/core/a.py", "", line))
+
+
 class GateConfigTests(GuardTestCase):
     def test_gate_sections_of_pyproject_ask(self) -> None:
         self.put("pyproject.toml", PYPROJECT)
@@ -366,6 +429,32 @@ class GateConfigTests(GuardTestCase):
         self.assert_asks(self.bash("sed -i '' 's/90/50/' pyproject.toml"))
         self.assert_allowed(self.bash("cat pyproject.toml"))
         self.assert_allowed(self.bash("git commit -m 'bump package.json'"))
+
+    def test_constraints_md_changes_ask(self) -> None:
+        self.put("CONSTRAINTS.md", CONSTRAINTS_MD)
+        reason = self.ask_reason(self.edit("CONSTRAINTS.md", "| ≥ 94% |", "| ≥ 90% |"))
+        self.assertIn("+| Coverage, overall | ≥ 90% |", reason)
+        self.assert_asks(self.bash("sed -i '' 's/94/90/' CONSTRAINTS.md"))
+        self.assert_allowed(self.bash("cat CONSTRAINTS.md"))
+
+    def test_uv_table_changes_ask(self) -> None:
+        self.put("pyproject.toml", PYPROJECT_UV)
+        ban = 'constraint-dependencies = ["litellm<0"]\n'
+        reason = self.ask_reason(self.edit("pyproject.toml", ban, ""))
+        self.assertIn('-constraint-dependencies = ["litellm<0"]', reason)
+
+    def test_uv_workspace_tables_pass(self) -> None:
+        self.put("pyproject.toml", PYPROJECT_UV)
+        self.assert_allowed(
+            self.edit("pyproject.toml", '"packages/*"]', '"packages/*", "apps/api"]')
+        )
+        self.assert_allowed(
+            self.edit(
+                "pyproject.toml",
+                "aqa-core = { workspace = true }",
+                "aqa-core = { workspace = true }\naqa-api = { workspace = true }",
+            )
+        )
 
 
 class TamperTests(GuardTestCase):
@@ -474,6 +563,37 @@ class ShellTests(GuardTestCase):
                 self.assert_blocked(self.bash(command))
 
 
+class TestFileShellTests(GuardTestCase):
+    def test_deleting_moving_or_rewriting_tests_asks(self) -> None:
+        commands = [
+            "rm tests/test_a.py",
+            "rm -rf packages/cli/tests",
+            "git rm -r packages/cli/tests",
+            "mv bench/harness/test_toggle.py /tmp/",
+            "sed -i '' '/assert/d' tests/test_a.py",
+            ": > tests/test_a.py",
+            "rm apps/dashboard/src/runs.test.ts",
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+                result = self.bash(command)
+                self.assert_asks(result)
+                self.assertIn("test file", result.stdout)
+
+    def test_reading_and_running_tests_is_allowed(self) -> None:
+        commands = [
+            "uv run pytest packages/cli/tests -q 2>&1 | tail -3",
+            "cat tests/test_a.py",
+            "grep -n assert bench/harness/test_toggle.py",
+            "python3 -m unittest discover -s .claude/hooks",
+            "rm -rf .pytest_cache htmlcov",
+            "rm packages/core/src/aqa_core/pytest_plugin.py",
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+                self.assert_allowed(self.bash(command))
+
+
 class TreeScanTests(GuardTestCase):
     def stop(self, **payload: Any) -> Result:
         base = {"hook_event_name": "Stop", "cwd": str(self.project)}
@@ -514,6 +634,18 @@ class TreeScanTests(GuardTestCase):
         self.put("local/a.py", "x = f()  # type: ignore\n")
         result = self.run_mode("--scan")
         self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_scan_flags_a_stub(self) -> None:
+        self.put(
+            "packages/core/a.py", "def f() -> int:\n    raise NotImplementedError\n"
+        )
+        self.put(
+            "tests/test_a.py", "def fake() -> int:\n    raise NotImplementedError\n"
+        )
+        result = self.run_mode("--scan")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("packages/core/a.py:2: unimplemented stub", result.stdout)
+        self.assertNotIn("tests/test_a.py", result.stdout)
 
     def test_scan_flags_credentials_in_docs_without_echoing_them(self) -> None:
         self.put("docs/setup.md", f"token: {FAKE_GITHUB}\n")
