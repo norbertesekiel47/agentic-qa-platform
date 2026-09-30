@@ -50,7 +50,8 @@ if [ "$candidate" = microvm ]; then
   mkdir -p spikes/hosted-chromium/build
   zip="$repo/spikes/hosted-chromium/build/microvm-$commit.zip"
   rm -f "$zip"
-  (cd "$context" && python3 -m zipfile -c "$zip" Dockerfile .python-version \
-    pyproject.toml uv.lock packages bench spikes)
+  # Everything the image was built from, dotfiles included, so the MicroVM's
+  # image can't differ from the local one.
+  (cd "$context" && shopt -s dotglob && python3 -m zipfile -c "$zip" *)
   echo "$zip"
 fi

@@ -44,6 +44,18 @@ HOST_FIXES = {
 }
 OTHER_FIX = "Run the runner on Linux or macOS."
 
+# The lines Chromium's zygote logs on Linux when its sandbox can't start, and
+# how to fix the host for each. Playwright passes the browser's log through in
+# its error. Chromium's root message goes on to name the switch that turns the
+# sandbox off, so only its start is matched.
+NO_SANDBOX_LOGS = {
+    "No usable sandbox": LINUX_FIX,
+    "Running as root without": (
+        "Chromium won't sandbox a browser that runs as root: run the runner as "
+        "a non-root user."
+    ),
+}
+
 
 @dataclass(frozen=True)
 class LinuxProcess:
@@ -127,12 +139,11 @@ async def launch(chromium: Chromium) -> Browser:
     try:
         browser = await chromium.launch(chromium_sandbox=True)
     except Error as error:
-        # Chromium's zygote logs this line when no sandbox can start on Linux,
-        # and Playwright passes the browser's log through in its error.
-        if "No usable sandbox" not in error.message:
+        fixes = [fix for line, fix in NO_SANDBOX_LOGS.items() if line in error.message]
+        if not fixes:
             raise
         raise SandboxUnavailableError(
-            f"Chromium's sandbox can't start on this host. {LINUX_FIX}"
+            f"Chromium's sandbox can't start on this host. {fixes[0]}"
         ) from error
     async with AsyncExitStack() as on_failure:
         on_failure.push_async_callback(browser.close)

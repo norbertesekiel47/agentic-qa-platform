@@ -322,6 +322,32 @@ def test_launch_that_cannot_start_the_sandbox_names_the_host_fix() -> None:
     assert HOST_FIX_ON["linux"] in str(refused.value), str(refused.value)
 
 
+# The error Playwright 1.63 raised when Chromium ran as root (a container run
+# with --user root). Chromium's line is cut short before it names the switch
+# that turns the sandbox off, and Playwright's advice is left out.
+RUNNING_AS_ROOT = """\
+BrowserType.launch: Target page, context or browser has been closed
+Browser logs:
+Chromium sandboxing failed!
+
+Call log:
+  - <launched> pid=20
+  - [pid=20][err] [0930/200339.264143:ERROR:content/browser/zygote_host/zygote_host_impl_linux.cc:102] Running as root without
+  - [pid=20] <process did exit: exitCode=1, signal=null>
+"""
+
+
+def test_launch_as_root_is_an_infrastructure_error_naming_the_fix() -> None:
+    chromium = FailingChromium(RUNNING_AS_ROOT)
+
+    with pytest.raises(SandboxUnavailableError) as refused:
+        asyncio.run(launch(chromium))
+
+    assert chromium.requested == [True]
+    assert refused.value.exit_code >= 10  # an infrastructure error (API.md §7)
+    assert "run the runner as a non-root user" in str(refused.value), str(refused.value)
+
+
 def test_other_launch_errors_pass_through() -> None:
     missing = "BrowserType.launch: Executable doesn't exist at /ms-playwright/chrome"
 

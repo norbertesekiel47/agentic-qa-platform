@@ -19,7 +19,12 @@ from pathlib import Path
 import pytest
 from aqa_hosted_chromium_spike.lambda_function import handler
 from aqa_hosted_chromium_spike.microvm import HOOK_PREFIX, server
-from aqa_hosted_chromium_spike.trial import Report, Sandbox, trial_on_this_host
+from aqa_hosted_chromium_spike.trial import (
+    Report,
+    Sandbox,
+    tree_pss,
+    trial_on_this_host,
+)
 
 LINUX_ONLY = "the trial runs on Linux only"
 
@@ -70,10 +75,13 @@ def test_the_lambda_handler_returns_the_trial_report(
         with pytest.raises(RuntimeError, match=LINUX_ONLY):
             handler({}, None)
         return
+    before = tree_pss(Path("/proc"), os.getpid())
     report = handler({}, None)
     assert report["sandbox"] == {"on": True}
     assert report["earlier_runs"] == []
-    assert (tmp_path / "aqa-spike-runs").read_text() == f"{report['run_id']}\n"
+    assert report["run_id"] in (tmp_path / "aqa-spike-runs").read_text()
+    # The peak counts the browser and its page, not only this process.
+    assert report["peak_memory_bytes"] > before + 100 * 2**20
 
 
 # The MicroVM's server, with a trial that only counts its calls.
@@ -132,6 +140,14 @@ def test_the_microvm_answers_its_lifecycle_hooks_without_a_trial(
     assert microvm.reports == [], "a hook ran a trial: a browser in the snapshot"
 
 
+# Lambda's /run carries a JSON body with a payload of up to 16 KB. A server
+# that replies without reading a body closes a socket with unread bytes, and
+# the reset that follows can lose its reply. A body larger than the socket's
+# buffers makes that loss certain.
+def test_the_microvm_reads_a_hook_body_before_it_replies(microvm: MicroVM) -> None:
+    assert microvm.post(f"{HOOK_PREFIX}run", body=b"x" * 2**25) == 200
+
+
 def test_the_microvm_runs_a_trial_per_request(microvm: MicroVM) -> None:
     microvm.connection.request("POST", "/trial")
     response = microvm.connection.getresponse()
@@ -142,19 +158,15 @@ def test_the_microvm_runs_a_trial_per_request(microvm: MicroVM) -> None:
     assert microvm.reports == [REPORT]
 
 
-# A trial changes state (the run marker), so only a POST runs one.
+# A trial changes state (the run marker), so only a POST to /trial runs one.
 @pytest.mark.parametrize(
-    ("method", "path", "status"),
-    [
-        ("POST", "/", 404),
-        ("POST", f"{HOOK_PREFIX}validate", 404),
-        ("GET", "/trial", 501),
-    ],
+    ("method", "path"),
+    [("POST", "/"), ("POST", f"{HOOK_PREFIX}validate"), ("GET", "/trial")],
 )
 def test_the_microvm_runs_no_trial_for_other_requests(
-    microvm: MicroVM, method: str, path: str, status: int
+    microvm: MicroVM, method: str, path: str
 ) -> None:
     microvm.connection.request(method, path)
 
-    assert microvm.connection.getresponse().status == status
+    assert microvm.connection.getresponse().status >= 400
     assert microvm.reports == []

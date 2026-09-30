@@ -383,10 +383,12 @@ def test_a_warning_fails_the_test_run(tmp_path: Path) -> None:
 
 
 def test_the_test_gate_collects_the_harness_the_guard_and_these_tests() -> None:
-    # CI runs the harness's and the guard's tests through pytest (ADR-0029).
+    # CI runs the harness's, the guard's and the spikes' tests through pytest
+    # (ADR-0029; ADR-0008 amendment, 2026-09-30).
     result = run([*PYTEST, "--collect-only", "-q"])
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert "spikes/hosted-chromium/tests/test_trial.py" in result.stdout
     assert "bench/harness/test_manifest.py" in result.stdout
     assert ".claude/hooks/test_policy_guard.py" in result.stdout
     assert "tests/test_constraints.py" in result.stdout

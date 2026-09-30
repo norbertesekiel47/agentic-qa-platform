@@ -3,7 +3,7 @@
 A trial launches Chromium with its sandbox on through `aqa_runner.sandbox`,
 whose sandbox check proves the first half of the fresh-VM predicate, and
 reports as JSON how long the browser took to be ready and the peak memory
-of the trial and its browser."""
+of the trial and its browser with a page open."""
 
 import asyncio
 import os
@@ -17,10 +17,11 @@ from pathlib import Path
 from typing import NotRequired, TypedDict
 
 from aqa_runner.sandbox import Chromium, SandboxUnavailableError, launch
-from playwright.async_api import async_playwright
+from playwright.async_api import Browser, async_playwright
 
-# How often the trial measures its memory while the browser runs.
+# How often, and for how long after the launch, the trial samples its memory.
 SAMPLE_SECONDS = 0.05
+MEMORY_SECONDS = 1.0
 
 
 class Sandbox(TypedDict):
@@ -35,13 +36,15 @@ class Report(TypedDict):
 
     run_id: str
     # Fresh-VM evidence a second trial can compare: the kernel's boot ID, and
-    # the run IDs of trials this environment ran before this one.
+    # the run IDs of trials this environment ran before this one, in the order
+    # they ran.
     boot_id: str
     earlier_runs: list[str]
     sandbox: Sandbox
     # From asking Playwright to launch until the sandbox check passed.
     ready_seconds: float | None
-    # The largest PSS sample of the trial's process and its descendants.
+    # The largest PSS sample of the trial's process and its descendants, over
+    # MEMORY_SECONDS after the launch, with a blank page open in the browser.
     peak_memory_bytes: int
 
 
@@ -61,21 +64,27 @@ async def _trial_on_this_host(runs_file: Path) -> Report:
 
 
 async def run_trial(chromium: Chromium, proc: Path, runs_file: Path) -> Report:
-    """Launch Chromium with its sandbox on, close it, and report. `proc` is
-    where /proc is mounted, and `runs_file` the run marker: the file in which
-    each trial in this environment records its run ID."""
+    """Launch Chromium with its sandbox on, measure it, close it, and report.
+    `proc` is where /proc is mounted, and `runs_file` the run marker: the file
+    in which each trial in this environment records its run ID."""
     run_id = uuid.uuid4().hex
     earlier_runs = mark_run(runs_file, run_id)
-    async with peak_memory(proc, os.getpid()) as peak:
-        started = time.perf_counter()
-        try:
-            browser = await launch(chromium)
-        except SandboxUnavailableError as error:
-            # The finding the spike looks for on a candidate, so it is
-            # reported. Every other error still stops the trial.
-            sandbox, ready = Sandbox(on=False, error=str(error)), None
-        else:
-            sandbox, ready = Sandbox(on=True), time.perf_counter() - started
+    # Nothing else runs in the trial while the launch is timed: sampling memory
+    # takes CPU that a small candidate would charge to the launch.
+    started = time.perf_counter()
+    browser: Browser | None
+    try:
+        browser = await launch(chromium)
+    except SandboxUnavailableError as error:
+        # The finding the spike looks for on a candidate, so it is reported.
+        # Every other error still stops the trial.
+        sandbox, ready, browser = Sandbox(on=False, error=str(error)), None, None
+    else:
+        sandbox, ready = Sandbox(on=True), time.perf_counter() - started
+    try:
+        peak = await memory_with_a_page(proc, browser)
+    finally:
+        if browser is not None:
             await browser.close()
     return Report(
         run_id=run_id,
@@ -83,8 +92,20 @@ async def run_trial(chromium: Chromium, proc: Path, runs_file: Path) -> Report:
         boot_id=boot_id(proc),
         sandbox=sandbox,
         ready_seconds=ready,
-        peak_memory_bytes=peak(),
+        peak_memory_bytes=peak,
     )
+
+
+async def memory_with_a_page(proc: Path, browser: Browser | None) -> int:
+    """The trial's peak PSS over MEMORY_SECONDS, with a blank page open in
+    `browser`, as a run's browser has at least one page. Without a browser
+    (the sandbox didn't start), the trial's own."""
+    async with peak_memory(proc, os.getpid()) as peak:
+        if browser is not None:
+            context = await browser.new_context()
+            await context.new_page()
+        await asyncio.sleep(MEMORY_SECONDS)
+    return peak()
 
 
 def mark_run(runs_file: Path, run_id: str) -> list[str]:
