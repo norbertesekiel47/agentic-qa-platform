@@ -22,3 +22,6 @@ graft/
 # Coverage data files (`uv run pytest --cov`)
 .coverage
 .coverage.*
+
+# The spike's local packages: build contexts and MicroVM zips (spikes/hosted-chromium/package.sh)
+/spikes/hosted-chromium/build/
