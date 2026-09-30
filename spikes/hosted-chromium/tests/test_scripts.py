@@ -850,7 +850,7 @@ DEPLOYED = [
         "aws",
         "lambda-microvms",
         "list-microvms",
-        mentions=[f"ends_with(imageArn, ':microvm-image:{NAME}')"],
+        mentions=[f"imageArn=='{IMAGE_ARN}'"],
         outputs=["mvm-fake-1", ""],
     ),
     rule(
@@ -894,6 +894,7 @@ DEPLOYED = [
         "ec2",
         "describe-security-groups",
         f"Name=group-name,Values={NAME}",
+        "Name=tag:aqa-spike,Values=hosted-chromium",
         outputs=["sg-0fake", ""],
     ),
     rule(

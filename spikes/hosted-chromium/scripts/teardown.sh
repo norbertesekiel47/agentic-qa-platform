@@ -22,7 +22,7 @@ log_groups_list=$(jmespath_list "${LOG_GROUPS[@]}")
 # so a failed listing stops the script instead of reading as "none".
 microvms() {
   aws lambda-microvms list-microvms --output text --query \
-    "items[?state!='TERMINATED' && ends_with(imageArn, ':microvm-image:$NAME')].microvmId"
+    "items[?state!='TERMINATED' && imageArn=='arn:aws:lambda:$AWS_REGION:$account:microvm-image:$NAME'].microvmId"
 }
 microvm_images() {
   aws lambda-microvms list-microvm-images --output text \
@@ -41,7 +41,8 @@ task_definitions() {
     --query "taskDefinitionArns[?contains(@, ':task-definition/$NAME:')]"
 }
 security_groups() {
-  aws ec2 describe-security-groups --filters "Name=group-name,Values=$NAME" \
+  aws ec2 describe-security-groups \
+    --filters "Name=group-name,Values=$NAME" "Name=tag:$TAG_KEY,Values=$TAG_VALUE" \
     --query 'SecurityGroups[].GroupId' --output text
 }
 repositories() {

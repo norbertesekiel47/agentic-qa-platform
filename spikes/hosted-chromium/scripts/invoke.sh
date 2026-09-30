@@ -77,7 +77,8 @@ invoke_fargate() {
   local subnets group arn
   subnets=$(aws ec2 describe-subnets --filters Name=default-for-az,Values=true \
     --query 'Subnets[].SubnetId' --output text | tr '\t' ',')
-  group=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$NAME" \
+  group=$(aws ec2 describe-security-groups \
+    --filters "Name=group-name,Values=$NAME" "Name=tag:$TAG_KEY,Values=$TAG_VALUE" \
     --query 'SecurityGroups[].GroupId' --output text)
   requested=$(now)
   aws ecs run-task --cluster "$NAME" --launch-type FARGATE --task-definition "$NAME" \
@@ -154,7 +155,7 @@ invoke_microvm() {
   (umask 077 && printf 'X-aws-proxy-auth: %s\n' "$token" > "$work/auth")
   # Lambda routes traffic to the server once its /run hook has answered.
   for attempt in $(seq 60); do
-    if curl --silent --fail --max-time 10 --header "@$work/auth" \
+    if curl --silent --show-error --fail --max-time 10 --header "@$work/auth" \
       "https://$endpoint/health" > /dev/null; then
       break
     fi
@@ -166,7 +167,7 @@ invoke_microvm() {
   done
   # One request, never repeated: a second trial on this MicroVM would read as
   # an environment used twice.
-  curl --silent --fail --max-time 120 --request POST --header "@$work/auth" \
+  curl --silent --show-error --fail --max-time 120 --request POST --header "@$work/auth" \
     "https://$endpoint/trial" > "$work/trial.json"
   answered=$(now)
   local id=$microvm
