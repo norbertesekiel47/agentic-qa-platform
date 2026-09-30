@@ -208,16 +208,12 @@ def test_launch_refuses_an_os_with_no_sandbox_check(
 
 
 # The error Playwright 1.63 raised on Linux when Chromium's sandbox couldn't
-# start (Docker's default seccomp profile), with its long lines cut short.
+# start (Docker's default seccomp profile). Its long lines are cut short, and
+# Playwright's advice, which includes turning the sandbox off, is left out.
 NO_USABLE_SANDBOX = """\
 BrowserType.launch: Target page, context or browser has been closed
 Browser logs:
 Chromium sandboxing failed!
-================================
-To avoid the sandboxing issue, do either of the following:
-  - (preferred): Configure your environment to support sandboxing
-  - (alternative): Launch Chromium without sandbox using 'chromiumSandbox: false' option
-================================
 
 Call log:
   - <launched> pid=19
