@@ -275,6 +275,12 @@ class CliTest(ToggleTestCase):
         self.assertEqual(code, 0)
         self.assertIn("12 checks over 2 cycles, all as expected", out)
 
+    def test_case_switches_only_that_flag(self) -> None:
+        code, out, _ = self.run_cli("--cycles", "1", "--case", "conduit-bug-001")
+        self.assertEqual(code, 0)
+        # Both checks on the clean app, then both under bug-001's flag only.
+        self.assertIn("4 checks over 1 cycles, all as expected", out)
+
     def test_failure_exits_1(self) -> None:
         self.checks.failing.add("conduit-bug-001")
         code, out, _ = self.run_cli("--cycles", "1")
