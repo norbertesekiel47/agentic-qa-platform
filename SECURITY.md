@@ -1,6 +1,6 @@
 # Security — Agentic QA Platform
 
-Last updated: 2026-09-29 (M1 design decisions, ADR-0026). Threat model and controls for a multi-tenant SaaS that runs browser agents against customer web apps. Guarantees are stated as narrowly as they are actually enforced.
+Last updated: 2026-09-30 (the sandbox check, #35; M1 design decisions, ADR-0026). Threat model and controls for a multi-tenant SaaS that runs browser agents against customer web apps. Guarantees are stated as narrowly as they are actually enforced.
 
 ## 1. Assets
 
@@ -75,7 +75,7 @@ The agent reads arbitrary page content. A malicious or compromised page may say 
 
 ## 6. Runner isolation (precise boundary)
 
-- **Chromium sandbox decision gate (ADR-0008 amendment, 2026-09-29).** The runner launches Chromium with its sandbox enabled (`chromium_sandbox=True`) and verifies it at startup, by comparing a renderer process with the browser process. Without the sandbox, a renderer exploit runs with the runner's own privileges.
+- **Chromium sandbox decision gate (ADR-0008 amendment, 2026-09-29).** The runner launches Chromium with its sandbox enabled (`chromium_sandbox=True`) and proves it with the sandbox check before any page loads, by comparing a renderer process with the browser process. Without the sandbox, a renderer exploit runs with the runner's own privileges.
   - *The rule:* hosted compute qualifies only with sandboxed Chromium **and** a fresh VM for every run.
   - *Candidates:* the M1 spike measures a Lambda MicroVM, a Fargate task and a Lambda function. A Lambda function can't win, because it reuses execution environments across invocations. Fargate most likely can't start the sandbox.
   - *Until then:* cross-tenant hosted execution isn't offered until a candidate qualifies.
