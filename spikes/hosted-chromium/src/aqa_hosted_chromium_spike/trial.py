@@ -81,12 +81,8 @@ async def run_trial(chromium: Chromium, proc: Path, runs_file: Path) -> Report:
     except SandboxUnavailableError as error:
         # The finding the spike looks for on a candidate, so it is reported.
         # Every other error still stops the trial.
-        sandbox, ready, ready_at, browser = (
-            Sandbox(on=False, error=str(error)),
-            None,
-            None,
-            None,
-        )
+        sandbox = Sandbox(on=False, error=str(error))
+        ready = ready_at = browser = None
     else:
         sandbox, ready = Sandbox(on=True), time.perf_counter() - started
         ready_at = time.time()

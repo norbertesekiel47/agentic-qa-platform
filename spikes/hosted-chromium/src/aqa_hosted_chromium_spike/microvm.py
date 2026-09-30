@@ -46,6 +46,12 @@ def server(address: tuple[str, int], trial: Callable[[], Report]) -> HTTPServer:
             else:
                 self._reply(HTTPStatus.NOT_FOUND, b"")
 
+        def do_GET(self) -> None:
+            # What invoke.sh asks until Lambda routes the MicroVM's traffic,
+            # so that its one trial request is never repeated.
+            status = HTTPStatus.OK if self.path == "/health" else HTTPStatus.NOT_FOUND
+            self._reply(status, b"")
+
         def _reply(self, status: HTTPStatus, body: bytes) -> None:
             self.send_response(status)
             self.send_header("Content-Type", "application/json")

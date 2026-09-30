@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Deploys one candidate's package of the trial, as package.sh built it
 # locally (ADR-0008 amendment, 2026-09-30). It refuses to run before
-# budget.sh has created the budget alarm. Each candidate gets resources of its
-# own, with the fixed names in common.sh and the tag aqa-spike=hosted-chromium;
-# teardown.sh deletes them. A second deploy of the same candidate fails on its
-# first create: run teardown.sh first.
+# budget.sh has created the budget alarm, and refuses a candidate that is
+# already deployed. Each candidate gets resources of its own, with the fixed
+# names in common.sh; teardown.sh deletes them.
 #
 # Roles hold the least the candidate needs: writing its own logs, and for
 # Fargate and the MicroVM's build, reading its own image or zip. The trial's
@@ -13,15 +12,25 @@
 #
 # Usage: spikes/hosted-chromium/scripts/deploy.sh lambda|fargate|microvm
 source "$(dirname "$0")/common.sh"
+require_tools docker
 
 candidate=${1:-}
 is_candidate "$candidate" || usage_candidate
 require_budget
 
 account=$(account_id)
-if ! commit=$(docker image inspect "aqa-spike-trial:$candidate" \
-  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'); then
-  echo "no local image aqa-spike-trial:$candidate: run package.sh $candidate first" >&2
+# A deploy creates its candidate's log group, so an existing one means the
+# candidate is deployed, fully or partly.
+deployed=$(aws logs describe-log-groups --log-group-name-prefix "$(log_group "$candidate")" \
+  --query 'logGroups[].logGroupName' --output text)
+if [ -n "$deployed" ]; then
+  echo "$candidate is already deployed: run teardown.sh first" >&2
+  exit 1
+fi
+commit=$(docker image inspect "aqa-spike-trial:$candidate" \
+  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
+if [[ ! $commit =~ ^[0-9a-f]{12}$ ]]; then
+  echo "aqa-spike-trial:$candidate names no commit: build it with package.sh $candidate" >&2
   exit 1
 fi
 
@@ -42,17 +51,20 @@ create_log_group() {
     --retention-in-days 7
 }
 
-# Prints the ARN of a new role that only `service` may assume, holding the one
-# inline policy in the file `policy`. Lambda MicroVMs' roles must also allow
-# sts:TagSession (microvms-security.html), so every role does.
+# Creates a role that only `service` may assume, holding the one inline policy
+# in the file `policy`, and sets role_arn. With `tag_session`, the role may
+# also tag its session, which Lambda MicroVMs' roles must (microvms-security.html).
 create_role() {
-  local role=$1 service=$2 policy=$3
-  jq -n --arg service "$service" '{Version: "2012-10-17", Statement: [
-      {Effect: "Allow", Principal: {Service: $service},
-       Action: ["sts:AssumeRole", "sts:TagSession"]}]}' > "$work/trust-$role.json"
-  aws iam create-role --role-name "$role" --path "$IAM_PATH" \
+  local role=$1 service=$2 policy=$3 actions='["sts:AssumeRole"]'
+  if [ "${4:-}" = tag_session ]; then
+    actions='["sts:AssumeRole", "sts:TagSession"]'
+  fi
+  jq -n --arg service "$service" --argjson actions "$actions" '{Version: "2012-10-17",
+      Statement: [{Effect: "Allow", Principal: {Service: $service}, Action: $actions}]}' \
+    > "$work/trust-$role.json"
+  role_arn=$(aws iam create-role --role-name "$role" --path "$IAM_PATH" \
     --assume-role-policy-document "file://$work/trust-$role.json" \
-    --tags "Key=$TAG_KEY,Value=$TAG_VALUE" --query Role.Arn --output text
+    --tags "Key=$TAG_KEY,Value=$TAG_VALUE" --query Role.Arn --output text)
   aws iam put-role-policy --role-name "$role" --policy-name "$role" \
     --policy-document "file://$policy"
 }
@@ -63,26 +75,27 @@ settle_iam() {
   sleep 15
 }
 
-# Pushes the candidate's image to a repository of its own, and prints its URI.
+# Pushes the candidate's image to a repository of its own, and sets image_uri.
 push_image() {
   local repo=$NAME-$candidate registry=$account.dkr.ecr.$AWS_REGION.amazonaws.com
   aws ecr create-repository --repository-name "$repo" \
     --tags "Key=$TAG_KEY,Value=$TAG_VALUE" > /dev/null
   aws ecr get-login-password | docker login --username AWS --password-stdin "$registry" > /dev/null
-  docker tag "aqa-spike-trial:$candidate" "$registry/$repo:$commit"
-  docker push --quiet "$registry/$repo:$commit" > /dev/null
-  echo "$registry/$repo:$commit"
+  image_uri=$registry/$repo:$commit
+  docker tag "aqa-spike-trial:$candidate" "$image_uri"
+  docker push --quiet "$image_uri" > /dev/null
 }
 
 deploy_lambda() {
-  local uri role_arn
-  uri=$(push_image)
+  local logs
+  push_image
   create_log_group lambda
-  policy "$(logs_statement lambda)" > "$work/policy.json"
-  role_arn=$(create_role "$(role_name lambda)" lambda.amazonaws.com "$work/policy.json")
+  logs=$(logs_statement lambda)
+  policy "$logs" > "$work/policy.json"
+  create_role "$(role_name lambda)" lambda.amazonaws.com "$work/policy.json"
   settle_iam
   aws lambda create-function --function-name "$NAME" --package-type Image \
-    --code "ImageUri=$uri" --role "$role_arn" --architectures arm64 \
+    --code "ImageUri=$image_uri" --role "$role_arn" --architectures arm64 \
     --memory-size "$MEMORY_MB" --timeout 120 \
     --logging-config "LogFormat=Text,LogGroup=$(log_group lambda)" \
     --tags "$TAG_KEY=$TAG_VALUE" > /dev/null
@@ -90,16 +103,17 @@ deploy_lambda() {
 }
 
 deploy_fargate() {
-  local uri role_arn vpc repo_arn
-  uri=$(push_image)
+  local logs pull vpc
+  push_image
   create_log_group fargate
-  repo_arn=arn:aws:ecr:$AWS_REGION:$account:repository/$NAME-fargate
-  policy "$(logs_statement fargate)" \
+  logs=$(logs_statement fargate)
+  pull=$(jq -n --arg arn "arn:aws:ecr:$AWS_REGION:$account:repository/$NAME-fargate" \
+    '{Effect: "Allow", Resource: $arn, Action: ["ecr:BatchCheckLayerAvailability",
+      "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"]}')
+  policy "$logs" "$pull" \
     '{"Effect": "Allow", "Action": "ecr:GetAuthorizationToken", "Resource": "*"}' \
-    "$(jq -n --arg arn "$repo_arn" '{Effect: "Allow", Resource: $arn, Action: [
-        "ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"]}')" \
     > "$work/policy.json"
-  role_arn=$(create_role "$(role_name fargate)" ecs-tasks.amazonaws.com "$work/policy.json")
+  create_role "$(role_name fargate)" ecs-tasks.amazonaws.com "$work/policy.json"
   aws ecs create-cluster --cluster-name "$NAME" \
     --tags "key=$TAG_KEY,value=$TAG_VALUE" > /dev/null
   vpc=$(aws ec2 describe-vpcs --filters Name=is-default,Values=true \
@@ -115,7 +129,7 @@ deploy_fargate() {
     > /dev/null
   # The task gets no task role, so its container holds no AWS credentials.
   jq -n --arg family "$NAME" --arg cpu "$FARGATE_CPU" --arg memory "$MEMORY_MB" \
-    --arg role "$role_arn" --arg image "$uri" --arg group "$(log_group fargate)" \
+    --arg role "$role_arn" --arg image "$image_uri" --arg group "$(log_group fargate)" \
     --arg region "$AWS_REGION" --arg key "$TAG_KEY" --arg value "$TAG_VALUE" '{
       family: $family, requiresCompatibilities: ["FARGATE"], networkMode: "awsvpc",
       cpu: $cpu, memory: $memory, executionRoleArn: $role,
@@ -130,7 +144,7 @@ deploy_fargate() {
 }
 
 deploy_microvm() {
-  local zip=$spike_dir/build/microvm-$commit.zip bucket key build_arn state
+  local zip=$spike_dir/build/microvm-$commit.zip bucket key logs get_zip build_role image state
   if [ ! -f "$zip" ]; then
     echo "no $zip: run package.sh microvm first" >&2
     exit 1
@@ -144,28 +158,30 @@ deploy_microvm() {
     --tagging "TagSet=[{Key=$TAG_KEY,Value=$TAG_VALUE}]"
   aws s3 cp --only-show-errors "$zip" "s3://$bucket/$key"
   create_log_group microvm
-  policy "$(logs_statement microvm)" \
-    "$(jq -n --arg arn "arn:aws:s3:::$bucket/$key" '{Effect: "Allow", Action: "s3:GetObject", Resource: $arn}')" \
-    > "$work/build-policy.json"
-  build_arn=$(create_role "$(role_name microvm-build)" lambda.amazonaws.com "$work/build-policy.json")
+  logs=$(logs_statement microvm)
+  get_zip=$(jq -n --arg arn "arn:aws:s3:::$bucket/$key" \
+    '{Effect: "Allow", Action: "s3:GetObject", Resource: $arn}')
+  policy "$logs" "$get_zip" > "$work/build-policy.json"
+  create_role "$(role_name microvm-build)" lambda.amazonaws.com "$work/build-policy.json" tag_session
+  build_role=$role_arn
   # The role each MicroVM runs with, which invoke.sh passes: logs only.
-  policy "$(logs_statement microvm)" > "$work/policy.json"
-  create_role "$(role_name microvm)" lambda.amazonaws.com "$work/policy.json" > /dev/null
+  policy "$logs" > "$work/policy.json"
+  create_role "$(role_name microvm)" lambda.amazonaws.com "$work/policy.json" tag_session
   settle_iam
   # Lambda snapshots the server once /ready answers, and a MicroVM takes
   # traffic once /run answers (microvms-images.html#microvms-images-build-hooks).
   # No egress connector: the trial reaches nothing outside its MicroVM.
-  aws lambda-microvms create-microvm-image --name "$NAME" \
+  image=$(aws lambda-microvms create-microvm-image --name "$NAME" \
     --code-artifact "uri=s3://$bucket/$key" --base-image-arn "$MICROVM_BASE_IMAGE" \
-    --build-role-arn "$build_arn" --cpu-configurations architecture=ARM_64 \
+    --build-role-arn "$build_role" --cpu-configurations architecture=ARM_64 \
     --resources "minimumMemoryInMiB=$MEMORY_MB" \
     --hooks '{"port": 8080, "microvmHooks": {"run": "ENABLED", "runTimeoutInSeconds": 30},
               "microvmImageHooks": {"ready": "ENABLED", "readyTimeoutInSeconds": 300}}' \
     --logging "{\"cloudWatch\": {\"logGroup\": \"$(log_group microvm)\"}}" \
-    --tags "$TAG_KEY=$TAG_VALUE" > /dev/null
+    --tags "$TAG_KEY=$TAG_VALUE" --query imageArn --output text)
   # No wait command exists for the build: poll it, for up to 30 minutes.
   for _ in $(seq 120); do
-    state=$(aws lambda-microvms get-microvm-image --image-identifier "$NAME" \
+    state=$(aws lambda-microvms get-microvm-image --image-identifier "$image" \
       --query state --output text)
     case $state in
       CREATED) return 0 ;;

@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 from base64 import b64encode
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ FAKE = Path(__file__).resolve().parent / "fake_cli.py"
 NAME = "aqa-spike-hosted-chromium"
 ACCOUNT = "123456789012"
 COMMIT = "0123456789ab"
+IMAGE_ARN = f"arn:aws:lambda:us-east-1:{ACCOUNT}:microvm-image:{NAME}"
 CANDIDATES = ["lambda", "fargate", "microvm"]
 
 Rule = dict[str, Any]
@@ -45,6 +47,7 @@ DEPLOYABLE = [
         outputs=[f"arn:aws:iam::{ACCOUNT}:role/aqa-spike/{NAME}-role"],
     ),
     rule("aws", "ec2", "describe-vpcs", outputs=["vpc-0fake"]),
+    rule("aws", "lambda-microvms", "create-microvm-image", outputs=[IMAGE_ARN]),
     rule(
         "aws",
         "lambda-microvms",
@@ -58,7 +61,7 @@ NO_BUDGET = [
         "aws",
         "budgets",
         "describe-budget",
-        exit=254,
+        exits=[254],
         stderr="An error occurred (NotFoundException) when calling the "
         "DescribeBudget operation: fake: no such budget\n",
     ),
@@ -107,7 +110,8 @@ def dry_run(tmp_path: Path) -> DryRun:
     # sleep too, so a poll or an IAM settle takes no time.
     for tool in ("aws", "docker", "curl", "sleep"):
         shim = tmp_path / "bin" / tool
-        shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE}" {tool} "$@"\n')
+        # -S: the fake needs only the standard library, and starts faster.
+        shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" -S "{FAKE}" {tool} "$@"\n')
         shim.chmod(0o755)
     return DryRun(tmp_path)
 
@@ -127,18 +131,27 @@ def changes(call: list[str]) -> bool:
     return tool == "aws" and len(args) > 1 and bool(CHANGES.match(args[1]))
 
 
-def test_the_budget_alarm_is_created_before_any_other_resource(
-    dry_run: DryRun,
-) -> None:
-    budget = dry_run.run("budget.sh", "spike@example.com", scenario=DEPLOYABLE)
-    for candidate in CANDIDATES:
-        deployed = dry_run.run("deploy.sh", candidate, scenario=DEPLOYABLE)
-        assert deployed.returncode == 0, deployed.stderr
+def test_budget_sh_creates_only_the_budget_alarm(dry_run: DryRun) -> None:
+    result = dry_run.run("budget.sh", "spike@example.com", scenario=DEPLOYABLE)
 
-    assert budget.returncode == 0, budget.stderr
-    changed = [call for call in dry_run.calls if changes(call)]
-    assert changed[0][:3] == ["aws", "budgets", "create-budget"], changed[:1]
-    assert len(changed) > 1, "the deploys changed nothing"
+    assert result.returncode == 0, result.stderr
+    changed = [call[:3] for call in dry_run.calls if changes(call)]
+    assert changed == [["aws", "budgets", "create-budget"]]
+
+
+# With the alarm there, each deploy looks for it before it changes anything.
+@pytest.mark.parametrize("candidate", CANDIDATES)
+def test_a_deploy_checks_the_budget_alarm_before_its_first_change(
+    dry_run: DryRun, candidate: str
+) -> None:
+    result = dry_run.run("deploy.sh", candidate, scenario=DEPLOYABLE)
+
+    assert result.returncode == 0, result.stderr
+    calls = dry_run.calls
+    first_change = next(i for i, call in enumerate(calls) if changes(call))
+    assert ["aws", "budgets", "describe-budget"] in [
+        c[:3] for c in calls[:first_change]
+    ]
 
 
 @pytest.mark.parametrize("script", ["deploy.sh", "invoke.sh"])
@@ -168,6 +181,7 @@ LAMBDA_REPORT = (
     "Memory Size: 2048 MB\tMax Memory Used: 420 MB\tInit Duration: 1500.10 ms"
 )
 FAKE_AUTH = "fake-microvm-auth-3f9a"
+LOG_STREAM = "2026/10/01/[$LATEST]0f1e2d3c"
 TASK = f"arn:aws:ecs:us-east-1:{ACCOUNT}:task/{NAME}/0f1e2d3c"
 TASK_RECORD = {
     "taskArn": TASK,
@@ -192,7 +206,7 @@ INVOKABLE = [
         "aws",
         "lambda",
         "invoke",
-        write_last_arg=json.dumps(TRIAL),
+        write_last_arg=json.dumps({"trial": TRIAL, "log_stream": LOG_STREAM}),
         outputs=[
             json.dumps(
                 {
@@ -219,13 +233,7 @@ INVOKABLE = [
             )
         ],
     ),
-    rule(
-        "aws",
-        "lambda-microvms",
-        "get-microvm-image",
-        "imageArn",
-        outputs=[f"arn:aws:lambda:us-east-1:{ACCOUNT}:microvm-image:{NAME}"],
-    ),
+    rule("aws", "lambda-microvms", "list-microvm-images", outputs=[IMAGE_ARN]),
     rule("aws", "iam", "get-role", outputs=[f"arn:aws:iam::{ACCOUNT}:role/x"]),
     rule(
         "aws",
@@ -240,7 +248,7 @@ INVOKABLE = [
 
 # The platform's own record of the run, as invoke.sh reports it.
 PLATFORM = {
-    "lambda": {"report": LAMBDA_REPORT},
+    "lambda": {"report": LAMBDA_REPORT, "log_stream": LOG_STREAM},
     "fargate": {"task": TASK_RECORD, "reported_at": 1790000031.5},
     "microvm": {"microvm": MICROVM_RECORD},
 }
@@ -294,7 +302,7 @@ def test_a_microvm_is_terminated_after_its_trial(dry_run: DryRun) -> None:
 
 
 def test_a_microvm_that_never_answers_is_still_terminated(dry_run: DryRun) -> None:
-    silent = [rule("curl", exit=22, stderr="curl: (22) 502\n"), *INVOKABLE]
+    silent = [rule("curl", exits=[22], stderr="curl: (22) 502\n"), *INVOKABLE]
 
     result = dry_run.run("invoke.sh", "microvm", "cold", scenario=silent)
 
@@ -330,7 +338,7 @@ def option(args: list[str], name: str) -> str:
 # Each kind of resource the scripts create, and the calls that must delete it:
 # the words each deleting call must hold. A create that isn't listed here or
 # in PART_OF fails the teardown test until someone decides what deletes it.
-DELETED_BY: dict[tuple[str, str], Any] = {
+DELETED_BY: dict[tuple[str, str], Callable[[list[str]], list[list[str]]]] = {
     ("budgets", "create-budget"): lambda _: [["budgets", "delete-budget", NAME]],
     ("ecr", "create-repository"): lambda a: [
         ["ecr", "delete-repository", option(a, "--repository-name"), "--force"]
@@ -365,8 +373,8 @@ DELETED_BY: dict[tuple[str, str], Any] = {
     ("s3api", "create-bucket"): lambda a: [
         ["s3", "rb", f"s3://{option(a, '--bucket')}", "--force"]
     ],
-    ("lambda-microvms", "create-microvm-image"): lambda a: [
-        ["lambda-microvms", "delete-microvm-image", option(a, "--name")]
+    ("lambda-microvms", "create-microvm-image"): lambda _: [
+        ["lambda-microvms", "delete-microvm-image", IMAGE_ARN]
     ],
     ("lambda-microvms", "run-microvm"): lambda _: [
         ["lambda-microvms", "terminate-microvm", "mvm-fake-1"]
@@ -398,7 +406,7 @@ ROLES = [f"{NAME}-{role}" for role in ("lambda", "fargate", "microvm-build", "mi
 DEPLOYED = [
     rule("aws", "sts", "get-caller-identity", outputs=[ACCOUNT]),
     rule("aws", "lambda-microvms", "list-microvms", outputs=["mvm-fake-1", ""]),
-    rule("aws", "lambda-microvms", "list-microvm-images", outputs=[NAME, ""]),
+    rule("aws", "lambda-microvms", "list-microvm-images", outputs=[IMAGE_ARN, ""]),
     rule("aws", "lambda", "list-functions", outputs=[NAME, ""]),
     rule("aws", "ecs", "describe-clusters", outputs=[NAME, ""]),
     rule("aws", "ecs", "list-tasks", outputs=[""]),
@@ -463,24 +471,30 @@ def test_the_teardown_deletes_everything_the_scripts_create(dry_run: DryRun) -> 
     assert missing == [], "nothing deletes these"
 
 
-@pytest.mark.parametrize(
-    "remaining",
-    ["list-functions", "describe-repositories", "list-roles", "describe-budgets"],
-)
-def test_the_teardown_fails_while_a_resource_remains(
-    dry_run: DryRun, remaining: str
-) -> None:
-    # The resource shows up in the listing after its delete as well.
-    stuck = [
-        {**r, "outputs": [r["outputs"][0]]} if remaining in r["words"] else r
-        for r in DEPLOYED
-    ]
+def test_the_teardown_fails_while_anything_remains(dry_run: DryRun) -> None:
+    # Every resource still shows up in its listing after its delete.
+    stuck = [{**r, "outputs": [r["outputs"][0]]} for r in DEPLOYED]
 
     result = dry_run.run("teardown.sh", scenario=stuck)
 
     assert result.returncode == 1
     assert "still there" in result.stderr
-    assert NAME in result.stderr
+    # The check names every kind of resource the scripts create.
+    kinds = [
+        "microvms",
+        "microvm_images",
+        "functions",
+        "clusters",
+        "task_definitions ACTIVE",
+        "task_definitions INACTIVE",
+        "security_groups",
+        "repositories",
+        "buckets",
+        "log_groups",
+        "roles",
+        "budgets",
+    ]
+    assert [kind for kind in kinds if f"  {kind}: " not in result.stderr] == []
 
 
 def test_collect_asks_cost_explorer_for_the_usage_by_type(dry_run: DryRun) -> None:
@@ -501,3 +515,138 @@ def test_collect_needs_two_days(dry_run: DryRun, days: list[str]) -> None:
 
     assert result.returncode == 2
     assert dry_run.calls == []
+
+
+# Failures stop a script where they happen. set -e doesn't reach a command
+# inside `$(…)` or `for … in $(…)`, so the scripts never run one there.
+
+
+def test_a_teardown_stops_when_a_listing_fails(dry_run: DryRun) -> None:
+    expired = rule(
+        "aws", "lambda", "list-functions", exits=[255], stderr="ExpiredTokenException\n"
+    )
+
+    result = dry_run.run("teardown.sh", scenario=[expired, *DEPLOYED])
+
+    assert result.returncode != 0
+    assert "teardown complete" not in result.stdout
+    assert ["aws", "budgets", "delete-budget"] not in [c[:3] for c in dry_run.calls]
+
+
+@pytest.mark.parametrize(
+    ("candidate", "failing"),
+    [
+        ("lambda", ["ecr", "create-repository"]),
+        ("fargate", ["iam", "create-role"]),
+        ("microvm", ["iam", "put-role-policy"]),
+    ],
+)
+def test_a_deploy_stops_at_the_first_change_that_fails(
+    dry_run: DryRun, candidate: str, failing: list[str]
+) -> None:
+    fails = rule("aws", *failing, exits=[254], stderr="fake: AccessDenied\n")
+
+    result = dry_run.run("deploy.sh", candidate, scenario=[fails, *DEPLOYABLE])
+
+    assert result.returncode != 0
+    calls = [call[1:3] for call in dry_run.calls]
+    assert [c for c in dry_run.calls[calls.index(failing) + 1 :] if changes(c)] == []
+
+
+@pytest.mark.parametrize("candidate", CANDIDATES)
+def test_a_deploy_refuses_a_candidate_already_deployed(
+    dry_run: DryRun, candidate: str
+) -> None:
+    there = rule(
+        "aws",
+        "logs",
+        "describe-log-groups",
+        outputs=[f"/aqa-spike/hosted-chromium/{candidate}"],
+    )
+
+    result = dry_run.run("deploy.sh", candidate, scenario=[there, *DEPLOYABLE])
+
+    assert result.returncode == 1
+    assert "already deployed: run teardown.sh first" in result.stderr
+    assert [call for call in dry_run.calls if changes(call)] == []
+
+
+ENDPOINT = "https://mvm-fake-1.microvms.example"
+
+
+def test_a_microvm_runs_one_trial_once_its_server_answers(dry_run: DryRun) -> None:
+    # Lambda answers 502 until the MicroVM's /run hook has returned.
+    health = rule("curl", f"{ENDPOINT}/health", exits=[22, 22, 0])
+
+    result = dry_run.run("invoke.sh", "microvm", "cold", scenario=[health, *INVOKABLE])
+
+    assert result.returncode == 0, result.stderr
+    urls = [call[-1] for call in dry_run.calls if call[0] == "curl"]
+    assert urls == [f"{ENDPOINT}/health"] * 3 + [f"{ENDPOINT}/trial"]
+
+
+def test_a_microvm_trial_that_fails_is_not_run_again(dry_run: DryRun) -> None:
+    timeout = rule("curl", f"{ENDPOINT}/trial", exits=[28], stderr="curl: (28)\n")
+
+    result = dry_run.run("invoke.sh", "microvm", "cold", scenario=[timeout, *INVOKABLE])
+
+    assert result.returncode != 0
+    urls = [call[-1] for call in dry_run.calls if call[0] == "curl"]
+    assert urls.count(f"{ENDPOINT}/trial") == 1
+    terminated = [c for c in dry_run.calls if "terminate-microvm" in c]
+    assert [call[-1] for call in terminated] == ["mvm-fake-1"]
+
+
+def test_a_failed_token_request_stops_the_invoke(dry_run: DryRun) -> None:
+    denied = rule(
+        "aws",
+        "lambda-microvms",
+        "create-microvm-auth-token",
+        exits=[254],
+        stderr="fake\n",
+    )
+
+    result = dry_run.run("invoke.sh", "microvm", "cold", scenario=[denied, *INVOKABLE])
+
+    assert result.returncode != 0
+    assert [call for call in dry_run.calls if call[0] == "curl"] == []
+    assert any("terminate-microvm" in call for call in dry_run.calls)
+
+
+def test_a_fargate_task_is_stopped_when_its_wait_fails(dry_run: DryRun) -> None:
+    # `ecs wait tasks-stopped` gives up after 100 checks, about ten minutes.
+    gave_up = rule("aws", "ecs", "wait", exits=[255], stderr="Max attempts exceeded\n")
+
+    result = dry_run.run("invoke.sh", "fargate", "cold", scenario=[gave_up, *INVOKABLE])
+
+    assert result.returncode != 0
+    stopped = [c for c in dry_run.calls if c[1:3] == ["ecs", "stop-task"]]
+    assert len(stopped) == 1
+    assert TASK in stopped[0]
+
+
+def test_the_teardown_fails_when_a_task_definition_is_not_deleted(
+    dry_run: DryRun,
+) -> None:
+    refused = rule("aws", "ecs", "delete-task-definitions", outputs=[f"{NAME}:1"])
+
+    result = dry_run.run("teardown.sh", scenario=[refused, *DEPLOYED])
+
+    assert result.returncode != 0
+    assert f"{NAME}:1" in result.stderr
+
+
+def test_the_teardown_waits_for_deletions_to_finish(dry_run: DryRun) -> None:
+    # A MicroVM image is DELETING for a while after its delete, and IAM's
+    # listings lag: both show up in a listing or two after the delete.
+    slow = [
+        {**r, "outputs": [r["outputs"][0]] * 3 + [""]}
+        if {"list-microvm-images", "list-roles"} & set(r["words"])
+        else r
+        for r in DEPLOYED
+    ]
+
+    result = dry_run.run("teardown.sh", scenario=slow)
+
+    assert result.returncode == 0, result.stderr
+    assert "teardown complete" in result.stdout
