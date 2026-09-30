@@ -71,7 +71,8 @@ Known gaps, stated rather than hidden
   1-3; rules 4-6 have no backstop for a write through an opaque script. A
   test file deleted by ``find -delete``, a glob or a script goes unseen, as
   does quoted text in a command that commits. A mutating command that names a
-  test path asks, even a formatter run or test output sent to ``tee``.
+  test path asks, even a formatter run or test output sent to ``tee``, and a
+  shell write is judged as source (write a test fake's stub with Write).
 * This is a guardrail, not a security boundary. Other agents (Codex, Cursor)
   do not run Claude Code hooks, and CI runs only ``--scan``, which sees file
   contents but not deleted tests, dropped assertions or changed gate configs.
@@ -356,10 +357,10 @@ SECTION_HEADER = re.compile(r"^\[\[?\s*([A-Za-z_][\w.:\s\"-]*?)\s*\]\]?\s*(?:#.*
 # [tool.uv] holds the litellm ban, which a [tool.uv.sources] entry can override;
 # a workspace member's entry can't, so it doesn't gate.
 GATE_SECTION = re.compile(
-    r"^(?:tool\.(?:ruff|mypy|pytest|coverage|pyright|basedpyright)\b|tool\.uv(?:\.sources)?$"
+    r"^(?:tool\.(?:ruff|mypy|pytest|coverage|pyright|basedpyright)\b|tool\.uv(?:$|\.sources\b)"
     r"|mypy\b|tool:pytest\b|pytest\b|coverage:|flake8\b)"
 )
-WORKSPACE_MEMBER = re.compile(r"^\s*[\w.-]+\s*=\s*\{\s*workspace\s*=\s*true\s*\}\s*$")
+WORKSPACE_MEMBER = re.compile(r"^\s*[\w-]+\s*=\s*\{\s*workspace\s*=\s*true\s*\}\s*$")
 PACKAGE_GATE_SCRIPT = re.compile(
     r'^\s*"(?:lint|typecheck|type-check|tsc|test|check|coverage|ci|verify|format:check)'
     r'(?::[\w:.-]+)?"\s*:'
@@ -394,6 +395,8 @@ SHELL_WRITE = re.compile(
     """,
     re.VERBOSE,
 )
+# git's global options, which may stand between `git` and its subcommand.
+GIT_OPTIONS = r"(?:\s+(?:-[Cc]|--(?:git-dir|work-tree|namespace))\s+\S+|\s+-(?!(?:[Cc]|-(?:git-dir|work-tree|namespace))\s)[\w-]+(?:=\S+)?)*"
 FILE_MUTATOR = re.compile(
     r"\b(?:cp|mv|rm|rmdir|install|rsync|ln|truncate|chmod|unlink)\s"
     r"|\bruff\s+(?:format|check\b[^|;&\n]*--fix)"
@@ -401,7 +404,7 @@ FILE_MUTATOR = re.compile(
     r"|\beslint\b[^|;&\n]*--fix"
     r"|\bcurl\b[^|;&\n]*\s(?:-[a-zA-Z]*[oO]\b|--output\b|--remote-name\b)"
     r"|\bwget\b"
-    r"|\bgit(?:\s+-[Cc]\s+\S+|\s+--[\w-]+(?:=\S+)?)*\s+(?:checkout|restore|clean)\b"
+    r"|\bgit" + GIT_OPTIONS + r"\s+(?:checkout|restore|clean|apply)\b"
 )
 # Installers that rewrite .claude/settings.json and AGENTS.md without naming them.
 AGENT_CONFIG_INSTALLER = re.compile(
@@ -415,9 +418,9 @@ BROWSER_LAUNCH = re.compile(
 TEXT_BODY = re.compile(
     r"\bgit\s+commit\b|\bgh\s+(?:pr|issue|release)\s+(?:create|edit|comment)\b"
 )
-# A message quotes patterns and paths: blank its quoted strings and heredoc bodies.
+# A message quotes patterns and paths: blank it, but judge a heredoc's first line.
 MESSAGE = re.compile(
-    r"""'[^']*'|"(?:\\.|[^"\\])*"|<<-?\s*(['"]?)(\w+)\1\n.*?\n\s*\2\b""", re.DOTALL
+    r"""(?m)\\.|\$'(?:\\.|[^'\\])*'|'[^']*'|"(?:\\.|[^"\\])*"|<<-?[ \t]*(['"]?)(\w+)\1([^\n]*\n)(?:[^\n]*\n)*?[ \t]*\2[ \t]*$"""
 )
 ADD_NOQA = re.compile(r"\bruff\b[^;&|\n]*\s--add-noqa\b")
 PROTECTED_IN_SHELL = re.compile(r"\.claude/(?:hooks\b|settings(?:\.local)?\.json\b)")
@@ -738,16 +741,15 @@ def check_file_edit(
 def check_bash(command: str, project: Path) -> Verdict:
     verdict = Verdict(target="", secrets=find_secrets(command))
     if TEXT_BODY.search(command):
-        command = MESSAGE.sub("''", command)
+        command = MESSAGE.sub(lambda m: m[3] or "''", command)
     if ADD_NOQA.search(command):
         verdict.findings.append(("`ruff --add-noqa`", SUPPRESSION, ""))
     writes = SHELL_WRITE.search(command) is not None
     mutates = writes or FILE_MUTATOR.search(command) is not None
     launches = BROWSER_LAUNCH.search(command) is not None
-    tests = TEST_PATH_IN_SHELL.search(command) is not None
     verdict.findings.extend(
         finding
-        for finding in added_findings("", command, project, tests=tests)
+        for finding in added_findings("", command, project, tests=False)
         if writes or (launches and finding[1] == SANDBOX)
     )
     if mutates and PROTECTED_IN_SHELL.search(command):
@@ -765,7 +767,7 @@ def check_bash(command: str, project: Path) -> Verdict:
             "this shell command may modify a quality-gate config, which the "
             "per-edit diff check cannot see through a shell write."
         )
-    if mutates and tests:
+    if mutates and TEST_PATH_IN_SHELL.search(command):
         verdict.asks.append(
             "this shell command may delete, move or rewrite a test file, which the "
             "per-edit assertion check cannot see."

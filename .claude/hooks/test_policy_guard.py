@@ -363,11 +363,21 @@ class StubTests(GuardTestCase):
                 self.assert_blocked(result)
                 self.assertIn("no unimplemented stubs", result.stderr)
 
-    def test_shell_writes_of_stubs_are_judged_by_their_target(self) -> None:
+    def test_shell_writes_of_stubs_are_blocked(self) -> None:
+        # A shell write is judged as source: a test fake that needs a stub goes
+        # through Write, which knows its target.
         stub = "<<'EOF'\ndef f() -> int:\n    raise NotImplementedError\nEOF"
-        self.assert_blocked(self.bash(f"cat > packages/core/a.py {stub}"))
-        # A fake in a test may raise it; the command still asks, as it writes a test.
-        self.assert_asks(self.bash(f"cat > tests/test_fake.py {stub}"))
+        commands = [
+            f"cat > packages/core/a.py {stub}",
+            f"cat > tests/test_fake.py {stub}",
+            (
+                "sed -i '' 's/return 1/raise NotImplementedError/' packages/core/a.py"
+                " && uv run pytest tests/ -q"
+            ),
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+                self.assert_blocked(self.bash(command))
 
     def test_stubs_in_tests_or_citing_an_adr_pass(self) -> None:
         self.assert_allowed(
@@ -477,6 +487,17 @@ class GateConfigTests(GuardTestCase):
             self.edit("pyproject.toml", member, f"{member}\n{source}")
         )
         self.assertIn(f"+{source}", reason)
+
+    def test_uv_sources_sub_tables_ask(self) -> None:
+        self.put("pyproject.toml", PYPROJECT_UV)
+        table = (
+            '\n[tool.uv.sources.litellm]\ngit = "https://github.com/BerriAI/litellm"\n'
+        )
+        self.assert_asks(
+            self.edit(
+                "pyproject.toml", "[tool.uv.sources]\n", table + "[tool.uv.sources]\n"
+            )
+        )
 
     def test_uv_workspace_tables_pass(self) -> None:
         self.put("pyproject.toml", PYPROJECT_UV)
@@ -642,6 +663,21 @@ class TestFileShellTests(GuardTestCase):
             "rm apps/web/test/setup.ts",
             "git rm tests/test_a.py && git commit -m 'drop obsolete test'",
             "sed -i '' '/assert/d' tests/test_a.py && git commit -am 'simplify'",
+            "git --work-tree /work/aqa checkout main -- tests/test_a.py",
+            "git -P restore --source=main tests/test_a.py",
+            "git -C /work/aqa apply --include=tests/test_a.py fix.diff",
+            # A commit message mustn't hide the commands around it.
+            (
+                "git commit -F - <<'EOF' && git push\nfix: don't skip\nEOF\n"
+                "rm tests/test_a.py && echo 'done'"
+            ),
+            (
+                "git commit --allow-empty -F - <<'EOF'\nEOF\nrm tests/test_a.py\n"
+                "cat <<'EOF'\nx\nEOF"
+            ),
+            "git commit -m wip && echo it\\'s && rm tests/test_a.py && echo 'ok'",
+            "git commit -F - <<'EOF' && rm tests/test_a.py\nfix: tidy\nEOF",
+            "git commit -m wip && echo $'it\\'s' && rm tests/test_a.py && echo 'ok'",
         ]
         for command in commands:
             with self.subTest(command=command):
