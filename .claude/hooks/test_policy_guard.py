@@ -427,6 +427,7 @@ class GateConfigTests(GuardTestCase):
 
     def test_shell_writes_to_gate_configs_ask(self) -> None:
         self.assert_asks(self.bash("sed -i '' 's/90/50/' pyproject.toml"))
+        self.assert_asks(self.bash("git restore --source=main pyproject.toml"))
         self.assert_allowed(self.bash("cat pyproject.toml"))
         self.assert_allowed(self.bash("git commit -m 'bump package.json'"))
 
@@ -435,6 +436,7 @@ class GateConfigTests(GuardTestCase):
         reason = self.ask_reason(self.edit("CONSTRAINTS.md", "| ≥ 94% |", "| ≥ 90% |"))
         self.assertIn("+| Coverage, overall | ≥ 90% |", reason)
         self.assert_asks(self.bash("sed -i '' 's/94/90/' CONSTRAINTS.md"))
+        self.assert_asks(self.bash("git checkout main -- CONSTRAINTS.md"))
         self.assert_allowed(self.bash("cat CONSTRAINTS.md"))
 
     def test_uv_table_changes_ask(self) -> None:
@@ -563,6 +565,30 @@ class ShellTests(GuardTestCase):
                 self.assert_blocked(self.bash(command))
 
 
+class SwallowedExceptionTests(GuardTestCase):
+    def test_suppressing_every_exception_is_blocked(self) -> None:
+        cases = {
+            "packages/core/a.py": "    with contextlib.suppress(Exception):",
+            "bench/harness/b.py": "    with suppress(BaseException):",
+            "tests/test_c.py": "    with suppress(KeyError, Exception):",
+        }
+        for rel, line in cases.items():
+            with self.subTest(rel=rel):
+                result = self.edit(rel, "", line)
+                self.assert_blocked(result)
+                self.assertIn("CONSTRAINTS.md", result.stderr)
+
+    def test_narrow_or_excused_suppress_passes(self) -> None:
+        lines = [
+            "    with contextlib.suppress(FileNotFoundError):",
+            "    with suppress(KeyError, ExceptionGroup):",
+            "    with suppress(Exception):  # plugin hooks may raise anything, ADR-0008",
+        ]
+        for line in lines:
+            with self.subTest(line=line):
+                self.assert_allowed(self.edit("packages/core/a.py", "", line))
+
+
 class TestFileShellTests(GuardTestCase):
     def test_deleting_moving_or_rewriting_tests_asks(self) -> None:
         commands = [
@@ -573,6 +599,9 @@ class TestFileShellTests(GuardTestCase):
             "sed -i '' '/assert/d' tests/test_a.py",
             ": > tests/test_a.py",
             "rm apps/dashboard/src/runs.test.ts",
+            "git checkout main -- tests/test_a.py",
+            "git restore --source=main packages/cli/tests",
+            "git clean -fd tests/",
         ]
         for command in commands:
             with self.subTest(command=command):
@@ -588,6 +617,8 @@ class TestFileShellTests(GuardTestCase):
             "python3 -m unittest discover -s .claude/hooks",
             "rm -rf .pytest_cache htmlcov",
             "rm packages/core/src/aqa_core/pytest_plugin.py",
+            "git checkout -b m1/60-tests-in-ci",
+            "git restore --staged README.md",
         ]
         for command in commands:
             with self.subTest(command=command):

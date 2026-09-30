@@ -18,9 +18,10 @@ Refused
    ``@ts-expect-error``, ``@ts-nocheck``, ``eslint-disable*``, ``fallow-ignore*``,
    ``@expected-unused``), coverage pragmas,
    skipped / focused / rerun-until-green tests, tautological assertions
-   (``assert True``, ``expect(true).toBe(true)``), and ``ruff --add-noqa``;
-   and, outside tests, unimplemented stubs (``raise NotImplementedError``,
-   ``throw new Error("Not implemented")``), CONSTRAINTS.md's floor.
+   (``assert True``, ``expect(true).toBe(true)``) and ``ruff --add-noqa``.
+   CONSTRAINTS.md's floor adds ``suppress(Exception)`` and, outside tests,
+   unimplemented stubs (``raise NotImplementedError``,
+   ``throw new Error("Not implemented")``).
 2. Disabling the Chromium sandbox (AGENTS.md §6).
 3. Secrets (AGENTS.md §5 rule 9): literal secrets in shell commands (known
    formats, secret-named variables and flags, auth headers, remote database
@@ -127,6 +128,7 @@ SUPPRESSION = "suppression"
 SKIPPED_TEST = "skipped test"
 WEAK_ASSERTION = "weak assertion"
 STUB = "stub"
+SWALLOWED = "swallowed exception"
 SANDBOX = "sandbox"
 
 GUIDANCE = {
@@ -145,6 +147,10 @@ GUIDANCE = {
     STUB: (
         "CONSTRAINTS.md floor: no unimplemented stubs. Implement it, or leave it "
         "out until a ticket needs it; abstract and Protocol methods use `...`."
+    ),
+    SWALLOWED: (
+        "CONSTRAINTS.md floor: no swallowed exceptions. Suppress only the "
+        "narrowest exception type, and say why in a comment."
     ),
     SANDBOX: (
         "AGENTS.md §6: Chromium launches with its sandbox enabled "
@@ -233,6 +239,11 @@ CONTENT_RULES = (
         r"\braise\s+NotImplementedError\b"
         r"|(?i:\bthrow\s+new\s+Error\(\s*[\"'`][^\"'`]*\bnot\s+implemented)",
         scope="source",
+    ),
+    _rule(
+        "`suppress(Exception)`",
+        SWALLOWED,
+        r"\bsuppress\(\s*(?:[\w.]+\s*,\s*)*(?:Base)?Exception\b",
     ),
     _rule("`--no-sandbox`", SANDBOX, r"--no-sandbox\b"),
     _rule("`--disable-*sandbox`", SANDBOX, r"--disable-[\w-]*sandbox\b"),
@@ -383,6 +394,7 @@ FILE_MUTATOR = re.compile(
     r"|\beslint\b[^|;&\n]*--fix"
     r"|\bcurl\b[^|;&\n]*\s(?:-[a-zA-Z]*[oO]\b|--output\b|--remote-name\b)"
     r"|\bwget\b"
+    r"|\bgit\s+(?:checkout|restore|clean)\b"
 )
 # Installers that rewrite .claude/settings.json and AGENTS.md without naming them.
 AGENT_CONFIG_INSTALLER = re.compile(
