@@ -488,6 +488,42 @@ WAIVERS = REPO / "osv-scanner.toml"
 TODAY = date(2026, 9, 29)
 
 
+WAIVER_KEYS = {"id", "reason", "ignoreUntil"}
+
+
+def audit_exceptions(exceptions: str) -> set[str]:
+    """The IDs of the Exceptions rows whose rule is the dependency audit."""
+    rows = [line.strip("| ").split("|") for line in exceptions.splitlines()]
+    return {
+        cells[0].strip()
+        for cells in rows
+        if len(cells) > 1 and cells[1].strip() == "Dependency audit"
+    }
+
+
+def entry_problems(
+    entry: dict[str, Any], waived: set[str], today: date, latest: date
+) -> list[str]:
+    """How one [[IgnoredVulns]] entry falls short of the waiver rule."""
+    vuln = str(entry.get("id", ""))
+    until = entry.get("ignoreUntil")
+    if isinstance(until, datetime):
+        until = until.astimezone(UTC).date() if until.tzinfo else until.date()
+    problems = []
+    # osv-scanner's TOML decoder matches keys case-insensitively, so an extra
+    # `ID` or `IgnoreUntil` could override what this check reads.
+    if extra := sorted(set(entry) - WAIVER_KEYS):
+        problems.append(f"{vuln} has keys other than {sorted(WAIVER_KEYS)}: {extra}")
+    if not vuln or not str(entry.get("reason", "")).strip():
+        problems.append(f"{vuln or 'an entry'} needs an id and a reason")
+    # A zero date means "never expires" to osv-scanner, so there's a floor too.
+    if not isinstance(until, date) or not today <= until <= latest:
+        problems.append(f"{vuln} needs an ignoreUntil from {today} to {latest}")
+    if vuln not in waived:
+        problems.append(f"{vuln} needs a row in CONSTRAINTS.md's Exceptions")
+    return problems
+
+
 def waiver_problems(config: dict[str, Any], exceptions: str, today: date) -> list[str]:
     """How an osv-scanner.toml falls short of CONSTRAINTS.md's waiver rule.
 
@@ -503,21 +539,19 @@ def waiver_problems(config: dict[str, Any], exceptions: str, today: date) -> lis
         for key in config
         if key != "IgnoredVulns"
     ]
-    for entry in config.get("IgnoredVulns", []):
-        vuln = str(entry.get("id", ""))
-        until = entry.get("ignoreUntil")
-        if isinstance(until, datetime):
-            until = until.date()
-        if not vuln or not str(entry.get("reason", "")).strip():
-            problems.append(f"{vuln or 'an entry'} needs an id and a reason")
-        if not isinstance(until, date) or until > latest:
-            problems.append(f"{vuln} needs an ignoreUntil no later than {latest}")
-        if not vuln or vuln not in exceptions:
-            problems.append(f"{vuln} needs a row in CONSTRAINTS.md's Exceptions")
+    entries = config.get("IgnoredVulns", [])
+    if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
+        return [*problems, "IgnoredVulns must be [[IgnoredVulns]] tables"]
+    waived = audit_exceptions(exceptions)
+    for entry in entries:
+        problems += entry_problems(entry, waived, today, latest)
     return problems
 
 
-EXCEPTIONS = "| GHSA-fake-0000-0000 | Dependency audit | uv.lock | fake | maintainer | 2026-10-29 |"
+EXCEPTIONS = (
+    "| GHSA-fake-0000-0000 | Dependency audit | uv.lock | fake | maintainer | 2026-10-29 |\n"
+    "| GHSA-fake-3333-3333 | Coverage, overall | packages | fake | maintainer | 2026-10-29 |\n"
+)
 
 
 def ignored(**changes: object) -> dict[str, Any]:
@@ -547,9 +581,23 @@ def test_a_waiver_within_the_rule_passes() -> None:
         ),
         (ignored(ignoreUntil=None), "needs an ignoreUntil"),
         (ignored(ignoreUntil=TODAY + timedelta(days=91)), "needs an ignoreUntil"),
+        # osv-scanner reads a zero date as "never expires".
+        (ignored(ignoreUntil=date(1, 1, 1)), "needs an ignoreUntil"),
+        (ignored(ignoreUntil=TODAY - timedelta(days=1)), "needs an ignoreUntil"),
+        # osv-scanner's TOML decoder also fills `id` from `ID`, picking one at random.
+        (ignored(ID="GHSA-fake-9999-9999"), "keys other than"),
+        ({"IgnoredVulns": {"id": "GHSA-fake-0000-0000"}}, "[[IgnoredVulns]] tables"),
         (ignored(reason=" "), "needs an id and a reason"),
         (
             ignored(id="GHSA-fake-1111-1111"),
+            "needs a row in CONSTRAINTS.md's Exceptions",
+        ),
+        (
+            ignored(id="GHSA-fake-0000-000"),
+            "needs a row in CONSTRAINTS.md's Exceptions",
+        ),
+        (
+            ignored(id="GHSA-fake-3333-3333"),
             "needs a row in CONSTRAINTS.md's Exceptions",
         ),
     ],
@@ -557,8 +605,14 @@ def test_a_waiver_within_the_rule_passes() -> None:
         "blanket-override",
         "no-expiry",
         "expiry-too-late",
+        "zero-date",
+        "expired",
+        "case-variant-key",
+        "not-a-list",
         "no-reason",
         "no-exception-row",
+        "exception-row-for-a-longer-id",
+        "exception-row-for-another-rule",
     ],
 )
 def test_a_waiver_outside_the_rule_is_named(

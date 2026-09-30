@@ -468,6 +468,8 @@ class GateConfigTests(GuardTestCase):
         self.assert_asks(self.edit(rel, "uv sync --locked", "uv sync"))
         self.assert_asks(self.edit(rel, "on: push", "on: workflow_dispatch"))
         self.assert_allowed(self.edit(rel, "jobs:\n", "# The gates.\njobs:\n"))
+        # An anchor on the name could hold a command that a step runs.
+        self.assert_asks(self.edit(rel, "name: ci", "name: &gate uv run pytest"))
 
     def test_ci_scripts_ask(self) -> None:
         rel = ".github/scripts/audit-lockfile.sh"
