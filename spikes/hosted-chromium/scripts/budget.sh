@@ -16,6 +16,7 @@ if [[ ! $email =~ ^[^@[:space:]]+@[^@[:space:]]+$ ]]; then
   exit 2
 fi
 
+load_account
 jq -n --arg name "$NAME" --arg amount "$BUDGET_USD" \
   '{BudgetName: $name, BudgetType: "COST", TimeUnit: "MONTHLY",
     BudgetLimit: {Amount: $amount, Unit: "USD"}}' > "$work/budget.json"
@@ -26,7 +27,7 @@ jq -n --arg email "$email" \
      Subscribers: [{SubscriptionType: "EMAIL", Address: $email}]})' \
   > "$work/notifications.json"
 
-aws budgets create-budget --account-id "$(account_id)" \
+aws budgets create-budget --account-id "$account" \
   --budget "file://$work/budget.json" \
   --notifications-with-subscribers "file://$work/notifications.json" \
   --resource-tags "Key=$TAG_KEY,Value=$TAG_VALUE"

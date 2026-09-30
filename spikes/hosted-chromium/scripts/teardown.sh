@@ -3,7 +3,8 @@
 # amendment, 2026-09-30), then fails unless each of them is gone. It finds what
 # to delete by listing the fixed names in common.sh, so it touches only the
 # spike's own resources, and it works after a partial deploy too. The budget
-# alarm goes last. A failed listing or delete stops it where it fails.
+# alarm goes last, once everything else is gone. A failed listing or delete
+# stops it where it fails.
 #
 # AWS may create the ECS service-linked role (AWSServiceRoleForECS) with the
 # first cluster. It costs nothing, serves any later use of ECS, and stays.
@@ -11,15 +12,17 @@
 # Usage: spikes/hosted-chromium/scripts/teardown.sh
 source "$(dirname "$0")/common.sh"
 
-account=$(account_id)
-bucket=$(bucket_name)
+load_account
+repositories_list=$(jmespath_list "${REPOSITORIES[@]}")
+roles_list=$(jmespath_list "${ROLES[@]}")
+log_groups_list=$(jmespath_list "${LOG_GROUPS[@]}")
 
-# Each prints the spike's resources of one kind that exist now. A caller
-# assigns the output to a variable first, so a failed listing stops the
-# script instead of reading as "none".
+# Each prints the spike's resources of one kind that exist now, matching the
+# exact names in common.sh. A caller assigns the output to a variable first,
+# so a failed listing stops the script instead of reading as "none".
 microvms() {
   aws lambda-microvms list-microvms --output text --query \
-    "items[?state!='TERMINATED' && contains(imageArn, ':microvm-image:$NAME')].microvmId"
+    "items[?state!='TERMINATED' && ends_with(imageArn, ':microvm-image:$NAME')].microvmId"
 }
 microvm_images() {
   aws lambda-microvms list-microvm-images --output text \
@@ -34,8 +37,8 @@ clusters() {
     --query "clusters[?status=='ACTIVE'].clusterName"
 }
 task_definitions() {
-  aws ecs list-task-definitions --family-prefix "$NAME" --status "$1" \
-    --query taskDefinitionArns --output text
+  aws ecs list-task-definitions --family-prefix "$NAME" --status "$1" --output text \
+    --query "taskDefinitionArns[?contains(@, ':task-definition/$NAME:')]"
 }
 security_groups() {
   aws ec2 describe-security-groups --filters "Name=group-name,Values=$NAME" \
@@ -43,22 +46,30 @@ security_groups() {
 }
 repositories() {
   aws ecr describe-repositories --output text \
-    --query "repositories[?starts_with(repositoryName, '$NAME-')].repositoryName"
+    --query "repositories[?contains($repositories_list, repositoryName)].repositoryName"
 }
 buckets() {
   aws s3api list-buckets --query "Buckets[?Name=='$bucket'].Name" --output text
 }
 log_groups() {
-  aws logs describe-log-groups --log-group-name-prefix "$LOG_PREFIX/" \
-    --query 'logGroups[].logGroupName' --output text
+  aws logs describe-log-groups --log-group-name-prefix "$LOG_PREFIX/" --output text \
+    --query "logGroups[?contains($log_groups_list, logGroupName)].logGroupName"
 }
 roles() {
   aws iam list-roles --path-prefix "$IAM_PATH" --output text \
-    --query "Roles[?starts_with(RoleName, '$NAME-')].RoleName"
+    --query "Roles[?contains($roles_list, RoleName)].RoleName"
 }
+# DescribeBudgets answers NotFoundException for an account without budgets,
+# so this asks for the one budget by name, and only that answer means gone.
 budgets() {
-  aws budgets describe-budgets --account-id "$account" --output text \
-    --query "Budgets[?BudgetName=='$NAME'].BudgetName"
+  if aws budgets describe-budget --account-id "$account" --budget-name "$NAME" \
+    --query Budget.BudgetName --output text 2>"$work/budget.err"; then
+    return 0
+  fi
+  if ! grep -q NotFoundException "$work/budget.err"; then
+    cat "$work/budget.err" >&2
+    return 1
+  fi
 }
 
 found=$(microvms)
@@ -134,11 +145,6 @@ for role in $found; do
   done
   aws iam delete-role --role-name "$role"
 done
-found=$(budgets)
-for budget in $found; do
-  aws budgets delete-budget --account-id "$account" --budget-name "$budget"
-done
-
 # Adds to `left` what a listing still shows.
 still() {
   local listed
@@ -150,6 +156,7 @@ still() {
 
 # Some deletes finish later (a MicroVM image is DELETING, a MicroVM
 # TERMINATING), and IAM's listings lag, so the check gives them five minutes.
+# The budget alarm stays until nothing else is left.
 for attempt in $(seq 30); do
   left=""
   still microvms
@@ -163,14 +170,24 @@ for attempt in $(seq 30); do
   still buckets
   still log_groups
   still roles
-  still budgets
   if [ -z "$left" ]; then
-    echo "teardown complete: nothing of $NAME remains in $AWS_REGION"
-    exit 0
+    break
   fi
-  if [ "$attempt" != 30 ]; then
-    sleep 10
+  if [ "$attempt" = 30 ]; then
+    printf 'still there after the teardown, so the budget alarm stays:\n%s' "$left" >&2
+    exit 1
   fi
+  sleep 10
 done
-printf 'still there after the teardown:\n%s' "$left" >&2
-exit 1
+
+found=$(budgets)
+for budget in $found; do
+  aws budgets delete-budget --account-id "$account" --budget-name "$budget"
+done
+left=""
+still budgets
+if [ -n "$left" ]; then
+  printf 'still there after the teardown:\n%s' "$left" >&2
+  exit 1
+fi
+echo "teardown complete: nothing of $NAME remains in $AWS_REGION"
