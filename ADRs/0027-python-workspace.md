@@ -55,3 +55,7 @@ ADR-0028 settles the two consequences above that were left to #59:
 - Markdown stays in Ruff's `include`.
 
 mypy's `files` gain `tests`, and pytest's `testpaths` gain `.claude/hooks` and `tests`, so `uv run pytest --cov` measures the guard.
+
+## Amendment (2026-09-29): the type check is split in two
+
+ADR-0029 settles the import consequence above. `[tool.mypy]` now checks `packages` and `tests`, with only the three `src` folders on `mypy_path`, so package code that imports `manifest` or `policy_guard` fails with `import-not-found`. The scripts get their own run: `mypy --strict --no-explicit-package-bases .claude/hooks bench/harness`. CI now installs from the lockfile and runs `ruff format --check .`, so an unformatted Python block in a doc fails it. Pydantic's mypy plugin can be added when Pydantic is.

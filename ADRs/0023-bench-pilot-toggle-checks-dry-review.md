@@ -45,3 +45,7 @@ A review found two ways `toggle.py` could pass on bad evidence:
 - **Stale images.** `toggle.py` now builds the app's images from the working tree before its first switch (`docker compose build`, quick when nothing changed), so its evidence can't come from images of older code.
 
 Also, the `conduit-bug-004` check now reads the article count until it stops changing (`bench/harness/polling.py`). It used to wait for Playwright's "networkidle", which has already fired by the time of a client-side navigation.
+
+## Amendment (2026-09-29): Playwright comes from the lockfile in CI
+
+CI's `python` job installs the workspace from `uv.lock` (ADR-0029), which includes Playwright 1.63.0 for `toggle_checks.py`'s types; `guardrails` no longer pip-installs it. As before, no browsers are downloaded and the checks don't run in CI.

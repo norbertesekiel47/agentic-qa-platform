@@ -1,6 +1,6 @@
 # Testing — Agentic QA Platform
 
-Last updated: 2026-09-29 (M1 design decisions, ADR-0024–0026). Two different things are tested here: **the software is correct** (unit → E2E) and **the agent is good** (the benchmark). Both gate releases.
+Last updated: 2026-09-29 (M1 design decisions, ADR-0024–0026; CI gates, ADR-0029). Two different things are tested here: **the software is correct** (unit → E2E) and **the agent is good** (the benchmark). Both gate releases.
 
 ## 1. Test layers
 
@@ -26,7 +26,7 @@ Last updated: 2026-09-29 (M1 design decisions, ADR-0024–0026). Two different t
 | E2E system | CLI → API → runner → GitHub (sandbox org) on a demo app | Playwright + GitHub test org | Nightly + pre-release |
 | Benchmark | Agent quality on the dev split (§5) | `bench/` harness | Smoke every PR; full dev split nightly |
 | Load | Concurrent hosted runs, API p95, WebSocket fan-out | k6 / Locust against staging | Pre-release |
-| Security | Authz matrix, injection fixtures (explore-focused from M1: task hijack, decoy success, decoy binding after a failed confirmation, navigation and secret steering; heal-focused from M2), redaction, dependency audit | pytest, pip-audit, pnpm audit, Trivy | Every commit (audit weekly) |
+| Security | Authz matrix, injection fixtures (explore-focused from M1: task hijack, decoy success, decoy binding after a failed confirmation, navigation and secret steering; heal-focused from M2), redaction, dependency audit | pytest, osv-scanner (ADR-0029), Trivy | Every commit (audit weekly) |
 
 ## 2. Test-driven development scope
 
@@ -106,8 +106,20 @@ PR smoke: 8 dev-split cases (≈ 2 min, recorded cassettes). Nightly: full dev s
 
 ## 8. Quality gates (CI)
 
-A change is mergeable only when all pass:
-`ruff check` · `ruff format --check` · `mypy --strict` · `pytest --cov` (unit, integration, isolation, checkpointer, continuation, hygiene, egress/secrets, strict-mode) · `pnpm lint` · `pnpm typecheck` · `vitest` · Playwright component/page tests · benchmark smoke (dev split) · dependency audit.
+A change is mergeable only when every gate that runs passes. The jobs are in `.github/workflows/ci.yml` (ADR-0019, ADR-0029). Each job is a required check on `main`, and a gate with nothing to check yet is left out rather than faked.
+
+| Gate | CI job | Runs |
+|---|---|---|
+| `ruff check` · `ruff format --check` | `python` | Now |
+| `mypy --strict`, in two runs: the packages and `tests`, then the scripts in `bench/harness` and `.claude/hooks` | `python` | Now |
+| `pytest --cov`: every test in `packages/`, `bench/harness/`, `.claude/hooks/` and `tests/`, including CONSTRAINTS.md's threshold checks and the coverage floor | `python` | Now. §1's layers (unit, integration, isolation, checkpointer, continuation, hygiene, egress/secrets, strict-mode) join as their code lands |
+| Browser tests: the sandbox check and egress fixtures | Their own steps: Chromium, and the AppArmor sysctl (ADR-0026) | With #35, in M1 |
+| Dependency audit of `uv.lock` (osv-scanner) | `audit` | Now, and weekly |
+| Guard tests · policy scan | `guardrails` | Now |
+| Secret scan (gitleaks, full history) | `secrets` | Now |
+| `fallow audit` | `fallow` | Now, on pull requests. It checks TypeScript only, so it finds nothing until M7 |
+| `pnpm lint` · `pnpm typecheck` · `vitest` · Playwright component/page tests | — | M7, with the dashboard. Its lockfile joins the dependency audit then |
+| Benchmark smoke (dev split) | — | M2, once `aqa run` produces verdicts |
 
 The thresholds these gates hold, coverage included, are in [CONSTRAINTS.md](CONSTRAINTS.md).
 

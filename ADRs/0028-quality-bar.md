@@ -47,3 +47,7 @@
 - The `--diff` follow-up brings deleted tests, stripped assertions and config changes into CI.
 - policy_guard is near its 1000-line limit, so the `--diff` follow-up starts by moving its rule tables into a sibling module.
 - An upgrade of Ruff can add rules to its default set that this list doesn't pick up. Compare `ruff check --show-settings` before and after each upgrade (LAB_NOTES, 2026-09-29).
+
+## Amendment (2026-09-29): CI runs the bar
+
+ADR-0029 moves CI onto these commands. Its `python` job runs Ruff, mypy (now in two runs) and `uv run pytest --cov`, so every threshold here fails a pull request. policy_guard also asks before a change to `osv-scanner.toml`, where the dependency audit's waivers live.
