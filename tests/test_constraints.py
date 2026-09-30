@@ -8,6 +8,7 @@ config that drifts from CONSTRAINTS.md in either direction fails a test.
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -420,7 +421,12 @@ def osv_report(*scores: str) -> dict[str, Any]:
 def audit(
     tmp_path: Path, scanner_exit: int, report: dict[str, Any]
 ) -> subprocess.CompletedProcess[str]:
-    """The audit script, with a fake osv-scanner that writes `report` and exits."""
+    """The audit script, with a fake osv-scanner that writes `report` and exits.
+
+    Without jq the script can't judge anything, and a failure to run it would
+    pass every case that expects the audit to fail, so both are errors here.
+    """
+    assert shutil.which("jq"), "the dependency audit needs jq on PATH (ADR-0029)"
     (tmp_path / "report.json").write_text(json.dumps(report))
     scanner = tmp_path / "osv-scanner"
     scanner.write_text(
@@ -430,7 +436,10 @@ def audit(
         f"exit {scanner_exit}\n"
     )
     scanner.chmod(0o755)
-    return run([str(AUDIT), str(scanner), "uv.lock"])
+    result = run([str(AUDIT), str(scanner), "uv.lock"])
+    # 126 and 127 are the shell's "can't execute" and "command not found".
+    assert result.returncode not in {126, 127}, result.stderr
+    return result
 
 
 @pytest.mark.parametrize(
