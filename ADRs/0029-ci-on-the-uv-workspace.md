@@ -28,9 +28,9 @@
   - **Failing closed:** a scanner error fails the audit, and so does JSON the filter can't read, even on a clean exit, and so does an exit 1 with no rows.
   - **Why a script:** `tests/test_constraints.py` can run it against a fake scanner. The tests pin each rule above, and read the 7.0 from CONSTRAINTS.md.
   - **Waivers:** a reviewed advisory goes in `osv-scanner.toml` at the repository root, which osv-scanner reads next to `uv.lock`. osv-scanner itself also accepts waivers with no end date, and `[[PackageOverrides]]` that cover every package. So a test holds the file to CONSTRAINTS.md's rule:
-    - only `[[IgnoredVulns]]` entries;
-    - each has a reason and an `ignoreUntil` date, at most as far out as an Exception's expiry;
-    - each has a row in CONSTRAINTS.md's Exceptions table.
+    - only `[[IgnoredVulns]]` entries, each with just an `id`, a `reason` and an `ignoreUntil`. osv-scanner's TOML decoder matches keys case-insensitively, so an extra `ID` could override the checked one;
+    - an `ignoreUntil` from today to an Exception's longest expiry. osv-scanner reads a zero date as "never expires";
+    - a row in CONSTRAINTS.md's Exceptions table with the advisory's ID and `Dependency audit` as its rule.
   - **Why not the others:** option 2 would build on uv's preview JSON, which "may change without warning", and add a network lookup of our own. Option 3 would block on moderate and low advisories, a stricter bar than the one CONSTRAINTS.md sets.
 - **Jobs** (the approved plan's layout):
   - `guardrails` keeps the guard tests and the policy scan. The tests run on a bare interpreter, as Claude Code runs the guard, and they still report when `uv sync` fails.

@@ -367,8 +367,9 @@ PACKAGE_GATE_SCRIPT = re.compile(
     r'(?::[\w:.-]+)?"\s*:'
 )
 WORKFLOW = re.compile(r"(?:^|/)\.github/workflows/[^/]+\.ya?ml$")
-# Any workflow line can weaken a gate; only comments and the top-level name can't.
-WORKFLOW_FREE_LINE = re.compile(r"^\s*#|^name\s*:")
+# Any workflow line can weaken a gate; only comments and the top-level name
+# can't, unless the name holds a YAML anchor or alias a step could run.
+WORKFLOW_FREE_LINE = re.compile(r"^\s*#|^name\s*:[^&*]*$")
 
 # --- rule 5: assertions ---------------------------------------------------------------
 
