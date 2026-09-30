@@ -19,7 +19,7 @@ from playwright.async_api import Browser, BrowserType, Error, async_playwright
 # /proc facts recorded from Playwright 1.63's headless shell on Linux 6.12:
 # a sandboxed renderer lives in its own user, pid and net namespaces and adds
 # a seccomp filter of its own.
-BROWSER = LinuxProcess(
+LINUX_BROWSER = LinuxProcess(
     pid=19,
     namespaces={
         "user": "user:[4026531837]",
@@ -28,7 +28,7 @@ BROWSER = LinuxProcess(
     },
     seccomp_filters=0,
 )
-SANDBOXED_RENDERER = LinuxProcess(
+LINUX_RENDERER = LinuxProcess(
     pid=77,
     namespaces={
         "user": "user:[4026532823]",
@@ -40,18 +40,18 @@ SANDBOXED_RENDERER = LinuxProcess(
 
 
 def test_renderer_in_its_own_namespaces_with_its_own_seccomp_filter_passes() -> None:
-    assert compare_linux(BROWSER, [SANDBOXED_RENDERER]) == []
+    assert compare_linux(LINUX_BROWSER, [LINUX_RENDERER]) == []
 
 
 @pytest.mark.parametrize("namespace", ["user", "pid", "net"])
 def test_renderer_sharing_a_browser_namespace_fails(namespace: str) -> None:
-    shared = BROWSER.namespaces[namespace]
+    shared = LINUX_BROWSER.namespaces[namespace]
     renderer = replace(
-        SANDBOXED_RENDERER,
-        namespaces={**SANDBOXED_RENDERER.namespaces, namespace: shared},
+        LINUX_RENDERER,
+        namespaces={**LINUX_RENDERER.namespaces, namespace: shared},
     )
 
-    assert compare_linux(BROWSER, [renderer]) == [
+    assert compare_linux(LINUX_BROWSER, [renderer]) == [
         f"renderer 77 shares the browser's {namespace} namespace ({shared})"
     ]
 
@@ -67,8 +67,8 @@ def test_renderer_sharing_a_browser_namespace_fails(namespace: str) -> None:
 def test_renderer_without_a_seccomp_filter_of_its_own_fails(
     browser_filters: int, renderer_filters: int
 ) -> None:
-    browser = replace(BROWSER, seccomp_filters=browser_filters)
-    renderer = replace(SANDBOXED_RENDERER, seccomp_filters=renderer_filters)
+    browser = replace(LINUX_BROWSER, seccomp_filters=browser_filters)
+    renderer = replace(LINUX_RENDERER, seccomp_filters=renderer_filters)
 
     assert compare_linux(browser, [renderer]) == [
         (
@@ -79,12 +79,12 @@ def test_renderer_without_a_seccomp_filter_of_its_own_fails(
 
 
 def test_no_renderer_fails_on_linux() -> None:
-    assert compare_linux(BROWSER, []) == ["no renderer process to check"]
+    assert compare_linux(LINUX_BROWSER, []) == ["no renderer process to check"]
 
 
 def test_container_renderer_with_its_own_seccomp_filter_passes() -> None:
-    browser = replace(BROWSER, seccomp_filters=1)
-    renderer = replace(SANDBOXED_RENDERER, seccomp_filters=2)
+    browser = replace(LINUX_BROWSER, seccomp_filters=1)
+    renderer = replace(LINUX_RENDERER, seccomp_filters=2)
 
     assert compare_linux(browser, [renderer]) == []
 
@@ -154,6 +154,14 @@ def test_check_reports_failure_when_the_sandbox_is_off() -> None:
     assert all(problem.startswith("renderer ") for problem in problems), problems
 
 
+# The fix each OS's refusal names: the AppArmor sysctl on Linux, and on macOS
+# running outside any other sandbox.
+HOST_FIX_ON = {
+    "linux": "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
+    "darwin": "start the runner outside it",
+}
+
+
 class UnsandboxedChromium:
     """Real Chromium that ignores `launch`'s sandbox request: however the
     sandbox ends up off, `launch` must refuse the browser."""
@@ -186,6 +194,7 @@ def test_launch_refuses_a_browser_whose_sandbox_is_off() -> None:
     assert requested == [True], "launch didn't ask for the sandbox"
     assert error.exit_code >= 10  # an infrastructure error (API.md §7)
     assert "renderer " in str(error), str(error)
+    assert HOST_FIX_ON[sys.platform] in str(error), str(error)
     assert connected == [False], "launch left the refused browser running"
 
 

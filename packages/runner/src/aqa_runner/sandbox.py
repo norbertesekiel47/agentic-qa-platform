@@ -39,7 +39,7 @@ HOST_FIXES = {
         "outside it."
     ),
 }
-OTHER_FIX = "The sandbox check supports Linux and macOS: run the runner on one of them."
+OTHER_FIX = "Run the runner on Linux or macOS."
 
 
 @dataclass(frozen=True)
@@ -150,7 +150,7 @@ async def check_sandbox(browser: Browser) -> list[str]:
     try:
         await context.new_page()
         browser_pid, renderer_pids = await _process_ids(browser)
-        return _compare(browser_pid, renderer_pids)
+        return _check_processes(browser_pid, renderer_pids)
     finally:
         await context.close()
 
@@ -174,7 +174,7 @@ async def _process_ids(browser: Browser) -> tuple[int, list[int]]:
     return browser_pid, [pid for kind, pid in processes if kind == "renderer"]
 
 
-def _compare(browser_pid: int, renderer_pids: list[int]) -> list[str]:
+def _check_processes(browser_pid: int, renderer_pids: list[int]) -> list[str]:
     if sys.platform == "linux":
         return compare_linux(
             _read_linux(browser_pid), [_read_linux(pid) for pid in renderer_pids]
