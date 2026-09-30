@@ -50,6 +50,13 @@ Run every command from the repository root. You need uv, which installs the Pyth
 
 ```bash
 uv sync --locked                     # install the workspace from uv.lock, as CI does
+uv run playwright install --with-deps --only-shell chromium                     # the headless shell the browser tests launch
+# Chromium's sandbox can't start where AppArmor restricts unprivileged user namespaces
+# (Ubuntu 23.10 and later, CI's runners included), so the browser tests fail there. CI logs
+# the setting, then relaxes it (ADR-0026); on a machine you keep, prefer the AppArmor
+# profile that the failure's message links to.
+sysctl kernel.apparmor_restrict_unprivileged_userns                            # 1 means restricted
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0                  # allow them until the next reboot
 
 # The gates. A change is done when all pass (rule 1).
 # On a bare python3 of .python-version's version, as CI runs the guard:
