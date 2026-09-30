@@ -23,6 +23,7 @@ Versions are the latest stable releases as of **2026-09-27** (checked on PyPI/np
 | Logging | structlog | 26.1.0 | JSON logs with redaction processors |
 | JWT verification | PyJWT | 2.15.0 | Clerk JWKS + run tokens |
 | AWS SDK | boto3 | 1.43.x | KMS, SQS, S3, Lambda invoke |
+| Lambda runtime interface client | awslambdaric | 4.1.0 | Runs the M1 spike's trial in a Lambda function built on the spike's shared Amazon Linux 2023 image; Lambda's Python base image can't take Chromium's libraries (ADR-0008 amendment, 2026-09-30) |
 
 **Quality tooling:** Ruff 0.16.9, mypy 2.3.1 (strict), pytest 9.1.1, pytest-cov 7.1.0 with coverage 7.16.2, testcontainers 4.15.0, Hypothesis 6.168.2, VCR.py 8.3.0 (recorded LLM/HTTP fixtures), respx 0.23.1. CI installs uv 0.11.15 and runs osv-scanner 2.6.0, the dependency audit, as sha256-checked release binaries (ADR-0029).
 

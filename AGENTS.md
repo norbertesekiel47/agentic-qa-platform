@@ -38,11 +38,12 @@ packages/cli/        `aqa` CLI (Typer)
 packages/core/       Shared Pydantic models: spec, compiled script, verdicts
 infra/terraform/     AWS infrastructure
 bench/               Benchmark apps, planted bugs, manifests, harness, results
+spikes/              Spikes under our gates: hosted-chromium/, M1's hosted-compute trial (ADR-0008)
 tests/               Cross-package integration, isolation, fixtures (pages, injection)
 docs/runbooks/       Operational runbooks
 ```
 
-The three `packages/` exist: uv workspace members with `src` layouts, imported as `aqa_core`, `aqa_runner` and `aqa_cli`. `bench/harness` is a member too (ADR-0027).
+The three `packages/` exist: uv workspace members with `src` layouts, imported as `aqa_core`, `aqa_runner` and `aqa_cli`. `bench/harness` is a member too (ADR-0027), and so is `spikes/hosted-chromium` (`aqa_hosted_chromium_spike`).
 
 ## 4. Commands
 
@@ -78,7 +79,7 @@ uv run pytest tests/test_constraints.py                                        #
 uv run pytest tests/test_constraints.py::test_coverage_below_the_floor_fails   # one test
 ```
 
-The secret scan reads commits, not the working tree, and the other gates read the working tree, so commit everything first and run the gates before `git push`. The benchmark harness's commands are in [bench/README.md](bench/README.md). Gates that TESTING.md §8 marks for a later milestone join this block when they land: `tests/test_agents_commands.py` fails when a step or action in `.github/workflows/`, or a `uv run` command CONSTRAINTS.md names, has no line here.
+The secret scan reads commits, not the working tree, and the other gates read the working tree, so commit everything first and run the gates before `git push`. The benchmark harness's commands are in [bench/README.md](bench/README.md), and the hosted-compute spike's in [spikes/hosted-chromium/README.md](spikes/hosted-chromium/README.md). Gates that TESTING.md §8 marks for a later milestone join this block when they land: `tests/test_agents_commands.py` fails when a step or action in `.github/workflows/`, or a `uv run` command CONSTRAINTS.md names, has no line here.
 
 ## 5. Rules (non-negotiable)
 
