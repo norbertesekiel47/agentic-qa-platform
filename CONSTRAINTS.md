@@ -1,6 +1,6 @@
 # Constraints
 
-Last reviewed: 2026-09-29 (#59, #60).
+Last reviewed: 2026-09-30 (#37: `spikes/` joins the type check and the coverage scope).
 
 This file owns the project's quality bar: the floor every change keeps and the thresholds the gates hold. The floor applies to every file policy_guard checks. The thresholds cover the Python code; fallow gates TypeScript (ADR-0018) once the dashboard exists.
 - The tool configs in `pyproject.toml` mirror it, and `tests/test_constraints.py` fails when a config drifts from a number here.
