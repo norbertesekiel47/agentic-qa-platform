@@ -460,6 +460,22 @@ class GateConfigTests(GuardTestCase):
         )
         self.assert_allowed(self.edit(rel, "name: ci", "name: checks"))
 
+    def test_every_workflow_line_is_gate_config(self) -> None:
+        # A gate step needn't name a tool: dropping --locked or a trigger
+        # weakens the gates too (ADR-0029). Comments don't.
+        rel = ".github/workflows/ci.yml"
+        self.put(rel, WORKFLOW_YML + "      - run: uv sync --locked\n")
+        self.assert_asks(self.edit(rel, "uv sync --locked", "uv sync"))
+        self.assert_asks(self.edit(rel, "on: push", "on: workflow_dispatch"))
+        self.assert_allowed(self.edit(rel, "jobs:\n", "# The gates.\njobs:\n"))
+
+    def test_ci_scripts_ask(self) -> None:
+        rel = ".github/scripts/audit-lockfile.sh"
+        self.put(rel, "#!/usr/bin/env bash\njq -e 'all(.score < 7)' findings.json\n")
+        self.assert_asks(self.edit(rel, ".score < 7", ".score < 11"))
+        self.assert_asks(self.bash(f"sed -i '' 's/7/11/' {rel}"))
+        self.assert_allowed(self.bash(f"cat {rel}"))
+
     def test_shell_writes_to_gate_configs_ask(self) -> None:
         self.assert_asks(self.bash("sed -i '' 's/90/50/' pyproject.toml"))
         self.assert_asks(self.bash("git restore --source=main pyproject.toml"))

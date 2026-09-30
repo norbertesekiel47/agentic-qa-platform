@@ -33,10 +33,10 @@ Escalated to the user
 4. Any change to a quality-gate config: ruff / mypy / pytest / coverage /
    pyright settings, ``[tool.uv]`` and ``[tool.uv.sources]`` (the litellm ban),
    CONSTRAINTS.md, tsconfig, eslint, vitest and fallow configs, osv-scanner
-   waivers, pre-commit, gate scripts in package.json, gate steps in CI
-   workflows. Tightening prompts too: the bar moves only with a human in the
-   loop. Creating one of these files prompts once, which is how the initial bar
-   gets approved.
+   waivers, pre-commit, gate scripts in package.json, CI workflows (all but
+   comments and the top-level name) and CI scripts. Tightening prompts too: the
+   bar moves only with a human in the loop. Creating one of these files prompts
+   once, which is how the initial bar gets approved.
 5. A test-file edit that leaves fewer assertions or tests, and a shell
    command that may delete, move or rewrite a test file.
 6. Edits to this guard or the settings that load it (``.claude/hooks/``,
@@ -350,7 +350,7 @@ FILE_SECRET_GUIDANCE = (
 GATE_WHOLE_FILE = re.compile(
     r"(?:^|/)(?:\.?ruff\.toml|\.?mypy\.ini|pytest\.ini|\.coveragerc|pyrightconfig\.json"
     r"|\.pre-commit-config\.ya?ml|eslint\.config\.[cm]?[jt]s|\.eslintrc(?:\.\w+)?"
-    r"|vitest\.(?:config|workspace)\.[cm]?[jt]s|tsconfig[\w.-]*\.json"
+    r"|vitest\.(?:config|workspace)\.[cm]?[jt]s|tsconfig[\w.-]*\.json|\.github/scripts/[^/]+"
     r"|\.fallowrc(?:\.jsonc?)?|\.?fallow\.toml|osv-scanner\.toml|CONSTRAINTS\.md)$"
 )
 GATE_SECTION_FILES = frozenset({"pyproject.toml", "setup.cfg", "tox.ini"})
@@ -367,10 +367,8 @@ PACKAGE_GATE_SCRIPT = re.compile(
     r'(?::[\w:.-]+)?"\s*:'
 )
 WORKFLOW = re.compile(r"(?:^|/)\.github/workflows/[^/]+\.ya?ml$")
-WORKFLOW_GATE_LINE = re.compile(
-    r"\b(?:ruff|mypy|pytest|vitest|eslint|tsc|typecheck|lint|coverage)\b"
-    r"|--cov|continue-on-error|^\s*-?\s*if\s*:"
-)
+# Any workflow line can weaken a gate; only comments and the top-level name can't.
+WORKFLOW_FREE_LINE = re.compile(r"^\s*#|^name\s*:")
 
 # --- rule 5: assertions ---------------------------------------------------------------
 
@@ -429,7 +427,7 @@ GATE_FILE_IN_SHELL = re.compile(
     r"(?<![\w-])(?:pyproject\.toml|\.?ruff\.toml|\.?mypy\.ini|pytest\.ini|\.coveragerc"
     r"|setup\.cfg|tox\.ini|pyrightconfig\.json|tsconfig[\w.-]*\.json"
     r"|eslint\.config\.[cm]?[jt]s|\.eslintrc|vitest\.(?:config|workspace)\.[cm]?[jt]s"
-    r"|\.pre-commit-config\.ya?ml|package\.json|\.github/workflows/"
+    r"|\.pre-commit-config\.ya?ml|package\.json|\.github/(?:workflows|scripts)/"
     r"|\.fallowrc(?:\.jsonc?)?|\.?fallow\.toml|osv-scanner\.toml|CONSTRAINTS\.md)"
 )
 # A test file or directory named in a shell command: TEST_FILE's shapes.
@@ -632,7 +630,7 @@ def gate_lines(rel: str, text: str) -> list[str] | None:
     elif name == "package.json":
         selected = [line for line in lines if PACKAGE_GATE_SCRIPT.match(line)]
     elif WORKFLOW.search(rel):
-        selected = [line for line in lines if WORKFLOW_GATE_LINE.search(line)]
+        selected = [line for line in lines if not WORKFLOW_FREE_LINE.match(line)]
     else:
         return None
     return [line.rstrip() for line in selected if line.strip()]
