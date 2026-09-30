@@ -111,9 +111,9 @@ A change is mergeable only when every gate that runs passes. The jobs are in `.g
 | Gate | CI job | Runs |
 |---|---|---|
 | `ruff check` · `ruff format --check` | `python` | Now |
-| `mypy --strict`, in two runs: the packages and `tests`, then the scripts in `bench/harness` and `.claude/hooks` | `python` | Now |
-| `pytest --cov`: every test in `packages/`, `bench/harness/`, `.claude/hooks/` and `tests/`, including CONSTRAINTS.md's threshold checks and the coverage floor | `python` | Now. §1's layers (unit, integration, isolation, checkpointer, continuation, hygiene, egress/secrets, strict-mode) join as their code lands |
-| Browser tests: the sandbox check, then the egress fixtures | `python`, after steps that install Playwright's headless shell, log the runner's AppArmor setting and relax it (ADR-0026) | The sandbox check now (#35). The egress fixtures join as their code lands in M1 |
+| `mypy --strict`, in two runs: the packages, `spikes` and `tests`, then the scripts in `bench/harness` and `.claude/hooks` | `python` | Now |
+| `pytest --cov`: every test in `packages/`, `spikes/`, `bench/harness/`, `.claude/hooks/` and `tests/`, including CONSTRAINTS.md's threshold checks and the coverage floor | `python` | Now. §1's layers (unit, integration, isolation, checkpointer, continuation, hygiene, egress/secrets, strict-mode) join as their code lands |
+| Browser tests: the sandbox check and the spike's trial (#37), then the egress fixtures | `python`, after steps that install Playwright's headless shell, log the runner's AppArmor setting and relax it (ADR-0026) | The sandbox check (#35) and the trial (#37) now. The egress fixtures join as their code lands in M1 |
 | Dependency audit of `uv.lock` (osv-scanner) | `dependency-audit` | Now, and weekly |
 | Guard tests · policy scan | `guardrails` | Now |
 | Secret scan (gitleaks, full history) | `secrets` | Now |

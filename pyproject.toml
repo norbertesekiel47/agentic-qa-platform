@@ -5,7 +5,13 @@
 name = "aqa-workspace"
 version = "0.1.0"
 requires-python = ">=3.14"
-dependencies = ["aqa-bench-harness", "aqa-cli", "aqa-core", "aqa-runner"]
+dependencies = [
+    "aqa-bench-harness",
+    "aqa-cli",
+    "aqa-core",
+    "aqa-hosted-chromium-spike",
+    "aqa-runner",
+]
 
 [dependency-groups]
 dev = [
@@ -28,13 +34,14 @@ required-version = ">=0.11.15,<0.12"
 constraint-dependencies = ["litellm<0"]
 
 [tool.uv.workspace]
-members = ["packages/*", "bench/harness"]
+members = ["packages/*", "bench/harness", "spikes/hosted-chromium"]
 
 # Shared by every member (uv applies root sources workspace-wide).
 [tool.uv.sources]
 aqa-bench-harness = { workspace = true }
 aqa-cli = { workspace = true }
 aqa-core = { workspace = true }
+aqa-hosted-chromium-spike = { workspace = true }
 aqa-runner = { workspace = true }
 
 # The tool settings below point the tools at our code (ADR-0027). Their
@@ -80,6 +87,7 @@ ignore = [
 "bench/harness/test_*.py" = ["PT009", "PT027"]
 # pytest tests assert with a plain `assert`.
 "packages/*/tests/**" = ["S101"]
+"spikes/*/tests/**" = ["S101"]
 "tests/**" = ["S101"]
 # T20: scripts whose interface is stdout. In package code T20 stays on, because
 # a print bypasses structlog's redaction. S104, S105: the secret detector names
@@ -105,24 +113,30 @@ max-statements = 50
 [tool.mypy]
 python_version = "3.14"
 strict = true
-# The packages and the cross-package tests. The scripts in bench/harness and
-# .claude/hooks import each other by bare name, so they get a mypy run of their
-# own, named by file (CONSTRAINTS.md, Types; ADR-0029). With the scripts off
-# mypy_path, package code can't import one here, just as it can't for users.
-files = ["packages", "tests"]
+# The packages, the spikes and the cross-package tests. The scripts in
+# bench/harness and .claude/hooks import each other by bare name, so they get a
+# mypy run of their own, named by file (CONSTRAINTS.md, Types; ADR-0029). With
+# the scripts off mypy_path, package code can't import one here, just as it
+# can't for users.
+files = ["packages", "spikes", "tests"]
 exclude = ["^bench/apps/"]
 # Module names come from these bases, not from the directory layout: each
 # package's src. Package tests sit outside every base, so they are named by
 # their path (packages.cli.tests.test_version) and may share a basename.
 explicit_package_bases = true
-mypy_path = ["packages/core/src", "packages/runner/src", "packages/cli/src"]
+mypy_path = [
+    "packages/core/src",
+    "packages/runner/src",
+    "packages/cli/src",
+    "spikes/hosted-chromium/src",
+]
 
 [tool.pytest]
 # strict turns on strict_config, strict_markers, strict_xfail and
 # strict_parametrization_ids; a warning fails the test that raised it.
 strict = true
 filterwarnings = ["error"]
-testpaths = ["packages", "bench/harness", ".claude/hooks", "tests"]
+testpaths = ["packages", "spikes", "bench/harness", ".claude/hooks", "tests"]
 # importlib mode lets test files in different packages share a basename
 # (pytest's advice for new projects). The harness's tests import each other by
 # bare name, as under unittest, so its directory is on the path, and namespace
@@ -140,7 +154,7 @@ norecursedirs = [
 # run (one file, one test) isn't held to the whole suite's floor.
 [tool.coverage.run]
 branch = true
-source = ["packages", "bench/harness", ".claude/hooks"]
+source = ["packages", "spikes", "bench/harness", ".claude/hooks"]
 # toggle_checks.py runs only inside the checks image (ADR-0023), where no unit
 # test reaches it. Every pattern starts with `*`: coverage anchors any other
 # pattern to the cwd of each process, and a subprocess may start elsewhere.
