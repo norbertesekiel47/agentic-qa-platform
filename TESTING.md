@@ -26,7 +26,7 @@ Last updated: 2026-09-29 (M1 design decisions, ADR-0024–0026; CI gates, ADR-00
 | E2E system | CLI → API → runner → GitHub (sandbox org) on a demo app | Playwright + GitHub test org | Nightly + pre-release |
 | Benchmark | Agent quality on the dev split (§5) | `bench/` harness | Smoke every PR; full dev split nightly |
 | Load | Concurrent hosted runs, API p95, WebSocket fan-out | k6 / Locust against staging | Pre-release |
-| Security | Authz matrix, injection fixtures (explore-focused from M1: task hijack, decoy success, decoy binding after a failed confirmation, navigation and secret steering; heal-focused from M2), redaction, dependency audit | pytest, osv-scanner (ADR-0029), Trivy | Every commit (audit weekly) |
+| Security | Authz matrix, injection fixtures (explore-focused from M1: task hijack, decoy success, decoy binding after a failed confirmation, navigation and secret steering; heal-focused from M2), redaction, dependency audit | pytest, osv-scanner (ADR-0029), pnpm audit, Trivy | Every commit (audit weekly) |
 
 ## 2. Test-driven development scope
 
@@ -118,8 +118,8 @@ A change is mergeable only when every gate that runs passes. The jobs are in `.g
 | Guard tests · policy scan | `guardrails` | Now |
 | Secret scan (gitleaks, full history) | `secrets` | Now |
 | `fallow audit` | `fallow` | Now, on pull requests. It checks TypeScript only, so it finds nothing until M7 |
-| `pnpm lint` · `pnpm typecheck` · `vitest` · Playwright component/page tests | — | M7, with the dashboard. Its lockfile joins the dependency audit then |
-| Benchmark smoke (dev split) | — | M2, once `aqa run` produces verdicts |
+| `pnpm lint` · `pnpm typecheck` · `vitest` · Playwright component/page tests | — | M7, with the dashboard, and its dependency audit |
+| Benchmark smoke (dev split) | — | M3, with the `bench/` runner. `aqa run` produces verdicts from M2 |
 
 The thresholds these gates hold, coverage included, are in [CONSTRAINTS.md](CONSTRAINTS.md).
 

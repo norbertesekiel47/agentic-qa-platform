@@ -106,10 +106,9 @@ max-statements = 50
 python_version = "3.14"
 strict = true
 # The packages and the cross-package tests. The scripts in bench/harness and
-# .claude/hooks import each other by bare name, so they get a run of their own,
-# named by file: `mypy --strict --no-explicit-package-bases .claude/hooks
-# bench/harness` (ADR-0029). Kept off mypy_path, a script can't be imported by
-# package code here, just as it can't be for users.
+# .claude/hooks import each other by bare name, so they get a mypy run of their
+# own, named by file (CONSTRAINTS.md, Types; ADR-0029). With the scripts off
+# mypy_path, package code can't import one here, just as it can't for users.
 files = ["packages", "tests"]
 exclude = ["^bench/apps/"]
 # Module names come from these bases, not from the directory layout: each
