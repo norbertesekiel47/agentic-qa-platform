@@ -4,22 +4,23 @@
 - Date: 2026-09-29
 
 ## Context
-#59 writes the quality bar down in CONSTRAINTS.md and makes each number fail a local run when it's crossed. ADR-0027 left it the Ruff rule set, pytest's strict mode and every threshold. The maintainer settled the coverage floor, the complexity checker, the rule set and the floor guard in an interview on 2026-09-29, and two more choices while it was built. Measured at `c54d955`:
-- Branch coverage of `packages/`, `bench/harness/` and `.claude/hooks/` is 94.1%, with tests excluded, subprocesses measured and `toggle_checks.py` excluded. It's 84.1% with `toggle_checks.py`. Without subprocess measurement the guard reads 0%, because its tests run it as a subprocess.
-- The highest cyclomatic complexity is 10 (`check_file_edit`, `_validate_case`). complexipy's cognitive complexity is above 15 in six functions, with a maximum of 24.
-- Ruff's `ALL` gives 754 findings. Ruff 0.16.9's default set is 413 rules and already includes BLE001, S110, PYI, YTT and parts of TC.
+#59 writes the quality bar down in CONSTRAINTS.md and makes each number fail a local run when it's crossed. ADR-0027 left it the Ruff rule set, pytest's strict mode and every threshold. The maintainer settled the coverage floor, the complexity checker, the rule set and the floor guard in an interview on 2026-09-29, and three more choices while it was built. Measurements:
+- **Coverage,** at `2d8e328`: `uv run pytest --cov` measures 94.09%. Removing `toggle_checks.py` from `omit` gives 84.02%. Removing `patch = ["subprocess"]` gives 57.71%, with the guard at 0%, because its tests run it as a subprocess.
+- **Complexity,** at `c54d955`: `ruff check --select C901 --config 'lint.mccabe.max-complexity=9' .` finds two functions at 10, `check_file_edit` and `_validate_case`, and none above. `uvx complexipy@8.0.1 packages bench/harness .claude/hooks` finds six functions with a cognitive complexity above 15, the highest at 24.
+- **Ruff,** at `c54d955`: `ruff check --select ALL .` gives 754 findings. `ruff check --show-settings` lists 413 rules in Ruff 0.16.9's default set, BLE001 and S110 among them (LAB_NOTES, 2026-09-29).
 
 ## Options
 - **Coverage tool:** (1) pytest-cov with coverage.py; (2) coverage.py alone: `coverage run -m pytest`, `coverage combine`, `coverage report`; (3) diff-cover, on changed lines.
 - **Coverage floor:** (1) hold today's 94%; (2) a round 90%; (3) changed lines only.
 - **Test-first modules** (TESTING.md §2): (1) 100% line and branch per module, from the first one; (2) the overall floor only.
-- **`toggle_checks.py`:** (1) excluded; (2) measured, which puts the total at 84.1%.
+- **`toggle_checks.py`:** (1) excluded; (2) measured, which puts the total at 84.02%.
 - **A module in a workspace member that no test imports:** (1) counted, with `include_namespace_packages`; (2) coverage's default, which leaves it out of the total.
 - **Complexity:** (1) Ruff's `C901` with its Pylint size rules; (2) complexipy's cognitive complexity at 15, fallow's limit for TypeScript; (3) both.
 - **`toggle()`'s six arguments:** (1) `max-args = 6`; (2) a parameter object, keeping Ruff's default of 5.
 - **Ruff rule set:** (1) a curated, explicit list; (2) `ALL` minus ignores; (3) Ruff's defaults plus more families (`extend-select`).
 - **Default rules the curated families leave out:** (1) keep them in the list; (2) drop them.
 - **Floor guard:** (1) extend policy_guard's per-call checks now, with a `--diff` mode for CI as a follow-up; (2) per-call checks only; (3) both now.
+- **`contextlib.suppress(Exception)`,** which Ruff's `SIM105` suggests in place of `try`-`except`-`pass` and no Ruff rule flags: (1) policy_guard refuses it; (2) CONSTRAINTS.md names it as a gap.
 - **Markdown in `ruff format`:** (1) keep Ruff's default `include`, which formats Python blocks in docs; (2) narrow `include` to Python files.
 - **pytest:** (1) `strict` mode, with warnings as errors; (2) pytest's lenient defaults.
 
@@ -28,12 +29,13 @@
 - **Hold 94%, rounded to a whole percent** (`precision = 0`), and raise it by hand. A round 90% would let coverage fall four points unnoticed, and changed-line coverage needs a base branch too.
 - **Test-first modules at 100% line and branch,** from the first one. Its ticket adds the per-module command (CONSTRAINTS.md, Planned).
 - **`toggle_checks.py` is excluded.** It runs only in the checks image (ADR-0023), where no unit test reaches it.
-- **`include_namespace_packages = true`** (the maintainer's call). Workspace members have no `__init__.py` above `src/`, and when coverage looks for files no test imported, it skips such directories (coverage 7.16.2, `files.py`). Without the option, an untested new module in `packages/` would drop out of the total instead of counting as 0%. Today's total is unchanged.
+- **`include_namespace_packages = true`** (the maintainer's call). Workspace members have no `__init__.py` above `src/`, so without the option an untested new module in `packages/` would drop out of the total instead of counting as 0% (LAB_NOTES, 2026-09-29). Today's total is unchanged.
 - **Ruff `C901` ≤ 10 and the Pylint size rules:** returns 6, branches 12, arguments 6, positional arguments 5, statements 50. Each limit is set explicitly, so a Ruff upgrade can't move it. All but arguments are Ruff's defaults, and nothing exceeds them today. complexipy would be one more tool with its own config, and its six functions above 15 would each need a refactor or an exception.
 - **`max-args = 6`,** today's maximum (`toggle()`). Its `only` became keyword-only, so positional arguments stay at 5. A parameter object for one function adds a concept.
 - **A curated, explicit list of families.** `ALL` gives 754 findings and turns on every rule a Ruff upgrade adds; `extend-select` lets an upgrade change the base set. Not selected: D, COM, CPY, EM, TC, INP; ANN, because mypy `strict` covers annotations; FBT, because Typer options are bools; PGH, because policy_guard owns suppression comments and each floor rule has one enforcer. `E501`, `PLR2004`, `TRY003`, `S603` and `S607` are ignored, each with its reason in `pyproject.toml`. Per-file ignores cover unittest-style tests, pytest's plain asserts, scripts that print, a fake that keeps its protocol's signature, and four reviewed false positives.
-- **The list keeps Ruff's default rules** that those families leave out (the maintainer's call): the YTT, EXE, INT, FA and PYI families, and PGH005, TC004, TC005, TC007, TC010 and D419. Otherwise 72 rules that ran before would stop, and none has a finding today. PGH005 is `invalid-mock-access`, not a suppression rule.
-- **policy_guard stays the floor's one enforcer beyond Ruff and mypy,** extended per call now: it refuses an unimplemented stub outside tests, and asks before a shell command that may delete, move or rewrite a test file and before any change to CONSTRAINTS.md or `[tool.uv]`. mypy's `empty-body` already rejects `...` and `pass` bodies that should return a value, so the stub rule covers only `raise NotImplementedError` and its TypeScript form. A `--diff` mode for CI is a follow-up: CI's `--scan` sees file contents, not a deleted test or a changed config.
+- **The list keeps Ruff's default rules** that those families leave out (the maintainer's call): the YTT, EXE, INT, FA and PYI families, and PGH005, TC004, TC005, TC007, TC010 and D419. Otherwise 72 rules that ran before would stop: the difference between the enabled rules that `ruff check --show-settings` lists before and after, at `c54d955`. None has a finding today. PGH005 is `invalid-mock-access`, not a suppression rule.
+- **policy_guard stays the floor's one enforcer beyond Ruff and mypy,** extended per call now: it refuses an unimplemented stub outside tests, and asks before a shell command that may delete, move or rewrite a test file (including `git checkout` or `git restore` from another ref) and before any change to CONSTRAINTS.md or `[tool.uv]`. mypy's `empty-body` already rejects `...` and `pass` bodies that should return a value, so the stub rule covers only `raise NotImplementedError` and its TypeScript form. A `--diff` mode for CI is a follow-up: CI's `--scan` sees file contents, not a deleted test or a changed config.
+- **policy_guard refuses a new `suppress(Exception)` or `suppress(BaseException)`** (the maintainer's call). Ruff's `BLE001`, `S110` and `S112` catch a broad `except` that swallows the error, but `SIM105` then suggests `contextlib.suppress(Exception)`, which no Ruff rule flags, so the linter's own fix would get around the floor. An ADR citation excuses it, as it does the other refused rules.
 - **Markdown stays in Ruff's `include`.** No doc has a Python block today, and `ruff format` fixes any that appears.
 - **pytest `strict = true` and `filterwarnings = ["error"]`.** Both pass today. Strict mode catches a mistyped marker or config key and an `xfail` test that starts passing, and a warning fails the test that raised it.
 
