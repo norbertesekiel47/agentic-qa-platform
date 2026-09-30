@@ -1,6 +1,9 @@
 # Claude Code personal overrides (shared settings live in .claude/settings.json)
 .claude/settings.local.json
 
+# Codex personal overrides, kept local like the file above
+.codex/
+
 # Local secrets and scratch files (AGENTS.md rule 9)
 .scratch/
 
