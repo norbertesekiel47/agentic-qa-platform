@@ -242,3 +242,46 @@ def test_an_unimported_module_counts_against_the_floor(tmp_path: Path) -> None:
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert unimported in result.stdout
+
+
+# --- pytest strictness ---------------------------------------------------------------
+
+PLAIN_TEST = "def test_plain() -> None:\n    int('1')\n"
+
+
+def pytest_repo_config(
+    root: Path, name: str, test: str
+) -> subprocess.CompletedProcess[str]:
+    """pytest with the repo's [tool.pytest] config, on one test file in `root`."""
+    (root / name).write_text(test)
+    config = ["-c", str(REPO / "pyproject.toml"), f"--rootdir={root}"]
+    return run(
+        [sys.executable, "-m", "pytest", *config, "-p", "no:cacheprovider", name],
+        cwd=root,
+    )
+
+
+def test_unregistered_marker_fails_under_strict_mode(tmp_path: Path) -> None:
+    marked = f"import pytest\n\n\n@pytest.mark.unregistered\n{PLAIN_TEST}"
+
+    result = pytest_repo_config(tmp_path, "test_marked.py", marked)
+    control = pytest_repo_config(tmp_path, "test_plain.py", PLAIN_TEST)
+
+    assert result.returncode != 0
+    assert "'unregistered' not found in `markers`" in result.stdout
+    assert control.returncode == 0, control.stdout
+
+
+def test_a_warning_fails_the_test_run(tmp_path: Path) -> None:
+    warns = (
+        "import warnings\n\n\n"
+        "def test_warns() -> None:\n"
+        "    warnings.warn('deprecated', DeprecationWarning, stacklevel=1)\n"
+    )
+
+    result = pytest_repo_config(tmp_path, "test_warns.py", warns)
+    control = pytest_repo_config(tmp_path, "test_plain.py", PLAIN_TEST)
+
+    assert result.returncode == 1, result.stdout
+    assert "DeprecationWarning: deprecated" in result.stdout
+    assert control.returncode == 0, control.stdout
