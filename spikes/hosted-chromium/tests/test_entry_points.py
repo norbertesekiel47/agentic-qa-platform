@@ -66,17 +66,31 @@ def test_the_command_prints_each_trial_as_json(tmp_path: Path) -> None:
     assert second["earlier_runs"] == [first["run_id"]]
 
 
-def test_the_lambda_handler_returns_the_trial_report(
+@dataclass(frozen=True)
+class LambdaContext:
+    """The part of Lambda's context object the handler reads."""
+
+    log_stream_name: str
+
+
+# Lambda gives each execution environment a log stream of its own, so the
+# stream is the platform's name for the environment a trial ran in.
+STREAM = "2026/10/01/[$LATEST]0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+
+
+def test_the_lambda_handler_returns_the_trial_and_its_log_stream(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
 
     if sys.platform != "linux":
         with pytest.raises(RuntimeError, match=LINUX_ONLY):
-            handler({}, None)
+            handler({}, LambdaContext(STREAM))
         return
     before = tree_pss(Path("/proc"), os.getpid())
-    report = handler({}, None)
+    answer = handler({}, LambdaContext(STREAM))
+    report = answer["trial"]
+    assert answer["log_stream"] == STREAM
     assert report["sandbox"] == {"on": True}
     assert report["earlier_runs"] == []
     assert report["run_id"] in (tmp_path / "aqa-spike-runs").read_text()
@@ -147,6 +161,14 @@ def test_the_microvm_answers_its_lifecycle_hooks_without_a_trial(
 # buffers makes that loss certain.
 def test_the_microvm_reads_a_hook_body_before_it_replies(microvm: MicroVM) -> None:
     assert microvm.post(f"{HOOK_PREFIX}run", body=b"x" * 2**25) == 200
+
+
+# invoke.sh asks until the server answers, then sends its one trial request.
+def test_the_microvm_answers_health_without_a_trial(microvm: MicroVM) -> None:
+    microvm.connection.request("GET", "/health")
+
+    assert microvm.connection.getresponse().status == 200
+    assert microvm.reports == []
 
 
 def test_the_microvm_runs_a_trial_per_request(microvm: MicroVM) -> None:

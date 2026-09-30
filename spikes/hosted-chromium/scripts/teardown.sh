@@ -3,7 +3,7 @@
 # amendment, 2026-09-30), then fails unless each of them is gone. It finds what
 # to delete by listing the fixed names in common.sh, so it touches only the
 # spike's own resources, and it works after a partial deploy too. The budget
-# alarm goes last.
+# alarm goes last. A failed listing or delete stops it where it fails.
 #
 # AWS may create the ECS service-linked role (AWSServiceRoleForECS) with the
 # first cluster. It costs nothing, serves any later use of ECS, and stays.
@@ -14,14 +14,16 @@ source "$(dirname "$0")/common.sh"
 account=$(account_id)
 bucket=$(bucket_name)
 
-# Each prints the spike's resources of one kind that exist now.
+# Each prints the spike's resources of one kind that exist now. A caller
+# assigns the output to a variable first, so a failed listing stops the
+# script instead of reading as "none".
 microvms() {
   aws lambda-microvms list-microvms --output text --query \
     "items[?state!='TERMINATED' && contains(imageArn, ':microvm-image:$NAME')].microvmId"
 }
 microvm_images() {
   aws lambda-microvms list-microvm-images --output text \
-    --query "items[?name=='$NAME' && state!='DELETED'].name"
+    --query "items[?name=='$NAME' && state!='DELETED'].imageArn"
 }
 functions() {
   aws lambda list-functions --output text \
@@ -59,33 +61,47 @@ budgets() {
     --query "Budgets[?BudgetName=='$NAME'].BudgetName"
 }
 
-for microvm in $(microvms); do
+found=$(microvms)
+for microvm in $found; do
   aws lambda-microvms terminate-microvm --microvm-identifier "$microvm" > /dev/null
 done
-for image in $(microvm_images); do
+found=$(microvm_images)
+for image in $found; do
   aws lambda-microvms delete-microvm-image --image-identifier "$image" > /dev/null
 done
-for function in $(functions); do
+found=$(functions)
+for function in $found; do
   aws lambda delete-function --function-name "$function"
 done
-for cluster in $(clusters); do
-  read -ra tasks <<< "$(aws ecs list-tasks --cluster "$cluster" --query taskArns --output text)"
-  if [ "${#tasks[@]}" -gt 0 ]; then
-    for task in "${tasks[@]}"; do
+found=$(clusters)
+for cluster in $found; do
+  tasks=$(aws ecs list-tasks --cluster "$cluster" --query taskArns --output text)
+  read -ra running <<< "$tasks"
+  if [ "${#running[@]}" -gt 0 ]; then
+    for task in "${running[@]}"; do
       aws ecs stop-task --cluster "$cluster" --task "$task" > /dev/null
     done
-    aws ecs wait tasks-stopped --cluster "$cluster" --tasks "${tasks[@]}"
+    aws ecs wait tasks-stopped --cluster "$cluster" --tasks "${running[@]}"
   fi
   aws ecs delete-cluster --cluster "$cluster" > /dev/null
 done
-for definition in $(task_definitions ACTIVE); do
+found=$(task_definitions ACTIVE)
+for definition in $found; do
   aws ecs deregister-task-definition --task-definition "$definition" > /dev/null
 done
-read -ra inactive <<< "$(task_definitions INACTIVE)"
+found=$(task_definitions INACTIVE)
+read -ra inactive <<< "$found"
 if [ "${#inactive[@]}" -gt 0 ]; then
-  aws ecs delete-task-definitions --task-definitions "${inactive[@]}" > /dev/null
+  # A revision it can't delete comes back in `failures`, with exit code 0.
+  failed=$(aws ecs delete-task-definitions --task-definitions "${inactive[@]}" \
+    --query 'failures[].arn' --output text)
+  if [ -n "$failed" ]; then
+    echo "ECS didn't delete these task definitions: $failed" >&2
+    exit 1
+  fi
 fi
-for group in $(security_groups); do
+found=$(security_groups)
+for group in $found; do
   # A stopped task's network interface can hold the group for a few minutes.
   for attempt in $(seq 36); do
     if aws ec2 delete-security-group --group-id "$group" 2>"$work/group.err"; then
@@ -98,35 +114,63 @@ for group in $(security_groups); do
     sleep 5
   done
 done
-for repository in $(repositories); do
+found=$(repositories)
+for repository in $found; do
   aws ecr delete-repository --repository-name "$repository" --force > /dev/null
 done
-for name in $(buckets); do
+found=$(buckets)
+for name in $found; do
   aws s3 rb "s3://$name" --force > /dev/null
 done
-for group in $(log_groups); do
+found=$(log_groups)
+for group in $found; do
   aws logs delete-log-group --log-group-name "$group"
 done
-for role in $(roles); do
-  for policy in $(aws iam list-role-policies --role-name "$role" --query PolicyNames --output text); do
+found=$(roles)
+for role in $found; do
+  policies=$(aws iam list-role-policies --role-name "$role" --query PolicyNames --output text)
+  for policy in $policies; do
     aws iam delete-role-policy --role-name "$role" --policy-name "$policy"
   done
   aws iam delete-role --role-name "$role"
 done
-for budget in $(budgets); do
+found=$(budgets)
+for budget in $found; do
   aws budgets delete-budget --account-id "$account" --budget-name "$budget"
 done
 
-remaining=""
-for kind in microvms microvm_images functions clusters "task_definitions ACTIVE" \
-  security_groups repositories buckets log_groups roles budgets; do
-  found=$($kind)
-  if [ -n "$found" ]; then
-    remaining+="  ${kind%% *}: $found"$'\n'
+# Adds to `left` what a listing still shows.
+still() {
+  local listed
+  listed=$("$@")
+  if [ -n "$listed" ]; then
+    left+="  $*: $listed"$'\n'
+  fi
+}
+
+# Some deletes finish later (a MicroVM image is DELETING, a MicroVM
+# TERMINATING), and IAM's listings lag, so the check gives them five minutes.
+for attempt in $(seq 30); do
+  left=""
+  still microvms
+  still microvm_images
+  still functions
+  still clusters
+  still task_definitions ACTIVE
+  still task_definitions INACTIVE
+  still security_groups
+  still repositories
+  still buckets
+  still log_groups
+  still roles
+  still budgets
+  if [ -z "$left" ]; then
+    echo "teardown complete: nothing of $NAME remains in $AWS_REGION"
+    exit 0
+  fi
+  if [ "$attempt" != 30 ]; then
+    sleep 10
   fi
 done
-if [ -n "$remaining" ]; then
-  printf 'still there after the teardown:\n%s' "$remaining" >&2
-  exit 1
-fi
-echo "teardown complete: nothing of $NAME remains in $AWS_REGION"
+printf 'still there after the teardown:\n%s' "$left" >&2
+exit 1
