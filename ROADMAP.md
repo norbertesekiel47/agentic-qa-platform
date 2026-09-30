@@ -1,6 +1,6 @@
 # Roadmap — Agentic QA Platform
 
-Last updated: 2026-09-29 (M1 design decisions, ADR-0024–0026). **Core first, then SaaS** (ADR-0016): prove the agent on the benchmark before building the platform around it. Each milestone is one vertical slice, one PR series, with an explicit exit criterion. No dates — quality over speed; milestones are sequential.
+Last updated: 2026-09-30 (the sandbox check, #35; M1 design decisions, ADR-0024–0026). **Core first, then SaaS** (ADR-0016): prove the agent on the benchmark before building the platform around it. Each milestone is one vertical slice, one PR series, with an explicit exit criterion. No dates — quality over speed; milestones are sequential.
 
 **Release checkpoints** (added after review): full v1 scope is unchanged, but two public, independently defensible releases ship along the way so the strongest hiring signal doesn't wait for the whole SaaS:
 - **Release 0.1 — "CLI + benchmark"** after M3: open-source CLI, frozen benchmark, local run viewer, measured test-split numbers.
@@ -24,7 +24,7 @@ Design: ADR-0024 (explore runs), ADR-0025 (compiled scripts), ADR-0026 (the brow
   - Playwright HTTP and WebSocket routing installed before page creation, and service workers blocked;
   - allowed-origin checks before each observation and action;
   - egress blocks and expected-blocked hosts;
-  - a sandbox-enabled launch with a startup check, and a minimal browser environment;
+  - a sandbox-enabled launch with a sandbox check, and a minimal browser environment;
   - an accessibility snapshot with element refs;
   - browser settings pinned for every run (ADR-0025).
 - **Moved up from M2** (the pilot signs in, and explore uses a model):

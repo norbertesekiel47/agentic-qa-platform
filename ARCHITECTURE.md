@@ -1,6 +1,6 @@
 # Architecture — Agentic QA Platform
 
-Last updated: 2026-09-29 (M1 design decisions, ADR-0024–0026). Decisions referenced as ADR-NNNN live in [`ADRs/`](ADRs/).
+Last updated: 2026-09-30 (the sandbox check, #35; M1 design decisions, ADR-0024–0026). Decisions referenced as ADR-NNNN live in [`ADRs/`](ADRs/).
 
 ## 1. System context
 
@@ -163,7 +163,7 @@ Credentials that arrive before the tenant is known (API keys, OIDC exchanges, Gi
 ## 5. Network & isolation
 
 - **Chromium sandbox decision gate (M1 spike; ADR-0008 amendment, 2026-09-29).**
-  - *Startup check:* the runner launches Chromium with its sandbox **enabled** (`chromium_sandbox=True`) and verifies it at startup (ADR-0026).
+  - *Sandbox check:* the runner launches Chromium with its sandbox **enabled** (`chromium_sandbox=True`) and proves it with the sandbox check before any page loads (ADR-0026).
   - *Why it matters:* without the sandbox, a renderer exploit runs with the runner process's privileges, and any environment reused across runs could expose a later tenant's run.
   - *Qualifying rule:* hosted compute qualifies only if it runs sandboxed Chromium **and** gives every run a fresh VM. The spike measures a Lambda MicroVM, a Fargate task and a Lambda function.
   - *What the facts suggest:* Lambda functions can't create user namespaces, and they reuse environments, so they can't win. Fargate most likely can't run the sandbox either (only `SYS_PTRACE` can be added, and custom seccomp profiles aren't allowed). A MicroVM gives each session its own VM and kernel.
