@@ -54,7 +54,7 @@ uv sync --locked                     # install the workspace from uv.lock, as CI
 # The gates. A change is done when all pass (rule 1).
 # On a bare python3 of .python-version's version, as CI runs the guard:
 python3 -m unittest discover -s .claude/hooks                                  # guard tests
-env -u AQA_POLICY_GUARD python3 .claude/hooks/policy_guard.py --scan           # policy scan
+python3 .claude/hooks/policy_guard.py --scan                                   # policy scan
 # In the workspace:
 uv run ruff check .                                                            # lint
 uv run ruff format --check .                                                   # format
@@ -64,14 +64,14 @@ uv run pytest --cov                                                            #
 # With osv-scanner, gitleaks and fallow at the versions .github/workflows/ci.yml pins:
 .github/scripts/audit-lockfile.sh osv-scanner uv.lock                          # dependency audit: high or critical advisories
 gitleaks git --no-banner --redact --verbose .                                  # secret scan: every commit
-fallow audit --format json --quiet --explain                                   # fallow: changes since the upstream, else since the merge-base with origin/main
+fallow audit --base "$(git merge-base origin/main HEAD)" --format json --quiet --explain   # fallow: the branch's changes, as in its pull request
 
 # Narrower test runs, without --cov: the coverage floor holds for the whole suite only.
 uv run pytest tests/test_constraints.py                                        # one file: CONSTRAINTS.md's threshold checks
 uv run pytest tests/test_constraints.py::test_coverage_below_the_floor_fails   # one test
 ```
 
-The scan runs with `AQA_POLICY_GUARD` unset because `off` turns it into a no-op. The secret scan reads commits, not the working tree, and the other gates read the working tree, so commit everything first and run the gates before `git push`. The benchmark harness's commands are in [bench/README.md](bench/README.md). Gates that TESTING.md §8 marks for a later milestone join this block when they land.
+The secret scan reads commits, not the working tree, and the other gates read the working tree, so commit everything first and run the gates before `git push`. The benchmark harness's commands are in [bench/README.md](bench/README.md). Gates that TESTING.md §8 marks for a later milestone join this block when they land: `tests/test_agents_commands.py` fails when a CI step, or a command CONSTRAINTS.md names, is missing here.
 
 ## 5. Rules (non-negotiable)
 
@@ -95,7 +95,7 @@ The scan runs with `AQA_POLICY_GUARD` unset because `off` turns it into a no-op.
   - **Needs the user's approval:** any change to quality-gate config (CONSTRAINTS.md, ruff/mypy/pytest/coverage settings, `[tool.uv]` and its non-workspace sources, tsconfig, eslint/vitest config, osv-scanner waivers, gate scripts, CI workflows and scripts), a test edit that removes assertions or tests, a shell command that may delete, move or rewrite a test file, and any edit to the guard or `.claude/settings*.json`.
   - **End-of-turn scan:** the whole tree is re-checked for the refused patterns, which catches files written by scripts or other tools; §4's policy scan runs the same scan (exit 1 on violations). Other agents don't run Claude Code hooks, but the rules still apply to them.
 - **fallow gate (ADR-0018):** before `git commit` or `git push`, `.claude/hooks/fallow-gate.sh` runs `fallow audit` and blocks a `fail` verdict (dead code, duplication or complexity that the change introduces). fallow analyzes only TypeScript and JavaScript, so until the dashboard exists it passes without checking anything; Python quality rests on the gates above. Agents without the hook run §4's fallow command before committing and fix any `fail`. Fix findings; `fallow-ignore` comments are suppressions under rule 1.
-- **CI (ADR-0019, ADR-0029):** every pull request must pass `guardrails` (guard tests, `--scan`), `python` (from `uv.lock`: lint, format, both mypy runs, `pytest --cov`), `dependency-audit` (osv-scanner on `uv.lock`), `secrets` (gitleaks over full history) and `fallow` (`fallow audit`). `main` accepts changes only through pull requests with those checks green, for admins too. A new CI job must also be added to the required checks.
+- **CI (ADR-0019, ADR-0029):** every pull request must pass each CI job in [TESTING.md §8](TESTING.md#8-quality-gates-ci). `main` accepts changes only through pull requests with those checks green, for admins too. A new CI job must also be added to the required checks.
 - **Vendored apps (ADR-0021):** `bench/apps/` holds third-party code with planted bugs, so policy_guard and fallow skip it. gitleaks still scans it: add a `file:rule:line` entry to `.gitleaksignore` only for an upstream finding you have reviewed and confirmed is not a real secret. Everything else under `bench/` is ours and fully policed.
 
 ## 6. Project-specific guardrails
