@@ -15,3 +15,7 @@ __pycache__/
 
 # graft's local, regenerable code-graph cache (`graft build` adds this entry itself)
 graft/
+
+# Coverage data files (`uv run pytest --cov`)
+.coverage
+.coverage.*

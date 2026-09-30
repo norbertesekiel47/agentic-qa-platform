@@ -9,9 +9,11 @@ dependencies = ["aqa-bench-harness", "aqa-cli", "aqa-core", "aqa-runner"]
 
 [dependency-groups]
 dev = [
+    "coverage==7.16.2",
     "hypothesis==6.168.2",
     "mypy==2.3.1",
     "pytest==9.1.1",
+    "pytest-cov==7.1.0",
     "respx==0.23.1",
     "ruff==0.16.9",
     "vcrpy==8.3.0",
@@ -119,7 +121,7 @@ mypy_path = [
 ]
 
 [tool.pytest]
-testpaths = ["packages", "bench/harness"]
+testpaths = ["packages", "bench/harness", ".claude/hooks", "tests"]
 # importlib mode lets test files in different packages share a basename
 # (pytest's advice for new projects). The harness's tests import each other by
 # bare name, as under unittest, so its directory is on the path, and namespace
@@ -132,3 +134,23 @@ norecursedirs = [
     "*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}",
     "bench/apps",
 ]
+
+# The gate is `uv run pytest --cov`. `--cov` stays out of addopts, so a partial
+# run (one file, one test) isn't held to the whole suite's floor.
+[tool.coverage.run]
+branch = true
+source = ["packages", "bench/harness", ".claude/hooks"]
+# toggle_checks.py runs only inside the checks image (ADR-0023), where no unit
+# test reaches it.
+omit = ["*/tests/*", "*/test_*.py", "*/conftest.py", "bench/harness/toggle_checks.py"]
+# The guard's and the CLI's tests run their code as subprocesses.
+patch = ["subprocess"]
+
+[tool.coverage.report]
+fail_under = 94
+precision = 0
+show_missing = true
+skip_empty = true
+# Workspace members have no __init__.py above their src/ package, so without
+# this a module no test imports would be left out of the total, not counted.
+include_namespace_packages = true
