@@ -160,18 +160,27 @@ def test_todo_comment_fails_ruff() -> None:
     assert exit_code == 1
 
 
-def test_swallowed_exception_fails_ruff() -> None:
-    source = (
-        "def f(text: str) -> None:\n"
-        "    try:\n"
-        "        int(text)\n"
-        "    except Exception:\n"
-        "        pass\n"
-    )
+@pytest.mark.parametrize(
+    ("handler", "rules"),
+    [("except Exception:", {"BLE001", "S110"}), ("except:", {"E722"})],
+    ids=["broad", "bare"],
+)
+def test_swallowed_exception_fails_ruff(handler: str, rules: set[str]) -> None:
+    source = f"def f(text: str) -> None:\n    try:\n        int(text)\n    {handler}\n        pass\n"
 
     exit_code, codes = ruff_codes(source)
 
-    assert {"BLE001", "S110"} <= codes
+    assert rules <= codes
+    assert exit_code == 1
+
+
+def test_assert_and_print_fail_ruff_in_package_code() -> None:
+    # Tests may assert and scripts may print; package code raises and logs.
+    exit_code, codes = ruff_codes(
+        "def f(x: int) -> None:\n    assert x\n    print(x)\n"
+    )
+
+    assert {"S101", "T201"} <= codes
     assert exit_code == 1
 
 
@@ -195,15 +204,19 @@ def test_empty_body_fails_mypy(body: str, tmp_path: Path) -> None:
 # --- coverage ------------------------------------------------------------------------
 
 
-def covered_package(root: Path, percent: int) -> None:
-    """A workspace member under `root` whose tests cover `percent`% of its code."""
-    # Fifty one-line functions are 100 statements. The import runs the 50 `def`
-    # lines, so calling (percent - 50) of the functions covers percent% exactly.
-    functions = "".join(f"def f{i}() -> int:\n    return {i}\n\n\n" for i in range(50))
-    calls = "".join(f"    mod.f{i}()\n" for i in range(percent - 50))
+def covered_package(root: Path, functions: int, called: int) -> None:
+    """A workspace member under `root` whose tests call `called` of its `functions`.
+
+    Each function is two statements and the import runs every `def`, so the
+    package is (functions + called) / (2 * functions) covered.
+    """
+    source = "".join(
+        f"def f{i}() -> int:\n    return {i}\n\n\n" for i in range(functions)
+    )
+    calls = "".join(f"    mod.f{i}()\n" for i in range(called))
     package = root / "packages/demo"
     (package / "src/demo").mkdir(parents=True)
-    (package / "src/demo/mod.py").write_text(functions)
+    (package / "src/demo/mod.py").write_text(source)
     (package / "tests").mkdir()
     (package / "tests/test_mod.py").write_text(
         f"from demo import mod\n\n\ndef test_mod() -> None:\n{calls}"
@@ -225,28 +238,37 @@ def pytest_cov(root: Path) -> subprocess.CompletedProcess[str]:
 
 def test_coverage_at_the_floor_passes(tmp_path: Path) -> None:
     floor = threshold("Coverage, overall")
-    covered_package(tmp_path, floor)
+    covered_package(tmp_path, 50, floor - 50)
 
     result = pytest_cov(tmp_path)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    # pytest-cov prints the configured floor as a float.
-    assert f"Required test coverage of {float(floor)}% reached" in result.stdout
+    assert "Required test coverage of" in result.stdout  # a floor is configured
 
 
 def test_coverage_below_the_floor_fails(tmp_path: Path) -> None:
     floor = threshold("Coverage, overall")
-    covered_package(tmp_path, floor - 1)
+    covered_package(tmp_path, 50, floor - 51)
 
     result = pytest_cov(tmp_path)
 
     assert result.returncode == 1, result.stdout + result.stderr
-    failure = f"Coverage failure: total of {floor - 1} is less than fail-under={floor}"
-    assert failure in result.stdout
+    assert "Coverage failure" in result.stdout  # the floor failed it, not a test
+
+
+def test_coverage_rounds_to_a_whole_percent(tmp_path: Path) -> None:
+    floor = threshold("Coverage, overall")
+    # 500 statements, 0.4 points short of the floor, which rounds up to it.
+    covered_package(tmp_path, 250, 5 * floor - 252)
+
+    result = pytest_cov(tmp_path)
+
+    assert f"Total coverage: {floor - 0.4:.2f}%" in result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_an_unimported_module_counts_against_the_floor(tmp_path: Path) -> None:
-    covered_package(tmp_path, threshold("Coverage, overall"))
+    covered_package(tmp_path, 50, threshold("Coverage, overall") - 50)
     # Like every workspace member, packages/demo has no __init__.py.
     unimported = "packages/demo/src/demo/unimported.py"
     (tmp_path / unimported).write_text("def f() -> int:\n    return 0\n")
@@ -255,6 +277,24 @@ def test_an_unimported_module_counts_against_the_floor(tmp_path: Path) -> None:
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert unimported in result.stdout
+
+
+def test_a_branch_never_taken_counts_against_the_floor(tmp_path: Path) -> None:
+    covered_package(tmp_path, 1, 1)
+    # Every line of g runs, but its `if` never takes the False branch: all
+    # lines are covered, one of two branches isn't (8 of 9, below the floor).
+    demo = tmp_path / "packages/demo"
+    (demo / "src/demo/branchy.py").write_text(
+        "def g(x: bool) -> int:\n    y = 0\n    if x:\n        y = 1\n    return y\n"
+    )
+    (demo / "tests/test_branchy.py").write_text(
+        "from demo import branchy\n\n\ndef test_g() -> None:\n    branchy.g(True)\n"
+    )
+
+    result = pytest_cov(tmp_path)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Coverage failure" in result.stdout
 
 
 # --- pytest strictness ---------------------------------------------------------------
@@ -280,7 +320,7 @@ def test_unregistered_marker_fails_under_strict_mode(tmp_path: Path) -> None:
     result = pytest_repo_config(tmp_path, "test_marked.py", marked)
     control = pytest_repo_config(tmp_path, "test_plain.py", PLAIN_TEST)
 
-    assert result.returncode != 0
+    assert result.returncode == pytest.ExitCode.INTERRUPTED, result.stdout
     assert "'unregistered' not found in `markers`" in result.stdout
     assert control.returncode == 0, control.stdout
 
@@ -298,3 +338,11 @@ def test_a_warning_fails_the_test_run(tmp_path: Path) -> None:
     assert result.returncode == 1, result.stdout
     assert "DeprecationWarning: deprecated" in result.stdout
     assert control.returncode == 0, control.stdout
+
+
+def test_the_test_gate_collects_the_guard_and_these_tests() -> None:
+    result = run([*PYTEST, "--collect-only", "-q"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ".claude/hooks/test_policy_guard.py" in result.stdout
+    assert "tests/test_constraints.py" in result.stdout
