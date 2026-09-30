@@ -15,7 +15,7 @@ Planted bugs and benign UI changes in vendored open-source apps, used to measure
 ```bash
 python3 bench/harness/manifest.py                   # validate the manifest and the split freeze
 python3 bench/harness/manifest.py --split-hash      # print the hash after a deliberate split change
-python3 -m unittest discover -s bench/harness       # harness tests (CI runs these in guardrails)
+uv run pytest bench/harness                         # harness tests (CI's python job runs them)
 
 python3 bench/harness/flags.py set <case-id>        # switch the case's app to that case (recreates, reseeds, verifies)
 python3 bench/harness/flags.py clean <app>          # the clean app

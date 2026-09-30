@@ -24,3 +24,7 @@ Option 3. `.github/workflows/ci.yml` runs three jobs:
 - Applying the rules to admins means neither the maintainer's token nor an agent using it can push to `main` or merge a red pull request. It can be turned off in Settings → Branches when genuinely needed.
 - M1 adds the Python gates (pytest, mypy over `packages/`, …) and M7 the dashboard gates as further jobs. Each new job must also be added to the required checks.
 - No CD yet: nothing is deployable before the M4 SaaS foundation. Deploys will use GitHub OIDC to AWS (SECURITY.md).
+
+## Amendment (2026-09-29): the Python gates join as two jobs
+
+ADR-0029 adds the `python` job (the workspace gates, installed from `uv.lock`) and the `audit` job (osv-scanner on `uv.lock`), and a weekly scheduled run. `guardrails` keeps the guard tests and the policy scan; its Ruff and mypy steps move to `python`. `main` requires all five checks: `guardrails`, `python`, `audit`, `secrets` and `fallow`. uv and osv-scanner are downloaded as linux x64 release binaries checked against a pinned sha256, so the allowlist stays as it is.

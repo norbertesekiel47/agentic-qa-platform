@@ -24,7 +24,7 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | [0016](0016-build-order-and-license.md) | Core-first build order; Apache-2.0 | Accepted |
 | [0017](0017-dashboard-hosting-static-export.md) | Dashboard hosting: Next.js static export on S3 + CloudFront | Accepted |
 | [0018](0018-fallow-agent-commit-gate.md) | fallow as the TypeScript codebase-intelligence gate, enforced at agent commit/push | Accepted (amended 2026-09-28) |
-| [0019](0019-ci-switchable-runner.md) | CI on GitHub Actions with a switchable runner (Blacksmith-ready) | Accepted |
+| [0019](0019-ci-switchable-runner.md) | CI on GitHub Actions with a switchable runner (Blacksmith-ready) | Accepted (amended 2026-09-29) |
 | [0020](0020-benchmark-apps-conduit-medusa.md) | Benchmark apps: RealWorld Conduit first, Medusa second | Accepted (amended 2026-09-28) |
 | [0021](0021-bench-apps-gate-carve-out.md) | Vendored benchmark apps (`bench/apps/`): a narrow gate carve-out | Accepted |
 | [0022](0022-bench-flags-test-api-manifest.md) | Benchmark feature flags, test-only endpoints and the ground-truth manifest | Accepted (amended 2026-09-28, 2026-09-29) |
@@ -33,7 +33,8 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | [0025](0025-compiled-targets-checks-flags.md) | Compiled scripts: meanings, locators, checks and step flags | Accepted |
 | [0026](0026-local-ci-browser-boundary.md) | The browser boundary for local and CI runs: sandbox, egress and test secrets | Accepted |
 | [0027](0027-python-workspace.md) | The Python workspace: layout, pins and tool settings | Accepted (amended 2026-09-29) |
-| [0028](0028-quality-bar.md) | The quality bar: coverage, complexity, the Ruff rule set and the floor guard | Accepted |
+| [0028](0028-quality-bar.md) | The quality bar: coverage, complexity, the Ruff rule set and the floor guard | Accepted (amended 2026-09-29) |
+| [0029](0029-ci-on-the-uv-workspace.md) | CI on the uv workspace: jobs, installs, the mypy split and the dependency audit | Accepted |
 
 ## Template
 

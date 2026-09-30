@@ -74,3 +74,7 @@ Recreating both Conduit containers with `docker compose up -d --force-recreate -
 The "Residual exposure" consequence understated what the page's own code reveals. The production bundle keeps each flag ID as a literal next to the code it switches. In the build at `f4531eb`, for example, it reads `this.dateZone=w("4o6x")?"-1200":void 0`. Together with the flag list in the served HTML, the page's source reveals the planted change, not only that some opaque flag is on. The same build ships no source maps, case IDs or ADR references.
 
 So the guarantee rests on the system under test never reading page or script source. The model gets the accessibility tree, screenshots, and console and network metadata, and no tool may fetch arbitrary URLs or read files (AGENTS.md §6). A future tool that returns response bodies or scripts must keep benchmark bundles out of the model's input.
+
+## Amendment (2026-09-29): CI runs the harness under pytest
+
+ADR-0029 moves the harness's CI checks from `guardrails` to the `python` job. They now run from `uv.lock`: `ruff`, `mypy --strict --no-explicit-package-bases` and `pytest`, which collects the harness's unittest tests.
