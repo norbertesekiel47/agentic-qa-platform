@@ -121,6 +121,10 @@ mypy_path = [
 ]
 
 [tool.pytest]
+# strict turns on strict_config, strict_markers, strict_xfail and
+# strict_parametrization_ids; a warning fails the test that raised it.
+strict = true
+filterwarnings = ["error"]
 testpaths = ["packages", "bench/harness", ".claude/hooks", "tests"]
 # importlib mode lets test files in different packages share a basename
 # (pytest's advice for new projects). The harness's tests import each other by
