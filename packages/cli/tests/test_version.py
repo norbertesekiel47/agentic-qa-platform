@@ -16,7 +16,3 @@ def test_version_prints_the_cli_package_version(aqa: str) -> None:
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == f"aqa {declared}\n"
-
-
-def test_broken() -> None:
-    assert int("1") == 2
