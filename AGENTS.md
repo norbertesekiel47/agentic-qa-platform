@@ -20,6 +20,7 @@ A multi-tenant SaaS + CLI + GitHub App for agentic E2E testing: an agent explore
 | Screens and UI rules | [UX_SPEC.md](UX_SPEC.md) |
 | Test layers, benchmark, gates | [TESTING.md](TESTING.md) |
 | Quality thresholds and the floor | [CONSTRAINTS.md](CONSTRAINTS.md) |
+| How to install, test and run the gates | [§4 Commands](#4-commands) |
 | Threat model and controls | [SECURITY.md](SECURITY.md) |
 | Milestones and order | [ROADMAP.md](ROADMAP.md) |
 | Why a decision was made | [ADRs/](ADRs/) |
@@ -45,16 +46,29 @@ The three `packages/` exist: uv workspace members with `src` layouts, imported a
 
 ## 4. Commands
 
-To be filled in at scaffold (M1) and kept current. Expected shape:
+Run them from the repository root. You need uv, which installs the Python in `.python-version`. The last three gates also need osv-scanner (with jq), gitleaks and fallow, at the versions `.github/workflows/ci.yml` pins. TESTING.md §8 lists the gates and CONSTRAINTS.md holds their thresholds.
+
+```bash
+uv sync --locked                     # install the workspace from uv.lock, as CI does
+
+# The gates, in CI's job order, with the job in brackets. A change is done when all pass (rule 1).
+python3 -m unittest discover -s .claude/hooks                                  # [guardrails] guard tests
+env -u AQA_POLICY_GUARD python3 .claude/hooks/policy_guard.py --scan           # [guardrails] policy scan
+uv run ruff check .                                                            # [python] lint
+uv run ruff format --check .                                                   # [python] format
+uv run mypy                                                                    # [python] types: packages and tests
+uv run mypy --strict --no-explicit-package-bases .claude/hooks bench/harness   # [python] types: scripts
+uv run pytest --cov                                                            # [python] every test, and the coverage floor
+.github/scripts/audit-lockfile.sh osv-scanner uv.lock                          # [dependency-audit] high or critical advisories
+gitleaks git --no-banner --redact --verbose .                                  # [secrets] full history
+fallow audit --format json --quiet --explain                                   # [fallow] what the branch changes
+
+# Narrower test runs, without --cov: the coverage floor holds for the whole suite only.
+uv run pytest tests/test_constraints.py                                        # one file: CONSTRAINTS.md's threshold checks
+uv run pytest tests/test_constraints.py::test_coverage_below_the_floor_fails   # one test
 ```
-uv sync                         # install Python deps
-uv run ruff check . && uv run ruff format --check .
-uv run mypy --strict packages apps/api
-uv run pytest                   # unit + integration + isolation
-uv run pytest bench/ -m smoke   # benchmark smoke (cassettes)
-pnpm -C apps/dashboard install && pnpm -C apps/dashboard lint typecheck test
-pnpm -C apps/dashboard gen:client   # regenerate TS client from OpenAPI
-```
+
+The scan runs with `AQA_POLICY_GUARD` unset because `off` turns it into a no-op. The benchmark harness's commands are in [bench/README.md](bench/README.md). The dashboard's commands arrive with M7, and the benchmark smoke with M3 (TESTING.md §8).
 
 ## 5. Rules (non-negotiable)
 
@@ -70,17 +84,16 @@ pnpm -C apps/dashboard gen:client   # regenerate TS client from OpenAPI
 10. **Git safety.** Name paths explicitly. Never run whole-tree destructive commands (hard reset, `git add -A`/`.`, whole-tree checkout/restore, forced `git clean`). Before a rebase, merge, or branch switch, run `git status --porcelain` and report what is dirty.
 
 **Enforcement.** Each rule in CONSTRAINTS.md has exactly one enforcer:
-- **Ruff** (`uv run ruff check .`, `uv run ruff format --check .`): the rule set, formatting, the function-size limits, `TODO`-style comments and broad exception handlers.
-- **mypy** (`uv run mypy`, then its scripts run; CONSTRAINTS.md, Types): types, and empty bodies in functions that return a value.
-- **pytest** (`uv run pytest --cov`): tests in strict mode with warnings as errors, and the coverage floor.
+- **Ruff** (lint and format, §4): the rule set, formatting, the function-size limits, `TODO`-style comments and broad exception handlers.
+- **mypy** (both type runs, §4; CONSTRAINTS.md, Types): types, and empty bodies in functions that return a value.
+- **pytest** (the test gate, §4): tests in strict mode with warnings as errors, and the coverage floor.
 - **policy_guard** (`.claude/hooks/policy_guard.py`): the rest of the floor. In Claude Code it runs before each tool call and at the end of each turn.
   - **Refused:** newly added suppressions, coverage pragmas, skipped/focused/rerun tests, tautological assertions, `suppress(Exception)` and, outside tests, unimplemented stubs (rule 1); Chromium sandbox disabling (§6); secrets in shell commands, and known-format credentials in any file (rule 9). A refused line other than a secret passes when it cites an existing `ADR-NNNN`, so write the ADR first. Fake test credentials must say so (e.g. contain `fake`).
   - **Needs the user's approval:** any change to quality-gate config (CONSTRAINTS.md, ruff/mypy/pytest/coverage settings, `[tool.uv]` and its non-workspace sources, tsconfig, eslint/vitest config, osv-scanner waivers, gate scripts, CI workflows and scripts), a test edit that removes assertions or tests, a shell command that may delete, move or rewrite a test file, and any edit to the guard or `.claude/settings*.json`.
-  - **End-of-turn scan:** the whole tree is re-checked for the refused patterns, which catches files written by scripts or other tools; `python3 .claude/hooks/policy_guard.py --scan` runs the same scan (exit 1 on violations). Other agents don't run Claude Code hooks, but the rules still apply to them.
-- **fallow gate (ADR-0018):** before `git commit` or `git push`, `.claude/hooks/fallow-gate.sh` runs `fallow audit` and blocks a `fail` verdict (dead code, duplication or complexity that the change introduces). fallow analyzes only TypeScript and JavaScript, so until the dashboard exists it passes without checking anything; Python quality rests on the gates above. Agents without the hook run `fallow audit --format json --quiet --explain` before committing and fix any `fail`. Fix findings; `fallow-ignore` comments are suppressions under rule 1.
+  - **End-of-turn scan:** the whole tree is re-checked for the refused patterns, which catches files written by scripts or other tools; §4's policy scan runs the same scan (exit 1 on violations). Other agents don't run Claude Code hooks, but the rules still apply to them.
+- **fallow gate (ADR-0018):** before `git commit` or `git push`, `.claude/hooks/fallow-gate.sh` runs `fallow audit` and blocks a `fail` verdict (dead code, duplication or complexity that the change introduces). fallow analyzes only TypeScript and JavaScript, so until the dashboard exists it passes without checking anything; Python quality rests on the gates above. Agents without the hook run §4's fallow command before committing and fix any `fail`. Fix findings; `fallow-ignore` comments are suppressions under rule 1.
 - **CI (ADR-0019, ADR-0029):** every pull request must pass `guardrails` (guard tests, `--scan`), `python` (from `uv.lock`: lint, format, both mypy runs, `pytest --cov`), `dependency-audit` (osv-scanner on `uv.lock`), `secrets` (gitleaks over full history) and `fallow` (`fallow audit`). `main` accepts changes only through pull requests with those checks green, for admins too. A new CI job must also be added to the required checks.
 - **Vendored apps (ADR-0021):** `bench/apps/` holds third-party code with planted bugs, so policy_guard and fallow skip it. gitleaks still scans it: add a `file:rule:line` entry to `.gitleaksignore` only for an upstream finding you have reviewed and confirmed is not a real secret. Everything else under `bench/` is ours and fully policed.
-- Tests: `python3 -m unittest discover -s .claude/hooks`.
 
 ## 6. Project-specific guardrails
 

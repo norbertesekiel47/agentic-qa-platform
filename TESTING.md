@@ -106,7 +106,7 @@ PR smoke: 8 dev-split cases (≈ 2 min, recorded cassettes). Nightly: full dev s
 
 ## 8. Quality gates (CI)
 
-A change is mergeable only when every gate that runs passes. The jobs are in `.github/workflows/ci.yml` (ADR-0019, ADR-0029). Each job is a required check on `main`, and a gate with nothing to check yet is left out rather than faked.
+A change is mergeable only when every gate that runs passes. The jobs are in `.github/workflows/ci.yml` (ADR-0019, ADR-0029). Each job is a required check on `main`, and a gate with nothing to check yet is left out rather than faked. [AGENTS.md §4](AGENTS.md#4-commands) runs the same gates locally.
 
 | Gate | CI job | Runs |
 |---|---|---|
