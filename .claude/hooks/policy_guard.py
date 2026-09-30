@@ -18,7 +18,9 @@ Refused
    ``@ts-expect-error``, ``@ts-nocheck``, ``eslint-disable*``, ``fallow-ignore*``,
    ``@expected-unused``), coverage pragmas,
    skipped / focused / rerun-until-green tests, tautological assertions
-   (``assert True``, ``expect(true).toBe(true)``), and ``ruff --add-noqa``.
+   (``assert True``, ``expect(true).toBe(true)``), and ``ruff --add-noqa``;
+   and, outside tests, unimplemented stubs (``raise NotImplementedError``,
+   ``throw new Error("Not implemented")``), CONSTRAINTS.md's floor.
 2. Disabling the Chromium sandbox (AGENTS.md §6).
 3. Secrets (AGENTS.md §5 rule 9): literal secrets in shell commands (known
    formats, secret-named variables and flags, auth headers, remote database
@@ -28,11 +30,13 @@ Refused
 Escalated to the user
 ---------------------
 4. Any change to a quality-gate config: ruff / mypy / pytest / coverage /
-   pyright settings, tsconfig, eslint, vitest and fallow configs, pre-commit, gate
-   scripts in package.json, gate steps in CI workflows. Tightening prompts too:
+   pyright settings, ``[tool.uv]`` (the litellm ban), CONSTRAINTS.md, tsconfig,
+   eslint, vitest and fallow configs, pre-commit, gate scripts in package.json,
+   gate steps in CI workflows. Tightening prompts too:
    the bar moves only with a human in the loop. Creating one of these files
    prompts once, which is how the initial bar gets approved.
-5. A test-file edit that leaves fewer assertions than before.
+5. A test-file edit that leaves fewer assertions than before, and a shell
+   command that may delete, move or rewrite a test file.
 6. Edits to this guard or the settings that load it (``.claude/hooks/``,
    ``.claude/settings*.json``), including shell writes that name them and
    installers that rewrite them without naming them (``fallow hooks install``,
@@ -63,9 +67,12 @@ Known gaps, stated rather than hidden
 * In files, only known credential formats are recognised; the generic
   ``PASSWORD=...`` detection runs on shell commands only.
 * Shell writes are recognised heuristically. The Stop scan backstops rules
-  1-3; rules 4-6 have no backstop for a write through an opaque script.
+  1-3; rules 4-6 have no backstop for a write through an opaque script. A
+  test file deleted by ``find -delete``, a glob or a script goes unseen, and
+  any mutating command that names a test path asks, a formatter run included.
 * This is a guardrail, not a security boundary. Other agents (Codex, Cursor)
-  do not run Claude Code hooks: wire ``--scan`` into CI or pre-commit.
+  do not run Claude Code hooks, and CI runs only ``--scan``, which sees file
+  contents but not deleted tests, dropped assertions or changed gate configs.
 
 Contract (code.claude.com/docs/en/hooks): stdin is the hook payload as JSON.
 PreToolUse: exit 2 refuses and shows stderr to the model; a JSON
@@ -89,7 +96,7 @@ from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
 from types import TracebackType
-from typing import Any
+from typing import Any, Literal
 
 # --- scope ---------------------------------------------------------------------
 
@@ -119,6 +126,7 @@ TEST_FILE = re.compile(
 SUPPRESSION = "suppression"
 SKIPPED_TEST = "skipped test"
 WEAK_ASSERTION = "weak assertion"
+STUB = "stub"
 SANDBOX = "sandbox"
 
 GUIDANCE = {
@@ -134,11 +142,18 @@ GUIDANCE = {
         "AGENTS.md §5 rule 1: no weakened assertions. "
         "Assert the behaviour the test is named for."
     ),
+    STUB: (
+        "CONSTRAINTS.md floor: no unimplemented stubs. Implement it, or leave it "
+        "out until a ticket needs it; abstract and Protocol methods use `...`."
+    ),
     SANDBOX: (
         "AGENTS.md §6: Chromium launches with its sandbox enabled "
         "(chromium_sandbox=True); never ship --no-sandbox for hosted runs."
     ),
 }
+
+# Where a rule applies: every checked file, test files only, or all but tests.
+Scope = Literal["any", "tests", "source"]
 
 ADR_HINT = (
     "If an accepted ADR genuinely justifies this, write the ADR first "
@@ -151,11 +166,11 @@ class Rule:
     label: str
     kind: str
     pattern: re.Pattern[str]
-    tests_only: bool = False
+    scope: Scope = "any"
 
 
-def _rule(label: str, kind: str, regex: str, *, tests_only: bool = False) -> Rule:
-    return Rule(label, kind, re.compile(regex), tests_only)
+def _rule(label: str, kind: str, regex: str, *, scope: Scope = "any") -> Rule:
+    return Rule(label, kind, re.compile(regex), scope)
 
 
 CONTENT_RULES = (
@@ -201,7 +216,7 @@ CONTENT_RULES = (
         r"|\b(?:xit|xtest|xdescribe)\s*\(",
     ),
     _rule("flaky / rerun marker", SKIPPED_TEST, r"\bpytest\.mark\.flaky\b|--reruns\b"),
-    _rule("test retry", SKIPPED_TEST, r"\bretry\s*:\s*[1-9]", tests_only=True),
+    _rule("test retry", SKIPPED_TEST, r"\bretry\s*:\s*[1-9]", scope="tests"),
     _rule(
         "tautological assertion",
         WEAK_ASSERTION,
@@ -212,6 +227,13 @@ CONTENT_RULES = (
         r"|\bexpect\(\s*true\s*\)\.toBeTruthy\(\)"
         r"|\bexpect\(\s*false\s*\)\.toBeFalsy\(\)",
     ),
+    _rule(
+        "unimplemented stub",
+        STUB,
+        r"\braise\s+NotImplementedError\b"
+        r"|(?i:\bthrow\s+new\s+Error\(\s*[\"'`][^\"'`]*\bnot\s+implemented)",
+        scope="source",
+    ),
     _rule("`--no-sandbox`", SANDBOX, r"--no-sandbox\b"),
     _rule("`--disable-*sandbox`", SANDBOX, r"--disable-[\w-]*sandbox\b"),
     _rule(
@@ -220,7 +242,8 @@ CONTENT_RULES = (
         r"""\bchromium_?[sS]andbox["']?\s*[:=]\s*[Ff]alse\b""",
     ),
 )
-NON_TEST_RULES = tuple(rule for rule in CONTENT_RULES if not rule.tests_only)
+TEST_RULES = tuple(rule for rule in CONTENT_RULES if rule.scope != "source")
+SOURCE_RULES = tuple(rule for rule in CONTENT_RULES if rule.scope != "tests")
 
 ADR_REF = re.compile(r"\bADR-(\d{4})\b")
 
@@ -312,12 +335,13 @@ GATE_WHOLE_FILE = re.compile(
     r"(?:^|/)(?:\.?ruff\.toml|\.?mypy\.ini|pytest\.ini|\.coveragerc|pyrightconfig\.json"
     r"|\.pre-commit-config\.ya?ml|eslint\.config\.[cm]?[jt]s|\.eslintrc(?:\.\w+)?"
     r"|vitest\.(?:config|workspace)\.[cm]?[jt]s|tsconfig[\w.-]*\.json"
-    r"|\.fallowrc(?:\.jsonc?)?|\.?fallow\.toml)$"
+    r"|\.fallowrc(?:\.jsonc?)?|\.?fallow\.toml|CONSTRAINTS\.md)$"
 )
 GATE_SECTION_FILES = frozenset({"pyproject.toml", "setup.cfg", "tox.ini"})
 SECTION_HEADER = re.compile(r"^\[\[?\s*([A-Za-z_][\w.:\s\"-]*?)\s*\]\]?\s*(?:#.*)?$")
+# [tool.uv] holds the litellm ban; its workspace and sources tables don't gate.
 GATE_SECTION = re.compile(
-    r"^(?:tool\.(?:ruff|mypy|pytest|coverage|pyright|basedpyright)\b"
+    r"^(?:tool\.(?:ruff|mypy|pytest|coverage|pyright|basedpyright)\b|tool\.uv$"
     r"|mypy\b|tool:pytest\b|pytest\b|coverage:|flake8\b)"
 )
 PACKAGE_GATE_SCRIPT = re.compile(
@@ -379,7 +403,12 @@ GATE_FILE_IN_SHELL = re.compile(
     r"|setup\.cfg|tox\.ini|pyrightconfig\.json|tsconfig[\w.-]*\.json"
     r"|eslint\.config\.[cm]?[jt]s|\.eslintrc|vitest\.(?:config|workspace)\.[cm]?[jt]s"
     r"|\.pre-commit-config\.ya?ml|package\.json|\.github/workflows/"
-    r"|\.fallowrc(?:\.jsonc?)?|\.?fallow\.toml)"
+    r"|\.fallowrc(?:\.jsonc?)?|\.?fallow\.toml|CONSTRAINTS\.md)"
+)
+# A test file or directory named in a shell command: TEST_FILE's shapes.
+TEST_PATH_IN_SHELL = re.compile(
+    r"(?<![\w.-])(?:tests?/|tests(?![\w.-])|test_[\w.-]*\.py|[\w.-]*_test\.py"
+    r"|conftest\.py|[\w.-]*\.(?:test|spec)\.[cm]?[jt]sx?(?![\w.-]))"
 )
 
 # --- tree scan ------------------------------------------------------------------------
@@ -477,7 +506,7 @@ def unexcused_hits(
     text: str, project: Path, *, tests: bool
 ) -> Iterator[tuple[int, Rule, str]]:
     """(line number, rule, line) for each rule match on a line citing no ADR."""
-    rules = CONTENT_RULES if tests else NON_TEST_RULES
+    rules = TEST_RULES if tests else SOURCE_RULES
     for number, line in enumerate(text.splitlines(), 1):
         hits = [rule for rule in rules if rule.pattern.search(line)]
         if hits and not cites_existing_adr(line, project):
@@ -710,6 +739,11 @@ def check_bash(command: str, project: Path) -> Verdict:
         verdict.asks.append(
             "this shell command may modify a quality-gate config, which the "
             "per-edit diff check cannot see through a shell write."
+        )
+    if mutates and TEST_PATH_IN_SHELL.search(command):
+        verdict.asks.append(
+            "this shell command may delete, move or rewrite a test file, which the "
+            "per-edit assertion check cannot see."
         )
     return verdict
 
