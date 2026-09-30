@@ -436,6 +436,13 @@ class GateConfigTests(GuardTestCase):
         )
         self.assert_asks(self.write("mypy.ini", "[mypy]\nstrict = True\n"))
 
+    def test_osv_scanner_waivers_ask(self) -> None:
+        # An ignored advisory there passes CI's dependency audit (ADR-0029).
+        waiver = '[[IgnoredVulns]]\nid = "GHSA-fake-0000-0000"\nreason = "fake"\n'
+        self.assert_asks(self.write("osv-scanner.toml", waiver))
+        self.assert_asks(self.bash("cat waiver.toml >> osv-scanner.toml"))
+        self.assert_allowed(self.bash("cat osv-scanner.toml"))
+
     def test_package_json_gate_scripts_ask(self) -> None:
         self.put("apps/dashboard/package.json", PACKAGE_JSON)
         rel = "apps/dashboard/package.json"
