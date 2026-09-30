@@ -1,0 +1,19 @@
+# The hosted-compute spike's trial (ADR-0008 amendment, 2026-09-30): one
+# program, packaged for each candidate by the Dockerfile next to this file.
+# awslambdaric runs the trial in the Lambda function's image; it ships Linux
+# wheels only, and nothing imports it.
+[project]
+name = "aqa-hosted-chromium-spike"
+version = "0.1.0"
+description = "The hosted-compute spike's trial: sandboxed Chromium, timed and measured."
+license = "Apache-2.0"
+requires-python = ">=3.14"
+dependencies = [
+    "aqa-runner",
+    "awslambdaric==4.1.0; sys_platform == 'linux'",
+    "playwright==1.63.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.15,<0.12"]
+build-backend = "uv_build"

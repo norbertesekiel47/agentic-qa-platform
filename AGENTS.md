@@ -65,7 +65,7 @@ python3 .claude/hooks/policy_guard.py --scan                                   #
 # In the workspace:
 uv run ruff check .                                                            # lint
 uv run ruff format --check .                                                   # format
-uv run mypy                                                                    # types: packages and tests
+uv run mypy                                                                    # types: packages, spikes and tests
 uv run mypy --strict --no-explicit-package-bases .claude/hooks bench/harness   # types: scripts
 uv run pytest --cov                                                            # every test, and the coverage floor
 # With osv-scanner, gitleaks and fallow at the versions .github/workflows/ci.yml pins:

@@ -244,6 +244,7 @@ def covered_package(root: Path, functions: int, called: int) -> None:
         f"from demo import mod\n\n\ndef test_mod() -> None:\n{calls}"
     )
     # The config's other source directories: coverage warns when one is missing.
+    (root / "spikes").mkdir()
     (root / "bench/harness").mkdir(parents=True)
     (root / ".claude/hooks").mkdir(parents=True)
 
