@@ -27,4 +27,4 @@ Option 3. `.github/workflows/ci.yml` runs three jobs:
 
 ## Amendment (2026-09-29): the Python gates join as two jobs
 
-ADR-0029 adds the `python` job (the workspace gates, installed from `uv.lock`) and the `audit` job (osv-scanner on `uv.lock`), and a weekly scheduled run. `guardrails` keeps the guard tests and the policy scan; its Ruff and mypy steps move to `python`. `main` requires all five checks: `guardrails`, `python`, `audit`, `secrets` and `fallow`. uv and osv-scanner are downloaded as linux x64 release binaries checked against a pinned sha256, so the allowlist stays as it is.
+ADR-0029 adds the `python` job (the workspace gates, installed from `uv.lock`) and the `dependency-audit` job (osv-scanner on `uv.lock`), and a weekly scheduled run. `guardrails` keeps the guard tests and the policy scan; its Ruff and mypy steps move to `python`. `main` requires all five checks: `guardrails`, `python`, `dependency-audit`, `secrets` and `fallow`. uv and osv-scanner are downloaded as linux x64 release binaries checked against a pinned sha256, so the allowlist stays as it is.

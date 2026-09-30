@@ -54,6 +54,10 @@ jobs:
     name: python
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 15
+    env:
+      # uv runs the gates on setup-python's interpreter, or fails if it doesn't
+      # match .python-version; it never downloads another.
+      UV_PYTHON_DOWNLOADS: never
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -70,8 +74,9 @@ jobs:
           curl -sSfL -o "$RUNNER_TEMP/uv.tar.gz" \
             "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz"
           echo "${UV_SHA256}  $RUNNER_TEMP/uv.tar.gz" | sha256sum --check --strict
-          tar -xzf "$RUNNER_TEMP/uv.tar.gz" -C "$RUNNER_TEMP" --strip-components=1 uv-x86_64-unknown-linux-gnu/uv
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          mkdir "$RUNNER_TEMP/uv-bin"
+          tar -xzf "$RUNNER_TEMP/uv.tar.gz" -C "$RUNNER_TEMP/uv-bin" --strip-components=1 uv-x86_64-unknown-linux-gnu/uv
+          echo "$RUNNER_TEMP/uv-bin" >> "$GITHUB_PATH"
       # --locked fails if uv.lock is out of date with the pyproject files, so
       # the gates run on exactly the locked versions.
       - name: Install the workspace from uv.lock
@@ -91,20 +96,13 @@ jobs:
       - name: Tests and coverage
         run: uv run pytest --cov
 
-  audit:
-    name: audit
+  dependency-audit:
+    name: dependency-audit
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     env:
       OSV_SCANNER_VERSION: 2.6.0
       OSV_SCANNER_SHA256: ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108
-      # One row per advisory group: the package, the group's IDs and its
-      # highest CVSS score, or null when the advisory has none. JSON without
-      # these keys is a jq error, which fails the step.
-      FINDINGS_JQ: >-
-        [.results[].packages[] | .package as $p | .groups[]
-        | {package: "\($p.name) \($p.version)", ids: (.ids | join(", ")),
-           score: (.max_severity | tonumber? // null)}]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -115,27 +113,10 @@ jobs:
             "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
           echo "${OSV_SCANNER_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum --check --strict
           chmod +x "$RUNNER_TEMP/osv-scanner"
-      # The threshold and waivers are CONSTRAINTS.md's "Dependency audit" row:
-      # an advisory scoring CVSS 7.0 or more, or with no score, fails. osv-scanner
-      # exits 1 on an advisory of any severity, so the step judges its JSON. It
-      # fails closed: on any other nonzero exit, and on an exit 1 whose JSON
-      # gives no rows.
+      # CONSTRAINTS.md's "Dependency audit" row; tests/test_constraints.py
+      # runs the script against a fake scanner.
       - name: Audit uv.lock
-        run: |
-          status=0
-          "$RUNNER_TEMP/osv-scanner" scan source --lockfile uv.lock --format json \
-            --output-file "$RUNNER_TEMP/osv.json" || status=$?
-          if [ "$status" -gt 1 ]; then exit "$status"; fi
-          rows=$(jq "$FINDINGS_JQ | length" "$RUNNER_TEMP/osv.json")
-          if [ "$status" -eq 1 ] && [ "$rows" -eq 0 ]; then
-            echo "::error::osv-scanner reported findings that the filter read no rows from"
-            exit 1
-          fi
-          jq -r "$FINDINGS_JQ"' | .[] | "\(.package): \(.ids) (CVSS \(.score // "none"))"' "$RUNNER_TEMP/osv.json"
-          if ! jq -e "$FINDINGS_JQ"' | all(.score != null and .score < 7)' "$RUNNER_TEMP/osv.json" > /dev/null; then
-            echo "::error::uv.lock has a high or critical advisory, or one without a score (listed above)"
-            exit 1
-          fi
+        run: .github/scripts/audit-lockfile.sh "$RUNNER_TEMP/osv-scanner" uv.lock
 
   secrets:
     name: secrets
