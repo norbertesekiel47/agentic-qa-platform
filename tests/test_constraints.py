@@ -279,6 +279,25 @@ def test_an_unimported_module_counts_against_the_floor(tmp_path: Path) -> None:
     assert unimported in result.stdout
 
 
+def test_an_omitted_file_stays_omitted_in_a_subprocess(tmp_path: Path) -> None:
+    covered_package(tmp_path, 50, threshold("Coverage, overall") - 50)
+    # toggle_checks.py is omitted; a measured subprocess started in another
+    # directory must not count it, which a cwd-relative omit pattern would.
+    (tmp_path / "bench/harness/toggle_checks.py").write_text(
+        "".join(f"x{i} = {i}\n" for i in range(50))
+    )
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "packages/demo/tests/test_child.py").write_text(
+        "import subprocess\nimport sys\n\n\ndef test_child() -> None:\n"
+        "    subprocess.run([sys.executable, '-c', 'pass'], cwd='elsewhere', check=True)\n"
+    )
+
+    result = pytest_cov(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "toggle_checks.py" not in result.stdout
+
+
 def test_a_branch_never_taken_counts_against_the_floor(tmp_path: Path) -> None:
     covered_package(tmp_path, 1, 1)
     # Every line of g runs, but its `if` never takes the False branch: all

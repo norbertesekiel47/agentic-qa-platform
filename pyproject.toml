@@ -145,8 +145,9 @@ norecursedirs = [
 branch = true
 source = ["packages", "bench/harness", ".claude/hooks"]
 # toggle_checks.py runs only inside the checks image (ADR-0023), where no unit
-# test reaches it.
-omit = ["*/tests/*", "*/test_*.py", "*/conftest.py", "bench/harness/toggle_checks.py"]
+# test reaches it. Every pattern starts with `*`: coverage anchors any other
+# pattern to the cwd of each process, and a subprocess may start elsewhere.
+omit = ["*/tests/*", "*/test_*.py", "*/conftest.py", "*/bench/harness/toggle_checks.py"]
 # The guard's and the CLI's tests run their code as subprocesses.
 patch = ["subprocess"]
 
