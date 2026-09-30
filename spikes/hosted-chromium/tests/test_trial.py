@@ -8,6 +8,7 @@ import asyncio
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -104,13 +105,18 @@ def test_trial_reports_a_sandboxed_browser(tmp_path: Path, runs: Path) -> None:
             chromium = DelayedChromium(playwright.chromium, delay=0.3)
             return await run_trial(chromium, proc, runs), chromium.requested
 
+    started = time.time()
     report, requested = asyncio.run(scenario())
+    finished = time.time()
 
     assert requested == [True], "the trial didn't ask for the sandbox"
     assert report["sandbox"] == {"on": True}
     # The timer runs from before the launch until the sandbox check passed.
     assert report["ready_seconds"] is not None
     assert report["ready_seconds"] >= 0.3
+    # When that was, by the host's clock: after the delay, before the report.
+    assert report["ready_at"] is not None
+    assert started + 0.3 <= report["ready_at"] <= finished
     assert report["peak_memory_bytes"] == 2048 * 1024
     assert report["boot_id"] == BOOT_ID
 
@@ -144,6 +150,7 @@ def test_trial_reports_a_sandbox_the_runner_refuses(proc: Path, runs: Path) -> N
     assert chromium.requested == [True], "the trial didn't ask for the sandbox"
     assert report["sandbox"] == {"on": False, "error": REFUSED}
     assert report["ready_seconds"] is None
+    assert report["ready_at"] is None
     assert report["peak_memory_bytes"] == 512 * 1024
 
 

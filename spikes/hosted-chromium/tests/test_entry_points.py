@@ -91,6 +91,7 @@ REPORT = Report(
     earlier_runs=[],
     sandbox=Sandbox(on=True),
     ready_seconds=0.5,
+    ready_at=1790000000.5,
     peak_memory_bytes=1,
 )
 

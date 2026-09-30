@@ -41,8 +41,11 @@ class Report(TypedDict):
     boot_id: str
     earlier_runs: list[str]
     sandbox: Sandbox
-    # From asking Playwright to launch until the sandbox check passed.
+    # From asking Playwright to launch until the sandbox check passed, and when
+    # it passed, in seconds since the epoch by the host's clock: the scripts
+    # time a run from their request to this moment.
     ready_seconds: float | None
+    ready_at: float | None
     # The largest PSS sample of the trial's process and its descendants, over
     # MEMORY_SECONDS after the launch, with a blank page open in the browser.
     peak_memory_bytes: int
@@ -78,9 +81,15 @@ async def run_trial(chromium: Chromium, proc: Path, runs_file: Path) -> Report:
     except SandboxUnavailableError as error:
         # The finding the spike looks for on a candidate, so it is reported.
         # Every other error still stops the trial.
-        sandbox, ready, browser = Sandbox(on=False, error=str(error)), None, None
+        sandbox, ready, ready_at, browser = (
+            Sandbox(on=False, error=str(error)),
+            None,
+            None,
+            None,
+        )
     else:
         sandbox, ready = Sandbox(on=True), time.perf_counter() - started
+        ready_at = time.time()
     try:
         peak = await memory_with_a_page(proc, browser)
     finally:
@@ -92,6 +101,7 @@ async def run_trial(chromium: Chromium, proc: Path, runs_file: Path) -> Report:
         boot_id=boot_id(proc),
         sandbox=sandbox,
         ready_seconds=ready,
+        ready_at=ready_at,
         peak_memory_bytes=peak,
     )
 
