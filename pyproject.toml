@@ -99,6 +99,12 @@ ignore = [
 "bench/harness/flags.py" = ["S106", "S310"]
 # A fake keeps the signature of the protocol it stands in for.
 "bench/harness/test_flags.py" = ["ARG002"]
+# The spike's trial (ADR-0008 amendment, 2026-09-30). T20: the Fargate task's
+# interface is stdout, and a trial's report holds no secret. S104: Lambda's
+# proxy reaches the MicroVM's server through the VM's network interface, and
+# only requests with a create-microvm-auth-token token get through it.
+"spikes/hosted-chromium/src/aqa_hosted_chromium_spike/__main__.py" = ["T20"]
+"spikes/hosted-chromium/src/aqa_hosted_chromium_spike/microvm.py" = ["S104"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10
