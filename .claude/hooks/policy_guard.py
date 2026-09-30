@@ -51,7 +51,7 @@ Excuses
 * A credential-shaped value that says it is fake (``fake``, ``dummy``,
   ``example``, ``placeholder``, ``redacted``, ``xxxxxx``) is not a secret.
 * ``AQA_POLICY_GUARD=off`` in the environment Claude Code was launched from
-  disables every entry point for that session.
+  disables the hooks for that session. An explicit ``--scan`` still runs.
 
 Scope
 -----
@@ -964,13 +964,13 @@ def scan_cli(project: Path) -> int:
 
 
 def main(argv: list[str]) -> int:
-    if os.environ.get("AQA_POLICY_GUARD", "").lower() == "off":
-        return 0
     mode = argv[1] if len(argv) > 1 else "--pre-tool-use"
     if mode == "--scan":
         return scan_cli(
             Path(argv[2]).resolve() if len(argv) > 2 else project_dir(str(Path.cwd()))
         )
+    if os.environ.get("AQA_POLICY_GUARD", "").lower() == "off":
+        return 0
     try:
         payload = json.load(sys.stdin)
     except ValueError:

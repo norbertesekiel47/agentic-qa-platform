@@ -822,6 +822,13 @@ class TreeScanTests(GuardTestCase):
         result = self.run_mode("--stop", base, AQA_POLICY_GUARD="off")
         self.assertEqual(result.stdout.strip(), "")
 
+    def test_escape_hatch_leaves_an_explicit_scan_on(self) -> None:
+        # The switch silences the hooks; a scan someone runs by hand still checks.
+        self.put("packages/core/a.py", "y = f()  # type: ignore\n")
+        result = self.run_mode("--scan", AQA_POLICY_GUARD="off")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("packages/core/a.py:1", result.stdout)
+
 
 class FallowTests(GuardTestCase):
     def test_fallow_suppressions_are_blocked(self) -> None:
