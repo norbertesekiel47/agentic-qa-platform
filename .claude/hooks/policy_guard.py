@@ -50,8 +50,9 @@ Excuses
   ``ADRs/NNNN-*.md`` exists: write the ADR first, then the suppression.
 * A credential-shaped value that says it is fake (``fake``, ``dummy``,
   ``example``, ``placeholder``, ``redacted``, ``xxxxxx``) is not a secret.
-* ``AQA_POLICY_GUARD=off`` in the environment Claude Code was launched from
-  disables the hooks for that session. An explicit ``--scan`` still runs.
+* ``AQA_POLICY_GUARD=off`` in Claude Code's environment (the shell that launched
+  it, or a settings file's ``env``) disables the hooks for that session. An
+  explicit ``--scan`` still runs.
 
 Scope
 -----

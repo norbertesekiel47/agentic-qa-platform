@@ -71,7 +71,7 @@ uv run pytest tests/test_constraints.py                                        #
 uv run pytest tests/test_constraints.py::test_coverage_below_the_floor_fails   # one test
 ```
 
-The secret scan reads commits, not the working tree, and the other gates read the working tree, so commit everything first and run the gates before `git push`. The benchmark harness's commands are in [bench/README.md](bench/README.md). Gates that TESTING.md §8 marks for a later milestone join this block when they land: `tests/test_agents_commands.py` fails when a CI step, or a command CONSTRAINTS.md names, is missing here.
+The secret scan reads commits, not the working tree, and the other gates read the working tree, so commit everything first and run the gates before `git push`. The benchmark harness's commands are in [bench/README.md](bench/README.md). Gates that TESTING.md §8 marks for a later milestone join this block when they land: `tests/test_agents_commands.py` fails when a step or action in `.github/workflows/`, or a `uv run` command CONSTRAINTS.md names, has no line here.
 
 ## 5. Rules (non-negotiable)
 
