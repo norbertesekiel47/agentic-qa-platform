@@ -19,6 +19,8 @@ REPO = Path(__file__).resolve().parents[1]
 CONSTRAINTS = REPO / "CONSTRAINTS.md"
 # Ruff applies the repo's config for this path; the file needn't exist.
 PACKAGE_MODULE = "packages/core/src/aqa_core/probe.py"
+# An inner pytest run, which mustn't write a cache into the directory it tests.
+PYTEST = [sys.executable, "-m", "pytest", "-p", "no:cacheprovider"]
 
 
 def threshold(dimension: str) -> int:
@@ -138,6 +140,17 @@ def test_complexity_past_the_limit_fails(
 # --- the floor rows that Ruff and mypy enforce --------------------------------------
 
 
+def test_unformatted_code_fails_ruff_format() -> None:
+    check = [sys.executable, "-m", "ruff", "format", "--check", "--no-cache"]
+    check += [f"--stdin-filename={PACKAGE_MODULE}", "-"]
+
+    unformatted = run(check, stdin="x=1\n")
+    formatted = run(check, stdin="x = 1\n")
+
+    assert unformatted.returncode == 1, unformatted.stderr
+    assert formatted.returncode == 0, formatted.stderr
+
+
 def test_todo_comment_fails_ruff() -> None:
     exit_code, codes = ruff_codes(
         "def f() -> int:\n    return 1  # TODO: the real value\n"
@@ -204,7 +217,7 @@ def pytest_cov(root: Path) -> subprocess.CompletedProcess[str]:
     """`pytest --cov` in `root`, with the repo's coverage config."""
     config = f"--cov-config={REPO / 'pyproject.toml'}"
     return run(
-        [sys.executable, "-m", "pytest", "--cov", config, "-p", "no:cacheprovider"],
+        [*PYTEST, "--cov", config],
         cwd=root,
         PYTHONPATH=str(root / "packages/demo/src"),
     )
@@ -256,7 +269,7 @@ def pytest_repo_config(
     (root / name).write_text(test)
     config = ["-c", str(REPO / "pyproject.toml"), f"--rootdir={root}"]
     return run(
-        [sys.executable, "-m", "pytest", *config, "-p", "no:cacheprovider", name],
+        [*PYTEST, *config, name],
         cwd=root,
     )
 
