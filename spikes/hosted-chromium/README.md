@@ -8,8 +8,8 @@ M1's decision gate (ADR-0008 amendment, 2026-09-29): which hosted compute runs C
 |---|---|
 | `src/aqa_hosted_chromium_spike/trial.py` | The trial, and `trial_on_this_host()`, which every entry point calls |
 | `src/aqa_hosted_chromium_spike/__main__.py` | The Fargate task's command: one trial, printed as a line of JSON |
-| `src/aqa_hosted_chromium_spike/lambda_function.py` | The Lambda function's handler: one trial per invocation |
-| `src/aqa_hosted_chromium_spike/microvm.py` | The MicroVM's HTTP server on port 8080: answers Lambda's lifecycle hooks, and runs one trial per `POST /trial` |
+| `src/aqa_hosted_chromium_spike/lambda_function.py` | The Lambda function's handler: one trial per invocation, answered with the execution environment's log stream |
+| `src/aqa_hosted_chromium_spike/microvm.py` | The MicroVM's HTTP server on port 8080: answers Lambda's lifecycle hooks and `GET /health`, and runs one trial per `POST /trial` |
 | `Dockerfile` | One target per candidate: `fargate`, `lambda` and `microvm` (the last stage, which Lambda builds) |
 | `package.sh` | Builds a candidate's package locally, from HEAD |
 | `scripts/` | The AWS CLI scripts #38 runs: budget alarm, deploy, invoke, collect, teardown |
@@ -74,10 +74,10 @@ spikes/hosted-chromium/scripts/collect.sh <first day> <day after the last>      
 spikes/hosted-chromium/scripts/teardown.sh              # deletes everything, the budget alarm last, and checks
 ```
 
-- **Names and tags.** Every resource has a fixed name from `scripts/common.sh`, starting `aqa-spike-hosted-chromium` (IAM roles also sit under the path `/aqa-spike/`, log groups under `/aqa-spike/hosted-chromium/`), and the tag `aqa-spike=hosted-chromium`. Each candidate's resources are its own, so each deploys and fails alone.
+- **Names and tags.** Every resource has a fixed name from `scripts/common.sh`, starting `aqa-spike-hosted-chromium` (IAM roles also sit under the path `/aqa-spike/`, log groups under `/aqa-spike/hosted-chromium/`). Every resource that takes tags carries `aqa-spike=hosted-chromium`, the Fargate tasks too (from their task definition); MicroVMs aren't tagged. Teardown finds resources by name, not by tag, because the tag index lags. Each candidate's resources are its own, and `deploy.sh` refuses a candidate that is already deployed.
 - **Budget first.** `deploy.sh` and `invoke.sh` refuse to run until the budget alarm exists. The alarm covers the whole account, and AWS updates its spend up to three times a day, so the scripts also cap how long anything runs:
   - Lambda: a 120-second timeout;
-  - Fargate: the task ends with the trial;
+  - Fargate: the task ends with the trial, and `invoke.sh` stops it if anything fails first;
   - MicroVM: `invoke.sh` terminates it after its trial, even when the trial fails, and it can't live past 15 minutes.
 - **Least privilege.**
   - Roles can write their candidate's logs and, for the Fargate task and the MicroVM's build, read their own image or zip.
@@ -102,14 +102,19 @@ spikes/hosted-chromium/scripts/teardown.sh              # deletes everything, th
 
 What #38 records for each candidate, with the command and the commit that produced every number (AGENTS.md rule 8). `invoke.sh` prints each trial as one JSON line: the trial's report (`trial`), `requested_at` and `answered_at` by this machine's clock, and the platform's record (`platform`). The package's commit is in its image tag or zip name.
 
-**Runs.** Each candidate runs at 2 GB and 1 vCPU:
+**Runs.** Each candidate runs with 2 GB: the Fargate task and the MicroVM with 1 vCPU, and the Lambda function with about 1.16, since its CPU follows its memory (1,769 MB is one vCPU).
 - Lambda, 2,048 MB: at least five cold and five warm trials. `invoke.sh lambda cold` changes the function's configuration first, which makes Lambda start a new execution environment. `warm` invokes again, which may reuse it.
 - Fargate, 1 vCPU and 2 GB: at least five cold trials. Every task starts cold, and a warm start doesn't exist.
 - MicroVM, a 2 GB baseline: one cold trial per image build (the first MicroVM after `deploy.sh`), then at least five warm ones. Every MicroVM is a new VM restored from the image's snapshot. The second and later MicroVMs may read a snapshot that Lambda has already cached.
 
 **Time to a ready browser.**
 - *In the trial:* `trial.ready_seconds`.
-- *End to end,* from the request to a ready browser: `trial.ready_at − requested_at`. This spans two clocks, this machine's and the candidate's, so it is only as exact as their sync; #38 records this machine's offset (for example `sntp time.aws.com` on macOS) with its results.
+- *End to end,* from the request to a ready browser: `trial.ready_at − requested_at`. This spans two clocks, this machine's and the candidate's, so it is only as exact as their sync; #38 records this machine's offset (for example `sntp time.aws.com` on macOS) with its results. It also includes the client's own path, which differs:
+  - Lambda: one `invoke` call;
+  - Fargate: one `run-task` call;
+  - MicroVM: `run-microvm`, an auth token, and `GET /health` once a second until Lambda routes traffic to the MicroVM.
+
+  So the MicroVM's end-to-end time is an upper bound by up to a second.
 - *Lambda's own breakdown* comes from the REPORT line in `platform.report`: `Init Duration` (cold only) and `Duration`.
 - *Fargate's* comes from the task's timestamps in `platform.task`: `createdAt → pullStartedAt → pullStoppedAt → startedAt`.
 - *The MicroVM's:* `platform.microvm.startedAt`.
@@ -117,10 +122,10 @@ What #38 records for each candidate, with the command and the commit that produc
 **Peak memory.** `trial.peak_memory_bytes`. For Lambda, also `Max Memory Used` in the REPORT line, which counts the whole execution environment.
 
 **Fresh VM.**
-- `trial.earlier_runs` must be empty, and the platform's ID must be new: the task ARN in `platform.task`, the MicroVM ID in `platform.microvm`.
+- `trial.earlier_runs` must be empty, and the platform's ID must be new: the log stream in `platform.log_stream` (one per Lambda execution environment), the task ARN in `platform.task`, the MicroVM ID in `platform.microvm`.
 - A warm Lambda trial whose `earlier_runs` lists the cold one records the reuse that rules Lambda functions out.
 
-**Cost per 60-second run.** A run is 60 seconds of work plus each platform's own start overhead, both measured above. Prices are us-east-1 list prices, checked 2026-09-30: [Lambda](https://aws.amazon.com/lambda/pricing/), [Fargate](https://aws.amazon.com/fargate/pricing/), [public IPv4](https://aws.amazon.com/vpc/pricing/) and [ECR](https://aws.amazon.com/ecr/pricing/).
+**Cost per 60-second run.** A run is 60 seconds of work, the browser's launch included, plus the time each platform bills before the work can start, both measured above. Prices are us-east-1 list prices, checked 2026-09-30: [Lambda](https://aws.amazon.com/lambda/pricing/), [Fargate](https://aws.amazon.com/fargate/pricing/), [public IPv4](https://aws.amazon.com/vpc/pricing/) and [ECR](https://aws.amazon.com/ecr/pricing/).
 
 - **Lambda function** (arm64, 2 GB). Container-image functions bill their Init phase.
 
@@ -136,14 +141,14 @@ What #38 records for each candidate, with the command and the commit that produc
   Ephemeral storage is within the 20 GB included.
 - **MicroVM** (a 2 GB, 1 vCPU baseline, and up to 4 × that in bursts). Compute runs while the MicroVM runs. Snapshot storage and reads come from `collect.sh`, because no MicroVM API reports a snapshot's size.
 
-  s = (trial.ready_at − startedAt) + 60
+  s = (the trial's start − startedAt) + 60, where the trial's start = trial.ready_at − trial.ready_seconds
 
   compute = s × (1 × $0.0000276944 + 2 × $0.0000036667) + burst
 
   - *When billing starts:* Lambda bills the baseline "while your MicroVM is running", so from `startedAt`. #38 checks that against the compute seconds `collect.sh` reports.
   - *Burst* is billed only for use above the baseline. The trial's peak memory sits below 2 GB, so any burst is CPU during the launch; #38 reads its cost from `collect.sh`.
   - *Snapshot reads:* each MicroVM reads its snapshot on start. The per-run cost is `R × $0.00155`, where R is the GB that `collect.sh` bills as snapshot reads, divided by the number of MicroVMs run.
-  - *Snapshot storage:* $0.08 per GB-month for the image's snapshot, with a one-week minimum per image version. Per run, it is the monthly storage cost divided by the runs in a month. #38 reports it at 1,000 and at 10,000 runs a month. The snapshot's size, in GB, is the GB-hours `collect.sh` bills as snapshot storage, divided by the hours the image existed.
+  - *Snapshot storage:* $0.08 per GB-month for the image's snapshot, with a one-week minimum per image version. Per run, it is the monthly storage cost divided by the runs in a month. #38 reports it at 1,000 and at 10,000 runs a month. The snapshot's size, in GB, is the GB-hours `collect.sh` bills as snapshot storage, divided by the hours billed: the hours the image existed, or 168 if that was less than a week.
   - *Snapshot writes* ($0.0038 per GB) happen only when a MicroVM suspends. `invoke.sh` terminates each MicroVM before its one-minute idle window can suspend it.
-- **Every candidate** also stores its package: ECR at $0.10 per GB-month for the Lambda function's and the Fargate task's image, and S3 for the MicroVM's zip. Per run: the package's GB × the monthly price ÷ the runs in a month.
+- **Every candidate** also stores its package: ECR at $0.10 per GB-month for the Lambda function's and the Fargate task's image, and S3 Standard ([S3](https://aws.amazon.com/s3/pricing/)) for the MicroVM's zip. Per run: the package's GB × the monthly price ÷ the runs in a month.
 
