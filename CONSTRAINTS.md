@@ -29,7 +29,7 @@ A refused line passes when it cites an existing `ADR-NNNN`, so write the ADR fir
 
 ## Thresholds
 
-Every row but the dependency audit holds at the local gate run: the commands in its "Enforced by" column, plus `python3 -m unittest discover -s .claude/hooks` and `env -u AQA_POLICY_GUARD python3 .claude/hooks/policy_guard.py --scan`. CI runs the same commands (ADR-0029): the last two in its `guardrails` job, the rest in its `python` job after `uv sync --locked`. The dependency audit runs in CI only.
+Every row holds at the local gate run, [AGENTS.md §4](AGENTS.md#4-commands), which runs the same commands as CI (ADR-0029).
 
 | Dimension | Threshold | Measured as | Enforced by | Why this number |
 |---|---|---|---|---|

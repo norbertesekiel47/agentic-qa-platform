@@ -6,7 +6,7 @@ Planted bugs and benign UI changes in vendored open-source apps, used to measure
 |---|---|---|
 | `apps/<app>/` | Vendored third-party apps, with our flag plumbing, `/test-api/*` routes and planted changes (see each app's README) | No: gitleaks only (ADR-0021) |
 | `apps/<app>/qa/` | That app's specs and their dry compile review (`REVIEW.md`) | No (inside `apps/`), so review them by hand |
-| `harness/` | Our Python harness. Standard library only until M1, except `toggle_checks.py`, which runs in the checks image (`checks.Dockerfile`, `checks-requirements.txt`, `chromium-seccomp.json`) | Yes |
+| `harness/` | Our Python harness, a uv workspace member (ADR-0027). `toggle_checks.py` runs in the checks image (`checks.Dockerfile`, `checks-requirements.txt`, `chromium-seccomp.json`) | Yes |
 | `manifest.v1.json` | Ground truth, keyed by case ID (format: DATA_MODEL.md §8) | Yes |
 | `manifest.v1.split.sha256` | The split freeze (TESTING.md §5) | Yes |
 
