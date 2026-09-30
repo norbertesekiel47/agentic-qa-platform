@@ -175,7 +175,7 @@ A run on our runners, started from the dashboard. It may navigate to and act on 
 The container that executes one run: the run graph plus a browser. It holds no database or cloud credentials and does all its I/O through the API.
 
 **Sandbox check**:
-The proof, before a run loads any page, that the browser's renderer is confined by Chromium's sandbox, made by comparing a renderer process with the browser process. It is the first half of the hosted-compute predicate.
+The proof, before a run loads any page, that the browser's renderer is confined by Chromium's sandbox, made by comparing a renderer process with the browser process. It is the first half of the fresh-VM predicate that hosted compute must meet.
 _Avoid_: startup check, sandbox probe
 
 **Run token**:
