@@ -39,7 +39,11 @@ A measured fact forced the last choice: with the workspace at `>=3.14`, Ruff ref
 - A new package is a `packages/<name>/` directory with `src/aqa_<name>/`. It joins the root's dependencies and sources, and mypy's `mypy_path`.
 - A version bump edits the member's pin and TECH_STACK.md together. A new Python minor version edits `.python-version`, the `requires-python` of the root and the packages, mypy's `python_version` and Ruff's `target-version` together. The guard's and the harness's Ruff targets, and the harness's floor, follow the interpreters they run on.
 - Test modules can't import each other, except in the harness. Shared test helpers go in fixtures or in the package under test.
-- mypy's bases and pytest's `pythonpath` also let package code import the harness's and the guard's modules, which the installed packages can't. So a package that imports them passes every gate and fails for users, until #59 bans those imports in Ruff (`TID251`).
+- mypy's bases and pytest's `pythonpath` also let package code import the harness's and the guard's modules, which the installed packages can't. So a package that imports them passes every gate and fails for users, until #60 splits the type check into two runs:
+  - the packages, with only their `src` folders as bases;
+  - the scripts, with `--no-explicit-package-bases`.
+
+  mypy also checks package tests, so pytest's `pythonpath` can stay.
 - The Ruff rule set, pytest's strict mode and every threshold belong to CONSTRAINTS.md (#59), and moving CI onto uv is #60. Until then, CI's pip-installed tools read these settings too, and its checks pass unchanged.
 - Ruff 0.16's default `include` covers Markdown, so `ruff format --check .` also formats the Python code blocks in our docs. Once CI runs that command (#60), an unformatted Python snippet in a doc fails it. #59 decides whether to keep that or to narrow `include` to Python files.
 - Pydantic's mypy plugin needs Pydantic installed wherever mypy runs, so adding it waits for CI to install from the lockfile (#60). mypy fails outright when it can't import a configured plugin.
