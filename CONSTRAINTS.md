@@ -12,7 +12,7 @@ Every row runs in the local gate run (AGENTS.md §4).
 | Format | 0 files to reformat | `ruff format` | `uv run ruff format --check .` | Formatting is never a review topic |
 | Types | 0 errors | mypy `strict` over `packages`, `bench/harness`, `.claude/hooks` and `tests` | `uv run mypy` | AGENTS.md rule 1 |
 | Tests | 0 failures | pytest in `strict` mode, with every warning an error | `uv run pytest --cov` | AGENTS.md rule 1 |
-| Coverage, overall | ≥ 94% | Line and branch coverage of `packages/`, `bench/harness/` and `.claude/hooks/`, tests excluded, subprocesses measured, rounded to a whole percent | `uv run pytest --cov` | Measured 94.1% at `c54d955`: hold it, and raise it by hand as it rises |
+| Coverage, overall | ≥ 94% | Line and branch coverage of `packages/`, `bench/harness/` and `.claude/hooks/`, rounded to a whole percent. Tests and `toggle_checks.py` (ADR-0023) are excluded, subprocesses are measured, and a module no test imports counts as uncovered | `uv run pytest --cov` | Measured 94.1% at `c54d955`: hold it, and raise it by hand as it rises |
 | Cyclomatic complexity per function | ≤ 10 | Ruff `C901` (mccabe) | `uv run ruff check .` | Ruff's default, and today's maximum |
 | Return statements per function | ≤ 6 | Ruff `PLR0911` | `uv run ruff check .` | Ruff's default; no function exceeds it |
 | Branches per function | ≤ 12 | Ruff `PLR0912` | `uv run ruff check .` | Ruff's default; no function exceeds it |

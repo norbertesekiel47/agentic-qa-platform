@@ -38,17 +38,17 @@ def threshold(dimension: str) -> int:
 
 
 def run(
-    args: list[str], *, stdin: str | None = None
+    args: list[str], *, stdin: str | None = None, cwd: Path = REPO, **env: str
 ) -> subprocess.CompletedProcess[str]:
-    """Run a gate command from the repo root, outside this suite's coverage run."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("COVERAGE_")}
+    """Run a gate command outside this suite's own coverage run."""
+    inherited = {k: v for k, v in os.environ.items() if not k.startswith("COVERAGE_")}
     return subprocess.run(
         args,
         input=stdin,
         capture_output=True,
         text=True,
-        cwd=REPO,
-        env=env,
+        cwd=cwd,
+        env=inherited | env,
         timeout=300,
         check=False,
     )
@@ -177,3 +177,68 @@ def test_empty_body_fails_mypy(body: str, tmp_path: Path) -> None:
     assert empty.returncode == 1
     assert "[empty-body]" in empty.stdout
     assert control.returncode == 0, control.stdout
+
+
+# --- coverage ------------------------------------------------------------------------
+
+
+def covered_package(root: Path, percent: int) -> None:
+    """A workspace member under `root` whose tests cover `percent`% of its code."""
+    # Fifty one-line functions are 100 statements. The import runs the 50 `def`
+    # lines, so calling (percent - 50) of the functions covers percent% exactly.
+    functions = "".join(f"def f{i}() -> int:\n    return {i}\n\n\n" for i in range(50))
+    calls = "".join(f"    mod.f{i}()\n" for i in range(percent - 50))
+    package = root / "packages/demo"
+    (package / "src/demo").mkdir(parents=True)
+    (package / "src/demo/mod.py").write_text(functions)
+    (package / "tests").mkdir()
+    (package / "tests/test_mod.py").write_text(
+        f"from demo import mod\n\n\ndef test_mod() -> None:\n{calls}"
+    )
+    # The config's other source directories: coverage warns when one is missing.
+    (root / "bench/harness").mkdir(parents=True)
+    (root / ".claude/hooks").mkdir(parents=True)
+
+
+def pytest_cov(root: Path) -> subprocess.CompletedProcess[str]:
+    """`pytest --cov` in `root`, with the repo's coverage config."""
+    config = f"--cov-config={REPO / 'pyproject.toml'}"
+    return run(
+        [sys.executable, "-m", "pytest", "--cov", config, "-p", "no:cacheprovider"],
+        cwd=root,
+        PYTHONPATH=str(root / "packages/demo/src"),
+    )
+
+
+def test_coverage_at_the_floor_passes(tmp_path: Path) -> None:
+    floor = threshold("Coverage, overall")
+    covered_package(tmp_path, floor)
+
+    result = pytest_cov(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    # pytest-cov prints the configured floor as a float.
+    assert f"Required test coverage of {float(floor)}% reached" in result.stdout
+
+
+def test_coverage_below_the_floor_fails(tmp_path: Path) -> None:
+    floor = threshold("Coverage, overall")
+    covered_package(tmp_path, floor - 1)
+
+    result = pytest_cov(tmp_path)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    failure = f"Coverage failure: total of {floor - 1} is less than fail-under={floor}"
+    assert failure in result.stdout
+
+
+def test_an_unimported_module_counts_against_the_floor(tmp_path: Path) -> None:
+    covered_package(tmp_path, threshold("Coverage, overall"))
+    # Like every workspace member, packages/demo has no __init__.py.
+    unimported = "packages/demo/src/demo/unimported.py"
+    (tmp_path / unimported).write_text("def f() -> int:\n    return 0\n")
+
+    result = pytest_cov(tmp_path)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert unimported in result.stdout
