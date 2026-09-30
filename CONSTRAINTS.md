@@ -1,17 +1,41 @@
 # Constraints
 
-This file owns the project's quality thresholds. The tool configs in `pyproject.toml` mirror it, and `tests/test_constraints.py` fails when a config drifts from a number here.
+Last reviewed: 2026-09-29 (#59).
+
+This file owns the project's quality bar: the floor every change keeps and the thresholds the gates hold. It covers the Python code; fallow gates TypeScript (ADR-0018) once the dashboard exists.
+- The tool configs in `pyproject.toml` mirror it, and `tests/test_constraints.py` fails when a config drifts from a number here.
+- TESTING.md §8 keeps the list of gates.
+- [ADR-0028](ADRs/0028-quality-bar.md) records why each choice was made.
+
+Read this file before writing code. Never weaken it to make a change pass. A threshold moves only in a change of its own, with the maintainer's approval: policy_guard asks before any edit to this file.
+
+## Floor
+
+Always enforced. Each rule has exactly one enforcer.
+
+| Rule | Enforced by | Runs at |
+|---|---|---|
+| No new suppression comments: `# type: ignore`, `# noqa`, `pyright:` and `mypy:` pragmas, `@ts-ignore`, `@ts-expect-error`, `eslint-disable`, `fallow-ignore`, coverage pragmas | policy_guard, refused | Each edit and shell write in Claude Code; the Stop hook's tree scan; `--scan` (CI's `guardrails` job runs it) |
+| No skipped, focused or rerun-until-green tests | policy_guard, refused | Same |
+| No tautological assertions (`assert True`, `expect(true).toBe(true)`) | policy_guard, refused | Same |
+| No unimplemented stubs outside tests (`raise NotImplementedError`, `throw new Error("Not implemented")`) | policy_guard, refused | Same |
+| No empty bodies in functions that return a value (`...` or `pass`) | mypy's `empty-body` | `uv run mypy` |
+| No `TODO`, `FIXME`, `XXX` or `HACK` comments | Ruff `FIX` | `uv run ruff check .` |
+| No swallowed exceptions: bare `except`, `except Exception`, `try`-`except`-`pass` or `continue` | Ruff `E722`, `BLE001`, `S110`, `S112` | `uv run ruff check .` |
+| No deleted test files, stripped assertions, or changed gate configs or thresholds without the maintainer's approval | policy_guard, asks | Each edit and shell command in Claude Code only, until the `--diff` follow-up brings it to CI |
+
+A refused line passes when it cites an existing `ADR-NNNN`, so write the ADR first. Abstract and Protocol methods use `...` as their body, which mypy allows.
 
 ## Thresholds
 
-Every row runs in the local gate run (AGENTS.md §4).
+Every row holds at the local gate run: the commands in its "Enforced by" column, plus `python3 -m unittest discover -s .claude/hooks` and `env -u AQA_POLICY_GUARD python3 .claude/hooks/policy_guard.py --scan`. CI's `guardrails` job runs Ruff, mypy and the unittest suites on `.claude/hooks` and `bench/harness` only, until #60 moves CI onto these commands.
 
 | Dimension | Threshold | Measured as | Enforced by | Why this number |
 |---|---|---|---|---|
-| Lint | 0 findings | Ruff's rule set in `pyproject.toml` `[tool.ruff.lint]` | `uv run ruff check .` | A finding either gets fixed or gets a reasoned per-file ignore in the config |
+| Lint | 0 findings | Ruff's rule set in `pyproject.toml` `[tool.ruff.lint]` | `uv run ruff check .` | A finding either gets fixed or gets a per-file ignore with its reason in the config |
 | Format | 0 files to reformat | `ruff format` | `uv run ruff format --check .` | Formatting is never a review topic |
 | Types | 0 errors | mypy `strict` over `packages`, `bench/harness`, `.claude/hooks` and `tests` | `uv run mypy` | AGENTS.md rule 1 |
-| Tests | 0 failures | pytest in `strict` mode, with every warning an error | `uv run pytest --cov` | AGENTS.md rule 1 |
+| Tests | 0 failures | pytest in `strict` mode, with every warning an error; it also collects the guard's unittest tests | `uv run pytest --cov` | AGENTS.md rule 1 |
 | Coverage, overall | ≥ 94% | Line and branch coverage of `packages/`, `bench/harness/` and `.claude/hooks/`, rounded to a whole percent. Tests and `toggle_checks.py` (ADR-0023) are excluded, subprocesses are measured, and a module no test imports counts as uncovered | `uv run pytest --cov` | Measured 94.1% at `c54d955`: hold it, and raise it by hand as it rises |
 | Cyclomatic complexity per function | ≤ 10 | Ruff `C901` (mccabe) | `uv run ruff check .` | Ruff's default, and today's maximum |
 | Return statements per function | ≤ 6 | Ruff `PLR0911` | `uv run ruff check .` | Ruff's default; no function exceeds it |
@@ -19,3 +43,20 @@ Every row runs in the local gate run (AGENTS.md §4).
 | Arguments per function | ≤ 6 | Ruff `PLR0913`, keyword-only arguments included | `uv run ruff check .` | Today's maximum (`toggle()`), one above Ruff's default: a parameter object for one function adds a concept |
 | Positional arguments per function | ≤ 5 | Ruff `PLR0917` | `uv run ruff check .` | Ruff's default; past five, arguments go keyword-only |
 | Statements per function | ≤ 50 | Ruff `PLR0915` | `uv run ruff check .` | Ruff's default; no function exceeds it |
+
+## Planned
+
+Recorded now, enforced once the code or the pipeline they need exists.
+
+| What | Threshold | Starts with |
+|---|---|---|
+| Coverage of each test-first module (TESTING.md §2) | 100% line and branch, via `uv run coverage report --include=<the module's paths> --fail-under=100` | The ticket that adds the first test-first module, which also adds the command |
+| Dependency audit | No new high or critical advisory | #60 |
+| Mutation testing | Chosen then | The replay engine, the first test-first module |
+
+## Exceptions
+
+| ID | Rule | Path | Reason | Owner | Expires |
+|---|---|---|---|---|---|
+
+None yet. An exception names its rule, path, reason, owner and an expiry at most 90 days out, and changes this file, so it needs the maintainer's approval.
