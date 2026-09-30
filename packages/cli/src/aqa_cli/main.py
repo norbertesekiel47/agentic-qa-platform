@@ -12,7 +12,7 @@ import typer
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
 
-def _show_version(value: bool | None) -> None:
+def _show_version(value: bool) -> None:
     if value:
         typer.echo(f"aqa {metadata.version('aqa-cli')}")
         raise typer.Exit()
@@ -21,14 +21,14 @@ def _show_version(value: bool | None) -> None:
 @app.callback()
 def main(
     version: Annotated[
-        bool | None,
+        bool,
         typer.Option(
             "--version",
             callback=_show_version,
             is_eager=True,
             help="Show the version and exit.",
         ),
-    ] = None,
+    ] = False,
 ) -> None:
     """Agentic QA: explore a spec once, compile it into a script, then replay that
     script with no model calls.
