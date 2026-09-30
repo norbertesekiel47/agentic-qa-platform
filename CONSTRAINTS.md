@@ -1,6 +1,6 @@
 # Constraints
 
-Last reviewed: 2026-09-29 (#59).
+Last reviewed: 2026-09-29 (#59, #60).
 
 This file owns the project's quality bar: the floor every change keeps and the thresholds the gates hold. The floor applies to every file policy_guard checks. The thresholds cover the Python code; fallow gates TypeScript (ADR-0018) once the dashboard exists.
 - The tool configs in `pyproject.toml` mirror it, and `tests/test_constraints.py` fails when a config drifts from a number here.
@@ -29,13 +29,13 @@ A refused line passes when it cites an existing `ADR-NNNN`, so write the ADR fir
 
 ## Thresholds
 
-Every row holds at the local gate run: the commands in its "Enforced by" column, plus `python3 -m unittest discover -s .claude/hooks` and `env -u AQA_POLICY_GUARD python3 .claude/hooks/policy_guard.py --scan`. CI's `guardrails` job runs Ruff, mypy and the unittest suites on `.claude/hooks` and `bench/harness` only, until #60 moves CI onto these commands.
+Every row but the dependency audit holds at the local gate run: the commands in its "Enforced by" column, plus `python3 -m unittest discover -s .claude/hooks` and `env -u AQA_POLICY_GUARD python3 .claude/hooks/policy_guard.py --scan`. CI's `python` job runs the same commands, after `uv sync --locked` (ADR-0029). The dependency audit runs in CI only.
 
 | Dimension | Threshold | Measured as | Enforced by | Why this number |
 |---|---|---|---|---|
 | Lint | 0 findings | Ruff's rule set in `pyproject.toml` `[tool.ruff.lint]` | `uv run ruff check .` | A finding either gets fixed or gets a per-file ignore with its reason in the config |
 | Format | 0 files to reformat | `ruff format` | `uv run ruff format --check .` | Formatting is never a review topic |
-| Types | 0 errors | mypy `strict` over `packages`, `bench/harness`, `.claude/hooks` and `tests` | `uv run mypy` | AGENTS.md rule 1 |
+| Types | 0 errors | mypy `strict`, in two runs. `packages` and `tests` have only each package's `src` as a base, so package code can't import a script. The scripts in `bench/harness` and `.claude/hooks` are named by file | `uv run mypy`, then `uv run mypy --strict --no-explicit-package-bases .claude/hooks bench/harness` | AGENTS.md rule 1 |
 | Tests | 0 failures | pytest in `strict` mode, with every warning an error; it also collects the guard's unittest tests | `uv run pytest --cov` | AGENTS.md rule 1 |
 | Coverage, overall | ≥ 94% | Line and branch coverage of `packages/`, `bench/harness/` and `.claude/hooks/`, rounded to a whole percent. Tests and `toggle_checks.py` (ADR-0023) are excluded, subprocesses are measured, and a module no test imports counts as uncovered | `uv run pytest --cov` | `uv run pytest --cov` measured 94.09% at `4d372fd`: hold it, and raise it by hand as it rises |
 | Cyclomatic complexity per function | ≤ 10 | Ruff `C901` (mccabe) | `uv run ruff check .` | Ruff's default, and today's maximum |
@@ -44,6 +44,7 @@ Every row holds at the local gate run: the commands in its "Enforced by" column,
 | Arguments per function | ≤ 6 | Ruff `PLR0913`, keyword-only arguments included | `uv run ruff check .` | Today's maximum (`toggle()`), one above Ruff's default: a parameter object for one function adds a concept |
 | Positional arguments per function | ≤ 5 | Ruff `PLR0917` | `uv run ruff check .` | Ruff's default; past five, arguments go keyword-only |
 | Statements per function | ≤ 50 | Ruff `PLR0915` | `uv run ruff check .` | Ruff's default; no function exceeds it |
+| Dependency audit | 0 high or critical advisories | osv-scanner's highest CVSS score per advisory group in `uv.lock`. A score of 7.0 or more is high or critical, and an advisory with no score counts as one. A waiver is an `osv-scanner.toml` entry with a reason and an `ignoreUntil` date, plus a row in Exceptions below | CI's `audit` job, on every pull request, every push to `main` and weekly | SECURITY.md §11. 7.0 is where CVSS v3 starts "High" |
 
 ## Planned
 
@@ -52,7 +53,6 @@ Recorded now, enforced once the code or the pipeline they need exists.
 | What | Threshold | Starts with |
 |---|---|---|
 | Coverage of each test-first module (TESTING.md §2) | 100% line and branch, via `uv run coverage report --include=<the module's paths> --fail-under=100` | The ticket that adds the first test-first module, which also adds the command |
-| Dependency audit | No new high or critical advisory | #60 |
 | Mutation testing | Chosen then | The replay engine, the first test-first module |
 | The floor in CI: deleted tests, stripped assertions, changed gate configs | `policy_guard.py --diff <base>` finds none, or the maintainer approved them | A follow-up ticket, which first splits the guard, now near its 1000-line limit |
 

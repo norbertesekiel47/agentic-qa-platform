@@ -74,8 +74,8 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# The guard's and the harness's tests are unittest by design: they run under a
-# bare `python3 -m unittest`, so pytest's assert style doesn't apply.
+# The guard's and the harness's tests are unittest-style: the guard's also run
+# under a bare `python3 -m unittest`, so pytest's assert style doesn't apply.
 ".claude/hooks/test_*.py" = ["PT009"]
 "bench/harness/test_*.py" = ["PT009", "PT027"]
 # pytest tests assert with a plain `assert`.
@@ -105,20 +105,18 @@ max-statements = 50
 [tool.mypy]
 python_version = "3.14"
 strict = true
-files = ["packages", "bench/harness", ".claude/hooks", "tests"]
+# The packages and the cross-package tests. The scripts in bench/harness and
+# .claude/hooks import each other by bare name, so they get a run of their own,
+# named by file: `mypy --strict --no-explicit-package-bases .claude/hooks
+# bench/harness` (ADR-0029). Kept off mypy_path, a script can't be imported by
+# package code here, just as it can't be for users.
+files = ["packages", "tests"]
 exclude = ["^bench/apps/"]
 # Module names come from these bases, not from the directory layout: each
-# package's src, and the script directories whose modules import each other by
-# bare name. Package tests sit outside every base, so they are named by their
-# path (packages.cli.tests.test_version) and may share a basename.
+# package's src. Package tests sit outside every base, so they are named by
+# their path (packages.cli.tests.test_version) and may share a basename.
 explicit_package_bases = true
-mypy_path = [
-    "packages/core/src",
-    "packages/runner/src",
-    "packages/cli/src",
-    "bench/harness",
-    ".claude/hooks",
-]
+mypy_path = ["packages/core/src", "packages/runner/src", "packages/cli/src"]
 
 [tool.pytest]
 # strict turns on strict_config, strict_markers, strict_xfail and

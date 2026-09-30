@@ -1,15 +1,17 @@
-# CI for this repository (ADR-0019).
+# CI for this repository (ADR-0019, ADR-0029). The gates are TESTING.md §8's;
+# CONSTRAINTS.md owns their thresholds.
 #
 # Runner: GitHub-hosted by default. To move to Blacksmith, set the repository
 # variable CI_RUNNER to a Blacksmith label (e.g. blacksmith-2vcpu-ubuntu-2404)
 # once the repo lives in a GitHub organization with the Blacksmith app
-# installed. Any label must be Linux x64: the secrets job downloads a
-# linux_x64 gitleaks build.
+# installed. Any label must be Linux x64: jobs download linux x64 builds of
+# gitleaks, uv and osv-scanner.
 #
 # Supply chain: third-party actions are pinned by commit SHA (SECURITY.md) and
-# the repository only allows GitHub-owned actions plus fallow-rs/fallow.
-# Jobs get a read-only token; nothing here needs a secret, so fork PRs run the
-# same checks with the same (lack of) privileges.
+# the repository only allows GitHub-owned actions plus fallow-rs/fallow, so
+# tools come as release binaries checked against a pinned sha256. Jobs get a
+# read-only token; nothing here needs a secret, so fork PRs run the same checks
+# with the same (lack of) privileges.
 
 name: ci
 
@@ -17,6 +19,10 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Weekly, so an advisory published against an unchanged uv.lock still fails
+  # a run (TESTING.md §1). Every job but fallow runs.
+  schedule:
+    - cron: "17 6 * * 1"
 
 permissions:
   contents: read
@@ -37,20 +43,92 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
-      - name: Install pinned tools (versions from TECH_STACK.md)
-        # playwright is installed for its types only (bench/harness/toggle_checks.py,
-        # ADR-0023); no browsers are downloaded and no checks run here.
-        run: python -m pip install --disable-pip-version-check ruff==0.16.9 mypy==2.3.1 playwright==1.63.0
+      # The guard runs on a bare interpreter, as Claude Code runs it; the
+      # python job runs these tests again under pytest.
       - name: Guard tests
         run: python -m unittest discover -s .claude/hooks
-      - name: Bench harness tests (ADR-0022)
-        run: python -m unittest discover -s bench/harness
-      - name: Lint
-        run: ruff check .claude/hooks bench/harness && ruff format --check .claude/hooks bench/harness
-      - name: Types
-        run: mypy --strict .claude/hooks bench/harness
       - name: Policy scan (AGENTS.md rules 1 and 9, §6)
         run: python .claude/hooks/policy_guard.py --scan
+
+  python:
+    name: python
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    env:
+      UV_VERSION: 0.11.15
+      UV_SHA256: b03e572f010bea94a4a52d42671ba72981e12894f71576181a1d26ff68546da7
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Install uv (checksum-verified)
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/uv.tar.gz" \
+            "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${UV_SHA256}  $RUNNER_TEMP/uv.tar.gz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/uv.tar.gz" -C "$RUNNER_TEMP" --strip-components=1 uv-x86_64-unknown-linux-gnu/uv
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      # --locked fails if uv.lock is out of date with the pyproject files, so
+      # the gates run on exactly the locked versions.
+      - name: Install the workspace from uv.lock
+        run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check .
+      - name: Format
+        run: uv run ruff format --check .
+      - name: Types (packages and tests)
+        run: uv run mypy
+      # Scripts import each other by bare name, so they are named by file, in
+      # a run of their own (ADR-0029).
+      - name: Types (scripts)
+        run: uv run mypy --strict --no-explicit-package-bases .claude/hooks bench/harness
+      # The packages, bench/harness, the guard's tests and tests/, including
+      # CONSTRAINTS.md's threshold checks and the coverage floor.
+      - name: Tests and coverage
+        run: uv run pytest --cov
+
+  audit:
+    name: audit
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    env:
+      OSV_SCANNER_VERSION: 2.6.0
+      OSV_SCANNER_SHA256: ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108
+      # One row per advisory group: the package, the group's IDs and its
+      # highest CVSS score, or null when the advisory has none.
+      FINDINGS: >-
+        [.results[]?.packages[] | .package as $p | .groups[]
+        | {package: "\($p.name) \($p.version)", ids: (.ids | join(", ")),
+           score: (.max_severity | tonumber? // null)}]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install osv-scanner (checksum-verified)
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/osv-scanner" \
+            "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum --check --strict
+          chmod +x "$RUNNER_TEMP/osv-scanner"
+      # CONSTRAINTS.md: no high or critical advisory (CVSS 7.0 or more). An
+      # advisory without a score fails too, until someone reviews it. A
+      # reviewed advisory goes in osv-scanner.toml with a reason and an
+      # ignoreUntil date (ADR-0029). osv-scanner exits 1 on an advisory of any
+      # severity, so the step judges its JSON; any other nonzero exit is an error.
+      - name: Audit uv.lock
+        run: |
+          status=0
+          "$RUNNER_TEMP/osv-scanner" scan source --lockfile uv.lock --format json \
+            --output-file "$RUNNER_TEMP/osv.json" || status=$?
+          if [ "$status" -gt 1 ]; then exit "$status"; fi
+          jq -r "$FINDINGS"' | .[] | "\(.package): \(.ids) (CVSS \(.score // "none"))"' "$RUNNER_TEMP/osv.json"
+          if ! jq -e "$FINDINGS"' | all(.score != null and .score < 7)' "$RUNNER_TEMP/osv.json" > /dev/null; then
+            echo "::error::uv.lock has a high or critical advisory, or one without a score (listed above)"
+            exit 1
+          fi
 
   secrets:
     name: secrets
