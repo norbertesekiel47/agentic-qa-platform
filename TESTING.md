@@ -107,7 +107,7 @@ PR smoke: 8 dev-split cases (≈ 2 min, recorded cassettes). Nightly: full dev s
 ## 8. Quality gates (CI)
 
 A change is mergeable only when all pass:
-`ruff check` · `ruff format --check` · `mypy --strict` · `pytest --cov` (unit, integration, isolation, checkpointer, continuation, hygiene, egress/secrets, strict-mode) · `pnpm lint` · `pnpm typecheck` · `vitest` · Playwright component/page tests · benchmark smoke (dev split) · dependency audit (no new high/critical).
+`ruff check` · `ruff format --check` · `mypy --strict` · `pytest --cov` (unit, integration, isolation, checkpointer, continuation, hygiene, egress/secrets, strict-mode) · `pnpm lint` · `pnpm typecheck` · `vitest` · Playwright component/page tests · benchmark smoke (dev split) · dependency audit.
 
 The thresholds these gates hold, coverage included, are in [CONSTRAINTS.md](CONSTRAINTS.md).
 
