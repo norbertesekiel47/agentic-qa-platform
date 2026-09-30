@@ -1,19 +1,45 @@
-"""AGENTS.md §4 runs every step CI runs, and every command CONSTRAINTS.md names.
+"""AGENTS.md §4 runs every gate CI runs, and every `uv run` command CONSTRAINTS.md names.
 
-A green local run predicts a green CI run only while §4 keeps up with
-.github/workflows/ci.yml (#61), so a CI step missing from §4 fails here. The
-fallow job runs an action rather than a step, and §4 runs its CLI.
+A green local run predicts a green CI run only while §4 keeps up with the
+workflows in .github/workflows/ (#61), so a CI step or action with no §4 line
+fails here.
 """
 
+import itertools
 import re
 import textwrap
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 
-# CI downloads its tools in steps named like this; locally they are §4's
-# prerequisites, not commands.
-TOOL_DOWNLOAD = "(checksum-verified)"
+# The §4 line each action needs, by the start of that line; None for the setup
+# actions, which §4's prerequisites replace. An action missing here fails the
+# test until someone decides what §4 runs for it.
+ACTIONS: dict[str, str | None] = {
+    "actions/checkout": None,
+    "actions/setup-python": None,
+    "fallow-rs/fallow": "fallow audit ",
+}
+
+HOW_TO_FIX = (
+    "add each to AGENTS.md §4. A step that downloads a tool is exempt when its "
+    "name ends in '(checksum-verified)', it checks a sha256 and every command in "
+    "it works in $RUNNER_TEMP; any other step that only prepares the CI runner "
+    "needs an exemption here, with the maintainer's approval"
+)
+
+
+def is_download(name: str, body: str) -> bool:
+    """A step that only fetches a tool and checks it, so §4 lists the tool as a
+    prerequisite instead of running the step. A gate added to it fails this."""
+    commands = [line for line in body.replace("\\\n", " ").splitlines() if line.strip()]
+    return (
+        name.endswith("(checksum-verified)")
+        and "sha256sum --check" in body
+        and all("$RUNNER_TEMP" in command for command in commands)
+    )
 
 
 def as_local(command: str) -> str:
@@ -25,9 +51,23 @@ def as_local(command: str) -> str:
     return re.sub(r"^python ", "python3 ", command)
 
 
+def run_value(first: str, rest: list[str], indent: int) -> str:
+    """A `run:` value from its first line and the lines after it. A block comes
+    back whole, so it matches no §4 line; a plain value continued on deeper
+    lines is folded into one, as YAML reads it."""
+    body = list(
+        itertools.takewhile(
+            lambda line: not line.strip() or len(line) - len(line.lstrip()) > indent,
+            rest,
+        )
+    )
+    if first.startswith(("|", ">")):
+        return textwrap.dedent("\n".join(body)).strip()
+    return " ".join([first, *(line.strip() for line in body if line.strip())])
+
+
 def ci_commands(workflow: str) -> list[str]:
-    """Every `run:` step of the workflow except the tool downloads, as §4 would
-    write it. A block step comes back whole, so it matches no §4 line."""
+    """Every `run:` step, as §4 would write it, except the tool downloads."""
     commands: list[str] = []
     name = ""
     lines = workflow.splitlines()
@@ -36,19 +76,18 @@ def ci_commands(workflow: str) -> list[str]:
             name = step.group(1)
         elif re.match(r"\s*- ", line):
             name = ""
-        run = re.match(r"(\s*(?:- )?)run: (.*)", line)
-        if run is None or name.endswith(TOOL_DOWNLOAD):
-            continue
-        value, indent = run.group(2).strip(), len(run.group(1))
-        if value.startswith(("|", ">")):
-            block = []
-            for body in lines[number + 1 :]:
-                if body.strip() and len(body) - len(body.lstrip()) <= indent:
-                    break
-                block.append(body)
-            value = textwrap.dedent("\n".join(block)).strip()
-        commands.append(as_local(value))
+        if run := re.match(r"(\s*(?:- )?)run: (.*)", line):
+            value = run_value(
+                run.group(2).strip(), lines[number + 1 :], len(run.group(1))
+            )
+            if not is_download(name, value):
+                commands.append(as_local(value))
     return commands
+
+
+def ci_actions(workflow: str) -> set[str]:
+    """The actions the workflow uses, by name, without their pinned ref."""
+    return set(re.findall(r"^\s*(?:- )?uses: ([^@\s]+)", workflow, flags=re.MULTILINE))
 
 
 def section4_commands(agents: str) -> set[str]:
@@ -70,25 +109,44 @@ def constraints_commands(constraints: str) -> set[str]:
     return set(re.findall(r"`(uv run [^`]+)`", current))
 
 
-def read(path: str) -> str:
-    return (REPO / path).read_text()
+def workflows() -> list[str]:
+    return [
+        path.read_text() for path in sorted((REPO / ".github/workflows").glob("*.y*ml"))
+    ]
+
+
+def section4() -> set[str]:
+    return section4_commands((REPO / "AGENTS.md").read_text())
 
 
 def test_section4_runs_every_ci_step() -> None:
-    local = section4_commands(read("AGENTS.md"))
-    ci = ci_commands(read(".github/workflows/ci.yml"))
-    assert ci, "found no run steps in ci.yml"
-    missing = [command for command in ci if command not in local]
-    assert not missing, f"AGENTS.md §4 doesn't run these CI steps: {missing}"
+    commands = [
+        command for workflow in workflows() for command in ci_commands(workflow)
+    ]
+    assert commands, "found no run steps in .github/workflows/"
+    missing = [command for command in commands if command not in section4()]
+    assert not missing, f"CI runs {missing} and §4 doesn't: {HOW_TO_FIX}"
 
 
-def test_section4_runs_every_command_constraints_names() -> None:
-    named = constraints_commands(read("CONSTRAINTS.md"))
+def test_section4_has_a_line_for_every_ci_action() -> None:
+    actions = set().union(*map(ci_actions, workflows()))
+    unknown = sorted(actions - ACTIONS.keys())
+    assert not unknown, f"CI uses {unknown}: say in ACTIONS which §4 line runs each"
+    local = section4()
+    missing = [
+        prefix
+        for action in sorted(actions)
+        if (prefix := ACTIONS[action])
+        and not any(line.startswith(prefix) for line in local)
+    ]
+    assert not missing, f"§4 has no line starting {missing}: {HOW_TO_FIX}"
+
+
+def test_section4_runs_every_uv_command_constraints_names() -> None:
+    named = constraints_commands((REPO / "CONSTRAINTS.md").read_text())
     assert named, "found no commands in CONSTRAINTS.md"
-    missing = sorted(named - section4_commands(read("AGENTS.md")))
-    assert not missing, (
-        f"AGENTS.md §4 doesn't run these CONSTRAINTS.md commands: {missing}"
-    )
+    missing = sorted(named - section4())
+    assert not missing, f"CONSTRAINTS.md names {missing} and §4 doesn't run them"
 
 
 WORKFLOW = """\
@@ -99,6 +157,7 @@ jobs:
       - name: Install gitleaks (checksum-verified)
         run: |
           curl -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" https://example.invalid/g
+          echo "abc  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum --check --strict
       - name: Guard tests
         run: python -m unittest discover -s .claude/hooks
       - name: Scan full history
@@ -113,12 +172,41 @@ def test_ci_steps_read_as_section4_writes_them() -> None:
         "gitleaks git --no-banner --redact .",
         ".github/scripts/audit-lockfile.sh osv-scanner uv.lock",
     ]
+    assert ci_actions(WORKFLOW) == {"actions/checkout"}
 
 
-def test_a_new_block_step_is_one_command_that_section4_lacks() -> None:
+def test_a_block_step_comes_back_whole() -> None:
     step = "      - name: Browser tests\n        run: |\n          sudo sysctl -w a=0\n          uv run pytest -m browser\n  next:\n"
-    commands = ci_commands(WORKFLOW + step)
-    assert commands[-1] == "sudo sysctl -w a=0\nuv run pytest -m browser"
+    assert (
+        ci_commands(WORKFLOW + step)[-1]
+        == "sudo sysctl -w a=0\nuv run pytest -m browser"
+    )
+
+
+def test_a_plain_value_continued_on_the_next_line_is_folded() -> None:
+    step = "      - name: Lint\n        run: uv run ruff check .\n          --select S\n      - name: Next\n"
+    assert ci_commands(WORKFLOW + step)[-1] == "uv run ruff check . --select S"
+
+
+@pytest.mark.parametrize(
+    ("body", "command"),
+    [
+        ("run: uv run pytest -m browser\n", "uv run pytest -m browser"),
+        (
+            (
+                'run: |\n          echo "abc  $RUNNER_TEMP/t" | sha256sum --check\n'
+                "          uv run pytest -m browser\n"
+            ),
+            'echo "abc  $RUNNER_TEMP/t" | sha256sum --check\nuv run pytest -m browser',
+        ),
+    ],
+    ids=["no-download", "gate-inside-a-download"],
+)
+def test_a_checksum_named_step_that_does_more_than_download_is_a_command(
+    body: str, command: str
+) -> None:
+    step = f"      - name: Install browsers (checksum-verified)\n        {body}"
+    assert ci_commands(WORKFLOW + step)[-1] == command
 
 
 def test_planned_commands_are_not_named_yet() -> None:
