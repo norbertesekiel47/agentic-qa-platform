@@ -160,6 +160,7 @@ TRIAL = {
     "boot_id": "b1",
     "sandbox": {"on": True},
     "ready_seconds": 0.5,
+    "ready_at": 1790000031.2,
     "peak_memory_bytes": 400_000_000,
 }
 LAMBDA_REPORT = (
