@@ -35,10 +35,10 @@ if [ -n "$(git status --porcelain -- "${paths[@]}")" ]; then
 fi
 
 commit=$(git rev-parse --short=12 HEAD)
-build=spikes/hosted-chromium/build
-context=$build/context
-rm -rf "$context"
-mkdir -p "$context"
+# Outside the repository: a copy of the packages' sources under spikes/ would
+# count as modules of our own for the type check and the coverage floor.
+context=$(mktemp -d)
+trap 'rm -rf "$context"' EXIT
 git archive HEAD -- "${paths[@]}" | tar -x -C "$context"
 mv "$context/spikes/hosted-chromium/Dockerfile" "$context/Dockerfile"
 
@@ -47,7 +47,8 @@ docker build --platform linux/arm64 --target "$candidate" \
   --label "org.opencontainers.image.revision=$commit" "$context"
 
 if [ "$candidate" = microvm ]; then
-  zip="$repo/$build/microvm-$commit.zip"
+  mkdir -p spikes/hosted-chromium/build
+  zip="$repo/spikes/hosted-chromium/build/microvm-$commit.zip"
   rm -f "$zip"
   (cd "$context" && python3 -m zipfile -c "$zip" Dockerfile .python-version \
     pyproject.toml uv.lock packages bench spikes)
