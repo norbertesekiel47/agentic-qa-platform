@@ -13,8 +13,9 @@ source "$(dirname "$0")/common.sh"
 first=${1:-}
 after=${2:-}
 day='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
-if [[ ! $first =~ $day || ! $after =~ $day ]]; then
-  echo "usage: $0 <first day> <day after the last>, as YYYY-MM-DD" >&2
+# Each request costs money, so a malformed one is refused before it's made.
+if [ "$#" -ne 2 ] || [[ ! $first =~ $day || ! $after =~ $day || ! $first < $after ]]; then
+  echo "usage: $0 <first day> <day after the last>, as YYYY-MM-DD, in that order" >&2
   exit 2
 fi
 

@@ -114,9 +114,10 @@ def test_trial_reports_a_sandboxed_browser(tmp_path: Path, runs: Path) -> None:
     # The timer runs from before the launch until the sandbox check passed.
     assert report["ready_seconds"] is not None
     assert report["ready_seconds"] >= 0.3
-    # When that was, by the host's clock: after the delay, before the report.
+    # When that was, by the host's clock: after the delay, and before the
+    # memory window that follows the launch.
     assert report["ready_at"] is not None
-    assert started + 0.3 <= report["ready_at"] <= finished
+    assert started + 0.3 <= report["ready_at"] <= finished - trial.MEMORY_SECONDS
     assert report["peak_memory_bytes"] == 2048 * 1024
     assert report["boot_id"] == BOOT_ID
 

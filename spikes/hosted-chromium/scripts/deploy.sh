@@ -16,11 +16,11 @@ require_tools docker
 
 candidate=${1:-}
 is_candidate "$candidate" || usage_candidate
+load_account
 require_budget
 
-account=$(account_id)
-# A deploy creates its candidate's log group, so an existing one means the
-# candidate is deployed, fully or partly.
+# A deploy's first change creates its candidate's log group, so an existing
+# one means the candidate is deployed, fully or partly.
 deployed=$(aws logs describe-log-groups --log-group-name-prefix "$(log_group "$candidate")" \
   --query 'logGroups[].logGroupName' --output text)
 if [ -n "$deployed" ]; then
@@ -31,6 +31,11 @@ commit=$(docker image inspect "aqa-spike-trial:$candidate" \
   --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
 if [[ ! $commit =~ ^[0-9a-f]{12}$ ]]; then
   echo "aqa-spike-trial:$candidate names no commit: build it with package.sh $candidate" >&2
+  exit 1
+fi
+zip=$spike_dir/build/microvm-$commit.zip
+if [ "$candidate" = microvm ] && [ ! -f "$zip" ]; then
+  echo "no $zip: run package.sh microvm first" >&2
   exit 1
 fi
 
@@ -87,10 +92,7 @@ push_image() {
 }
 
 deploy_lambda() {
-  local logs
   push_image
-  create_log_group lambda
-  logs=$(logs_statement lambda)
   policy "$logs" > "$work/policy.json"
   create_role "$(role_name lambda)" lambda.amazonaws.com "$work/policy.json"
   settle_iam
@@ -103,10 +105,8 @@ deploy_lambda() {
 }
 
 deploy_fargate() {
-  local logs pull vpc
+  local pull vpc
   push_image
-  create_log_group fargate
-  logs=$(logs_statement fargate)
   pull=$(jq -n --arg arn "arn:aws:ecr:$AWS_REGION:$account:repository/$NAME-fargate" \
     '{Effect: "Allow", Resource: $arn, Action: ["ecr:BatchCheckLayerAvailability",
       "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"]}')
@@ -127,14 +127,18 @@ deploy_fargate() {
     --description "The hosted-compute spike's Fargate task: no inbound traffic" \
     --tag-specifications "ResourceType=security-group,Tags=[{Key=$TAG_KEY,Value=$TAG_VALUE}]" \
     > /dev/null
-  # The task gets no task role, so its container holds no AWS credentials.
+  # The task gets no task role, so its container holds no AWS credentials. Its
+  # trial is killed after FARGATE_MAX_SECONDS, so a task ends even when
+  # invoke.sh can't stop it.
   jq -n --arg family "$NAME" --arg cpu "$FARGATE_CPU" --arg memory "$MEMORY_MB" \
     --arg role "$role_arn" --arg image "$image_uri" --arg group "$(log_group fargate)" \
-    --arg region "$AWS_REGION" --arg key "$TAG_KEY" --arg value "$TAG_VALUE" '{
+    --arg region "$AWS_REGION" --arg key "$TAG_KEY" --arg value "$TAG_VALUE" \
+    --arg max "$FARGATE_MAX_SECONDS" '{
       family: $family, requiresCompatibilities: ["FARGATE"], networkMode: "awsvpc",
       cpu: $cpu, memory: $memory, executionRoleArn: $role,
       runtimePlatform: {cpuArchitecture: "ARM64", operatingSystemFamily: "LINUX"},
       containerDefinitions: [{name: "trial", image: $image, essential: true,
+        command: ["timeout", $max, "python", "-m", "aqa_hosted_chromium_spike"],
         logConfiguration: {logDriver: "awslogs", options: {
           "awslogs-group": $group, "awslogs-region": $region,
           "awslogs-stream-prefix": "trial"}}}],
@@ -144,12 +148,7 @@ deploy_fargate() {
 }
 
 deploy_microvm() {
-  local zip=$spike_dir/build/microvm-$commit.zip bucket key logs get_zip build_role image state
-  if [ ! -f "$zip" ]; then
-    echo "no $zip: run package.sh microvm first" >&2
-    exit 1
-  fi
-  bucket=$(bucket_name)
+  local key get_zip build_role image state
   key=microvm-$commit.zip
   aws s3api create-bucket --bucket "$bucket" > /dev/null
   aws s3api put-public-access-block --bucket "$bucket" --public-access-block-configuration \
@@ -157,8 +156,6 @@ deploy_microvm() {
   aws s3api put-bucket-tagging --bucket "$bucket" \
     --tagging "TagSet=[{Key=$TAG_KEY,Value=$TAG_VALUE}]"
   aws s3 cp --only-show-errors "$zip" "s3://$bucket/$key"
-  create_log_group microvm
-  logs=$(logs_statement microvm)
   get_zip=$(jq -n --arg arn "arn:aws:s3:::$bucket/$key" \
     '{Effect: "Allow", Action: "s3:GetObject", Resource: $arn}')
   policy "$logs" "$get_zip" > "$work/build-policy.json"
@@ -170,7 +167,8 @@ deploy_microvm() {
   settle_iam
   # Lambda snapshots the server once /ready answers, and a MicroVM takes
   # traffic once /run answers (microvms-images.html#microvms-images-build-hooks).
-  # No egress connector: the trial reaches nothing outside its MicroVM.
+  # No egress connector: the MicroVM keeps Lambda's default outbound internet
+  # access, which the trial doesn't use (README, Outbound traffic).
   image=$(aws lambda-microvms create-microvm-image --name "$NAME" \
     --code-artifact "uri=s3://$bucket/$key" --base-image-arn "$MICROVM_BASE_IMAGE" \
     --build-role-arn "$build_role" --cpu-configurations architecture=ARM_64 \
@@ -196,5 +194,7 @@ deploy_microvm() {
   exit 1
 }
 
+create_log_group "$candidate"
+logs=$(logs_statement "$candidate")
 "deploy_$candidate"
 echo "deployed $candidate at $commit"

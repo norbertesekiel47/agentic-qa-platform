@@ -13,6 +13,7 @@ candidate=${1:-}
 start=${2:-}
 is_candidate "$candidate" || usage_candidate "cold|warm"
 case $start in cold | warm) ;; *) usage_candidate "cold|warm" ;; esac
+load_account
 require_budget
 
 # What must not outlive the script, whatever stops it: a task still running
@@ -40,14 +41,17 @@ emit() {
 }
 
 invoke_lambda() {
-  local stream report
+  local stamp stream report
   if [ "$start" = cold ]; then
+    stamp=$(now)
     aws lambda update-function-configuration --function-name "$NAME" \
-      --environment "Variables={AQA_SPIKE_START=$(now)}" > /dev/null
+      --environment "Variables={AQA_SPIKE_START=$stamp}" > /dev/null
     aws lambda wait function-updated-v2 --function-name "$NAME"
   fi
   requested=$(now)
-  aws lambda invoke --function-name "$NAME" --payload '{}' \
+  # Invoke has no idempotency token, so the CLI must not retry it: a retry
+  # after a lost answer would run a second trial.
+  AWS_MAX_ATTEMPTS=1 aws lambda invoke --function-name "$NAME" --payload '{}' \
     --cli-binary-format raw-in-base64-out --log-type Tail --cli-read-timeout 150 \
     --output json "$work/answer.json" > "$work/invoke.json"
   answered=$(now)
@@ -76,10 +80,17 @@ invoke_fargate() {
   group=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$NAME" \
     --query 'SecurityGroups[].GroupId' --output text)
   requested=$(now)
-  task=$(aws ecs run-task --cluster "$NAME" --launch-type FARGATE --task-definition "$NAME" \
+  aws ecs run-task --cluster "$NAME" --launch-type FARGATE --task-definition "$NAME" \
     --propagate-tags TASK_DEFINITION \
     --network-configuration "awsvpcConfiguration={subnets=[$subnets],securityGroups=[$group],assignPublicIp=ENABLED}" \
-    --query 'tasks[0].taskArn' --output text)
+    --output json > "$work/run.json"
+  # A task Fargate can't place comes back in `failures`, with exit code 0.
+  task=$(jq -r '.tasks[0].taskArn // empty' "$work/run.json")
+  if [ -z "$task" ]; then
+    echo "Fargate started no task:" >&2
+    jq .failures "$work/run.json" >&2
+    exit 1
+  fi
   aws ecs wait tasks-stopped --cluster "$NAME" --tasks "$task"
   answered=$(now)
   arn=$task
@@ -114,9 +125,16 @@ invoke_fargate() {
 }
 
 invoke_microvm() {
-  local image role run endpoint token
-  image=$(aws lambda-microvms list-microvm-images --output text \
-    --query "items[?name=='$NAME'].imageArn | [0]")
+  local images count image role run endpoint token
+  # JSON, not text: with text output the CLI applies the query to each page.
+  images=$(aws lambda-microvms list-microvm-images --output json \
+    --query "items[?name=='$NAME' && (state=='CREATED' || state=='UPDATED')].imageArn")
+  count=$(jq length <<< "$images")
+  if [ "$count" != 1 ]; then
+    echo "expected one ready MicroVM image named $NAME, found $count" >&2
+    exit 1
+  fi
+  image=$(jq -r '.[0]' <<< "$images")
   role=$(aws iam get-role --role-name "$(role_name microvm)" --query Role.Arn --output text)
   requested=$(now)
   # With no traffic for a minute the MicroVM suspends, and a suspended one is

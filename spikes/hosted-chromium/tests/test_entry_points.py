@@ -136,10 +136,11 @@ def microvm() -> Iterator[MicroVM]:
     running = server(("127.0.0.1", 0), trial)
     thread = threading.Thread(target=running.serve_forever)
     thread.start()
+    connection = HTTPConnection("127.0.0.1", running.server_address[1], timeout=10)
     try:
-        port = running.server_address[1]
-        yield MicroVM(HTTPConnection("127.0.0.1", port, timeout=10), reports)
+        yield MicroVM(connection, reports)
     finally:
+        connection.close()
         running.shutdown()
         thread.join()
         running.server_close()

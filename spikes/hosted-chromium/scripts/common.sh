@@ -1,7 +1,12 @@
 # Sourced by the spike's scripts (ADR-0008 amendment, 2026-09-30): the region,
-# the name of everything they create, the tag that marks it, and the helpers
-# they share. Every resource name is fixed here, so a teardown deletes only what
-# a deploy created.
+# the names of everything they create, the tag that marks it, and the helpers
+# they share. teardown.sh deletes the resources with these names, and nothing
+# else.
+#
+# set -e doesn't reach a failure inside `$(…)` used as an argument, in
+# `for … in $(…)`, or in a function run inside `$(…)`. So the scripts assign a
+# command's output to a variable before they use it, and functions that change
+# something set globals rather than print (LAB_NOTES, 2026-09-30).
 set -euo pipefail
 
 export AWS_REGION=us-east-1 AWS_DEFAULT_REGION=us-east-1 AWS_PAGER=""
@@ -21,6 +26,10 @@ TAG_KEY=aqa-spike
 TAG_VALUE=hosted-chromium
 IAM_PATH=/aqa-spike/
 LOG_PREFIX=/aqa-spike/hosted-chromium
+# The names of the resources of which the spike makes more than one.
+REPOSITORIES=("$NAME-lambda" "$NAME-fargate")
+ROLES=("$NAME-lambda" "$NAME-fargate" "$NAME-microvm-build" "$NAME-microvm")
+LOG_GROUPS=("$LOG_PREFIX/lambda" "$LOG_PREFIX/fargate" "$LOG_PREFIX/microvm")
 # Every candidate gets 2 GB: the Fargate task and the MicroVM's baseline get
 # 1 vCPU with it, and a Lambda function about 1.16, since its CPU follows its
 # memory (1,769 MB is one vCPU).
@@ -29,9 +38,11 @@ FARGATE_CPU=1024
 BUDGET_USD=10
 MICROVM_BASE_IMAGE=arn:aws:lambda:$AWS_REGION:aws:microvm-image:al2023-1
 MICROVM_CONNECTOR=arn:aws:lambda:$AWS_REGION:aws:network-connector:aws-network-connector
-# The longest a MicroVM may live, running or suspended: an invoke that fails
-# before it terminates its MicroVM leaves one that ends by itself.
+# The longest a run may last on each candidate, so that one whose script dies
+# ends by itself: a MicroVM's life, running or suspended, and the Fargate
+# task's trial. The Lambda function has its own timeout, 120 seconds.
 MICROVM_MAX_SECONDS=900
+FARGATE_MAX_SECONDS=300
 
 spike_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 work=$(mktemp -d)
@@ -53,12 +64,10 @@ is_candidate() {
   esac
 }
 
-account_id() {
-  aws sts get-caller-identity --query Account --output text
-}
-
-bucket_name() {
-  echo "$NAME-$(account_id)"
+# Sets account, and bucket: the MicroVM's zip bucket, named for the account.
+load_account() {
+  account=$(aws sts get-caller-identity --query Account --output text)
+  bucket=$NAME-$account
 }
 
 log_group() {
@@ -69,14 +78,21 @@ role_name() {
   echo "$NAME-$1"
 }
 
+# A JMESPath list of the given names, for a --query that must match exactly.
+jmespath_list() {
+  local names
+  names=$(printf ",'%s'" "$@")
+  echo "[${names#,}]"
+}
+
 now() {
   python3 -c 'import time; print(f"{time.time():.3f}")'
 }
 
 # Fails unless the budget alarm exists, so no other resource is ever created
-# before it.
+# before it. Needs load_account.
 require_budget() {
-  if ! aws budgets describe-budget --account-id "$(account_id)" \
+  if ! aws budgets describe-budget --account-id "$account" \
     --budget-name "$NAME" > /dev/null 2>"$work/budget.err"; then
     cat "$work/budget.err" >&2
     echo "no budget alarm $NAME: run budget.sh first" >&2
