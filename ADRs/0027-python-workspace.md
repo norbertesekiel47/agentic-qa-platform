@@ -51,7 +51,7 @@ A measured fact forced the last choice: with the workspace at `>=3.14`, Ruff ref
 ## Amendment (2026-09-29): #59 settles the bar
 
 ADR-0028 settles the two consequences above that were left to #59:
-- the Ruff rule set, pytest's strict mode and every threshold now live in CONSTRAINTS.md, which `pyproject.toml` mirrors;
+- every threshold now lives in CONSTRAINTS.md, which `pyproject.toml` mirrors, and ADR-0028 chooses the Ruff rule set and pytest's strict mode, set in `pyproject.toml`;
 - Markdown stays in Ruff's `include`.
 
 mypy's `files` gain `tests`, and pytest's `testpaths` gain `.claude/hooks` and `tests`, so `uv run pytest --cov` measures the guard.
