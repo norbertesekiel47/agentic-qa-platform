@@ -54,7 +54,7 @@ Recorded now, enforced once the code or the pipeline they need exists.
 | Coverage of each test-first module (TESTING.md §2) | 100% line and branch, via `uv run coverage report --include=<the module's paths> --fail-under=100` | The ticket that adds the first test-first module, which also adds the command |
 | Dependency audit | No new high or critical advisory | #60 |
 | Mutation testing | Chosen then | The replay engine, the first test-first module |
-| The floor in CI: deleted tests, stripped assertions, changed gate configs | `policy_guard.py --diff <base>` finds none, or the maintainer approved them | A follow-up ticket, which first splits the guard (995 lines) |
+| The floor in CI: deleted tests, stripped assertions, changed gate configs | `policy_guard.py --diff <base>` finds none, or the maintainer approved them | A follow-up ticket, which first splits the guard, now near its 1000-line limit |
 
 ## Exceptions
 
