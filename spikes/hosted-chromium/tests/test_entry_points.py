@@ -12,13 +12,14 @@ import sys
 import tempfile
 import threading
 from collections.abc import Iterator
+from dataclasses import dataclass
 from http.client import HTTPConnection
 from pathlib import Path
 
 import pytest
 from aqa_hosted_chromium_spike.lambda_function import handler
-from aqa_hosted_chromium_spike.microvm import HOOKS, server
-from aqa_hosted_chromium_spike.trial import Report, Sandbox, measure
+from aqa_hosted_chromium_spike.microvm import HOOK_PREFIX, server
+from aqa_hosted_chromium_spike.trial import Report, Sandbox, trial_on_this_host
 
 LINUX_ONLY = "the trial runs on Linux only"
 
@@ -29,7 +30,7 @@ def test_the_trial_refuses_a_host_other_than_linux(
     monkeypatch.setattr(sys, "platform", "darwin")
 
     with pytest.raises(RuntimeError, match=f"{LINUX_ONLY}, not darwin"):
-        measure()
+        trial_on_this_host()
 
 
 def test_the_command_prints_each_trial_as_json(tmp_path: Path) -> None:
@@ -86,10 +87,23 @@ REPORT = Report(
 )
 
 
+@dataclass(frozen=True)
+class MicroVM:
+    """A connection to the MicroVM's server, and the reports of the trials it
+    ran."""
+
+    connection: HTTPConnection
+    reports: list[Report]
+
+    def post(self, path: str, body: bytes = b"") -> int:
+        self.connection.request("POST", path, body=body)
+        return self.connection.getresponse().status
+
+
 @pytest.fixture
-def microvm() -> Iterator[tuple[HTTPConnection, list[Report]]]:
-    """A connection to the MicroVM's server on a free local port, and the
-    reports of the trials it ran."""
+def microvm() -> Iterator[MicroVM]:
+    """The MicroVM's server on a free local port, with a trial that returns
+    REPORT."""
     reports: list[Report] = []
 
     def trial() -> Report:
@@ -100,55 +114,47 @@ def microvm() -> Iterator[tuple[HTTPConnection, list[Report]]]:
     thread = threading.Thread(target=running.serve_forever)
     thread.start()
     try:
-        yield (
-            HTTPConnection("127.0.0.1", running.server_address[1], timeout=10),
-            reports,
-        )
+        port = running.server_address[1]
+        yield MicroVM(HTTPConnection("127.0.0.1", port, timeout=10), reports)
     finally:
         running.shutdown()
         thread.join()
         running.server_close()
 
 
-@pytest.mark.parametrize("hook", ["ready", "run"])
-def test_the_microvm_answers_its_hooks_without_a_trial(
-    microvm: tuple[HTTPConnection, list[Report]], hook: str
+@pytest.mark.parametrize("hook", ["ready", "run", "resume", "suspend", "terminate"])
+def test_the_microvm_answers_its_lifecycle_hooks_without_a_trial(
+    microvm: MicroVM, hook: str
 ) -> None:
-    connection, reports = microvm
+    status = microvm.post(f"{HOOK_PREFIX}{hook}", body=b'{"microvmId": "mvm-1"}')
 
-    connection.request("POST", f"{HOOKS}{hook}", body=b'{"microvmId": "mvm-1"}')
-    response = connection.getresponse()
-
-    assert response.status == 200
-    assert reports == [], "a hook ran a trial, so the snapshot would hold a browser"
+    assert status == 200
+    assert microvm.reports == [], "a hook ran a trial: a browser in the snapshot"
 
 
-def test_the_microvm_runs_a_trial_per_request(
-    microvm: tuple[HTTPConnection, list[Report]],
-) -> None:
-    connection, reports = microvm
-
-    connection.request("POST", "/trial")
-    response = connection.getresponse()
+def test_the_microvm_runs_a_trial_per_request(microvm: MicroVM) -> None:
+    microvm.connection.request("POST", "/trial")
+    response = microvm.connection.getresponse()
 
     assert response.status == 200
     assert response.getheader("Content-Type") == "application/json"
     assert json.loads(response.read()) == REPORT
-    assert reports == [REPORT]
+    assert microvm.reports == [REPORT]
 
 
 # A trial changes state (the run marker), so only a POST runs one.
 @pytest.mark.parametrize(
     ("method", "path", "status"),
-    [("POST", "/", 404), ("POST", f"{HOOKS}validate", 404), ("GET", "/trial", 501)],
+    [
+        ("POST", "/", 404),
+        ("POST", f"{HOOK_PREFIX}validate", 404),
+        ("GET", "/trial", 501),
+    ],
 )
 def test_the_microvm_runs_no_trial_for_other_requests(
-    microvm: tuple[HTTPConnection, list[Report]], method: str, path: str, status: int
+    microvm: MicroVM, method: str, path: str, status: int
 ) -> None:
-    connection, reports = microvm
+    microvm.connection.request(method, path)
 
-    connection.request(method, path)
-    response = connection.getresponse()
-
-    assert response.status == status
-    assert reports == []
+    assert microvm.connection.getresponse().status == status
+    assert microvm.reports == []

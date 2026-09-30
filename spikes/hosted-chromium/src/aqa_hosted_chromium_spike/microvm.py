@@ -13,13 +13,20 @@ from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from aqa_hosted_chromium_spike.trial import Report, measure
+from aqa_hosted_chromium_spike.trial import Report, trial_on_this_host
 
 # Lambda sends a MicroVM's inbound traffic, and its hooks, to this port.
 # https://docs.aws.amazon.com/lambda/latest/dg/microvms-launching.html#microvms-launching-port-routing
 PORT = 8080
 # https://docs.aws.amazon.com/lambda/latest/dg/microvms-launching.html#microvms-launching-lifecycle-hooks
-HOOKS = "/aws/lambda-microvms/runtime/v1/"
+HOOK_PREFIX = "/aws/lambda-microvms/runtime/v1/"
+# The lifecycle hooks Lambda may call. The server keeps no state to set up,
+# flush or restore around them, so each only answers 200. The spike's image
+# doesn't configure the build's /validate hook, so it isn't answered.
+LIFECYCLE_HOOKS = {
+    f"{HOOK_PREFIX}{hook}"
+    for hook in ("ready", "run", "resume", "suspend", "terminate")
+}
 
 
 def server(address: tuple[str, int], trial: Callable[[], Report]) -> HTTPServer:
@@ -29,7 +36,7 @@ def server(address: tuple[str, int], trial: Callable[[], Report]) -> HTTPServer:
         def do_POST(self) -> None:
             # /ready tells Lambda to take the snapshot; /run, that this MicroVM
             # may receive traffic.
-            if self.path in {f"{HOOKS}ready", f"{HOOKS}run"}:
+            if self.path in LIFECYCLE_HOOKS:
                 self._reply(HTTPStatus.OK, b"")
             elif self.path == "/trial":
                 self._reply(HTTPStatus.OK, json.dumps(trial()).encode())
@@ -48,6 +55,7 @@ def server(address: tuple[str, int], trial: Callable[[], Report]) -> HTTPServer:
 
 if __name__ == "__main__":
     # Lambda's proxy reaches the server through the MicroVM's network
-    # interface, so it listens on every interface. Only requests carrying a
-    # token from create-microvm-auth-token get through the proxy.
-    server(("", PORT), measure).serve_forever()
+    # interface, so it listens on every interface (pyproject.toml's S104
+    # ignore). Only requests carrying a token from create-microvm-auth-token
+    # get through the proxy.
+    server(("0.0.0.0", PORT), trial_on_this_host).serve_forever()

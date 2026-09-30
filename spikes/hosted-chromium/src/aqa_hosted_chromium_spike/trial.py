@@ -45,15 +45,17 @@ class Report(TypedDict):
     peak_memory_bytes: int
 
 
-def measure() -> Report:
+def trial_on_this_host() -> Report:
     """One trial on this host, as each candidate's entry point runs it. The
     run marker lives in the temporary directory, /tmp on every candidate."""
     if sys.platform != "linux":
         raise RuntimeError(f"the trial runs on Linux only, not {sys.platform}")
-    return asyncio.run(_measure(Path(tempfile.gettempdir(), "aqa-spike-runs")))
+    return asyncio.run(
+        _trial_on_this_host(Path(tempfile.gettempdir(), "aqa-spike-runs"))
+    )
 
 
-async def _measure(runs_file: Path) -> Report:
+async def _trial_on_this_host(runs_file: Path) -> Report:
     async with async_playwright() as playwright:
         return await run_trial(playwright.chromium, Path("/proc"), runs_file)
 

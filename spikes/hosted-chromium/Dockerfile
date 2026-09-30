@@ -31,11 +31,14 @@ ENV UV_PYTHON_INSTALL_DIR=/opt/python \
     HOME=/tmp
 
 # uv.lock's versions, installed as wheels, so the sources go once they are.
+# The check covers the libraries the shell loads at run time (EGL, GLES,
+# SwiftShader) as well as the shell itself.
 COPY . /build
 RUN cd /build \
     && uv sync --locked --no-dev --no-editable --package aqa-hosted-chromium-spike \
     && playwright install --only-shell chromium \
-    && ldd /opt/ms-playwright/chromium_headless_shell-*/*/chrome-headless-shell > /tmp/ldd.txt \
+    && cd /opt/ms-playwright/chromium_headless_shell-*/*/ \
+    && ldd chrome-headless-shell *.so* > /tmp/ldd.txt \
     && ! grep 'not found' /tmp/ldd.txt \
     && rm -rf /build /tmp/ldd.txt /root/.cache
 
