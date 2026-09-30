@@ -10,8 +10,11 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 from collections.abc import Callable
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -184,20 +187,38 @@ def test_assert_and_print_fail_ruff_in_package_code() -> None:
     assert exit_code == 1
 
 
+def mypy(tmp_path: Path, name: str, source: str) -> subprocess.CompletedProcess[str]:
+    """mypy, with the repo's config, on `source` as the module `name`."""
+    # mypy's -c conflicts with the config's `files`, so each source is a file.
+    module = tmp_path / name
+    module.write_text(source)
+    config = ["--config-file=pyproject.toml", f"--cache-dir={tmp_path / 'cache'}"]
+    return run([sys.executable, "-m", "mypy", *config, str(module)])
+
+
 @pytest.mark.parametrize("body", ["...", "pass"])
 def test_empty_body_fails_mypy(body: str, tmp_path: Path) -> None:
-    # mypy's -c conflicts with the config's `files`, so each source is a file.
-    def mypy(name: str, source: str) -> subprocess.CompletedProcess[str]:
-        module = tmp_path / name
-        module.write_text(source)
-        config = ["--config-file=pyproject.toml", f"--cache-dir={tmp_path / 'cache'}"]
-        return run([sys.executable, "-m", "mypy", *config, str(module)])
-
-    empty = mypy("empty.py", f"def f() -> int:\n    {body}\n")
-    control = mypy("control.py", "def f() -> int:\n    return 1\n")
+    empty = mypy(tmp_path, "empty.py", f"def f() -> int:\n    {body}\n")
+    control = mypy(tmp_path, "control.py", "def f() -> int:\n    return 1\n")
 
     assert empty.returncode == 1
     assert "[empty-body]" in empty.stdout
+    assert control.returncode == 0, control.stdout
+
+
+def test_package_code_cannot_import_a_script(tmp_path: Path) -> None:
+    # The scripts are off mypy_path, so an import that fails for users of the
+    # packages fails the type check too (ADR-0029).
+    leak = mypy(tmp_path, "leak.py", "import manifest\nimport policy_guard\n")
+    control = mypy(tmp_path, "control.py", "import aqa_cli\nimport aqa_core\n")
+
+    not_found = {
+        line.split('"')[1]
+        for line in leak.stdout.splitlines()
+        if line.endswith("[import-not-found]")
+    }
+    assert leak.returncode == 1
+    assert not_found == {"manifest", "policy_guard"}
     assert control.returncode == 0, control.stdout
 
 
@@ -359,9 +380,197 @@ def test_a_warning_fails_the_test_run(tmp_path: Path) -> None:
     assert control.returncode == 0, control.stdout
 
 
-def test_the_test_gate_collects_the_guard_and_these_tests() -> None:
+def test_the_test_gate_collects_the_harness_the_guard_and_these_tests() -> None:
+    # CI runs the harness's and the guard's tests through pytest (ADR-0029).
     result = run([*PYTEST, "--collect-only", "-q"])
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert "bench/harness/test_manifest.py" in result.stdout
     assert ".claude/hooks/test_policy_guard.py" in result.stdout
     assert "tests/test_constraints.py" in result.stdout
+
+
+# --- dependency audit ------------------------------------------------------------------
+
+AUDIT = REPO / ".github/scripts/audit-lockfile.sh"
+
+
+def audit_cut() -> float:
+    """The CVSS score from which CONSTRAINTS.md's dependency audit fails."""
+    for line in CONSTRAINTS.read_text().splitlines():
+        cut = re.search(r"A score of (\d+\.\d) or more", line)
+        if line.startswith("| Dependency audit |") and cut:
+            return float(cut.group(1))
+    raise LookupError("CONSTRAINTS.md's dependency audit row names no CVSS score")
+
+
+CUT = audit_cut()
+
+
+def osv_report(*scores: str) -> dict[str, Any]:
+    """osv-scanner's JSON: one package, an advisory group per score ("" = none)."""
+    groups = [
+        {"ids": [f"GHSA-fake-{i}"], "max_severity": score}
+        for i, score in enumerate(scores)
+    ]
+    package = {"package": {"name": "demo", "version": "1.0"}, "groups": groups}
+    return {"results": [{"packages": [package]}]}
+
+
+def audit(
+    tmp_path: Path, scanner_exit: int, report: dict[str, Any]
+) -> subprocess.CompletedProcess[str]:
+    """The audit script, with a fake osv-scanner that writes `report` and exits."""
+    (tmp_path / "report.json").write_text(json.dumps(report))
+    scanner = tmp_path / "osv-scanner"
+    scanner.write_text(
+        "#!/bin/bash\n"
+        'while [ $# -gt 0 ]; do [ "$1" = --output-file ] && out=$2; shift; done\n'
+        f'cp "{tmp_path / "report.json"}" "$out"\n'
+        f"exit {scanner_exit}\n"
+    )
+    scanner.chmod(0o755)
+    return run([str(AUDIT), str(scanner), "uv.lock"])
+
+
+@pytest.mark.parametrize(
+    ("scanner_exit", "report", "passes"),
+    [
+        (0, {"results": []}, True),
+        (1, osv_report(f"{CUT - 0.1:.1f}"), True),
+        (1, osv_report(f"{CUT:.1f}"), False),
+        (1, osv_report(""), False),
+        (1, osv_report("5.4", f"{CUT:.1f}"), False),
+        # osv-scanner found something, but the filter read nothing: fail closed.
+        (1, {"results": []}, False),
+        (1, {"findings": []}, False),
+        # A shape the filter doesn't know fails even on a clean exit, so a
+        # scanner upgrade that moves the results can't pass silently.
+        (0, {"findings": []}, False),
+    ],
+    ids=[
+        "clean",
+        "below-the-cut",
+        "at-the-cut",
+        "unscored",
+        "high-in-a-later-group",
+        "findings-without-rows",
+        "unknown-shape",
+        "unknown-shape-on-a-clean-exit",
+    ],
+)
+def test_the_audit_fails_on_a_high_or_unscored_advisory(
+    tmp_path: Path, scanner_exit: int, report: dict[str, Any], *, passes: bool
+) -> None:
+    result = audit(tmp_path, scanner_exit, report)
+
+    assert (result.returncode == 0) is passes, result.stdout + result.stderr
+
+
+def test_the_audit_lists_every_finding_with_its_score(tmp_path: Path) -> None:
+    result = audit(tmp_path, 1, osv_report("5.4", ""))
+
+    assert result.returncode == 1
+    assert "demo 1.0: GHSA-fake-0 (CVSS 5.4)" in result.stdout
+    assert "demo 1.0: GHSA-fake-1 (CVSS none)" in result.stdout
+
+
+def test_a_scanner_error_fails_the_audit_with_its_exit_code(tmp_path: Path) -> None:
+    # 128 is osv-scanner's "no packages found"; its JSON is empty but valid.
+    result = audit(tmp_path, 128, {"results": []})
+
+    assert result.returncode == 128, result.stdout + result.stderr
+
+
+# --- dependency audit waivers ----------------------------------------------------------
+
+WAIVERS = REPO / "osv-scanner.toml"
+TODAY = date(2026, 9, 29)
+
+
+def waiver_problems(config: dict[str, Any], exceptions: str, today: date) -> list[str]:
+    """How an osv-scanner.toml falls short of CONSTRAINTS.md's waiver rule.
+
+    osv-scanner itself accepts waivers that never expire and overrides that
+    cover every package, so the rule is checked here (ADR-0029).
+    """
+    days = re.search(r"an expiry at most (\d+) days out", CONSTRAINTS.read_text())
+    if not days:
+        raise LookupError("CONSTRAINTS.md's Exceptions name no longest expiry")
+    latest = today + timedelta(days=int(days.group(1)))
+    problems = [
+        f"[[{key}]] isn't a waiver of one advisory"
+        for key in config
+        if key != "IgnoredVulns"
+    ]
+    for entry in config.get("IgnoredVulns", []):
+        vuln = str(entry.get("id", ""))
+        until = entry.get("ignoreUntil")
+        if isinstance(until, datetime):
+            until = until.date()
+        if not vuln or not str(entry.get("reason", "")).strip():
+            problems.append(f"{vuln or 'an entry'} needs an id and a reason")
+        if not isinstance(until, date) or until > latest:
+            problems.append(f"{vuln} needs an ignoreUntil no later than {latest}")
+        if not vuln or vuln not in exceptions:
+            problems.append(f"{vuln} needs a row in CONSTRAINTS.md's Exceptions")
+    return problems
+
+
+EXCEPTIONS = "| GHSA-fake-0000-0000 | Dependency audit | uv.lock | fake | maintainer | 2026-10-29 |"
+
+
+def ignored(**changes: object) -> dict[str, Any]:
+    """An osv-scanner.toml waiving one advisory within the rule, then `changes`."""
+    entry = {
+        "id": "GHSA-fake-0000-0000",
+        "reason": "fake: the vulnerable function is never called",
+        "ignoreUntil": TODAY + timedelta(days=30),
+    } | changes
+    return {"IgnoredVulns": [{k: v for k, v in entry.items() if v is not None}]}
+
+
+def test_a_waiver_within_the_rule_passes() -> None:
+    assert waiver_problems(ignored(), EXCEPTIONS, TODAY) == []
+
+
+@pytest.mark.parametrize(
+    ("config", "problem"),
+    [
+        (
+            {
+                "PackageOverrides": [
+                    {"vulnerability": {"ignore": True}, "reason": "fake"}
+                ]
+            },
+            "[[PackageOverrides]] isn't a waiver of one advisory",
+        ),
+        (ignored(ignoreUntil=None), "needs an ignoreUntil"),
+        (ignored(ignoreUntil=TODAY + timedelta(days=91)), "needs an ignoreUntil"),
+        (ignored(reason=" "), "needs an id and a reason"),
+        (
+            ignored(id="GHSA-fake-1111-1111"),
+            "needs a row in CONSTRAINTS.md's Exceptions",
+        ),
+    ],
+    ids=[
+        "blanket-override",
+        "no-expiry",
+        "expiry-too-late",
+        "no-reason",
+        "no-exception-row",
+    ],
+)
+def test_a_waiver_outside_the_rule_is_named(
+    config: dict[str, Any], problem: str
+) -> None:
+    problems = waiver_problems(config, EXCEPTIONS, TODAY)
+
+    assert any(problem in found for found in problems), problems
+
+
+def test_the_repo_waivers_follow_the_rule() -> None:
+    config = tomllib.loads(WAIVERS.read_text()) if WAIVERS.exists() else {}
+    exceptions = CONSTRAINTS.read_text().partition("## Exceptions")[2]
+
+    assert waiver_problems(config, exceptions, datetime.now(UTC).date()) == []

@@ -50,4 +50,4 @@
 
 ## Amendment (2026-09-29): CI runs the bar
 
-ADR-0029 moves CI onto these commands. Its `python` job runs Ruff, mypy (now in two runs) and `uv run pytest --cov`, so every threshold here fails a pull request. policy_guard also asks before a change to `osv-scanner.toml`, where the dependency audit's waivers live.
+ADR-0029 moves CI onto these commands. Its `python` job runs Ruff, mypy (now in two runs) and `uv run pytest --cov`, so every threshold here fails a pull request. policy_guard also asks before a change to `osv-scanner.toml`, where the dependency audit's waivers live, to `.github/scripts/`, and to any line of a CI workflow but comments and the top-level `name:`.

@@ -19,7 +19,7 @@ Always enforced. Each rule has exactly one enforcer.
 | No skipped, focused or rerun-until-green tests | policy_guard, refused | Same |
 | No tautological assertions (`assert True`, `expect(true).toBe(true)`) | policy_guard, refused | Same |
 | No unimplemented stubs outside tests (`raise NotImplementedError`, `throw new Error("Not implemented")`) | policy_guard, refused | Same |
-| No empty bodies in functions that return a value (`...` or `pass`) | mypy's `empty-body` | `uv run mypy` |
+| No empty bodies in functions that return a value (`...` or `pass`) | mypy's `empty-body` | Both mypy runs in the Types row below |
 | No `TODO`, `FIXME`, `XXX` or `HACK` comments | Ruff `FIX` | `uv run ruff check .` |
 | No broad exception handlers that swallow the error: a bare `except`, `except Exception` or `except BaseException` that doesn't re-raise | Ruff `E722`, `BLE001`, `S110`, `S112` | `uv run ruff check .` |
 | No `suppress(Exception)` or `suppress(BaseException)`, the rewrite Ruff's `SIM105` suggests for `try`-`except`-`pass` | policy_guard, refused | Each edit and shell write in Claude Code; the Stop hook's tree scan; `--scan` |
@@ -44,7 +44,7 @@ Every row but the dependency audit holds at the local gate run: the commands in 
 | Arguments per function | ≤ 6 | Ruff `PLR0913`, keyword-only arguments included | `uv run ruff check .` | Today's maximum (`toggle()`), one above Ruff's default: a parameter object for one function adds a concept |
 | Positional arguments per function | ≤ 5 | Ruff `PLR0917` | `uv run ruff check .` | Ruff's default; past five, arguments go keyword-only |
 | Statements per function | ≤ 50 | Ruff `PLR0915` | `uv run ruff check .` | Ruff's default; no function exceeds it |
-| Dependency audit | 0 high or critical advisories | osv-scanner's highest CVSS score per advisory group in `uv.lock`. A score of 7.0 or more is high or critical, and an advisory with no score counts as one. A waiver is an `osv-scanner.toml` entry with a reason and an `ignoreUntil` date, plus a row in Exceptions below | CI's `audit` job, on every pull request, every push to `main` and weekly | SECURITY.md §11. 7.0 is where CVSS v3 starts "High" |
+| Dependency audit | 0 high or critical advisories | osv-scanner's highest CVSS score per advisory group in `uv.lock`. A score of 7.0 or more is high or critical, and an advisory with no score counts as one. A waiver is an `[[IgnoredVulns]]` entry in `osv-scanner.toml` with a reason and an `ignoreUntil` date, plus a row in Exceptions below | CI's `dependency-audit` job, on every pull request, every push to `main` and weekly. `tests/test_constraints.py` checks the script's cut and the waivers against this row | SECURITY.md §11. 7.0 is where CVSS v3 starts "High" |
 
 ## Planned
 

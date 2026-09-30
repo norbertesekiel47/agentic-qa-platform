@@ -114,7 +114,7 @@ A change is mergeable only when every gate that runs passes. The jobs are in `.g
 | `mypy --strict`, in two runs: the packages and `tests`, then the scripts in `bench/harness` and `.claude/hooks` | `python` | Now |
 | `pytest --cov`: every test in `packages/`, `bench/harness/`, `.claude/hooks/` and `tests/`, including CONSTRAINTS.md's threshold checks and the coverage floor | `python` | Now. §1's layers (unit, integration, isolation, checkpointer, continuation, hygiene, egress/secrets, strict-mode) join as their code lands |
 | Browser tests: the sandbox check and egress fixtures | Their own steps: Chromium, and the AppArmor sysctl (ADR-0026) | With #35, in M1 |
-| Dependency audit of `uv.lock` (osv-scanner) | `audit` | Now, and weekly |
+| Dependency audit of `uv.lock` (osv-scanner) | `dependency-audit` | Now, and weekly |
 | Guard tests · policy scan | `guardrails` | Now |
 | Secret scan (gitleaks, full history) | `secrets` | Now |
 | `fallow audit` | `fallow` | Now, on pull requests. It checks TypeScript only, so it finds nothing until M7 |
