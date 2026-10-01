@@ -16,6 +16,7 @@ Versions are the latest stable releases as of **2026-09-27** (checked on PyPI/np
 | API framework | FastAPI | 0.141.1 | OpenAPI generation → typed TS client |
 | Lambda adapter | Mangum | 0.22.0 | ASGI on Lambda behind API Gateway |
 | Validation | Pydantic | 2.13.5 | Typed tools, verdicts, API models |
+| YAML | PyYAML, narrowed to YAML 1.2's core schema | 6.0.3 | Spec frontmatter and the project config, with duplicate keys, aliases and tags refused; already locked through LangChain (ADR-0030) |
 | DB access | SQLAlchemy 2.1.1 + psycopg 3.3.6 | — | Async, typed; raw SQL for RLS policies |
 | Migrations | Alembic | 1.20.0 | Versioned schema, RLS policies in migrations |
 | CLI | Typer 0.27.2 + Rich 15.0.0 | — | Ergonomic CLI and terminal output |
@@ -25,7 +26,7 @@ Versions are the latest stable releases as of **2026-09-27** (checked on PyPI/np
 | AWS SDK | boto3 | 1.43.x | KMS, SQS, S3, Lambda invoke |
 | M1 spike images | Base `public.ecr.aws/lambda/microvms:al2023-minimal` (pinned by digest) for every candidate; awslambdaric runs the Lambda function's | awslambdaric 4.1.0 | One Amazon Linux 2023 image for all three candidates, so they differ only in their platform (ADR-0008 amendment, 2026-09-30) |
 
-**Quality tooling:** Ruff 0.16.9, mypy 2.3.1 (strict), pytest 9.1.1, pytest-cov 7.1.0 with coverage 7.16.2, testcontainers 4.15.0, Hypothesis 6.168.2, VCR.py 8.3.0 (recorded LLM/HTTP fixtures), respx 0.23.1. CI installs uv 0.11.15 and runs osv-scanner 2.6.0, the dependency audit, as sha256-checked release binaries (ADR-0029).
+**Quality tooling:** Ruff 0.16.9, mypy 2.3.1 (strict), pytest 9.1.1, pytest-cov 7.1.0 with coverage 7.16.2, testcontainers 4.15.0, Hypothesis 6.168.2, VCR.py 8.3.0 (recorded LLM/HTTP fixtures), types-pyyaml 6.0.12.20260906 (PyYAML's stubs, for mypy), respx 0.23.1. CI installs uv 0.11.15 and runs osv-scanner 2.6.0, the dependency audit, as sha256-checked release binaries (ADR-0029).
 
 ## 2. Dashboard (TypeScript)
 
