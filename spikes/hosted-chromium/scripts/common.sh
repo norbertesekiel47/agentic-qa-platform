@@ -9,7 +9,9 @@
 # something set globals rather than print (LAB_NOTES, 2026-09-30).
 set -euo pipefail
 
-export AWS_REGION=us-east-1 AWS_DEFAULT_REGION=us-east-1 AWS_PAGER=""
+# us-east-2: the AWS account the spike runs in, a project account, denies
+# Lambda, ECS, ECR, EC2 and S3 outside its own region (ADR-0030).
+export AWS_REGION=us-east-2 AWS_DEFAULT_REGION=us-east-2 AWS_PAGER=""
 
 # Fails unless each tool is on PATH. Every script needs aws, jq and python3;
 # deploy.sh and invoke.sh ask for the rest they use.

@@ -420,7 +420,7 @@ def test_collect_asks_cost_explorer_for_the_usage_by_type(dry_run: DryRun) -> No
     assert "Start=2026-10-01,End=2026-10-03" in call
     assert "Type=DIMENSION,Key=USAGE_TYPE" in call
     assert json.loads(option(call, "--filter")) == {
-        "Dimensions": {"Key": "REGION", "Values": ["us-east-1"]}
+        "Dimensions": {"Key": "REGION", "Values": ["us-east-2"]}
     }
 
 
