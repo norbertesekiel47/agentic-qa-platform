@@ -128,13 +128,16 @@ files = ["packages", "spikes", "tests"]
 exclude = ["^bench/apps/"]
 # Module names come from these bases, not from the directory layout: each
 # package's src. Package tests sit outside every base, so they are named by
-# their path (packages.cli.tests.test_version) and may share a basename.
+# their path (packages.cli.tests.test_version) and may share a basename. The
+# spike's tests are a base too, so they can import their shared dry-run
+# harness (ADR-0008 amendment, 2026-09-30).
 explicit_package_bases = true
 mypy_path = [
     "packages/core/src",
     "packages/runner/src",
     "packages/cli/src",
     "spikes/hosted-chromium/src",
+    "spikes/hosted-chromium/tests",
 ]
 
 [tool.pytest]
@@ -145,11 +148,12 @@ filterwarnings = ["error"]
 testpaths = ["packages", "spikes", "bench/harness", ".claude/hooks", "tests"]
 # importlib mode lets test files in different packages share a basename
 # (pytest's advice for new projects). The harness's tests import each other by
-# bare name, as under unittest, so its directory is on the path, and namespace
-# resolution imports each of its modules once, under that name.
+# bare name, as under unittest, and the spike's tests import their dry-run
+# harness, so both directories are on the path, and namespace resolution
+# imports each of their modules once, under that name.
 addopts = ["--import-mode=importlib"]
 consider_namespace_packages = true
-pythonpath = ["bench/harness"]
+pythonpath = ["bench/harness", "spikes/hosted-chromium/tests"]
 # pytest's defaults, plus the vendored apps (ADR-0021).
 norecursedirs = [
     "*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}",

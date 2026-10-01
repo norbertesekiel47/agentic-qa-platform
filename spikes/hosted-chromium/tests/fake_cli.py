@@ -1,5 +1,5 @@
 """A stand-in for the aws, docker and curl commands in the spike scripts' dry
-runs (test_scripts.py): it records every call and answers from a scenario, so
+runs (dry_run.py): it records every call and answers from a scenario, so
 no test reaches AWS.
 
 Run as `python fake_cli.py <tool> <args...>`.
