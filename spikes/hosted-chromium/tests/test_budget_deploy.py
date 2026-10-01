@@ -31,6 +31,8 @@ def test_budget_sh_creates_only_the_budget_alarm_it_promises(dry_run: DryRun) ->
     assert budget["BudgetType"] == "COST"
     assert budget["TimeUnit"] == "MONTHLY"
     assert budget["BudgetLimit"] == {"Amount": "10", "Unit": "USD"}
+    # Credits would offset the spend, and the alarm would never fire.
+    assert budget["CostTypes"] == {"IncludeCredit": False}
     alerts = [n["Notification"] for n in notifications]
     assert [(a["NotificationType"], a["Threshold"]) for a in alerts] == [
         ("ACTUAL", 50),

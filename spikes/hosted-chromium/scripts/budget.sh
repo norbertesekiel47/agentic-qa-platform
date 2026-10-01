@@ -17,9 +17,12 @@ if [[ ! $email =~ ^[^@[:space:]]+@[^@[:space:]]+$ ]]; then
 fi
 
 load_account
+# Budgets count credits by default, so an account spending its credits would
+# show no spend and never alarm: this one counts spend before credits.
 jq -n --arg name "$NAME" --arg amount "$BUDGET_USD" \
   '{BudgetName: $name, BudgetType: "COST", TimeUnit: "MONTHLY",
-    BudgetLimit: {Amount: $amount, Unit: "USD"}}' > "$work/budget.json"
+    BudgetLimit: {Amount: $amount, Unit: "USD"},
+    CostTypes: {IncludeCredit: false}}' > "$work/budget.json"
 jq -n --arg email "$email" \
   '[50, 100] | map({
      Notification: {NotificationType: "ACTUAL", ComparisonOperator: "GREATER_THAN",

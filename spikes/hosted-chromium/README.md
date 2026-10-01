@@ -78,7 +78,7 @@ spikes/hosted-chromium/scripts/teardown.sh              # deletes everything, ch
 ```
 
 - **Names and tags.** Every resource has a fixed name from `scripts/common.sh`, starting `aqa-spike-hosted-chromium` (IAM roles also sit under the path `/aqa-spike/`, log groups under `/aqa-spike/hosted-chromium/`). Every resource that takes tags carries `aqa-spike=hosted-chromium`, the Fargate tasks too (from their task definition); MicroVMs aren't tagged. Teardown lists resources by those exact names, not by prefix or tag (the tag index lags a delete), so it deletes nothing else. Each candidate's resources are its own, and `deploy.sh` refuses a candidate that is already deployed: its first change creates the candidate's log group, which marks it.
-- **Budget first.** `deploy.sh` and `invoke.sh` refuse to run until the budget alarm exists. The alarm covers the whole account, and AWS updates its spend up to three times a day, so the scripts also cap how long anything runs:
+- **Budget first.** `deploy.sh` and `invoke.sh` refuse to run until the budget alarm exists. The alarm covers the whole account and counts spend before credits, since an account spending its credits would otherwise show none. AWS updates its spend up to three times a day, so the scripts also cap how long anything runs:
   - Lambda: a 120-second timeout;
   - Fargate: the container's command kills the trial after 300 seconds, and `invoke.sh` stops the task if anything fails first;
   - MicroVM: `invoke.sh` terminates it after its trial, even when the trial fails, and it can't live past 15 minutes.
