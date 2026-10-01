@@ -1,0 +1,312 @@
+"""The project config, qa/config.yaml, is read strictly (DATA_MODEL §9, #39)."""
+
+from pathlib import Path
+
+import pytest
+from aqa_core.config import RoleField
+from aqa_core.project import SpecError, load_config
+
+# DATA_MODEL §9's example, verbatim.
+EXAMPLE = """\
+base_url: "http://127.0.0.1:4100"   # the start origin when `aqa explore --url` is omitted; `--url` wins
+roles:                        # overrides the defaults in TECH_STACK §3
+  navigator: { provider: anthropic, model: claude-sonnet-5-5, effort: medium, fallback: claude-opus-5-5 }
+browser:                      # settings for every run (ADR-0025); a spec may override them
+  timezone: UTC
+  locale: en-US
+  viewport: [1280, 800]
+egress:                       # ADR-0026
+  subresource_hosts: [ "fonts.cdn.example.test" ]            # pages may load from these; no navigation, no secrets
+  expected_blocked: [ "analytics.example.test" ]             # refused; their direct symptoms don't count against invariants
+  private_origins: [ "http://staging.internal.test:8080" ]   # local and CI runs only: may resolve to private addresses
+secrets:                      # bindings only; values come from AQA_SECRET_<NAME>
+  TEST_PASSWORD: { origins: [ start ], field: password }
+  API_TOKEN: { origins: [ start ], field: { role: textbox, name: "API token" } }
+models:                       # only for models missing from the pinned price map (ADR-0007 amendment)
+  "example-provider/example-model": { capabilities: [tools, structured_output], input_usd_per_mtok: 0.50, output_usd_per_mtok: 1.50 }
+budgets:                      # per explore run (ADR-0024)
+  attempts: 3
+  actions_per_attempt: 40
+  model_usd: 3.00
+  minutes: 15
+  resolve_seconds: 10
+"""
+
+BINDING = "{ origins: [ start ], field: password }"
+
+
+def write(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "config.yaml"
+    path.write_text(text)
+    return path
+
+
+def test_the_documented_example_loads(tmp_path: Path) -> None:
+    config = load_config(write(tmp_path, EXAMPLE))
+
+    assert config.base_url == "http://127.0.0.1:4100"
+    assert config.browser.viewport == (1280, 800)
+    assert config.egress.subresource_hosts == ("fonts.cdn.example.test",)
+    assert config.egress.private_origins == ("http://staging.internal.test:8080",)
+    assert config.secrets["TEST_PASSWORD"].origins == ("start",)
+    assert config.secrets["TEST_PASSWORD"].field == "password"
+    assert config.secrets["API_TOKEN"].field == RoleField(
+        role="textbox", name="API token"
+    )
+    assert config.models["example-provider/example-model"].output_usd_per_mtok == 1.5
+    assert config.roles["navigator"].fallback == "claude-opus-5-5"
+
+
+def test_every_key_is_optional(tmp_path: Path) -> None:
+    config = load_config(write(tmp_path, "# nothing set yet\n"))
+
+    assert config.base_url is None
+    assert config.secrets == {}
+    assert config.browser.model_dump(exclude_none=True) == {}
+    # ADR-0024's budgets apply when the project sets none.
+    assert config.budgets.model_dump() == {
+        "attempts": 3,
+        "actions_per_attempt": 40,
+        "model_usd": 3,
+        "minutes": 15,
+        "resolve_seconds": 10,
+    }
+
+
+@pytest.mark.parametrize(
+    ("written", "stored"),
+    [
+        ("HTTP://LocalHost:80/", "http://localhost"),
+        ("https://shop.example.test:443", "https://shop.example.test"),
+        ("http://[0:0::1]:4100", "http://[::1]:4100"),
+        ("http://127.0.0.1:4100", "http://127.0.0.1:4100"),
+    ],
+)
+def test_base_url_is_stored_as_a_normalized_origin(
+    tmp_path: Path, written: str, stored: str
+) -> None:
+    assert load_config(write(tmp_path, f"base_url: '{written}'\n")).base_url == stored
+
+
+@pytest.mark.parametrize(
+    ("text", "key", "problem"),
+    [
+        # Unknown keys, at every level.
+        ("timeout: 30\n", "timeout", "unknown key"),
+        (
+            "egress: { subresource_host: [a.test] }\n",
+            "egress.subresource_host",
+            "unknown key",
+        ),
+        (
+            "secrets: { TEST_PASSWORD: { origins: [start], field: password, value: x } }\n",
+            "secrets.TEST_PASSWORD.value",
+            "unknown key",
+        ),
+        ("browser: { timezon: UTC }\n", "browser.timezon", "unknown key"),
+        ("budgets: { attempt: 3 }\n", "budgets.attempt", "unknown key"),
+        ("roles: { navigatr: { model: m } }\n", "roles.navigatr", "'navigator'"),
+        (
+            "roles: { navigator: { temperature: 0 } }\n",
+            "roles.navigator.temperature",
+            "unknown key",
+        ),
+        # base_url is an origin: no path, query, user or other scheme.
+        ("base_url: http://127.0.0.1:4100/app\n", "base_url", "not an origin"),
+        ("base_url: 'http://a.test?x=1'\n", "base_url", "not an origin"),
+        ("base_url: 'http://a.test#top'\n", "base_url", "not an origin"),
+        ("base_url: http://user@a.test\n", "base_url", "not an origin"),
+        ("base_url: 'http://evil.test\\@a.test'\n", "base_url", "not an origin"),
+        ("base_url: ftp://a.test\n", "base_url", "not an origin"),
+        ("base_url: 127.0.0.1:4100\n", "base_url", "not an origin"),
+        ("base_url: //a.test\n", "base_url", "not an origin"),
+        ("base_url: http://a.test:99999\n", "base_url", "not an origin"),
+        ("base_url: http://127.000.000.001\n", "base_url", "not an origin"),
+        ("base_url: 'http://a b.test'\n", "base_url", "not an origin"),
+        ("base_url: 4100\n", "base_url", "valid string"),
+        # Secret bindings.
+        (
+            "secrets: { test-password: " + BINDING + " }\n",
+            "secrets.test-password",
+            "not a secret name",
+        ),
+        (
+            "secrets: { A: { origins: [anywhere], field: password } }\n",
+            "secrets.A.origins[0]",
+            "not an origin",
+        ),
+        (
+            "secrets: { A: { origins: [https://a.test/login], field: password } }\n",
+            "secrets.A.origins[0]",
+            "not an origin",
+        ),
+        (
+            "secrets: { A: { origins: [], field: password } }\n",
+            "secrets.A.origins",
+            "at least 1",
+        ),
+        (
+            "secrets: { A: { origins: [start, start], field: password } }\n",
+            "secrets.A.origins",
+            "start twice",
+        ),
+        (
+            "secrets: { A: { origins: start, field: password } }\n",
+            "secrets.A.origins",
+            "valid tuple",
+        ),
+        (
+            "secrets: { A: { origins: [start], field: email } }\n",
+            "secrets.A.field",
+            "password, or a role and an accessible name",
+        ),
+        (
+            "secrets: { A: { origins: [start], field: { role: textbox } } }\n",
+            "secrets.A.field.name",
+            "missing key",
+        ),
+        ("secrets: { A: { origins: [start] } }\n", "secrets.A.field", "missing key"),
+        # Egress hosts and private origins.
+        (
+            "egress: { subresource_hosts: ['https://cdn.test'] }\n",
+            "egress.subresource_hosts[0]",
+            "not a host",
+        ),
+        (
+            "egress: { subresource_hosts: ['*.cdn.test'] }\n",
+            "egress.subresource_hosts[0]",
+            "not a host",
+        ),
+        (
+            "egress: { expected_blocked: ['stats.test:443'] }\n",
+            "egress.expected_blocked[0]",
+            "not a host",
+        ),
+        (
+            "egress: { expected_blocked: [stats.test, STATS.test] }\n",
+            "egress.expected_blocked",
+            "stats.test twice",
+        ),
+        (
+            "egress: { private_origins: [staging.test] }\n",
+            "egress.private_origins[0]",
+            "not an origin",
+        ),
+        # Models and budgets.
+        (
+            "models: { m: { capabilities: [tools], input_usd_per_mtok: 1 } }\n",
+            "models.m.output_usd_per_mtok",
+            "missing key",
+        ),
+        (
+            "models: { m: { capabilities: [telepathy], input_usd_per_mtok: 1, output_usd_per_mtok: 1 } }\n",
+            "models.m.capabilities[0]",
+            "'tools'",
+        ),
+        (
+            "models: { m: { capabilities: [], input_usd_per_mtok: 1, output_usd_per_mtok: 1 } }\n",
+            "models.m.capabilities",
+            "at least 1",
+        ),
+        (
+            "models: { m: { capabilities: [vision], input_usd_per_mtok: -1, output_usd_per_mtok: 1 } }\n",
+            "models.m.input_usd_per_mtok",
+            "greater than or equal to 0",
+        ),
+        ("budgets: { attempts: 0 }\n", "budgets.attempts", "greater than 0"),
+        ("budgets: { attempts: true }\n", "budgets.attempts", "valid integer"),
+        ("budgets: { attempts: '3' }\n", "budgets.attempts", "valid integer"),
+        ("budgets: { model_usd: .nan }\n", "budgets.model_usd", "valid number"),
+        # Browser settings, as BrowserSettings validates them.
+        (
+            "browser: { viewport: [0, 800] }\n",
+            "browser.viewport[0]",
+            "greater than or equal to 1",
+        ),
+        (
+            "browser: { timezone: Mars/Phobos }\n",
+            "browser.timezone",
+            "not an IANA time zone",
+        ),
+    ],
+)
+def test_an_invalid_config_names_the_file_the_key_and_the_problem(
+    tmp_path: Path, text: str, key: str, problem: str
+) -> None:
+    path = write(tmp_path, text)
+
+    with pytest.raises(SpecError) as raised:
+        load_config(path)
+
+    assert any(
+        line.startswith(f"{path}: {key}: ") and problem in line
+        for line in raised.value.problems
+    ), raised.value.problems
+
+
+@pytest.mark.parametrize(
+    ("text", "line", "problem"),
+    [
+        (
+            "base_url: http://a.test\nbase_url: http://b.test\n",
+            2,
+            "duplicate key 'base_url'",
+        ),
+        (
+            "secrets:\n  A: " + BINDING + "\n  A: " + BINDING + "\n",
+            3,
+            "duplicate key 'A'",
+        ),
+        ("1: x\n", 1, "keys must be strings"),
+        # An alias is reported at its anchor's line.
+        ("budgets: &b { attempts: 3 }\nroles: *b\n", 1, "aliases"),
+        ("budgets: { attempts: !!int '3' }\n", 1, "tags"),
+        ("browser: [\n", 2, "expected"),
+    ],
+)
+def test_invalid_yaml_names_the_file_and_the_line(
+    tmp_path: Path, text: str, line: int, problem: str
+) -> None:
+    path = write(tmp_path, text)
+
+    with pytest.raises(SpecError) as raised:
+        load_config(path)
+
+    assert any(
+        entry.startswith(f"{path}: line {line}: ") and problem in entry
+        for entry in raised.value.problems
+    ), raised.value.problems
+
+
+def test_every_problem_in_the_file_is_reported_together(tmp_path: Path) -> None:
+    path = write(tmp_path, "base_url: http://a.test/app\ntimeout: 30\n")
+
+    with pytest.raises(SpecError) as raised:
+        load_config(path)
+
+    assert [line.split(": ")[1] for line in raised.value.problems] == [
+        "base_url",
+        "timeout",
+    ]
+
+
+def test_a_config_that_is_not_a_mapping_is_rejected(tmp_path: Path) -> None:
+    path = write(tmp_path, "- base_url\n")
+
+    with pytest.raises(SpecError) as raised:
+        load_config(path)
+
+    assert raised.value.problems == (
+        f"{path}: the project config must be a mapping of keys",
+    )
+
+
+def test_a_missing_config_is_a_spec_error(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+
+    with pytest.raises(SpecError) as raised:
+        load_config(path)
+
+    assert raised.value.problems == (
+        f"{path}: no such file: a project's spec root is the directory that holds its config.yaml",
+    )
