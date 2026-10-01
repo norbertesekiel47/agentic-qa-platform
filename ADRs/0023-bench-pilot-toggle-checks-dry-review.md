@@ -49,3 +49,7 @@ Also, the `conduit-bug-004` check now reads the article count until it stops cha
 ## Amendment (2026-09-29): Playwright comes from the lockfile in CI
 
 CI's `python` job installs the workspace from `uv.lock` (ADR-0029), which includes Playwright 1.63.0 for `toggle_checks.py`'s types; `guardrails` no longer pip-installs it. As before, no browsers are downloaded and the checks don't run in CI.
+
+## Amendment (2026-10-01): toggle.py runs under uv
+
+`toggle.py` imports the manifest validator, which now reads specs with `aqa_core`'s parser (ADR-0030), so it is no longer standard library only and runs as `uv run python bench/harness/toggle.py` (bench/README.md). `toggle_checks.py` is unchanged: it imports neither and still runs in the checks image.
