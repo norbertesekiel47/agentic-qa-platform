@@ -5,11 +5,11 @@ agent's tools act on (ADR-0025, ADR-0026 and its 2026-10-01 amendment)."""
 
 import asyncio
 import re
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from aqa_core.browser import BrowserSettings
-from playwright.async_api import ElementHandle, Page
+from playwright.async_api import ElementHandle, Error, Page
 
 from aqa_runner.sandbox import Chromium, launch
 
@@ -24,14 +24,9 @@ LINE = re.compile(
     re.MULTILINE,
 )
 
-# An element's own ref ends its key, followed by nothing but these attributes.
+# An element's own ref ends its key, followed by nothing but `[cursor=pointer]`.
 # Page text can't end a key so: a name is JSON-quoted or written /like this/.
-ELEMENT_REF = re.compile(
-    r"\[ref=((?:f[0-9]+)?e[0-9]+)\]((?: \[cursor=pointer\])?(?: \[box=[^\]]*\])?)\Z"
-)
-
-# Anything else shaped like a ref, which only page text writes.
-TEXT_REF = re.compile(r"\[ref=([^\]\n]*)\]")
+ELEMENT_REF = re.compile(r"\[ref=((?:f[0-9]+)?e[0-9]+)\]((?: \[cursor=pointer\])?)\Z")
 
 # A ref this session gives.
 SESSION_REF = re.compile(r"e([1-9][0-9]{0,17})")
@@ -51,35 +46,28 @@ class BrowserSession:
     (LAB_NOTES, 2026-10-01), so the session gives every element ref a number it
     never gives again and resolves only the current snapshot's. Playwright
     resolves a ref against the latest accessibility snapshot of its frame, so
-    every accessibility snapshot of the page goes through `snapshot`."""
+    every accessibility snapshot of the page goes through `snapshot`, and
+    snapshots and lookups take turns."""
 
     def __init__(self, page: Page) -> None:
         self.page = page
         self._refs_given = 0
-        self._first_current_ref = 1
         self._current: dict[str, str] = {}
-        self._snapshotting = asyncio.Lock()
+        self._turn = asyncio.Lock()
 
     async def snapshot(self) -> str:
         """The page's accessibility snapshot in Playwright's AI mode
         (https://playwright.dev/python/docs/api/class-page#page-aria-snapshot),
         with this session's refs, unredacted. It retires every earlier
-        snapshot's refs, and page text shaped like a ref reads `(ref=…)`."""
-        async with self._snapshotting:
+        snapshot's refs, and page text that imitates a ref reads `(ref=…`."""
+        async with self._turn:
             # Retired before the call: Playwright may store this snapshot, and
             # resolve refs against it, even if the call never returns.
             self._current = {}
-            self._first_current_ref = self._refs_given + 1
-            current: dict[str, str] = {}
-
-            def give(playwright_ref: str) -> str:
-                self._refs_given += 1
-                ref = f"e{self._refs_given}"
-                current[ref] = playwright_ref
-                return ref
-
-            text = renumber(await self.page.aria_snapshot(mode="ai"), give)
-            self._current = current
+            text, self._current = renumber(
+                await self.page.aria_snapshot(mode="ai"), first=self._refs_given + 1
+            )
+            self._refs_given += len(self._current)
             return text
 
     async def locate(self, ref: str) -> ElementHandle:
@@ -87,26 +75,37 @@ class BrowserSession:
         becomes another element, and acting on it fails once it has left the
         page. Any other ref raises `RefError`, so no string but a current ref
         reaches a selector."""
-        playwright_ref = self._current.get(ref)
-        if playwright_ref is None:
-            given = SESSION_REF.fullmatch(ref)
-            if given is not None and int(given[1]) < self._first_current_ref:
-                raise RefError(
-                    f"{ref!r} is from an older snapshot: a ref acts only on the "
-                    "snapshot that gave it, so take a new snapshot"
-                )
-            raise RefError(f"{ref[:40]!r} isn't a ref in the current snapshot")
-        # Playwright's built-in aria-ref selector engine. It isn't in
-        # Playwright's public docs; the session's tests pin its behavior on 1.63.
-        found = await self.page.locator(f"aria-ref={playwright_ref}").element_handles()
-        if not found:
-            raise RefError(f"{ref!r} names an element that has left the page")
-        return found[0]
+        async with self._turn:
+            playwright_ref = self._current.get(ref)
+            if playwright_ref is None:
+                given = SESSION_REF.fullmatch(ref)
+                if given is not None and int(given[1]) <= self._refs_given:
+                    raise RefError(
+                        f"{ref!r} is from an older snapshot: a ref acts only on "
+                        "the snapshot that gave it, so take a new snapshot"
+                    )
+                raise RefError(f"{ref[:40]!r} isn't a ref in the current snapshot")
+            gone = RefError(f"{ref!r} names an element that has left the page")
+            try:
+                # Playwright's built-in aria-ref selector engine. It isn't in
+                # Playwright's public docs; the session's tests pin its
+                # behavior on 1.63.
+                found = await self.page.query_selector(f"aria-ref={playwright_ref}")
+            except Error as error:
+                # Playwright's one error type: here, a ref whose frame has gone
+                # ("Invalid frame in aria-ref selector"), as the main frame's
+                # does when it leaves a page that isn't about:blank.
+                raise gone from error
+        if found is None:
+            raise gone
+        return found
 
 
-def renumber(snapshot: str, give: Callable[[str], str]) -> str:
-    """`snapshot` with each element's own ref replaced by `give(ref)`, and
-    every other `[ref=…]`, which page text wrote, rewritten as `(ref=…)`."""
+def renumber(snapshot: str, *, first: int) -> tuple[str, dict[str, str]]:
+    """`snapshot` with each element's own ref replaced by this session's, from
+    `e{first}` on, and every other `[ref=`, which page text wrote, made
+    `(ref=`. Also returns the session's refs, mapped to Playwright's."""
+    refs: dict[str, str] = {}
 
     def line(found: re.Match[str]) -> str:
         head, key, rest = found["head"] or "", found["key"], found["rest"]
@@ -115,17 +114,16 @@ def renumber(snapshot: str, give: Callable[[str], str]) -> str:
         own = ELEMENT_REF.search(inner) if head else None
         if own is None:
             return head + as_text(key) + as_text(rest)
-        return (
-            f"{head}{quote}{as_text(inner[: own.start()])}[ref={give(own[1])}]"
-            f"{own[2]}{quote}{as_text(rest)}"
-        )
+        ref = f"e{first + len(refs)}"
+        refs[ref] = own[1]
+        return f"{head}{quote}{as_text(inner[: own.start()])}[ref={ref}]{own[2]}{quote}{as_text(rest)}"
 
-    return LINE.sub(line, snapshot)
+    return LINE.sub(line, snapshot), refs
 
 
 def as_text(text: str) -> str:
-    """`text` with every ref-shaped token made unlike a ref."""
-    return TEXT_REF.sub(r"(ref=\1)", text)
+    """`text` with every imitation of a ref made unlike one, in linear time."""
+    return text.replace("[ref=", "(ref=")
 
 
 @asynccontextmanager
