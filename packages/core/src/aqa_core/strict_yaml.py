@@ -92,11 +92,9 @@ class _Loader(yaml.SafeLoader):
         for key_node, value_node in node.value:
             key = self.construct_object(key_node, deep=deep)
             if not isinstance(key, str):
+                # Not the key itself, which could be a mistyped password.
                 raise ConstructorError(
-                    None,
-                    None,
-                    f"keys must be strings, not {key!r}",
-                    key_node.start_mark,
+                    None, None, "keys must be strings", key_node.start_mark
                 )
             if key in mapping:
                 raise ConstructorError(

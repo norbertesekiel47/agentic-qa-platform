@@ -37,8 +37,9 @@ class SpecContext(TypedDict):
 
     # The spec's file name without `.spec.md`, which its id must equal.
     file_id: str
-    # The secrets the project config declares; None when the config itself is
-    # invalid, so no reference can be checked against it.
+    # The secrets the project config declares. None skips the check: only
+    # load_project passes it, for a config that is itself invalid, and then the
+    # load fails whatever the specs hold.
     declared_secrets: frozenset[str] | None
 
 
@@ -67,9 +68,10 @@ class SecretReference(StrictModel):
 def _credential(value: object, info: ValidationInfo) -> str | SecretReference:
     if isinstance(value, str):
         return value
-    if isinstance(value, dict):
+    if isinstance(value, dict) and set(value) == {"secret"}:
         return SecretReference.model_validate(value, context=info.context)
-    # Never the value itself: an unquoted password would land in a CI log.
+    # Never the value, nor a key: a password typed where a reference goes
+    # would otherwise land in a CI log.
     raise ValueError("must be a string, or { secret: NAME }")
 
 
