@@ -1,0 +1,4 @@
+# The pilot's project config (DATA_MODEL §9). This directory is its spec root.
+base_url: "http://127.0.0.1:4100"   # the local stack (compose.yaml); `aqa explore --url` overrides it
+secrets:
+  TEST_PASSWORD: { origins: [ start ], field: password }   # the seeded accounts' shared password (README.md)
