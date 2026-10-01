@@ -171,9 +171,15 @@ Free-form notes for humans. The agent never reads the body; anything that affect
 - *Expected-blocked hosts* (§9) are the exception. For them, the block's direct symptoms don't count against `console_errors` or `broken_images`: its console error and a broken image, matched by the failed request, never by console text.
 - *Indirect effects* always count, such as app code failing because a blocked script never loaded.
 
-**Layout** (the benchmark's validator reads it with no YAML parser before M1): top-level keys start at column 0, and each list item is a `  - ` line.
-
-**Parsing (M1).** Unknown and duplicate keys are errors, and `id` must equal the file name without `.spec.md`. Spec IDs must be unique across the project; a duplicate is a spec error before anything is written.
+**Parsing (M1).** Specs are read before a browser or a model is involved, and every problem is reported at once, each naming the file, the key and the problem.
+- *YAML:* the frontmatter is YAML 1.2's core schema (ADR-0030). Anchors, aliases and tags are errors, `yes` and `no` are strings, and a date is a string.
+- *Keys:* unknown and duplicate keys are errors, and so is a value of another type, such as a quoted `"3"` for a number.
+- *Required:* `id`, `goal`, `preconditions.start_url` and at least one `expect` item. `invariants` defaults to `inherit: true`; `disable` names distinct invariants from the table above, and an `inherit: false` with `disable` is an error.
+- *`id`* must equal the file name without `.spec.md`. Spec IDs must be unique across the project, subdirectories of the spec root included; a duplicate is a spec error before anything is written.
+- *`start_url`* is a path: one leading `/`, then no whitespace, control characters or backslashes, which a browser could read as `//`, another origin. A query and a fragment are allowed.
+- *`account`* takes `email` and `password`, each a string or a secret reference, `{ secret: NAME }`. A reference must name a secret the project config declares (§9).
+- *An expectation* is a string, or `{ text, visual }`. `visual: model` is a spec error in M1 (ADR-0024).
+- *`allowed_origins` and `browser`* are checked as §9 checks origins and `browser`.
 
 ## 7. Compiled script format
 
@@ -262,7 +268,9 @@ Free-form notes for humans. The agent never reads the body; anything that affect
   - *Only a person lowers it,* by editing this file.
 - **Actions:** `navigate`, `reload`, `click`, `fill`, `fill_secret`, `select`, `press`. A `navigate` to the start origin stores a path.
 - **Browser settings.** `browser` records the settings the script was explored under. Replay uses them rather than the current config (ADR-0025).
-- **`spec_hash`** is the sha256 of the canonical JSON of the parsed frontmatter without `tags`. The Markdown body never counts. A mismatch makes the script stale: `aqa explore` redoes it, and replay refuses it.
+- **`spec_hash`** is the sha256 of the canonical JSON of the parsed frontmatter without `tags`, written `sha256:<hex>`. The Markdown body never counts. A mismatch makes the script stale: `aqa explore` redoes it, and replay refuses it.
+  - *Canonical JSON:* sorted keys, no whitespace, and non-ASCII characters escaped, as Python's `json.dumps(…, sort_keys=True, separators=(",", ":"))` writes it.
+  - *As parsed:* the hash covers the YAML's values, not normalized ones, so `HTTPS://Pay.test` and `https://pay.test` hash differently. A field the model gains later never changes an existing hash.
 - **`confirmed`** is `true` when the confirmation replay passed. It is `false` when a path with side-effect steps was written without one because the spec has no reset hook (ADR-0024).
 - **Location:** `<spec root>/.compiled/<spec id>.json`. The spec root is the directory holding `config.yaml` (§9), and spec IDs are unique per project (§6).
 
@@ -318,7 +326,7 @@ Unknown keys and duplicate keys are errors. **Split freeze:** `bench/manifest.v1
 
 ## 9. Project config
 
-`qa/config.yaml` is committed next to the specs. The directory that holds it is the **spec root**: compiled scripts live in its `.compiled/` (§7). Every key is optional, and unknown keys are errors.
+`qa/config.yaml` is committed next to the specs. The directory that holds it is the **spec root**: compiled scripts live in its `.compiled/` (§7). The file must exist, but every key is optional, so an empty file is valid. It is read as specs are (§6, ADR-0030): unknown and duplicate keys are errors, and every problem is reported at once.
 
 ```yaml
 base_url: "http://127.0.0.1:4100"   # the start origin when `aqa explore --url` is omitted; `--url` wins
@@ -346,12 +354,14 @@ budgets:                      # per explore run (ADR-0024)
 ```
 
 **Test secrets (ADR-0026).** A spec may reference only secrets declared here.
-- `origins` lists where the browser may fill the secret. `start` is the run's start origin, which comes from the invocation (`aqa explore --url`). Any other entry must also be one of the spec's allowed origins, because a secret's destinations are the intersection of its binding and the run's allowed origins.
+- `origins` lists where the browser may fill the secret. `start` is the run's start origin, which comes from the invocation (`aqa explore --url`). Any other entry is an origin, and must also be one of the run's allowed origins, because a secret's destinations are the intersection of its binding and the run's allowed origins. A run checks each secret its spec references once its start origin is known, and a bound origin the run doesn't allow is an error, never dropped.
 - `field` is either `password`, meaning an `<input type="password">`, or a role and accessible name.
-- Values come from `AQA_SECRET_<NAME>` environment variables, locally and in CI. Hosted runs use the test-secrets API (API.md §3).
+- Values come from `AQA_SECRET_<NAME>` environment variables, locally and in CI, so a name is capital letters, digits and underscores, starting with a letter. Hosted runs use the test-secrets API (API.md §3).
 - Which revision of this file a CI run trusts, the base branch or the pull request, is decided at M5 (#27).
 
-**Start origin.** `base_url` must be an origin (scheme, host and port, no path). `aqa explore --url` overrides it. With neither, the run fails before the browser starts.
+**Start origin.** `base_url` must be an origin: `http` or `https`, a host and an optional port, with no path, query or user (a lone trailing `/` is allowed). `aqa explore --url` overrides it and is held to the same form. Origins compare lowercase and without the scheme's default port. With neither, the run fails before the browser starts.
+
+**Egress hosts.** `subresource_hosts` and `expected_blocked` list bare host names or IP addresses (an IPv6 address in brackets), with no scheme, port or wildcard. `private_origins` lists origins.
 
 **Model overrides.** A model missing from the pinned price map must be declared under `models`, with its capabilities and prices; otherwise config validation rejects it. Its cost records carry `price_source: config` and the rates they applied (`applied_prices`, §2), so a later change to this file doesn't change what past costs meant.
 

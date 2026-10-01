@@ -1,6 +1,6 @@
 # API — Agentic QA Platform
 
-Last updated: 2026-09-29 (explore exit codes and flags, ADR-0024). REST over HTTPS, JSON, base path `/v1`. The FastAPI app is the source of truth; its generated OpenAPI document produces the dashboard's typed client. This file is the design contract — update it in the same PR as any endpoint change.
+Last updated: 2026-10-01 (`--url` is an origin, #39; explore exit codes and flags, ADR-0024). REST over HTTPS, JSON, base path `/v1`. The FastAPI app is the source of truth; its generated OpenAPI document produces the dashboard's typed client. This file is the design contract — update it in the same PR as any endpoint change.
 
 ## 1. Conventions
 
@@ -177,7 +177,7 @@ Exit codes:
 | `6` | Policy: egress blocked. The page requested a host that is neither an allowed origin, a subresource host nor expected-blocked. No finding; the run record names the refused host (ADR-0026) |
 | `10+` | Infrastructure errors, e.g. no sandbox, a failed reset hook, a provider outage, or an unreachable start origin |
 
-The run's start origin is the `--url` origin, or the project config's `base_url` when `--url` is omitted (DATA_MODEL §9). A spec's `start_url` is only a path (ADR-0026). Test-secret values come from `AQA_SECRET_<NAME>` environment variables, and their bindings from the project config (DATA_MODEL §9).
+The run's start origin is `--url`, or the project config's `base_url` when `--url` is omitted (DATA_MODEL §9). Both must be origins: a `--url` with a path is an error, not cut back to its origin. A spec's `start_url` is only a path (ADR-0026). Test-secret values come from `AQA_SECRET_<NAME>` environment variables, and their bindings from the project config (DATA_MODEL §9).
 
 ## 8. GitHub Action
 

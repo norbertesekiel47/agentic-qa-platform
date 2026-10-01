@@ -10,6 +10,9 @@ An agent explores a plain-English spec once, compiles it into a deterministic sc
 A Markdown file in the customer's repo that states one user goal in structured plain English: preconditions, optional step hints, expectations and invariants. The repo copy is canonical.
 _Avoid_: test case, scenario
 
+**Project config**:
+The committed file of project-wide settings next to a project's specs: model roles, browser settings, egress hosts and test-secret bindings. The directory that holds it is the project's **spec root**, under which every spec ID is unique.
+
 **Expectation**:
 One observable claim in a spec's `expect` list about what must be true once the goal is done. Only a human edit to the spec can change an expectation.
 _Avoid_: expect item, clause
@@ -29,8 +32,11 @@ A read-only endpoint a spec declares so it can check app state the UI can't show
 **Reset hook**:
 An optional endpoint a spec declares to put the app in the spec's starting state. Every attempt starts by calling it, the first included, so a spec that declares one can run repeatedly.
 
+**Start origin**:
+The origin a run starts at: the invocation's `--url`, or the project config's base URL when the invocation gives none. Never the spec's.
+
 **Allowed origins**:
-The origins a run may navigate to and act on: the run's start origin, which comes from the invocation and never from the spec, plus any the spec lists. Test secrets can be bound only to allowed origins.
+The origins a run may navigate to and act on: the run's start origin plus any the spec lists. Test secrets can be bound only to allowed origins.
 
 **Subresource host**:
 A host the project lets pages load resources from, such as a CDN or font host, without making it an allowed origin: the agent can't navigate there, and no test secret can be bound to it.
