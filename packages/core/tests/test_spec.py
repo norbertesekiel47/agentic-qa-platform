@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from aqa_core.config import ProjectConfig
 from aqa_core.project import SpecError, load_spec
-from aqa_core.spec import SecretRef
+from aqa_core.spec import SecretReference
 
 CONFIG = ProjectConfig.model_validate(
     {"secrets": {"TEST_PASSWORD": {"origins": ["start"], "field": "password"}}}
@@ -73,7 +73,7 @@ def test_a_valid_spec_loads(tmp_path: Path) -> None:
     assert spec.preconditions.start_url == "/login"
     assert spec.preconditions.account is not None
     # A reference by name; the value comes from AQA_SECRET_TEST_PASSWORD.
-    assert spec.preconditions.account.password == SecretRef.model_validate(
+    assert spec.preconditions.account.password == SecretReference.model_validate(
         {"secret": "TEST_PASSWORD"}
     )
     assert [(e.text, e.visual) for e in spec.expect] == [
@@ -297,6 +297,13 @@ def test_an_invalid_spec_names_the_file_the_key_and_the_problem(
     assert any(
         line.startswith(f"{path}: {key}: ") and problem in line for line in problems
     ), problems
+
+
+def test_an_invalid_expectation_is_reported_once(tmp_path: Path) -> None:
+    # Not also as an empty expect list, though no item survived.
+    path = write(tmp_path, LOGIN.replace("  - The home page is shown\n", "  - 3\n"))
+
+    assert [line.split(": ")[1] for line in problems_for(path)] == ["expect[0]"]
 
 
 def test_the_id_must_be_the_file_name_without_its_suffix(tmp_path: Path) -> None:

@@ -429,7 +429,9 @@ class ExpectedTest(ManifestTestCase):
 
     def test_spec_file_without_expect_list(self) -> None:
         spec = self.ws.root / "bench" / "apps" / "conduit" / "qa" / "login.spec.md"
-        spec.write_text("---\nid: login\ngoal: x\npreconditions: { start_url: / }\n---\n")
+        spec.write_text(
+            "---\nid: login\ngoal: x\npreconditions: { start_url: / }\n---\n"
+        )
         self.assert_error(
             self.violation_in_login(),
             f"conduit-bug-001: expected[0]: {spec}: expect: missing key",
