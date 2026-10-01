@@ -71,11 +71,15 @@ name = "aqa-bench-harness"
 version = "0.1.0"
 source = { virtual = "bench/harness" }
 dependencies = [
+    { name = "aqa-core" },
     { name = "playwright" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "playwright", specifier = "==1.63.0" }]
+requires-dist = [
+    { name = "aqa-core", editable = "packages/core" },
+    { name = "playwright", specifier = "==1.63.0" },
+]
 
 [[package]]
 name = "aqa-cli"

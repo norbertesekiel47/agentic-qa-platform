@@ -1,6 +1,6 @@
 """Tests for polling.py: waiting for a value to settle (ADR-0023).
 
-Run: python3 -m unittest discover -s bench/harness
+Run: uv run python -m unittest discover -s bench/harness
 """
 
 from __future__ import annotations

@@ -1,13 +1,15 @@
 # The benchmark harness is a workspace member for its tools and tests
-# (ADR-0027), not a package: its scripts run from this directory. Python 3.12
-# is its floor: its tests pass on 3.12, and toggle_checks.py runs in the checks
-# image's Python 3.12. Playwright is here for toggle_checks.py's types; the
-# checks image pins its own hash-locked copy (checks.Dockerfile).
+# (ADR-0027), not a package: its scripts run from this directory. manifest.py
+# reads spec files with aqa-core's parser, so the harness needs the workspace's
+# Python. toggle_checks.py alone runs elsewhere, in the checks image's Python
+# 3.12, which is why Ruff holds the harness to 3.12 syntax. Playwright is here
+# for toggle_checks.py's types; the checks image pins its own hash-locked copy
+# (checks.Dockerfile).
 [project]
 name = "aqa-bench-harness"
 version = "0.1.0"
-requires-python = ">=3.12"
-dependencies = ["playwright==1.63.0"]
+requires-python = ">=3.14"
+dependencies = ["aqa-core", "playwright==1.63.0"]
 
 [tool.uv]
 package = false

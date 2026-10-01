@@ -3,7 +3,7 @@
 Docker and the checks container are faked here. The real run's output is the
 evidence in the pull request that adds or changes cases.
 
-Run: python3 -m unittest discover -s bench/harness
+Run: uv run python -m unittest discover -s bench/harness
 """
 
 from __future__ import annotations

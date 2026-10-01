@@ -1,6 +1,6 @@
 """Tests for manifest.py: the benchmark ground-truth manifest (ADR-0022).
 
-Run: python3 -m unittest discover -s bench/harness
+Run: uv run python -m unittest discover -s bench/harness
 """
 
 from __future__ import annotations
@@ -64,6 +64,7 @@ def spec_text(spec_id: str) -> str:
         "---\n"
         f"id: {spec_id}\n"
         "goal: A reader does something.\n"
+        "preconditions: { start_url: / }\n"
         "expect:\n"
         "  - The first thing holds\n"
         "  - text: The button is visible and not covered by any overlay\n"
@@ -76,13 +77,15 @@ def spec_text(spec_id: str) -> str:
 
 
 class Workspace:
-    """A throwaway repo root with the app directory and spec files the cases reference."""
+    """A throwaway repo root with the app directory, its project config and
+    the spec files the cases reference."""
 
     def __init__(self, specs: tuple[str, ...] = ("favorite-article", "login")) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
         qa = self.root / "bench" / "apps" / "conduit" / "qa"
         qa.mkdir(parents=True)
+        (qa / "config.yaml").write_text("# Every key is optional (DATA_MODEL §9).\n")
         for spec in specs:
             (qa / f"{spec}.spec.md").write_text(spec_text(spec))
 
@@ -418,28 +421,43 @@ class ExpectedTest(ManifestTestCase):
             "spec 'login' has 3 expectations",
         )
 
+    def violation_in_login(self) -> dict[str, Any]:
+        return self.with_expected(
+            "conduit-bug-001",
+            [{"spec": "login", "verdict": "expectation_violated", "expect": [0]}],
+        )
+
     def test_spec_file_without_expect_list(self) -> None:
         spec = self.ws.root / "bench" / "apps" / "conduit" / "qa" / "login.spec.md"
-        spec.write_text("---\nid: login\ngoal: x\n---\n")
+        spec.write_text("---\nid: login\ngoal: x\npreconditions: { start_url: / }\n---\n")
         self.assert_error(
-            self.with_expected(
-                "conduit-bug-001",
-                [{"spec": "login", "verdict": "expectation_violated", "expect": [0]}],
-            ),
-            "conduit-bug-001: expected[0]: bench/apps/conduit/qa/login.spec.md: "
-            "no expect list in its front matter",
+            self.violation_in_login(),
+            f"conduit-bug-001: expected[0]: {spec}: expect: missing key",
         )
 
     def test_spec_file_id_must_match_its_name(self) -> None:
         spec = self.ws.root / "bench" / "apps" / "conduit" / "qa" / "login.spec.md"
         spec.write_text(spec_text("sign-in"))
         self.assert_error(
-            self.with_expected(
-                "conduit-bug-001",
-                [{"spec": "login", "verdict": "expectation_violated", "expect": [0]}],
-            ),
-            "conduit-bug-001: expected[0]: bench/apps/conduit/qa/login.spec.md: "
-            "id 'sign-in' does not match the file name",
+            self.violation_in_login(),
+            f"conduit-bug-001: expected[0]: {spec}: id: 'sign-in' doesn't match the file name",
+        )
+
+    def test_spec_file_is_read_by_the_spec_parser(self) -> None:
+        # The line-based reader this replaced ignored keys it didn't know.
+        spec = self.ws.root / "bench" / "apps" / "conduit" / "qa" / "login.spec.md"
+        spec.write_text(spec_text("login").replace("goal:", "owner: qa\ngoal:"))
+        self.assert_error(
+            self.violation_in_login(),
+            f"conduit-bug-001: expected[0]: {spec}: owner: unknown key",
+        )
+
+    def test_spec_file_is_read_with_its_apps_project_config(self) -> None:
+        qa = self.ws.root / "bench" / "apps" / "conduit" / "qa"
+        (qa / "config.yaml").unlink()
+        self.assert_error(
+            self.violation_in_login(),
+            f"conduit-bug-001: expected[0]: {qa / 'config.yaml'}: no such file",
         )
 
     def test_drift_has_no_expect_indexes(self) -> None:
@@ -505,21 +523,6 @@ class ExpectedTest(ManifestTestCase):
             ),
             "conduit-bug-001: expected[0]: unknown key 'note'",
         )
-
-
-class SpecFrontMatterTest(unittest.TestCase):
-    def test_reads_id_and_counts_expect_items(self) -> None:
-        self.assertEqual(manifest.spec_front_matter(spec_text("login")), ("login", 3))
-
-    def test_expect_list_ends_at_the_next_top_level_key(self) -> None:
-        text = "---\nid: a\nexpect:\n  - one\n  - two\ntags: [x]\n---\n  - not front matter\n"
-        self.assertEqual(manifest.spec_front_matter(text), ("a", 2))
-
-    def test_no_front_matter(self) -> None:
-        self.assertEqual(manifest.spec_front_matter("# Just markdown\n"), (None, None))
-
-    def test_no_expect_list(self) -> None:
-        self.assertEqual(manifest.spec_front_matter("---\nid: a\n---\n"), ("a", None))
 
 
 class SplitHashTest(unittest.TestCase):
