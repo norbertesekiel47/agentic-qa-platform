@@ -123,8 +123,8 @@ def test_start_url_may_carry_a_query_and_a_fragment(tmp_path: Path) -> None:
         (
             "{ secret: TEST_PASSWORD }",
             "{ secret: TEST_PASSWORD, origin: start }",
-            "preconditions.account.password.origin",
-            "unknown key",
+            "preconditions.account.password",
+            "must be a string, or { secret: NAME }",
         ),
         (
             "  - The home page is shown\n",
@@ -350,8 +350,14 @@ def test_an_invalid_expectation_is_reported_once(tmp_path: Path) -> None:
     assert [line.split(": ")[1] for line in problems_for(path)] == ["expect[0]"]
 
 
-def test_an_account_value_error_never_repeats_the_value(tmp_path: Path) -> None:
-    path = write(tmp_path, LOGIN.replace("{ secret: TEST_PASSWORD }", "12345678"))
+@pytest.mark.parametrize(
+    "value", ["12345678", "{hunter2}", "{ secret: TEST_PASSWORD, hunter2: 1 }"]
+)
+def test_an_account_value_error_never_repeats_the_value(
+    tmp_path: Path, value: str
+) -> None:
+    # A password typed where a reference goes would otherwise reach a CI log.
+    path = write(tmp_path, LOGIN.replace("{ secret: TEST_PASSWORD }", value))
 
     assert problems_for(path) == (
         f"{path}: preconditions.account.password: must be a string, or {{ secret: NAME }}",
