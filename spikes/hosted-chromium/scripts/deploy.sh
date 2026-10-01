@@ -150,7 +150,9 @@ deploy_fargate() {
 deploy_microvm() {
   local key get_zip build_role image state
   key=microvm-$commit.zip
-  aws s3api create-bucket --bucket "$bucket" > /dev/null
+  # Outside us-east-1, S3 refuses a bucket that names no region.
+  aws s3api create-bucket --bucket "$bucket" \
+    --create-bucket-configuration "LocationConstraint=$AWS_REGION" > /dev/null
   aws s3api put-public-access-block --bucket "$bucket" --public-access-block-configuration \
     BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
   aws s3api put-bucket-tagging --bucket "$bucket" \
