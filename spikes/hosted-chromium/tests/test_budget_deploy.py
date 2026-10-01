@@ -160,6 +160,19 @@ def test_a_microvm_deploy_refuses_a_missing_zip(dry_run: DryRun) -> None:
     assert [call for call in dry_run.calls if changes(call)] == []
 
 
+def test_a_microvm_deploy_creates_its_bucket_in_the_spikes_region(
+    dry_run: DryRun,
+) -> None:
+    result = dry_run.run("deploy.sh", "microvm", scenario=DEPLOYABLE)
+
+    assert result.returncode == 0, result.stderr
+    # Outside us-east-1, S3 refuses a bucket that names no region.
+    [call] = calls_of(dry_run.calls, "s3api", "create-bucket")
+    assert option(call, "--create-bucket-configuration") == (
+        "LocationConstraint=us-east-2"
+    )
+
+
 def test_a_fargate_deploy_needs_a_default_vpc(dry_run: DryRun) -> None:
     none = rule("aws", "ec2", "describe-vpcs", outputs=["None"])
 
