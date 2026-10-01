@@ -121,6 +121,9 @@ def test_base_url_is_stored_as_a_normalized_origin(
         ("base_url: 127.0.0.1:4100\n", "base_url", "not an origin"),
         ("base_url: //a.test\n", "base_url", "not an origin"),
         ("base_url: http://a.test:99999\n", "base_url", "not an origin"),
+        # Origins no browser can use: port 0, and an IPv6 zone index.
+        ("base_url: http://a.test:0\n", "base_url", "not an origin"),
+        ("base_url: 'http://[fe80::1%25eth0]'\n", "base_url", "not an origin"),
         ("base_url: http://127.000.000.001\n", "base_url", "not an origin"),
         ("base_url: 'http://a b.test'\n", "base_url", "not an origin"),
         ("base_url: 4100\n", "base_url", "valid string"),
@@ -310,3 +313,11 @@ def test_a_missing_config_is_a_spec_error(tmp_path: Path) -> None:
     assert raised.value.problems == (
         f"{path}: no such file: a project's spec root is the directory that holds its config.yaml",
     )
+
+
+def test_yaml_that_changes_no_value_is_accepted(tmp_path: Path) -> None:
+    # ADR-0030: an anchor with no alias, and a tag naming the type a value
+    # already has; `no` stays Norwegian's language tag.
+    path = write(tmp_path, "browser: &b { locale: !!str no }\n")
+
+    assert load_config(path).browser.locale == "no"

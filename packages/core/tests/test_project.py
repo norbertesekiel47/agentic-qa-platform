@@ -166,7 +166,7 @@ def test_a_project_without_a_config_is_an_error(tmp_path: Path) -> None:
 def test_without_overrides_the_pinned_settings_apply(tmp_path: Path) -> None:
     config, spec = load_one(tmp_path, BOUND)
 
-    assert effective_browser(config, spec) == BrowserSettings()
+    assert effective_browser(spec, config) == BrowserSettings()
 
 
 def test_the_spec_overrides_the_project_which_overrides_the_pins(
@@ -178,7 +178,7 @@ def test_the_spec_overrides_the_project_which_overrides_the_pins(
         extra="browser: { timezone: Europe/Paris, viewport: [1440, 900] }\n",
     )
 
-    assert effective_browser(config, spec) == BrowserSettings(
+    assert effective_browser(spec, config) == BrowserSettings(
         timezone="Europe/Paris",  # the spec's, over the project's
         locale="de-DE",  # the project's
         viewport=(1440, 900),  # the spec's
@@ -231,7 +231,7 @@ def test_allowed_origins_are_the_start_origin_then_the_specs(tmp_path: Path) -> 
         extra="allowed_origins: ['https://pay.example.test', 'http://127.0.0.1:4100']\n",
     )
 
-    assert allowed_origins("http://127.0.0.1:4100", spec) == (
+    assert allowed_origins(spec, "http://127.0.0.1:4100") == (
         "http://127.0.0.1:4100",
         "https://pay.example.test",
     )

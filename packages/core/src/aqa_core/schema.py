@@ -23,11 +23,23 @@ def _distinct[T](items: tuple[T, ...]) -> tuple[T, ...]:
     return items
 
 
-# A tuple keeps a frozen model's lists immutable. Not strict on the outside, so
-# the list YAML gives becomes a tuple; each item type stays strict.
-type Items[T] = Annotated[tuple[T, ...], Field(strict=False), AfterValidator(_distinct)]
+def _not_empty[T](items: tuple[T, ...]) -> tuple[T, ...]:
+    if not items:
+        raise ValueError("must list at least 1 item")
+    return items
+
+
+# A YAML list, kept as a tuple so a frozen model's lists can't change. Not
+# strict on the outside, so the list YAML gives becomes a tuple; each item type
+# stays strict.
+type ListOf[T] = Annotated[tuple[T, ...], Field(strict=False)]
+type Items[T] = Annotated[ListOf[T], AfterValidator(_distinct)]
+# After the items, so a list whose only item is invalid isn't also reported as
+# empty, as Field(min_length=1) would.
+NotEmpty = AfterValidator(_not_empty)
 
 NonEmpty = Annotated[StrictStr, Field(min_length=1)]
+PositiveNumber = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 # Characters no origin or host contains as written. WHATWG URL parsing reads
@@ -49,7 +61,11 @@ def _host(host: str) -> str | None:
         if _DNS_NAME.fullmatch(host) and not host.rsplit(".", 1)[-1].isdigit():
             return host
         return None
-    return f"[{address}]" if address.version == 6 else str(address)
+    if isinstance(address, ipaddress.IPv6Address):
+        # A zone index (fe80::1%eth0) names one host's interface, which no
+        # browser accepts in a URL.
+        return None if address.scope_id else f"[{address}]"
+    return str(address)
 
 
 def parse_origin(text: str) -> str:
@@ -74,7 +90,7 @@ def parse_origin(text: str) -> str:
     except ValueError:
         raise problem from None
     host = _host(parts.hostname)
-    if host is None:
+    if host is None or port == 0:
         raise problem
     if port is None or port == _DEFAULT_PORTS[parts.scheme]:
         return f"{parts.scheme}://{host}"

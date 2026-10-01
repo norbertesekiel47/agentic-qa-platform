@@ -168,17 +168,16 @@ def _check_spec_file(
         return [f"{where}: no spec file {spec_file}"]
     # The app's qa/ directory is its spec root (DATA_MODEL.md §9).
     try:
-        count = len(
-            load_spec(path, load_config(path.parent / "config.yaml")).frontmatter.expect
-        )
+        config = load_config(path.parent / "config.yaml")
+        expectations = load_spec(path, config).frontmatter.expect
     except SpecError as error:
         return [f"{where}: {problem}" for problem in error.problems]
     if not (isinstance(expect, list) and _valid_indexes(expect)):
         return []
     return [
-        f"{where}: expect index {i} is out of range: spec '{spec}' has {count} expectations"
+        f"{where}: expect index {i} is out of range: spec '{spec}' has {len(expectations)} expectations"
         for i in expect
-        if i >= count
+        if i >= len(expectations)
     ]
 
 

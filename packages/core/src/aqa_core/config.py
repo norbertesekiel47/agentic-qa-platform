@@ -10,19 +10,21 @@ from aqa_core.schema import (
     Host,
     Items,
     NonEmpty,
+    NotEmpty,
     Origin,
+    PositiveNumber,
     SecretName,
     StrictModel,
     parse_origin,
 )
 
-_Positive = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 _PositiveCount = Annotated[StrictInt, Field(gt=0)]
 _Price = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
 
-class Role(StrictModel):
-    """Overrides for one model role. #40 checks what each value means."""
+class ModelRole(StrictModel):
+    """Overrides for one model role's defaults (TECH_STACK §3). Only their
+    shape is checked here."""
 
     provider: NonEmpty | None = None
     model: NonEmpty | None = None
@@ -30,7 +32,7 @@ class Role(StrictModel):
     fallback: NonEmpty | None = None
 
 
-RoleName = Literal["navigator", "verifier", "healer", "vision_fallback"]
+ModelRoleName = Literal["navigator", "verifier", "healer", "vision_fallback"]
 
 
 class ModelOverride(StrictModel):
@@ -38,7 +40,7 @@ class ModelOverride(StrictModel):
     costs (ADR-0007 amendment)."""
 
     capabilities: Annotated[
-        Items[Literal["tools", "structured_output", "vision"]], Field(min_length=1)
+        Items[Literal["tools", "structured_output", "vision"]], NotEmpty
     ]
     input_usd_per_mtok: _Price
     output_usd_per_mtok: _Price
@@ -78,8 +80,7 @@ class SecretBinding(StrictModel):
     run's start origin; any other origin must also be one the run allows."""
 
     origins: Annotated[
-        Items[Annotated[StrictStr, AfterValidator(_binding_origin)]],
-        Field(min_length=1),
+        Items[Annotated[StrictStr, AfterValidator(_binding_origin)]], NotEmpty
     ]
     # `password` is an <input type="password">.
     field: Annotated[Literal["password"] | RoleField, PlainValidator(_field)]
@@ -90,9 +91,9 @@ class Budgets(StrictModel):
 
     attempts: _PositiveCount = 3
     actions_per_attempt: _PositiveCount = 40
-    model_usd: _Positive = 3
-    minutes: _Positive = 15
-    resolve_seconds: _Positive = 10
+    model_usd: PositiveNumber = 3
+    minutes: PositiveNumber = 15
+    resolve_seconds: PositiveNumber = 10
 
 
 class ProjectConfig(StrictModel):
@@ -100,7 +101,7 @@ class ProjectConfig(StrictModel):
 
     # The start origin when the invocation gives none.
     base_url: Origin | None = None
-    roles: dict[RoleName, Role] = Field(default_factory=dict)
+    roles: dict[ModelRoleName, ModelRole] = Field(default_factory=dict)
     browser: BrowserOverrides = BrowserOverrides()
     egress: Egress = Egress()
     secrets: dict[SecretName, SecretBinding] = Field(default_factory=dict)
