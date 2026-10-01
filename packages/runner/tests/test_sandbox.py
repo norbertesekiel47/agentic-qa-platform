@@ -9,6 +9,7 @@ from typing import override
 
 import pytest
 from aqa_runner.sandbox import (
+    Environment,
     LinuxProcess,
     MacProcess,
     SandboxUnavailableError,
@@ -170,17 +171,13 @@ class RecordingChromium:
         self.requested: list[bool] = []
         self.launched: list[Browser] = []
 
-    async def launch(
-        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
-    ) -> Browser:
+    async def launch(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
         self.requested.append(chromium_sandbox)
         browser = await self.start(chromium_sandbox=chromium_sandbox, env=env)
         self.launched.append(browser)
         return browser
 
-    async def start(
-        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
-    ) -> Browser:
+    async def start(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
         return await self.chromium.launch(chromium_sandbox=chromium_sandbox, env=env)
 
 
@@ -189,9 +186,7 @@ class UnsandboxedChromium(RecordingChromium):
     sandbox ends up off, `launch` must refuse the browser."""
 
     @override
-    async def start(
-        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
-    ) -> Browser:
+    async def start(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
         return await self.chromium.launch(
             chromium_sandbox=False,  # ADR-0026: a negative control for launch
             env=env,
@@ -312,11 +307,9 @@ class FailingChromium:
     def __init__(self, message: str) -> None:
         self.message = message
         self.requested: list[bool] = []
-        self.environments: list[dict[str, str | float | bool]] = []
+        self.environments: list[Environment] = []
 
-    async def launch(
-        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
-    ) -> Browser:
+    async def launch(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
         self.requested.append(chromium_sandbox)
         self.environments.append(env)
         raise Error(self.message)

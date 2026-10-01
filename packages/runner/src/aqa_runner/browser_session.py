@@ -14,7 +14,7 @@ from playwright.async_api import ElementHandle, Page
 from aqa_runner.sandbox import Chromium, launch
 
 # The settings every run uses unless the caller passes its own (ADR-0025).
-PINNED = BrowserSettings()
+PINNED_SETTINGS = BrowserSettings()
 
 # One line of Playwright's AI snapshot: `- ` and a key, then `:` and a value or
 # children, or nothing. Playwright single-quotes a key YAML would misread, so an
@@ -44,7 +44,8 @@ class RefError(LookupError):
 
 class BrowserSession:
     """The browser one attempt or replay of a run uses: a fresh Chromium
-    process and its page. Open it with `open_session`, which launches it.
+    process and its page. Open it with `open_browser_session`, which launches
+    it.
 
     Playwright's own refs can name a different element in a later snapshot
     (LAB_NOTES, 2026-10-01), so the session gives every element ref a number it
@@ -71,10 +72,10 @@ class BrowserSession:
             self._first_current_ref = self._refs_given + 1
             current: dict[str, str] = {}
 
-            def give(theirs: str) -> str:
+            def give(playwright_ref: str) -> str:
                 self._refs_given += 1
                 ref = f"e{self._refs_given}"
-                current[ref] = theirs
+                current[ref] = playwright_ref
                 return ref
 
             text = renumber(await self.page.aria_snapshot(mode="ai"), give)
@@ -86,8 +87,8 @@ class BrowserSession:
         becomes another element, and acting on it fails once it has left the
         page. Any other ref raises `RefError`, so no string but a current ref
         reaches a selector."""
-        theirs = self._current.get(ref)
-        if theirs is None:
+        playwright_ref = self._current.get(ref)
+        if playwright_ref is None:
             given = SESSION_REF.fullmatch(ref)
             if given is not None and int(given[1]) < self._first_current_ref:
                 raise RefError(
@@ -97,7 +98,7 @@ class BrowserSession:
             raise RefError(f"{ref[:40]!r} isn't a ref in the current snapshot")
         # Playwright's built-in aria-ref selector engine. It isn't in
         # Playwright's public docs; the session's tests pin its behavior on 1.63.
-        found = await self.page.locator(f"aria-ref={theirs}").element_handles()
+        found = await self.page.locator(f"aria-ref={playwright_ref}").element_handles()
         if not found:
             raise RefError(f"{ref!r} names an element that has left the page")
         return found[0]
@@ -128,8 +129,8 @@ def as_text(text: str) -> str:
 
 
 @asynccontextmanager
-async def open_session(
-    chromium: Chromium, *, settings: BrowserSettings = PINNED
+async def open_browser_session(
+    chromium: Chromium, *, settings: BrowserSettings = PINNED_SETTINGS
 ) -> AsyncIterator[BrowserSession]:
     """Launch a fresh browser through the sandbox check, open one page with
     `settings` and downloads refused, and close the browser, its temporary

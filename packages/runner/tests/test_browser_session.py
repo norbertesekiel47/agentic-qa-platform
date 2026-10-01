@@ -17,8 +17,8 @@ from urllib.parse import quote
 
 import pytest
 from aqa_core.browser import BrowserSettings
-from aqa_runner.sandbox import SandboxUnavailableError
-from aqa_runner.session import BrowserSession, RefError, open_session
+from aqa_runner.browser_session import BrowserSession, RefError, open_browser_session
+from aqa_runner.sandbox import Environment, SandboxUnavailableError
 from playwright.async_api import Browser, BrowserType, Error, async_playwright
 
 # What the runner's own environment may hold and the browser's must not:
@@ -40,17 +40,24 @@ def fake_value(name: str) -> str:
     return f"fake-{name.lower()}-for-the-environment-test"
 
 
-def environment_of(pid: int) -> str:
-    """A process's environment, as this host reports it."""
+def process_info(pid: int, name: str) -> str:
+    """A process's `environ` or `cmdline`, as this host reports it: from
+    /proc on Linux, and from ps on macOS, which prints the environment after
+    the command line."""
     if sys.platform == "linux":
-        return Path("/proc", str(pid), "environ").read_bytes().decode(errors="replace")
-    # macOS's ps prints the environment after the command line.
+        return Path("/proc", str(pid), name).read_bytes().decode(errors="replace")
+    environment = ["-E"] if name == "environ" else []
     return subprocess.run(
-        ["ps", "-E", "-ww", "-o", "command=", "-p", str(pid)],
+        ["ps", *environment, "-ww", "-o", "command=", "-p", str(pid)],
         check=True,
         capture_output=True,
         text=True,
     ).stdout
+
+
+def environment_of(pid: int) -> str:
+    """A process's environment."""
+    return process_info(pid, "environ")
 
 
 async def chromium_processes(session: BrowserSession) -> list[tuple[str, int]]:
@@ -93,7 +100,7 @@ def test_browser_environment_holds_none_of_the_runners_secrets(
     async def scenario() -> list[tuple[str, str]]:
         async with (
             async_playwright() as playwright,
-            open_session(playwright.chromium) as session,
+            open_browser_session(playwright.chromium) as session,
         ):
             return [
                 (kind, environment_of(pid))
@@ -119,9 +126,7 @@ class RecordingChromium:
         self.chromium = chromium
         self.requested: list[bool] = []
 
-    async def launch(
-        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
-    ) -> Browser:
+    async def launch(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
         self.requested.append(chromium_sandbox)
         return await self.chromium.launch(chromium_sandbox=chromium_sandbox, env=env)
 
@@ -137,9 +142,7 @@ class FarZoneChromium(RecordingChromium):
     without this the default-settings test couldn't tell a pin from the host."""
 
     @override
-    async def launch(
-        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
-    ) -> Browser:
+    async def launch(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
         return await super().launch(
             chromium_sandbox=chromium_sandbox, env={**env, "TZ": HOST_ZONE}
         )
@@ -161,7 +164,7 @@ def test_session_runs_in_utc_and_the_other_pinned_settings_by_default() -> None:
     async def scenario() -> tuple[object, object]:
         async with (
             async_playwright() as playwright,
-            open_session(FarZoneChromium(playwright.chromium)) as session,
+            open_browser_session(FarZoneChromium(playwright.chromium)) as session,
         ):
             # The control: a context of the same browser without the pins.
             browser = session.page.context.browser
@@ -196,7 +199,7 @@ def test_explicit_settings_override_each_pinned_setting() -> None:
     async def scenario() -> object:
         async with (
             async_playwright() as playwright,
-            open_session(playwright.chromium, settings=settings) as session,
+            open_browser_session(playwright.chromium, settings=settings) as session,
         ):
             return await session.page.evaluate(REPORT_SETTINGS)
 
@@ -215,13 +218,13 @@ def test_session_launches_through_the_sandbox_check(
     async def scenario() -> tuple[list[bool], SandboxUnavailableError]:
         async with async_playwright() as playwright:
             chromium = RecordingChromium(playwright.chromium)
-            async with open_session(chromium):
+            async with open_browser_session(chromium):
                 pass
             # An OS with no sandbox check: only the check itself refuses it.
             monkeypatch.setattr(sys, "platform", "win32")
             try:
                 with pytest.raises(SandboxUnavailableError) as refused:
-                    async with open_session(chromium):
+                    async with open_browser_session(chromium):
                         pass
             finally:
                 monkeypatch.undo()
@@ -298,13 +301,8 @@ async def browser_pid(session: BrowserSession) -> int:
 
 def profile_of(pid: int) -> Path:
     """The profile directory a browser process runs with, from its command line."""
-    command = subprocess.run(
-        ["ps", "-ww", "-o", "command=", "-p", str(pid)],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    found = re.search(r"--user-data-dir=(\S+)", command)
+    command = process_info(pid, "cmdline")
+    found = re.search(r"--user-data-dir=([^\s\x00]+)", command)
     assert found is not None, command
     return Path(found[1])
 
@@ -318,8 +316,8 @@ def test_two_sessions_share_no_profile_storage_or_cache(site: Site) -> None:
     async def scenario() -> tuple[object, object, int, list[Path]]:
         async with (
             async_playwright() as playwright,
-            open_session(playwright.chromium) as first,
-            open_session(playwright.chromium) as second,
+            open_browser_session(playwright.chromium) as first,
+            open_browser_session(playwright.chromium) as second,
         ):
             await first.page.goto(site.origin)
             await first.page.evaluate(STORE)
@@ -348,7 +346,7 @@ def test_downloads_are_refused(site: Site) -> None:
     async def scenario() -> str | None:
         async with (
             async_playwright() as playwright,
-            open_session(playwright.chromium) as session,
+            open_browser_session(playwright.chromium) as session,
         ):
             await session.page.goto(site.origin)
             async with session.page.expect_download() as started:
@@ -384,7 +382,7 @@ def test_refs_act_on_their_elements() -> None:
     async def scenario() -> tuple[str | None, str, str]:
         async with (
             async_playwright() as playwright,
-            open_session(playwright.chromium) as session,
+            open_browser_session(playwright.chromium) as session,
         ):
             page = session.page
             await page.set_content(REFS_PAGE)
@@ -412,9 +410,8 @@ def page_url(html: str) -> str:
     return "data:text/html," + quote(html)
 
 
-# Playwright numbers its refs afresh in each new document, and a page's first
-# navigation away from about:blank keeps its frame's ref prefix, so these two
-# pages' buttons get the same raw ref (LAB_NOTES, 2026-10-01).
+# Playwright gives these two pages' buttons the same ref of its own when one
+# replaces the other from about:blank (LAB_NOTES, 2026-10-01).
 BEFORE = '<p id="log"></p><button onclick="log.textContent += \'keep;\'">Keep</button>'
 AFTER = (
     '<p id="log"></p><button onclick="log.textContent += \'publish;\'">Publish</button>'
@@ -425,7 +422,7 @@ def test_ref_from_an_older_snapshot_is_refused() -> None:
     async def scenario() -> tuple[list[str], RefError, RefError, str | None]:
         async with (
             async_playwright() as playwright,
-            open_session(playwright.chromium) as session,
+            open_browser_session(playwright.chromium) as session,
         ):
             page = session.page
             await page.set_content(BEFORE)
@@ -474,7 +471,7 @@ def test_ref_never_given_is_refused() -> None:
     async def scenario() -> list[str]:
         async with (
             async_playwright() as playwright,
-            open_session(playwright.chromium) as session,
+            open_browser_session(playwright.chromium) as session,
         ):
             await session.page.set_content(REFS_PAGE)
             for _ in range(3):  # past e10, so the session has given it
@@ -495,7 +492,7 @@ def test_unfinished_snapshot_retires_the_earlier_refs() -> None:
     async def scenario() -> RefError:
         async with (
             async_playwright() as playwright,
-            open_session(playwright.chromium) as session,
+            open_browser_session(playwright.chromium) as session,
         ):
             await session.page.set_content(REFS_PAGE)
             save = ref_for(await session.snapshot(), "button", "Save")
@@ -517,7 +514,7 @@ def test_ref_whose_element_has_left_the_page_is_refused() -> None:
     async def scenario() -> RefError:
         async with (
             async_playwright() as playwright,
-            open_session(playwright.chromium) as session,
+            open_browser_session(playwright.chromium) as session,
         ):
             await session.page.set_content(REFS_PAGE)
             save = ref_for(await session.snapshot(), "button", "Save")
@@ -535,7 +532,7 @@ def test_located_element_never_becomes_another() -> None:
     async def scenario() -> str | None:
         async with (
             async_playwright() as playwright,
-            open_session(playwright.chromium) as session,
+            open_browser_session(playwright.chromium) as session,
         ):
             page = session.page
             await page.set_content(BEFORE)
@@ -565,7 +562,7 @@ def test_page_text_cannot_mint_a_ref() -> None:
     async def scenario() -> tuple[str, list[str], int]:
         async with (
             async_playwright() as playwright,
-            open_session(playwright.chromium) as session,
+            open_browser_session(playwright.chromium) as session,
         ):
             await session.page.set_content(MINTING_PAGE)
             snapshot = await session.snapshot()
