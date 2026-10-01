@@ -3,15 +3,18 @@ is involved (DATA_MODEL §6, §9; ADR-0030). Every problem is reported at once,
 each naming the file, the key and what is wrong."""
 
 import re
-from collections.abc import Callable, Hashable, Iterator, Sequence
+from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ValidationError
 from yaml.constructor import ConstructorError
 
-from aqa_core.config import ProjectConfig
+from aqa_core.browser import BrowserSettings
+from aqa_core.config import ProjectConfig, RoleField
+from aqa_core.schema import parse_origin
 from aqa_core.spec import Spec, SpecFrontmatter, secret_references, spec_hash
 
 
@@ -239,3 +242,103 @@ def load_spec(path: Path, config: ProjectConfig) -> Spec:
     if problems:
         raise SpecError(problems)
     return Spec(path, frontmatter, spec_hash(data))
+
+
+@dataclass(frozen=True)
+class Project:
+    """A spec root: its project config, and every spec below it by id."""
+
+    root: Path
+    config: ProjectConfig
+    specs: Mapping[str, Spec]
+
+
+def load_project(spec_root: Path) -> Project:
+    """The project whose config is `spec_root/config.yaml`, with every
+    `*.spec.md` below it, in subdirectories too. Spec ids are unique in a
+    project (DATA_MODEL §6)."""
+    config = load_config(spec_root / "config.yaml")
+    specs: dict[str, Spec] = {}
+    problems: list[str] = []
+    for path in sorted(spec_root.rglob("*.spec.md")):
+        try:
+            spec = load_spec(path, config)
+        except SpecError as error:
+            problems.extend(error.problems)
+            continue
+        first = specs.setdefault(spec.frontmatter.id, spec)
+        if first is not spec:
+            problems.append(
+                f"{path}: id: '{spec.frontmatter.id}' is already the id of {first.path}: "
+                "spec ids are unique in a project"
+            )
+    if problems:
+        raise SpecError(problems)
+    return Project(spec_root, config, specs)
+
+
+def effective_browser(config: ProjectConfig, spec: Spec) -> BrowserSettings:
+    """The pinned settings, overridden by the project's, then by the spec's
+    (ADR-0025)."""
+    settings = BrowserSettings().model_dump()
+    for overrides in (config.browser, spec.frontmatter.browser):
+        settings |= overrides.model_dump(exclude_none=True)
+    return BrowserSettings.model_validate(settings)
+
+
+def start_origin(url: str | None, config: ProjectConfig) -> str:
+    """The run's start origin: the invocation's `--url` when it gives one,
+    otherwise the project's base_url (DATA_MODEL §9). Never the spec's."""
+    if url is None:
+        if config.base_url is None:
+            raise SpecError(
+                ["no start origin: pass --url, or set base_url in the project config"]
+            )
+        return config.base_url
+    try:
+        return parse_origin(url)
+    except ValueError as error:
+        raise SpecError([f"--url: {error}"]) from None
+
+
+def allowed_origins(start: str, spec: Spec) -> tuple[str, ...]:
+    """The origins the run may navigate to and act on: `start`, the run's
+    start origin, then the spec's (ADR-0026)."""
+    return tuple(dict.fromkeys((start, *spec.frontmatter.allowed_origins)))
+
+
+@dataclass(frozen=True)
+class SecretDestination:
+    """Where the browser may fill one test secret in this run."""
+
+    origins: tuple[str, ...]
+    field: Literal["password"] | RoleField
+
+
+def secret_destinations(
+    spec: Spec, config: ProjectConfig, start: str
+) -> dict[str, SecretDestination]:
+    """For each test secret `spec` references, its binding in `config`
+    intersected with the run's allowed origins (ADR-0026), where `start` is
+    the run's start origin. A bound origin the run doesn't allow is an error,
+    never dropped: the secret could otherwise be left with nowhere to go."""
+    allowed = allowed_origins(start, spec)
+    destinations: dict[str, SecretDestination] = {}
+    problems: list[str] = []
+    for key, name in secret_references(spec.frontmatter):
+        if name in destinations:
+            continue
+        binding = config.secrets[name]
+        origins = tuple(
+            dict.fromkeys(start if o == "start" else o for o in binding.origins)
+        )
+        problems.extend(
+            f"{spec.path}: {key}: secret {name} is bound to {origin}, which is not one of "
+            f"this run's allowed origins: {', '.join(allowed)}"
+            for origin in origins
+            if origin not in allowed
+        )
+        destinations[name] = SecretDestination(origins, binding.field)
+    if problems:
+        raise SpecError(problems)
+    return destinations
