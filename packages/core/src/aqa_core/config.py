@@ -7,10 +7,10 @@ from pydantic import AfterValidator, Field, PlainValidator, StrictInt, StrictStr
 
 from aqa_core.browser import BrowserOverrides
 from aqa_core.schema import (
+    AtLeastOne,
+    DistinctListOf,
     Host,
-    Items,
     NonEmpty,
-    NotEmpty,
     Origin,
     PositiveNumber,
     SecretName,
@@ -40,7 +40,7 @@ class ModelOverride(StrictModel):
     costs (ADR-0007 amendment)."""
 
     capabilities: Annotated[
-        Items[Literal["tools", "structured_output", "vision"]], NotEmpty
+        DistinctListOf[Literal["tools", "structured_output", "vision"]], AtLeastOne
     ]
     input_usd_per_mtok: _Price
     output_usd_per_mtok: _Price
@@ -49,9 +49,9 @@ class ModelOverride(StrictModel):
 class Egress(StrictModel):
     """ADR-0026's hosts beyond the allowed origins."""
 
-    subresource_hosts: Items[Host] = ()
-    expected_blocked: Items[Host] = ()
-    private_origins: Items[Origin] = ()
+    subresource_hosts: DistinctListOf[Host] = ()
+    expected_blocked: DistinctListOf[Host] = ()
+    private_origins: DistinctListOf[Origin] = ()
 
 
 class RoleField(StrictModel):
@@ -64,7 +64,7 @@ class RoleField(StrictModel):
 def _field(value: object) -> Literal["password"] | RoleField:
     if value == "password":
         return "password"
-    if not isinstance(value, str):
+    if isinstance(value, dict):
         return RoleField.model_validate(value)
     raise ValueError(
         f"'{value}' is not a field: write password, or a role and an accessible name"
@@ -80,7 +80,8 @@ class SecretBinding(StrictModel):
     run's start origin; any other origin must also be one the run allows."""
 
     origins: Annotated[
-        Items[Annotated[StrictStr, AfterValidator(_binding_origin)]], NotEmpty
+        DistinctListOf[Annotated[StrictStr, AfterValidator(_binding_origin)]],
+        AtLeastOne,
     ]
     # `password` is an <input type="password">.
     field: Annotated[Literal["password"] | RoleField, PlainValidator(_field)]

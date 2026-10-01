@@ -23,7 +23,7 @@ def _distinct[T](items: tuple[T, ...]) -> tuple[T, ...]:
     return items
 
 
-def _not_empty[T](items: tuple[T, ...]) -> tuple[T, ...]:
+def _at_least_one[T](items: tuple[T, ...]) -> tuple[T, ...]:
     if not items:
         raise ValueError("must list at least 1 item")
     return items
@@ -33,10 +33,10 @@ def _not_empty[T](items: tuple[T, ...]) -> tuple[T, ...]:
 # strict on the outside, so the list YAML gives becomes a tuple; each item type
 # stays strict.
 type ListOf[T] = Annotated[tuple[T, ...], Field(strict=False)]
-type Items[T] = Annotated[ListOf[T], AfterValidator(_distinct)]
+type DistinctListOf[T] = Annotated[ListOf[T], AfterValidator(_distinct)]
 # After the items, so a list whose only item is invalid isn't also reported as
 # empty, as Field(min_length=1) would.
-NotEmpty = AfterValidator(_not_empty)
+AtLeastOne = AfterValidator(_at_least_one)
 
 NonEmpty = Annotated[StrictStr, Field(min_length=1)]
 PositiveNumber = Annotated[float, Field(gt=0, allow_inf_nan=False)]
@@ -48,6 +48,9 @@ _DEFAULT_PORTS = {"http": 80, "https": 443}
 _NOT_IN_AN_ORIGIN = re.compile(r"[\s\x00-\x1f\x7f\\@?#]")
 _LABEL = r"(?!-)[a-z0-9_-]{1,63}(?<!-)"
 _DNS_NAME = re.compile(rf"{_LABEL}(?:\.{_LABEL})*")
+# WHATWG's "ends in a number": a host whose last label is decimal or 0x-hex is
+# an IPv4 address to a browser, which reads 0x7f000001 and 127.1 as 127.0.0.1.
+_NUMBER = re.compile(r"[0-9]+|0x[0-9a-f]*")
 
 
 def _host(host: str) -> str | None:
@@ -56,15 +59,17 @@ def _host(host: str) -> str | None:
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
-        # A name whose last label is a number is an IPv4 address to a browser
-        # (WHATWG's "ends in a number"), such as 127.000.000.001.
-        if _DNS_NAME.fullmatch(host) and not host.rsplit(".", 1)[-1].isdigit():
+        # Only dotted decimal, which ip_address takes, is accepted as IPv4.
+        if _DNS_NAME.fullmatch(host) and not _NUMBER.fullmatch(host.rsplit(".", 1)[-1]):
             return host
         return None
     if isinstance(address, ipaddress.IPv6Address):
         # A zone index (fe80::1%eth0) names one host's interface, which no
-        # browser accepts in a URL.
-        return None if address.scope_id else f"[{address}]"
+        # browser accepts in a URL; and a browser writes an IPv4-mapped address
+        # (::ffff:127.0.0.1) in a form Python doesn't (::ffff:7f00:1).
+        if address.scope_id or address.ipv4_mapped is not None:
+            return None
+        return f"[{address}]"
     return str(address)
 
 
@@ -78,7 +83,10 @@ def parse_origin(text: str) -> str:
     )
     if _NOT_IN_AN_ORIGIN.search(text):
         raise problem
-    parts = urlsplit(text)
+    try:
+        parts = urlsplit(text)
+    except ValueError:  # brackets that don't close
+        raise problem from None
     if (
         parts.scheme not in _DEFAULT_PORTS
         or parts.path not in ("", "/")
@@ -90,7 +98,9 @@ def parse_origin(text: str) -> str:
     except ValueError:
         raise problem from None
     host = _host(parts.hostname)
-    if host is None or port == 0:
+    # A bracketed host must be IPv6: urlsplit drops the brackets of any other,
+    # such as [v1.example.test], leaving a different host.
+    if host is None or port == 0 or ("[" in parts.netloc) != host.startswith("["):
         raise problem
     if port is None or port == _DEFAULT_PORTS[parts.scheme]:
         return f"{parts.scheme}://{host}"

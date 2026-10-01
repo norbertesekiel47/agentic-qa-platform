@@ -143,10 +143,40 @@ def test_every_spec_problem_in_the_project_is_reported_together(tmp_path: Path) 
     with pytest.raises(SpecError) as raised:
         load_project(root)
 
-    assert [line.split(": ")[:2] for line in raised.value.problems] == [
-        [str(login), "owner"],
-        [str(pay), "tags[0]"],
-    ]
+    assert {tuple(line.split(": ")[:2]) for line in raised.value.problems} == {
+        (str(login), "owner"),
+        (str(pay), "tags[0]"),
+    }
+
+
+def test_an_invalid_config_does_not_hide_the_specs_problems(tmp_path: Path) -> None:
+    root = write_project(tmp_path / "qa", BOUND + "base_ur: http://127.0.0.1:4100\n")
+    login = write_spec(root / "login.spec.md", extra="owner: qa\n")
+
+    with pytest.raises(SpecError) as raised:
+        load_project(root)
+
+    assert {tuple(line.split(": ")[:2]) for line in raised.value.problems} == {
+        (str(root / "config.yaml"), "base_ur"),
+        (str(login), "owner"),
+    }
+
+
+def test_a_file_that_cannot_be_read_does_not_hide_the_others(tmp_path: Path) -> None:
+    root = write_project(tmp_path / "qa", BOUND)
+    latin = root / "latin.spec.md"
+    latin.write_bytes(b"---\nid: latin\ngoal: caf\xe9\n---\n")
+    login = write_spec(root / "login.spec.md", extra="owner: qa\n")
+    # A directory is not a spec, whatever its name.
+    (root / "drafts.spec.md").mkdir()
+
+    with pytest.raises(SpecError) as raised:
+        load_project(root)
+
+    assert set(raised.value.problems) == {
+        f"{latin}: not UTF-8 text",
+        f"{login}: owner: unknown key",
+    }
 
 
 def test_a_project_without_a_config_is_an_error(tmp_path: Path) -> None:
@@ -185,6 +215,16 @@ def test_the_spec_overrides_the_project_which_overrides_the_pins(
         device_scale_factor=1,  # pinned
         color_scheme="light",  # pinned
     )
+
+
+def test_a_null_override_leaves_the_setting_as_it_was(tmp_path: Path) -> None:
+    config, spec = load_one(
+        tmp_path,
+        BOUND + "browser: { timezone: Asia/Tokyo }\n",
+        extra="browser: { timezone: null }\n",
+    )
+
+    assert effective_browser(spec, config).timezone == "Asia/Tokyo"
 
 
 # Start origin and allowed origins (ADR-0026).
@@ -300,6 +340,37 @@ def test_a_binding_to_the_start_origin_by_name_is_allowed(tmp_path: Path) -> Non
     destinations = secret_destinations(spec, config, "http://127.0.0.1:4100")
 
     assert destinations["TEST_PASSWORD"].origins == ("http://127.0.0.1:4100",)
+
+
+def test_a_binding_naming_the_start_origin_twice_lists_it_once(tmp_path: Path) -> None:
+    config, spec = load_one(
+        tmp_path,
+        "secrets: { TEST_PASSWORD: { origins: [start, 'http://127.0.0.1:4100'], "
+        "field: password } }\n",
+    )
+
+    destinations = secret_destinations(spec, config, "http://127.0.0.1:4100")
+
+    assert destinations["TEST_PASSWORD"].origins == ("http://127.0.0.1:4100",)
+
+
+def test_a_secret_referenced_twice_is_checked_once(tmp_path: Path) -> None:
+    root = write_project(
+        tmp_path / "qa",
+        "secrets: { TEST_PASSWORD: { origins: ['http://127.0.0.1:4100'], field: password } }\n",
+    )
+    config = load_config(root / "config.yaml")
+    path = write_spec(root / "login.spec.md")
+    path.write_text(
+        path.read_text().replace(
+            "email: reader@example.test", "email: { secret: TEST_PASSWORD }"
+        )
+    )
+
+    with pytest.raises(SpecError) as raised:
+        secret_destinations(load_spec(path, config), config, "http://localhost:4100")
+
+    assert len(raised.value.problems) == 1
 
 
 def test_only_the_secrets_the_spec_references_get_destinations(tmp_path: Path) -> None:

@@ -14,7 +14,13 @@ from aqa_core import strict_yaml
 from aqa_core.browser import BrowserSettings
 from aqa_core.config import ProjectConfig, RoleField
 from aqa_core.schema import parse_origin
-from aqa_core.spec import Spec, SpecFrontmatter, secret_references, spec_hash
+from aqa_core.spec import (
+    Spec,
+    SpecContext,
+    SpecFrontmatter,
+    secret_references,
+    spec_hash,
+)
 
 
 class SpecError(Exception):
@@ -25,6 +31,14 @@ class SpecError(Exception):
     def __init__(self, problems: Sequence[str]) -> None:
         super().__init__("\n".join(problems))
         self.problems = tuple(problems)
+
+
+def _read_text(path: Path) -> str:
+    try:
+        # utf-8-sig: a byte order mark an editor wrote is not part of the text.
+        return path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        raise SpecError([f"{path}: not UTF-8 text"]) from None
 
 
 def _read_yaml(text: str, path: Path, first_line: int) -> object:
@@ -55,14 +69,21 @@ def _problems(error: ValidationError, path: Path) -> Iterator[str]:
                 problem = "missing key"
             case "value_error":
                 problem = str(detail["ctx"]["error"])
+            # Pydantic names Python's types; the file is YAML.
+            case "model_type" | "dict_type":
+                problem = "must be a mapping of keys"
+            case "tuple_type":
+                problem = "must be a list"
             case _:
                 problem = detail["msg"]
         yield f"{path}: {_key(detail['loc'])}: {problem}"
 
 
-def _validate[M: BaseModel](model: type[M], data: object, path: Path) -> M:
+def _validate[M: BaseModel](
+    model: type[M], data: object, path: Path, context: SpecContext | None = None
+) -> M:
     try:
-        return model.model_validate(data)
+        return model.model_validate(data, context=context)
     except ValidationError as error:
         raise SpecError(list(_problems(error, path))) from None
 
@@ -71,7 +92,7 @@ def load_config(path: Path) -> ProjectConfig:
     """The project config at `path`. The directory that holds it is the
     project's spec root (DATA_MODEL §9)."""
     try:
-        text = path.read_text(encoding="utf-8")
+        text = _read_text(path)
     except FileNotFoundError:
         raise SpecError(
             [
@@ -96,7 +117,11 @@ _FRONTMATTER = re.compile(r"---\n(.*?)^---[ \t]*$", re.DOTALL | re.MULTILINE)
 def load_spec(path: Path, config: ProjectConfig) -> Spec:
     """The spec at `path`. Its secret references must name secrets `config`
     declares, and its id must be its file name without `.spec.md`."""
-    match = _FRONTMATTER.match(path.read_text(encoding="utf-8"))
+    return _load_spec(path, frozenset(config.secrets))
+
+
+def _load_spec(path: Path, declared_secrets: frozenset[str] | None) -> Spec:
+    match = _FRONTMATTER.match(_read_text(path))
     if match is None:
         raise SpecError(
             [f"{path}: a spec starts with its frontmatter between two --- lines"]
@@ -104,25 +129,10 @@ def load_spec(path: Path, config: ProjectConfig) -> Spec:
     data = _read_yaml(match[1], path, first_line=2)
     if not isinstance(data, dict):
         raise SpecError([f"{path}: the frontmatter must be a mapping of keys"])
-    problems = []
-    name = path.name.removesuffix(".spec.md")
-    if isinstance(data.get("id"), str) and data["id"] != name:
-        problems.append(
-            f"{path}: id: '{data['id']}' doesn't match the file name: a spec's id is its "
-            f"file name without .spec.md, here '{name}'"
-        )
-    try:
-        frontmatter = _validate(SpecFrontmatter, data, path)
-    except SpecError as error:
-        raise SpecError([*problems, *error.problems]) from None
-    problems.extend(
-        f"{path}: {key}: secret {secret} is not declared in the project config's secrets"
-        for key, secret in secret_references(frontmatter)
-        if secret not in config.secrets
+    context = SpecContext(
+        file_id=path.name.removesuffix(".spec.md"), declared_secrets=declared_secrets
     )
-    if problems:
-        raise SpecError(problems)
-    return Spec(path, frontmatter, spec_hash(data))
+    return Spec(path, _validate(SpecFrontmatter, data, path, context), spec_hash(data))
 
 
 @dataclass(frozen=True)
@@ -137,13 +147,20 @@ class Project:
 def load_project(spec_root: Path) -> Project:
     """The project whose config is `spec_root/config.yaml`, with every
     `*.spec.md` below it, in subdirectories too. Spec ids are unique in a
-    project (DATA_MODEL §6)."""
-    config = load_config(spec_root / "config.yaml")
-    specs: dict[str, Spec] = {}
+    project (DATA_MODEL §6). An invalid config doesn't stop the specs being
+    read: every problem in every file is reported together."""
     problems: list[str] = []
-    for path in sorted(spec_root.rglob("*.spec.md")):
+    try:
+        config: ProjectConfig | None = load_config(spec_root / "config.yaml")
+    except SpecError as error:
+        config = None
+        problems.extend(error.problems)
+    # Unknown when the config is invalid, so references aren't checked then.
+    declared = None if config is None else frozenset(config.secrets)
+    specs: dict[str, Spec] = {}
+    for path in sorted(p for p in spec_root.rglob("*.spec.md") if p.is_file()):
         try:
-            spec = load_spec(path, config)
+            spec = _load_spec(path, declared)
         except SpecError as error:
             problems.extend(error.problems)
             continue
@@ -153,7 +170,7 @@ def load_project(spec_root: Path) -> Project:
                 f"{path}: id: '{spec.frontmatter.id}' is already the id of {first.path}: "
                 "spec ids are unique in a project"
             )
-    if problems:
+    if config is None or problems:
         raise SpecError(problems)
     return Project(spec_root, config, specs)
 
