@@ -171,12 +171,12 @@ Free-form notes for humans. The agent never reads the body; anything that affect
 - *Expected-blocked hosts* (§9) are the exception. For them, the block's direct symptoms don't count against `console_errors` or `broken_images`: its console error and a broken image, matched by the failed request, never by console text.
 - *Indirect effects* always count, such as app code failing because a blocked script never loaded.
 
-**Parsing (M1).** Specs are read before a browser or a model is involved, and every problem is reported at once, each naming the file, the key and the problem.
-- *YAML:* the frontmatter is YAML 1.2's core schema (ADR-0030). Aliases and tags that change a value's type are errors, `yes` and `no` are strings, and a date is a string.
+**Parsing (M1).** Specs are read before a browser or a model is involved, and every problem is reported at once, each naming the file, the key and the problem. An invalid project config doesn't hide the specs' problems.
+- *YAML:* the file is UTF-8 (a byte order mark is skipped), and the frontmatter is YAML 1.2's core schema (ADR-0030). Aliases and tags that change a value's type are errors, `yes` and `no` are strings, and a date is a string.
 - *Keys:* unknown and duplicate keys are errors, and so is a value of another type, such as a quoted `"3"` for a number.
 - *Required:* `id`, `goal`, `preconditions.start_url` and at least one `expect` item. `invariants` defaults to `inherit: true`; `disable` names distinct invariants from the table above, and an `inherit: false` with `disable` is an error.
 - *`id`* must equal the file name without `.spec.md`. Spec IDs must be unique across the project, subdirectories of the spec root included; a duplicate is a spec error before anything is written.
-- *`start_url`* is a path: one leading `/`, then no whitespace, control characters or backslashes, which a browser could read as `//`, another origin. A query and a fragment are allowed.
+- *`start_url`* is a path: one leading `/`, then no whitespace, control characters or backslashes, and no empty, `.` or `..` segment (`%2e` is a dot). A browser could read any of those as a path starting `//`, another origin. A query and a fragment are allowed.
 - *`account`* takes `email` and `password`, each a string or a secret reference, `{ secret: NAME }`. A reference must name a secret the project config declares (§9).
 - *An expectation* is a string, or `{ text, visual }`. `visual: model` is a spec error in M1 (ADR-0024).
 - *`allowed_origins` and `browser`* are checked as §9 checks origins and `browser`.
@@ -359,7 +359,7 @@ budgets:                      # per explore run (ADR-0024)
 - Values come from `AQA_SECRET_<NAME>` environment variables, locally and in CI, so a name is capital letters, digits and underscores, starting with a letter. Hosted runs use the test-secrets API (API.md §3).
 - Which revision of this file a CI run trusts, the base branch or the pull request, is decided at M5 (#27).
 
-**Start origin.** `base_url` must be an origin: `http` or `https`, a host and an optional port, with no path, query or user (a lone trailing `/` is allowed). `aqa explore --url` overrides it and is held to the same form. Origins compare lowercase and without the scheme's default port. With neither, the run fails before the browser starts.
+**Start origin.** `base_url` must be an origin: `http` or `https`, a host and an optional port, with no path, query or user (a lone trailing `/` is allowed). `aqa explore --url` overrides it and is held to the same form. Origins compare lowercase and without the scheme's default port. A host is a DNS name, a dotted-decimal IPv4 address or a bracketed IPv6 address; the other IPv4 spellings a browser reads (`0x7f000001`, `127.1`) and IPv4-mapped IPv6 addresses are refused, so a stored origin is the one the browser reports. With neither, the run fails before the browser starts.
 
 **Egress hosts.** `subresource_hosts` and `expected_blocked` list bare host names or IP addresses (an IPv6 address in brackets), with no scheme, port or wildcard. `private_origins` lists origins.
 

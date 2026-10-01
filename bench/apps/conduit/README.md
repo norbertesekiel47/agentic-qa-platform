@@ -16,9 +16,9 @@ docker compose down
 **Benchmark flags (ADR-0022).** Each planted change sits behind an opaque flag ID. Switch cases from the repository root with the harness, which recreates both containers with `BENCH_FLAGS` set (reseeding the database) and checks that both tiers got exactly that flag set:
 
 ```bash
-python3 bench/harness/flags.py set conduit-bug-001   # one case on
-python3 bench/harness/flags.py clean conduit         # the clean app
-python3 bench/harness/flags.py show conduit          # which case is on
+uv run python bench/harness/flags.py set conduit-bug-001   # one case on
+uv run python bench/harness/flags.py clean conduit         # the clean app
+uv run python bench/harness/flags.py show conduit          # which case is on
 ```
 
 `flags.py` doesn't rebuild images, so run `docker compose build` here after changing app code (`toggle.py` builds them itself). A plain `docker compose up` takes `BENCH_FLAGS` from your shell; unset means the clean app.
