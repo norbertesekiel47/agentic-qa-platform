@@ -1,6 +1,6 @@
 # ADR-0008: One runner image, two locations; AWS Lambda for hosted runs
 
-- Status: Accepted
+- Status: Superseded in part by ADR-0030 (hosted compute)
 - Date: 2026-09-27
 
 ## Context

@@ -1,6 +1,6 @@
 # Architecture — Agentic QA Platform
 
-Last updated: 2026-10-08 (a navigator reply the model didn't finish runs nothing, #53); 2026-10-07 (each step's evidence in the local run record, #50 B; step intents and completions in the local run record, #46; the browser session's document-origin checks, #44; the local run record under the spec root, #41; the browser session, #36; the sandbox check, #35; M1 design decisions, ADR-0024–0026). Decisions referenced as ADR-NNNN live in [`ADRs/`](ADRs/).
+Last updated: 2026-10-08 (hosted compute: one Lambda MicroVM per run, ADR-0030; a navigator reply the model didn't finish runs nothing, #53); 2026-10-07 (each step's evidence in the local run record, #50 B; step intents and completions in the local run record, #46; the browser session's document-origin checks, #44; the local run record under the spec root, #41; the browser session, #36; the sandbox check, #35; M1 design decisions, ADR-0024–0026). Decisions referenced as ADR-NNNN live in [`ADRs/`](ADRs/).
 
 ## 1. System context
 
@@ -12,9 +12,9 @@ Last updated: 2026-10-08 (a navigator reply the model didn't finish runs nothing
                             ▼              │
 ┌──────────────────────────────────┐   ┌───┴────────────────────────────────────────────┐
 │ Customer CI (GitHub Actions)     │   │ AWS (our account)                              │
-│  runner container (same image)   │──►│  API Gateway (HTTP + WebSocket) → API Lambda   │
+│  runner container (aqa Action)   │──►│  API Gateway (HTTP + WebSocket) → API Lambda   │
 │  auth: GitHub OIDC → run token   │   │  RDS Postgres (RLS)   S3 artifacts   SQS       │
-│  LLM: customer key (GH secret)   │   │  Dispatcher Lambda → Runner Lambdas (no VPC)   │
+│  LLM: customer key (GH secret)   │   │  Dispatcher Lambda → Runner MicroVMs (no VPC)  │
 └──────────────────────────────────┘   │  KMS (BYOK, test secrets)  CloudWatch  fck-nat │
                                        └───┬──────────────────────────▲─────────────────┘
                                            │                          │
@@ -141,7 +141,7 @@ Page content is **untrusted data**:
 
 ### 4.2 Hosted run (dashboard-triggered)
 1. `POST /v1/runs` → API checks domain verification, rate limits → enqueues to SQS.
-2. Dispatcher enforces per-org concurrency (DB counter) → issues a run token + lease → invokes Runner Lambda asynchronously with `{run_id, run_token}` only.
+2. Dispatcher enforces per-org concurrency (DB counter) → issues a run token + lease → starts one runner MicroVM for the run (ADR-0030), which gets `{run_id, run_token}` only; how it gets them is decided in M6.
 3. Runner startup hygiene (§5) → fetches the spec bundle, the provider key, and any test secrets the spec references over HTTPS using the **hosted-execution** run token (held in memory only; CI run tokens can't retrieve org-stored secrets) → runs the graph → streams events via the API → WebSocket fan-out.
 
 ### 4.3 Checks and Accept heal
@@ -165,23 +165,20 @@ Credentials that arrive before the tenant is known (API keys, OIDC exchanges, Gi
 
 ## 5. Network & isolation
 
-- **Chromium sandbox decision gate (M1 spike; ADR-0008 amendment, 2026-09-29).**
+- **Chromium sandbox and hosted compute (ADR-0030).**
   - *Sandbox check:* the runner launches Chromium with its sandbox **enabled** (`chromium_sandbox=True`) and proves it with the sandbox check before any page loads (ADR-0026).
   - *Why it matters:* without the sandbox, a renderer exploit runs with the runner process's privileges, and any environment reused across runs could expose a later tenant's run.
-  - *Qualifying rule:* hosted compute qualifies only if it runs sandboxed Chromium **and** gives every run a fresh VM. The spike measures a Lambda MicroVM, a Fargate task and a Lambda function.
-  - *What the facts suggest:* Lambda functions can't create user namespaces, and they reuse environments, so they can't win. Fargate most likely can't run the sandbox either (only `SYS_PTRACE` can be added, and custom seccomp profiles aren't allowed). A MicroVM gives each session its own VM and kernel.
-  - *Outcome:* recorded in a new ADR that supersedes ADR-0008's choice of Lambda. If nothing qualifies, hosted runs wait.
+  - *The gate:* hosted compute had to run sandboxed Chromium **and** give every run a fresh VM. M1's spike measured a Lambda MicroVM, a Fargate task and a Lambda function. Only the MicroVM started the sandbox; the Lambda function also reused its environments.
   - *In M1:* an unsandboxed launch is a hard error everywhere. Whether customer CI may ever run unsandboxed is decided with the Action at M5 (#26).
-  - *Pending:* the runner compute in §1's diagram and the Lambda-specific bullets below stay until the spike ADR replaces them.
 - **Local and CI egress:** the egress proxy, the per-location IP policy, and the allowed-origin checks before each observation and action apply to every run, local and CI included (SECURITY §7, ADR-0026).
-- **Isolation boundary (stated precisely, if the gate selects Lambda):** each run executes in a Lambda invocation. Lambda **may reuse an execution environment** (including `/tmp` and any surviving processes) for later invocations of the same function — possibly a different tenant's run — and a timeout does not clear `/tmp`. So isolation is enforced by the runner, not assumed from Lambda:
-  - **Startup hygiene (every invocation, before any tenant data is fetched):** kill any leftover child processes, wipe `/tmp`, verify the wipe.
+- **Isolation boundary (hosted runs): one Lambda MicroVM per run (ADR-0030).** Each run executes in its own MicroVM: a Firecracker VM with its own kernel, restored from a snapshot of the runner image that no run has touched.
+  - The dispatcher starts one MicroVM per run and terminates it when the run ends, whatever the outcome; `maximumDurationInSeconds` ends one that is lost. No MicroVM serves a second run, and none is suspended: suspending would write its memory, secrets included, to storage AWS keeps.
+  - MicroVMs of one image version start from the image's snapshot, so everything per run comes after the restore: the run token and secrets arrive then, and the runner creates its IDs, randomness (from the kernel) and browser then.
   - A **fresh browser process and a fresh, randomized profile directory** per run; no persistent contexts; downloads disabled.
   - Secrets and provider keys held in memory only; never written to disk by our code.
-  - Teardown on normal completion; startup hygiene covers crash/timeout paths.
-  - **Crash-reuse tests** (TESTING §1) prove a run that crashes mid-way leaves nothing readable by the next invocation.
-  - **Residual risk:** a compromised browser that escapes its sandbox inside a warm environment could observe a later run in that environment. For stronger isolation, the compute-backend interface supports a one-task-per-run Fargate adapter (roadmap).
-- **Runner Lambdas run outside the VPC**, reach the internet directly (apps under test, LLM providers) at no NAT cost, and have **no route or credentials** to RDS. Their execution role has only CloudWatch Logs permissions.
+  - **Startup hygiene** (before any tenant data is fetched: kill leftover child processes, wipe `/tmp`, verify the wipe) still runs, as defence in depth against a MicroVM reused by mistake.
+  - **Residual risk:** a browser exploit that escapes the sandbox controls its own run's VM, and what that run holds, until the run ends; the in-VM egress proxy doesn't constrain it, and secrets it sends out outlive the run ([SECURITY §6](SECURITY.md#6-runner-isolation-precise-boundary)). Reaching another run's memory means escaping Firecracker, AWS's boundary.
+- **Runner MicroVMs run outside the VPC**, reach the internet through Lambda's default egress (apps under test, LLM providers) at no NAT cost, and have **no route or credentials** to RDS. Their execution role has only CloudWatch Logs permissions.
 - **API Lambda runs inside the VPC** (private subnets) to reach RDS. Outbound (Clerk JWKS, GitHub API, KMS, SQS, API Gateway management API) goes through a **fck-nat** instance (~$3/month) instead of a managed NAT Gateway (~$32/month + data). S3 uses a free **gateway VPC endpoint**.
 - **Connection management:** no RDS Proxy (cost). API Lambda reserved concurrency is capped and each container reuses one pooled connection across invocations.
 
@@ -189,7 +186,7 @@ Credentials that arrive before the tenant is known (API keys, OIDC exchanges, Gi
 
 | Failure | Handling |
 |---|---|
-| Runner hits the Lambda 15-min limit | Continuation per §3.3 (new lease + token, max 3); non-resumable specs end `errored: non_resumable` |
+| Runner reaches its time limit (a 15-minute run token; a MicroVM's `maximumDurationInSeconds`, ADR-0030; #28 revisits) | Continuation per §3.3 (new lease + token, max 3); non-resumable specs end `errored: non_resumable` |
 | Runner crash mid-step | One retry from the last checkpoint **only if** no `side_effect` step is in flight; otherwise `errored` with logs |
 | LLM provider 429/5xx | The SDK retries with exponential backoff (two retries); the call then raises, and records nothing if no response ever arrived. A role's fallback model answers a refusal, not a provider error (ADR-0007 amendment, 2026-10-01) |
 | Duplicate SQS delivery | Idempotency key on dispatch; runner claims the run atomically |
@@ -207,7 +204,7 @@ Credentials that arrive before the tenant is known (API keys, OIDC exchanges, Gi
 
 ## 8. Cost design (AWS)
 
-No NAT Gateway · runners bill per ms with zero idle · control-plane Lambdas stay within the always-free tier · hosted-runner compute depends on the M1 spike (TECH_STACK §5) · S3 lifecycle rules expire artifacts (30 days default) · AWS Budgets alarm from day one · single-AZ db.t4g.micro · static dashboard on S3 + CloudFront. Base infrastructure estimated at ~$20–30/month at portfolio traffic, before hosted-runner compute (see [TECH_STACK §5](TECH_STACK.md#5-aws-services-and-cost)).
+No NAT Gateway · runner MicroVMs bill per second while they run and are terminated after each run (ADR-0030) · control-plane Lambdas stay within the always-free tier · hosted-runner compute per run is in TECH_STACK §5 · S3 lifecycle rules expire artifacts (30 days default) · AWS Budgets alarm from day one · single-AZ db.t4g.micro · static dashboard on S3 + CloudFront. Base infrastructure estimated at ~$20–30/month at portfolio traffic, before hosted-runner compute (see [TECH_STACK §5](TECH_STACK.md#5-aws-services-and-cost)).
 
 ## 9. Observability
 
@@ -231,4 +228,4 @@ The runner's browser tools can optionally be exposed as MCP tools and routed thr
 
 ## 11. Decision index
 
-ADR-0001 product choice · 0002 hybrid perception · 0003 explore–compile–heal (amended: strict/verified replay, drift classification) · 0004 specs in repo · 0005 Python + Next.js · 0006 LangGraph (amended: continuation contract; one required `side_effect` step flag) · 0007 model routing (amended: pinned price map; Sonnet 5.5 defaults; no forced tool choice; where the map lives and how it is checked and refreshed; roles, capability checks and cost records; the router, the Anthropic adapter, tracing and cassettes) · 0008 runner image & Lambda (amended: isolation boundary; sandbox decision gate; three spike candidates and a fresh-VM predicate; how the spike's trial measures) · 0009 RDS + RLS · 0010 Clerk · 0011 BYOK · 0012 domain verification · 0013 CI auth (amended: OIDC trust policy) · 0014 observability · 0015 benchmark (amended: dev/test split) · 0016 build order & license · 0017 dashboard hosting · 0018 fallow commit gate (amended: CI) · 0019 CI with a switchable runner · 0020 benchmark apps (amended: localization scope) · 0021 bench/apps gate carve-out · 0022 benchmark flags, test-only endpoints and manifest (amended: invariant ground truth; residual exposure) · 0023 pilot toggle checks and dry compile review (amended: sandboxed checks image; every check under every flag) · 0024 explore runs: coverage plan, stateless navigator, confirmation replay · 0025 compiled scripts: meanings, locators, checks and step flags · 0026 browser boundary for local and CI runs (amended: how the sandbox check works; a browser running as root; the browser session; what the sandbox check observed; the egress proxy).
+ADR-0001 product choice · 0002 hybrid perception · 0003 explore–compile–heal (amended: strict/verified replay, drift classification) · 0004 specs in repo · 0005 Python + Next.js · 0006 LangGraph (amended: continuation contract; one required `side_effect` step flag) · 0007 model routing (amended: pinned price map; Sonnet 5.5 defaults; no forced tool choice; where the map lives and how it is checked and refreshed; roles, capability checks and cost records; the router, the Anthropic adapter, tracing and cassettes) · 0008 runner image & Lambda (amended: isolation boundary; sandbox decision gate; three spike candidates and a fresh-VM predicate; how the spike's trial measures; superseded in part by 0030) · 0009 RDS + RLS · 0010 Clerk · 0011 BYOK · 0012 domain verification · 0013 CI auth (amended: OIDC trust policy) · 0014 observability · 0015 benchmark (amended: dev/test split) · 0016 build order & license · 0017 dashboard hosting · 0018 fallow commit gate (amended: CI) · 0019 CI with a switchable runner · 0020 benchmark apps (amended: localization scope) · 0021 bench/apps gate carve-out · 0022 benchmark flags, test-only endpoints and manifest (amended: invariant ground truth; residual exposure) · 0023 pilot toggle checks and dry compile review (amended: sandboxed checks image; every check under every flag) · 0024 explore runs: coverage plan, stateless navigator, confirmation replay · 0025 compiled scripts: meanings, locators, checks and step flags · 0026 browser boundary for local and CI runs (amended: how the sandbox check works; a browser running as root; the browser session; what the sandbox check observed; the egress proxy) · 0030 hosted compute: one Lambda MicroVM per run.

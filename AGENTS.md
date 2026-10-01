@@ -4,7 +4,7 @@ Instructions for coding agents (Claude Code, Codex, Cursor, etc.) working in thi
 
 ## 1. What this project is
 
-A multi-tenant SaaS + CLI + GitHub App for agentic E2E testing: an agent explores a natural-language spec once, compiles a deterministic script, replays in strict mode with zero LLM calls, and heals on UI drift by classifying *UI drift with expectations intact* (`drift_consistent`) vs *expectation violated* vs *inconclusive*. Python backend/runner (FastAPI, LangGraph, Playwright) + Next.js dashboard (static export), on AWS (Lambda runners, RDS Postgres with RLS).
+A multi-tenant SaaS + CLI + GitHub App for agentic E2E testing: an agent explores a natural-language spec once, compiles a deterministic script, replays in strict mode with zero LLM calls, and heals on UI drift by classifying *UI drift with expectations intact* (`drift_consistent`) vs *expectation violated* vs *inconclusive*. Python backend/runner (FastAPI, LangGraph, Playwright) + Next.js dashboard (static export), on AWS (Lambda MicroVM runners, RDS Postgres with RLS).
 
 ## 2. Where things are documented (single owner per fact)
 
