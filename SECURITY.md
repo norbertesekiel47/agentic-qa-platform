@@ -1,6 +1,6 @@
 # Security — Agentic QA Platform
 
-Last updated: 2026-09-30 (the sandbox check, #35; M1 design decisions, ADR-0026). Threat model and controls for a multi-tenant SaaS that runs browser agents against customer web apps. Guarantees are stated as narrowly as they are actually enforced.
+Last updated: 2026-10-01 (the browser session's empty environment, #36; the sandbox check, #35; M1 design decisions, ADR-0026). Threat model and controls for a multi-tenant SaaS that runs browser agents against customer web apps. Guarantees are stated as narrowly as they are actually enforced.
 
 ## 1. Assets
 
@@ -61,7 +61,7 @@ The agent reads arbitrary page content. A malicious or compromised page may say 
   - *Where a secret may go:* the intersection of its binding and the run's allowed origins.
   - *The start origin* comes from the invocation (`--url`), never from the spec, so editing a spec can't move where a secret goes (ADR-0026).
   - *Pending:* which revision of the config a CI run trusts is decided at M5 (#27).
-- **The browser's environment** is an explicit minimal set: no provider keys, no `AQA_SECRET_*` values, no cloud credentials. A secret reaches the browser only through `fill_secret`.
+- **The browser's environment** is empty: the launch passes Chromium no variables, so no provider key, `AQA_SECRET_*` value or cloud credential reaches any of its processes (ADR-0026 amendment, 2026-10-01). A secret reaches the browser only through `fill_secret`.
 - **Reflection defense (every model-using mode — explore, heal, verified).**
   - *Text:* before any text observation (accessibility tree, text, console, network summary) reaches a model, it is scanned for every active secret value and simple encodings (URL, base64), and each match is replaced with `[SECRET:<name>]`.
   - *Screenshots:* secret-bearing fields are masked (Playwright `mask`). Once any secret has been filled in the run, screenshots are OCR-scanned before being sent to a model, and dropped if a secret value is found.

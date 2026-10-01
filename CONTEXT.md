@@ -54,7 +54,7 @@ One way of finding a target on the page, such as by role and accessible name or 
 _Avoid_: selector
 
 **Element ref**:
-A short-lived handle to one element in one accessibility snapshot, such as `e12`, that the agent's tools act on. Compiling turns each ref on the explored path into a target.
+A short-lived handle to one element in one accessibility snapshot, such as `e12`, that the agent's tools act on. A browser session never gives the same ref twice, and refuses a ref from an older snapshot. Compiling turns each ref on the explored path into a target.
 _Avoid_: using "ref" for a locator or a target
 
 **Binding**:
@@ -173,6 +173,10 @@ A run on our runners, started from the dashboard. It may navigate to and act on 
 
 **Runner**:
 The container that executes one run: the run graph plus a browser. It holds no database or cloud credentials and does all its I/O through the API.
+
+**Browser session**:
+The fresh browser that one attempt or replay of a run uses. It is launched through the sandbox check with an empty environment, the run's browser settings and a profile of its own, and its accessibility snapshots give the element refs the agent acts on.
+_Avoid_: "session" alone where a MicroVM's session could be meant
 
 **Sandbox check**:
 The proof, before a run loads any page, that the browser's renderer is confined by Chromium's sandbox, made by comparing a renderer process with the browser process. It is the first half of the fresh-VM predicate that hosted compute must meet.
