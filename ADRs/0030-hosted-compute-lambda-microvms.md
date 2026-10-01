@@ -63,7 +63,7 @@ This supersedes ADR-0008's choice of Lambda functions for hosted runs. These ADR
   - `maximumDurationInSeconds` set, so a lost MicroVM still ends;
   - no suspension: automatic suspension off, and no `suspend-microvm` call. Suspending writes the MicroVM's memory and disk, and with them the run's token and secrets, to storage that AWS keeps ([MicroVM lifecycle](https://docs.aws.amazon.com/lambda/latest/dg/microvms-how-it-works.html#microvms-lifecycle-overview)). The idle timer counts only traffic through the MicroVM's endpoint, so a runner that only calls out would look idle and be suspended mid-run ([Running MicroVMs](https://docs.aws.amazon.com/lambda/latest/dg/microvms-launching.html#microvms-launching-idle-policy), checked 2026-10-01).
 
-  SECURITY §6 and ARCHITECTURE §5 state the boundary. M6's isolation tests prove it on real MicroVMs (ROADMAP M6).
+  SECURITY §6 and ARCHITECTURE §5 state the boundary. TESTING §1's runner-isolation tests enforce it: on the dispatcher at every commit, and on real MicroVMs from M6.
 - **Uniqueness after restore.** MicroVMs restored from one snapshot share everything it holds, and AWS says content generated during the build is shared by every MicroVM of that image version: IDs, secrets and random seeds ([Working with snapshots](https://docs.aws.amazon.com/lambda/latest/dg/microvms-images-snapshots.html#microvms-images-snapshots-uniqueness), checked 2026-10-01). So:
   - every per-run value comes after the restore, from the run hook on;
   - the runner draws randomness from the kernel (`secrets`, `os.urandom`);
@@ -86,7 +86,7 @@ This supersedes ADR-0008's choice of Lambda functions for hosted runs. These ADR
   - *The zip in S3:* SESSION-3.
   - *Data transfer,* at standard AWS rates: the trial sent almost none. A real run's, such as screenshots sent to model providers, is for M6 to measure.
   - *Total per run:* SESSION-3. This is M6's cost impact, before data transfer.
-- **Docs updated:** ARCHITECTURE §1, §4.2, §5, §6, §8 and §11; SECURITY §6; TECH_STACK §4, §5 and §6; ROADMAP M1, M6 and its risk table; PRD §5; AGENTS.md §1; LAB_NOTES' watch list; the spike's README; ADR-0008's status; the ADR index, whose template gains "Superseded in part".
+- **Docs updated:** ARCHITECTURE §1, §4.2, §5, §6, §8 and §11; SECURITY §6; TECH_STACK §4, §5 and §6; ROADMAP M1, M6 and its risk table; PRD §4, §5 and §8; TESTING §1 and §5; AGENTS.md §1; LAB_NOTES' watch list; the spike's README; ADR-0008's status; the ADR index, whose template gains "Superseded in part".
 
 ## Evidence
 Run from the repository root. `R` holds the rows; `T` holds three helpers: ISO 8601 timestamps with an offset in seconds, a median, and rounding.
