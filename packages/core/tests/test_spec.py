@@ -201,6 +201,12 @@ def test_start_url_may_carry_a_query_and_a_fragment(tmp_path: Path) -> None:
         ),
         (
             "start_url: /login",
+            "start_url: /%2E%2e/login",
+            "preconditions.start_url",
+            "not a path",
+        ),
+        (
+            "start_url: /login",
             "start_url: /app//login",
             "preconditions.start_url",
             "not a path",
