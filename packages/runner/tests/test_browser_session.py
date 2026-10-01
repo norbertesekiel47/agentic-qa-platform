@@ -116,22 +116,29 @@ def test_browser_environment_holds_none_of_the_runners_secrets(
     for name in RUNNER_SECRETS:
         monkeypatch.setenv(name, fake_value(name))
 
-    async def scenario() -> list[tuple[str, str]]:
+    async def scenario() -> tuple[list[tuple[str, str]], list[str]]:
         async with (
             async_playwright() as playwright,
-            open_browser_session(FarZoneChromium(playwright.chromium)) as session,
+            # Launched as every run launches it.
+            open_browser_session(playwright.chromium) as session,
+            # The control: launched with one variable, which must be readable.
+            open_browser_session(FarZoneChromium(playwright.chromium)) as control,
         ):
-            return [
-                (kind, environment_of(pid))
-                for kind, pid in await chromium_processes(session)
-            ]
+            processes = await chromium_processes(session)
+            control_processes = await chromium_processes(control)
+            return (
+                [(kind, environment_of(pid)) for kind, pid in processes],
+                [
+                    environment_of(pid)
+                    for kind, pid in control_processes
+                    if kind == "browser"
+                ],
+            )
 
-    environments = asyncio.run(scenario())
+    environments, [control] = asyncio.run(scenario())
 
+    assert f"TZ={HOST_ZONE}" in control
     assert {"browser", "renderer"} <= {kind for kind, _ in environments}
-    # The control: the one variable the launch was given is there to read.
-    [browser] = [environment for kind, environment in environments if kind == "browser"]
-    assert f"TZ={HOST_ZONE}" in browser
     leaks = [
         (kind, name)
         for kind, environment in environments
@@ -601,6 +608,23 @@ def test_ref_into_a_document_or_frame_that_has_gone_is_refused() -> None:
 
     for error in asyncio.run(scenario()):
         assert "has left the page" in str(error), str(error)
+
+
+def test_ref_on_a_closed_page_is_not_blamed_on_the_ref() -> None:
+    async def scenario() -> Error:
+        async with (
+            async_playwright() as playwright,
+            open_browser_session(playwright.chromium) as session,
+        ):
+            await session.page.set_content(REFS_PAGE)
+            save = ref_for(await session.snapshot(), "button", "Save")
+            await session.page.close()
+            # Playwright's own error, not a RefError, which isn't one.
+            with pytest.raises(Error) as closed:
+                await session.locate(save)
+            return closed.value
+
+    assert "closed" in str(asyncio.run(scenario()))
 
 
 def test_located_element_never_becomes_another() -> None:

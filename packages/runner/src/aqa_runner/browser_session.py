@@ -92,9 +92,11 @@ class BrowserSession:
                 # behavior on 1.63.
                 found = await self.page.query_selector(f"aria-ref={playwright_ref}")
             except Error as error:
-                # Playwright's one error type: here, a ref whose frame has gone
-                # ("Invalid frame in aria-ref selector"), as the main frame's
-                # does when it leaves a page that isn't about:blank.
+                if self.page.is_closed():
+                    raise  # the page itself has gone, not the ref's element
+                # Playwright's general error type: here, a ref whose frame has
+                # gone ("Invalid frame in aria-ref selector"), as the main
+                # frame's does when it leaves a page that isn't about:blank.
                 raise gone from error
         if found is None:
             raise gone
