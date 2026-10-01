@@ -19,7 +19,7 @@ from aqa_hosted_chromium_spike.trial import (
     peak_memory,
     run_trial,
 )
-from aqa_runner.sandbox import SandboxUnavailableError
+from aqa_runner.sandbox import Environment, SandboxUnavailableError
 from playwright.async_api import Browser, BrowserType, Error, async_playwright
 
 BOOT_ID = "8c0e4c6a-6a3c-4a8e-9d0c-3f1b7e2a5d10"
@@ -72,11 +72,9 @@ class FailingChromium:
     def __init__(self, error: Exception) -> None:
         self.error = error
         self.requested: list[bool] = []
-        self.environments: list[dict[str, str | float | bool]] = []
+        self.environments: list[Environment] = []
 
-    async def launch(
-        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
-    ) -> Browser:
+    async def launch(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
         self.requested.append(chromium_sandbox)
         self.environments.append(env)
         raise self.error
@@ -95,9 +93,7 @@ class DelayedChromium:
         self.delay = delay
         self.requested: list[bool] = []
 
-    async def launch(
-        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
-    ) -> Browser:
+    async def launch(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
         self.requested.append(chromium_sandbox)
         await asyncio.sleep(self.delay)
         return await self.chromium.launch(chromium_sandbox=chromium_sandbox, env=env)
@@ -254,9 +250,7 @@ class SwellingChromium(FailingChromium):
         super().__init__(SandboxUnavailableError(REFUSED))
         self.proc = proc
 
-    async def launch(
-        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
-    ) -> Browser:
+    async def launch(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
         set_process(self.proc, os.getpid(), 1, 999_999)
         await asyncio.sleep(4 * SAMPLE_SECONDS)
         set_process(self.proc, os.getpid(), 1, 512)
@@ -278,9 +272,7 @@ class LingeringChromium(FailingChromium):
         self.proc = proc
         self.lingering: list[asyncio.Task[None]] = []
 
-    async def launch(
-        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
-    ) -> Browser:
+    async def launch(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
         self.lingering.append(asyncio.create_task(self.linger()))
         return await super().launch(chromium_sandbox=chromium_sandbox, env=env)
 

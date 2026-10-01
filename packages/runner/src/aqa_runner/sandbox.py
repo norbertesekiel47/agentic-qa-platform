@@ -128,12 +128,14 @@ class SandboxUnavailableError(RuntimeError):
     exit_code = 10
 
 
+# The environment variables a launch gives the browser, in Playwright's type.
+type Environment = dict[str, str | float | bool]
+
+
 class Chromium(Protocol):
     """The part of Playwright's `BrowserType` that `launch` uses."""
 
-    async def launch(
-        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
-    ) -> Browser: ...
+    async def launch(self, *, chromium_sandbox: bool, env: Environment) -> Browser: ...
 
 
 async def launch(chromium: Chromium) -> Browser:
