@@ -3,7 +3,7 @@
 Docker is faked here. The real stack is exercised by `flags.py selftest`,
 whose output is the evidence in the pull request that added it.
 
-Run: python3 -m unittest discover -s bench/harness
+Run: uv run python -m unittest discover -s bench/harness
 """
 
 from __future__ import annotations

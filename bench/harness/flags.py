@@ -8,10 +8,10 @@ Switching doesn't rebuild images: after changing app code, run
 `docker compose build` in the app's directory first.
 
 Run:
-  python3 bench/harness/flags.py set conduit-bug-001
-  python3 bench/harness/flags.py clean conduit
-  python3 bench/harness/flags.py show conduit
-  python3 bench/harness/flags.py selftest conduit --cycles 10
+  uv run python bench/harness/flags.py set conduit-bug-001
+  uv run python bench/harness/flags.py clean conduit
+  uv run python bench/harness/flags.py show conduit
+  uv run python bench/harness/flags.py selftest conduit --cycles 10
 """
 
 from __future__ import annotations

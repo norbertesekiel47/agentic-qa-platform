@@ -9,7 +9,7 @@ The run ends on the clean app. The checks (toggle_checks.py) run in the checks
 image (checks.Dockerfile) on the app's Compose network, as a non-root user
 with Chromium's sandbox on.
 
-Run: python3 bench/harness/toggle.py conduit [--cycles N] [--case CASE_ID ...]
+Run: uv run python bench/harness/toggle.py conduit [--cycles N] [--case CASE_ID ...]
 """
 
 from __future__ import annotations

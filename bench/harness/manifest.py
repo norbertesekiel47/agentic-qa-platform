@@ -2,9 +2,9 @@
 
 Validates the manifest against the format in DATA_MODEL.md §8, checks the
 split-freeze hash (TESTING.md §5) and loads typed cases for the harness.
-Standard library only, so a bare python3 runs it (bench/README.md).
+Spec files are read with aqa_core's spec parser, so it runs in the workspace.
 
-Run: python3 bench/harness/manifest.py [--root DIR] [--split-hash]
+Run: uv run python bench/harness/manifest.py [--root DIR] [--split-hash]
 """
 
 from __future__ import annotations
@@ -18,6 +18,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from aqa_core.project import SpecError, load_config, load_spec
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = Path("bench/manifest.v1.json")
@@ -52,12 +54,6 @@ CASE_REQUIRED = ("app", "kind", "split", "family", "flag", "summary", "expected"
 CASE_OPTIONAL = ("category",)
 ENTRY_REQUIRED = ("spec", "verdict")
 ENTRY_OPTIONAL = ("expect", "invariants")
-
-# Spec files (DATA_MODEL.md §6) start with YAML front matter. With no YAML parser
-# before M1, spec_front_matter relies on that section's layout: top-level keys at
-# column 0, and each expectation a "  - " line two spaces in.
-FRONT_MATTER = re.compile(r"\A---\n(.*?)\n---(?:\n|\Z)", re.DOTALL)
-TOP_LEVEL_KEY = re.compile(r"[A-Za-z_][\w-]*:")
 
 
 @dataclass(frozen=True)
@@ -156,25 +152,6 @@ def _one_of(
     return [f"{where}: {key} '{value}' is not one of {', '.join(allowed)}"]
 
 
-def spec_front_matter(text: str) -> tuple[str | None, int | None]:
-    """A spec file's id and its number of expectations (None where absent)."""
-    match = FRONT_MATTER.match(text)
-    if match is None:
-        return None, None
-    spec_id: str | None = None
-    has_expect, count, in_expect = False, 0, False
-    for line in match[1].splitlines():
-        if TOP_LEVEL_KEY.match(line):
-            key, _, value = line.partition(":")
-            in_expect = key == "expect"
-            has_expect = has_expect or in_expect
-            if key == "id":
-                spec_id = value.strip()
-        elif in_expect and line.startswith("  - "):
-            count += 1
-    return spec_id, (count if has_expect else None)
-
-
 def _valid_invariants(value: object) -> bool:
     if not isinstance(value, list) or not value:
         return False
@@ -189,21 +166,20 @@ def _check_spec_file(
     path = root / spec_file
     if not path.is_file():
         return [f"{where}: no spec file {spec_file}"]
-    spec_id, count = spec_front_matter(path.read_text())
-    errors: list[str] = []
-    if spec_id != spec:
-        errors.append(
-            f"{where}: {spec_file}: id '{spec_id}' does not match the file name"
+    # The app's qa/ directory is its spec root (DATA_MODEL.md §9).
+    try:
+        count = len(
+            load_spec(path, load_config(path.parent / "config.yaml")).frontmatter.expect
         )
-    if count is None:
-        return [*errors, f"{where}: {spec_file}: no expect list in its front matter"]
-    if isinstance(expect, list) and _valid_indexes(expect):
-        errors.extend(
-            f"{where}: expect index {i} is out of range: spec '{spec}' has {count} expectations"
-            for i in expect
-            if i >= count
-        )
-    return errors
+    except SpecError as error:
+        return [f"{where}: {problem}" for problem in error.problems]
+    if not (isinstance(expect, list) and _valid_indexes(expect)):
+        return []
+    return [
+        f"{where}: expect index {i} is out of range: spec '{spec}' has {count} expectations"
+        for i in expect
+        if i >= count
+    ]
 
 
 def _valid_indexes(value: object) -> bool:
