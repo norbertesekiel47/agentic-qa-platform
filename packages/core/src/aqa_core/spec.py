@@ -6,7 +6,7 @@ import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Self, TypedDict, cast
 
 from pydantic import (
     AfterValidator,
@@ -14,20 +14,38 @@ from pydantic import (
     PlainValidator,
     StrictBool,
     StrictStr,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
 
 from aqa_core.browser import BrowserOverrides
 from aqa_core.schema import (
-    Items,
+    AtLeastOne,
+    DistinctListOf,
     ListOf,
     NonEmpty,
-    NotEmpty,
     Origin,
     SecretName,
     StrictModel,
 )
+
+
+class SpecContext(TypedDict):
+    """What checking a spec needs beyond its frontmatter. Checked during
+    validation, so every problem is reported together."""
+
+    # The spec's file name without `.spec.md`, which its id must equal.
+    file_id: str
+    # The secrets the project config declares; None when the config itself is
+    # invalid, so no reference can be checked against it.
+    declared_secrets: frozenset[str] | None
+
+
+def _context(info: ValidationInfo) -> SpecContext:
+    if info.context is None:
+        raise TypeError("a spec is validated with a SpecContext: use load_spec")
+    return cast(SpecContext, info.context)
 
 
 class SecretReference(StrictModel):
@@ -35,15 +53,24 @@ class SecretReference(StrictModel):
 
     secret: SecretName
 
+    @field_validator("secret")
+    @classmethod
+    def _declared(cls, name: str, info: ValidationInfo) -> str:
+        declared = _context(info)["declared_secrets"]
+        if declared is not None and name not in declared:
+            raise ValueError(
+                f"secret {name} is not declared in the project config's secrets"
+            )
+        return name
 
-def _credential(value: object) -> str | SecretReference:
+
+def _credential(value: object, info: ValidationInfo) -> str | SecretReference:
     if isinstance(value, str):
         return value
     if isinstance(value, dict):
-        return SecretReference.model_validate(value)
-    raise ValueError(
-        f"{value!r} is not an account value: write a string, or {{ secret: NAME }}"
-    )
+        return SecretReference.model_validate(value, context=info.context)
+    # Never the value itself: an unquoted password would land in a CI log.
+    raise ValueError("must be a string, or { secret: NAME }")
 
 
 _Credential = Annotated[str | SecretReference, PlainValidator(_credential)]
@@ -68,10 +95,19 @@ _PATH = re.compile(r"/(?![/\\])[^\s\x00-\x1f\x7f\\]*")
 
 
 def _start_url(text: str) -> str:
-    if not _PATH.fullmatch(text):
+    # The path's segments as a browser resolves them, where %2e is a dot: an
+    # empty, `.` or `..` segment can leave a path that starts `//`, such as
+    # /..//evil.test.
+    path = re.split(r"[?#]", text, maxsplit=1)[0]
+    segments = path.lower().replace("%2e", ".").split("/")[1:]
+    if (
+        not _PATH.fullmatch(text)
+        or "" in segments[:-1]
+        or not {".", ".."}.isdisjoint(segments)
+    ):
         raise ValueError(
-            f"'{text}' is not a path: start_url is a path such as /login, and the "
-            "origin comes from the run (ADR-0026)"
+            f"'{text}' is not a path: start_url is a path such as /login, with no "
+            "empty, . or .. segment, and the origin comes from the run (ADR-0026)"
         )
     return text
 
@@ -115,7 +151,7 @@ class Invariants(StrictModel):
     """Every invariant applies unless the spec turns it off (DATA_MODEL §6)."""
 
     inherit: StrictBool = True
-    disable: Items[InvariantName] = ()
+    disable: DistinctListOf[InvariantName] = ()
 
     @model_validator(mode="after")
     def _disable_needs_inherit(self) -> Self:
@@ -133,11 +169,22 @@ class SpecFrontmatter(StrictModel):
     goal: NonEmpty
     preconditions: Preconditions
     steps: ListOf[NonEmpty] = ()
-    expect: Annotated[ListOf[Expectation], NotEmpty]
+    expect: Annotated[ListOf[Expectation], AtLeastOne]
     invariants: Invariants = Invariants()
-    allowed_origins: Items[Origin] = ()
+    allowed_origins: DistinctListOf[Origin] = ()
     browser: BrowserOverrides = BrowserOverrides()
-    tags: Items[NonEmpty] = ()
+    tags: DistinctListOf[NonEmpty] = ()
+
+    @field_validator("id")
+    @classmethod
+    def _is_the_file_name(cls, spec_id: str, info: ValidationInfo) -> str:
+        file_id = _context(info)["file_id"]
+        if spec_id != file_id:
+            raise ValueError(
+                f"'{spec_id}' doesn't match the file name: a spec's id is its file "
+                f"name without .spec.md, here '{file_id}'"
+            )
+        return spec_id
 
 
 @dataclass(frozen=True)
@@ -155,7 +202,7 @@ def secret_references(frontmatter: SpecFrontmatter) -> Iterator[tuple[str, str]]
     account = frontmatter.preconditions.account
     if account is None:
         return
-    for key, value in (("email", account.email), ("password", account.password)):
+    for key, value in account:
         if isinstance(value, SecretReference):
             yield f"preconditions.account.{key}", value.secret
 

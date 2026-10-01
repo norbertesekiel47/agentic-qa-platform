@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from aqa_core.config import ProjectConfig
 from aqa_core.project import SpecError, load_spec
-from aqa_core.spec import SecretReference
+from aqa_core.spec import SecretReference, secret_references
 
 CONFIG = ProjectConfig.model_validate(
     {"secrets": {"TEST_PASSWORD": {"origins": ["start"], "field": "password"}}}
@@ -73,9 +73,10 @@ def test_a_valid_spec_loads(tmp_path: Path) -> None:
     assert spec.preconditions.start_url == "/login"
     assert spec.preconditions.account is not None
     # A reference by name; the value comes from AQA_SECRET_TEST_PASSWORD.
-    assert spec.preconditions.account.password == SecretReference.model_validate(
-        {"secret": "TEST_PASSWORD"}
-    )
+    assert isinstance(spec.preconditions.account.password, SecretReference)
+    assert list(secret_references(spec)) == [
+        ("preconditions.account.password", "TEST_PASSWORD")
+    ]
     assert [(e.text, e.visual) for e in spec.expect] == [
         ("The home page is shown", "deterministic")
     ]
@@ -180,17 +181,41 @@ def test_start_url_may_carry_a_query_and_a_fragment(tmp_path: Path) -> None:
             "not a path",
         ),
         ("start_url: /login", "start_url: ''", "preconditions.start_url", "not a path"),
+        (
+            "start_url: /login",
+            "start_url: /..//evil.test",
+            "preconditions.start_url",
+            "not a path",
+        ),
+        (
+            "start_url: /login",
+            "start_url: /.//evil.test",
+            "preconditions.start_url",
+            "not a path",
+        ),
+        (
+            "start_url: /login",
+            "start_url: /%2e%2E//evil.test",
+            "preconditions.start_url",
+            "not a path",
+        ),
+        (
+            "start_url: /login",
+            "start_url: /app//login",
+            "preconditions.start_url",
+            "not a path",
+        ),
         # Test secrets: declared in the project config, named as it names them.
         (
             "{ secret: TEST_PASSWORD }",
             "{ secret: API_TOKEN }",
-            "preconditions.account.password",
+            "preconditions.account.password.secret",
             "API_TOKEN is not declared",
         ),
         (
             "email: reader@conduit.test",
             "email: { secret: TEST_EMAIL }",
-            "preconditions.account.email",
+            "preconditions.account.email.secret",
             "TEST_EMAIL is not declared",
         ),
         (
@@ -203,7 +228,7 @@ def test_start_url_may_carry_a_query_and_a_fragment(tmp_path: Path) -> None:
             "{ secret: TEST_PASSWORD }",
             "[TEST_PASSWORD]",
             "preconditions.account.password",
-            "write a string, or { secret: NAME }",
+            "must be a string, or { secret: NAME }",
         ),
         # Expectations: visual: model is a spec error in M1 (ADR-0024).
         (
@@ -270,7 +295,20 @@ def test_start_url_may_carry_a_query_and_a_fragment(tmp_path: Path) -> None:
             "allowed_origins[0]",
             "not an origin",
         ),
-        ("goal:", "steps: Sign in\ngoal:", "steps", "valid tuple"),
+        ("goal:", "steps: Sign in\ngoal:", "steps", "must be a list"),
+        (
+            "  account: { email: reader@conduit.test, password: { secret: TEST_PASSWORD } }\n",
+            "  account: reader\n",
+            "preconditions.account",
+            "must be a mapping of keys",
+        ),
+        # M11: allowed origins are distinct.
+        (
+            "goal:",
+            "allowed_origins: [https://pay.test, 'HTTPS://Pay.test/']\ngoal:",
+            "allowed_origins",
+            "https://pay.test twice",
+        ),
         ("goal:", "tags: [1]\ngoal:", "tags[0]", "valid string"),
         (
             "  start_url: /login\n",
@@ -282,7 +320,7 @@ def test_start_url_may_carry_a_query_and_a_fragment(tmp_path: Path) -> None:
             "  start_url: /login\n",
             "  start_url: /login\n  reset: POST /reset\n",
             "preconditions.reset",
-            "valid dictionary",
+            "must be a mapping of keys",
         ),
     ],
 )
@@ -306,6 +344,26 @@ def test_an_invalid_expectation_is_reported_once(tmp_path: Path) -> None:
     assert [line.split(": ")[1] for line in problems_for(path)] == ["expect[0]"]
 
 
+def test_an_account_value_error_never_repeats_the_value(tmp_path: Path) -> None:
+    path = write(tmp_path, LOGIN.replace("{ secret: TEST_PASSWORD }", "12345678"))
+
+    assert problems_for(path) == (
+        f"{path}: preconditions.account.password: must be a string, or {{ secret: NAME }}",
+    )
+
+
+def test_a_start_url_problem_reads_in_full(tmp_path: Path) -> None:
+    path = write(tmp_path, LOGIN.replace("start_url: /login", "start_url: login"))
+
+    assert problems_for(path) == (
+        (
+            f"{path}: preconditions.start_url: 'login' is not a path: start_url is a "
+            "path such as /login, with no empty, . or .. segment, and the origin "
+            "comes from the run (ADR-0026)"
+        ),
+    )
+
+
 def test_the_id_must_be_the_file_name_without_its_suffix(tmp_path: Path) -> None:
     path = write(tmp_path, LOGIN, name="sign-in")
 
@@ -318,9 +376,16 @@ def test_the_id_must_be_the_file_name_without_its_suffix(tmp_path: Path) -> None
 
 
 def test_every_problem_in_the_spec_is_reported_together(tmp_path: Path) -> None:
-    path = write(tmp_path, LOGIN.replace("goal:", "owner: qa\ngoal:"), name="sign-in")
+    text = LOGIN.replace("goal:", "owner: qa\ngoal:").replace(
+        "TEST_PASSWORD", "API_TOKEN"
+    )
+    path = write(tmp_path, text, name="sign-in")
 
-    assert [line.split(": ")[1] for line in problems_for(path)] == ["id", "owner"]
+    assert {line.split(": ")[1] for line in problems_for(path)} == {
+        "id",
+        "owner",
+        "preconditions.account.password.secret",
+    }
 
 
 @pytest.mark.parametrize(
@@ -334,6 +399,10 @@ def test_every_problem_in_the_spec_is_reported_together(tmp_path: Path) -> None:
             "---\nid: login\n",
             "a spec starts with its frontmatter between two --- lines",
         ),
+        (
+            "Notes first.\n---\n" + LOGIN + "---\n",
+            "a spec starts with its frontmatter between two --- lines",
+        ),
         ("---\n- id\n---\n", "the frontmatter must be a mapping of keys"),
         ("---\n---\n", "the frontmatter must be a mapping of keys"),
     ],
@@ -345,6 +414,42 @@ def test_a_spec_without_frontmatter_is_rejected(
     path.write_text(text)
 
     assert problems_for(path) == (f"{path}: {problem}",)
+
+
+def test_a_rule_in_the_body_is_not_frontmatter(tmp_path: Path) -> None:
+    path = write(tmp_path, LOGIN, body="Notes.\n\n---\n\nMore notes.\n")
+
+    assert load_spec(path, CONFIG).frontmatter.id == "login"
+
+
+def test_inherit_false_turns_every_invariant_off(tmp_path: Path) -> None:
+    path = write(tmp_path, LOGIN + "invariants: { inherit: false }\n")
+
+    invariants = load_spec(path, CONFIG).frontmatter.invariants
+
+    assert (invariants.inherit, invariants.disable) == (False, ())
+
+
+def test_a_trailing_slash_is_part_of_a_path(tmp_path: Path) -> None:
+    path = write(tmp_path, LOGIN.replace("start_url: /login", "start_url: /login/"))
+
+    assert load_spec(path, CONFIG).frontmatter.preconditions.start_url == "/login/"
+
+
+def test_a_spec_that_is_not_utf8_is_a_spec_error(tmp_path: Path) -> None:
+    path = tmp_path / "login.spec.md"
+    path.write_bytes(
+        ("---\n" + LOGIN + "---\n").replace("reader", "caf\xe9").encode("latin-1")
+    )
+
+    assert problems_for(path) == (f"{path}: not UTF-8 text",)
+
+
+def test_a_spec_saved_with_a_byte_order_mark_loads(tmp_path: Path) -> None:
+    path = tmp_path / "login.spec.md"
+    path.write_text("\ufeff---\n" + LOGIN + "---\n", encoding="utf-8")
+
+    assert load_spec(path, CONFIG).frontmatter.id == "login"
 
 
 def test_a_duplicate_key_names_its_line_in_the_file(tmp_path: Path) -> None:
@@ -383,11 +488,21 @@ def test_spec_hash_ignores_tags_the_body_and_key_order(tmp_path: Path) -> None:
     assert load_spec(changed, CONFIG).spec_hash == first
 
 
-def test_spec_hash_changes_with_any_other_frontmatter_edit(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("signs in.", "signs in again."),
+        ("start_url: /login", "start_url: /login?next=%2F"),
+        ("The home page is shown", "The home page is shown at once"),
+        ("expect:", "steps: [Sign in]\nexpect:"),
+        ("expect:", "invariants: { disable: [http_5xx] }\nexpect:"),
+    ],
+)
+def test_spec_hash_changes_with_any_other_frontmatter_edit(
+    tmp_path: Path, old: str, new: str
+) -> None:
     before = load_spec(write(tmp_path, LOGIN), CONFIG).spec_hash
 
-    after = load_spec(
-        write(tmp_path, LOGIN.replace("signs in.", "signs in again.")), CONFIG
-    )
+    after = load_spec(write(tmp_path, LOGIN.replace(old, new, 1)), CONFIG)
 
     assert after.spec_hash != before

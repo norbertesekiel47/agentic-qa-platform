@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from aqa_core.config import RoleField
 from aqa_core.project import SpecError, load_config
+from pydantic import ValidationError
 
 # DATA_MODEL §9's example, verbatim.
 EXAMPLE = """\
@@ -126,11 +127,29 @@ def test_base_url_is_stored_as_a_normalized_origin(
         ("base_url: 'http://[fe80::1%25eth0]'\n", "base_url", "not an origin"),
         ("base_url: http://127.000.000.001\n", "base_url", "not an origin"),
         ("base_url: 'http://a b.test'\n", "base_url", "not an origin"),
+        # A browser reads a hex last label as IPv4: 0x7f000001 is 127.0.0.1.
+        ("base_url: http://0x7f000001\n", "base_url", "not an origin"),
+        ("base_url: http://127.0x1\n", "base_url", "not an origin"),
+        ("base_url: http://example.0x10\n", "base_url", "not an origin"),
+        ("base_url: 'http://[::ffff:127.0.0.1]'\n", "base_url", "not an origin"),
+        # A bracketed host that isn't IPv6 would lose its brackets.
+        ("base_url: 'https://[v1.attacker.example]'\n", "base_url", "not an origin"),
+        ("base_url: http://-a.test\n", "base_url", "not an origin"),
         ("base_url: 4100\n", "base_url", "valid string"),
         # Secret bindings.
         (
             "secrets: { test-password: " + BINDING + " }\n",
             "secrets.test-password",
+            "not a secret name",
+        ),
+        (
+            "secrets: { TEST-PASSWORD: " + BINDING + " }\n",
+            "secrets.TEST-PASSWORD",
+            "not a secret name",
+        ),
+        (
+            "secrets: { test_password: " + BINDING + " }\n",
+            "secrets.test_password",
             "not a secret name",
         ),
         (
@@ -156,7 +175,13 @@ def test_base_url_is_stored_as_a_normalized_origin(
         (
             "secrets: { A: { origins: start, field: password } }\n",
             "secrets.A.origins",
-            "valid tuple",
+            "must be a list",
+        ),
+        ("secrets: { A: start }\n", "secrets.A", "must be a mapping of keys"),
+        (
+            "secrets: { A: { origins: [start], field: 3 } }\n",
+            "secrets.A.field",
+            "password, or a role and an accessible name",
         ),
         (
             "secrets: { A: { origins: [start], field: email } }\n",
@@ -183,6 +208,21 @@ def test_base_url_is_stored_as_a_normalized_origin(
         (
             "egress: { expected_blocked: ['stats.test:443'] }\n",
             "egress.expected_blocked[0]",
+            "not a host",
+        ),
+        (
+            "egress: { subresource_hosts: ['[127.0.0.1]'] }\n",
+            "egress.subresource_hosts[0]",
+            "not a host",
+        ),
+        (
+            "egress: { subresource_hosts: ['[fonts.test]'] }\n",
+            "egress.subresource_hosts[0]",
+            "not a host",
+        ),
+        (
+            "egress: { subresource_hosts: [0x7f000001] }\n",
+            "egress.subresource_hosts[0]",
             "not a host",
         ),
         (
@@ -215,6 +255,11 @@ def test_base_url_is_stored_as_a_normalized_origin(
             "models: { m: { capabilities: [vision], input_usd_per_mtok: -1, output_usd_per_mtok: 1 } }\n",
             "models.m.input_usd_per_mtok",
             "greater than or equal to 0",
+        ),
+        (
+            "roles: { navigator: { model: '' } }\n",
+            "roles.navigator.model",
+            "at least 1 character",
         ),
         ("budgets: { attempts: 0 }\n", "budgets.attempts", "greater than 0"),
         ("budgets: { attempts: true }\n", "budgets.attempts", "valid integer"),
@@ -265,6 +310,20 @@ def test_an_invalid_config_names_the_file_the_key_and_the_problem(
         ("budgets: &b { attempts: 3 }\nroles: *b\n", 1, "aliases"),
         ("budgets: { attempts: !!int '3' }\n", 1, "tags"),
         ("browser: [\n", 2, "expected"),
+        # A tag on a collection: refused, never read as a plain mapping or list.
+        ("browser: !!set {timezone}\n", 1, "tags"),
+        ("browser: !custom {timezone: UTC}\n", 1, "tags"),
+        ("browser: !!null {timezone: UTC}\n", 1, "tags"),
+        ("browser: !!map [UTC]\n", 1, "tags"),
+        ("browser: !!bool [x]\n", 1, "tags"),
+        ("budgets: { attempts: !!int {a: 1} }\n", 1, "tags"),
+        # Characters YAML refuses, and a number Python won't read.
+        (
+            "budgets:\n  attempts: 3\nbase_url: 'http://a.test\x1b'\n",
+            3,
+            "unacceptable character",
+        ),
+        ("budgets: { attempts: " + "9" * 5000 + " }\n", 1, "can't read this int"),
     ],
 )
 def test_invalid_yaml_names_the_file_and_the_line(
@@ -287,10 +346,10 @@ def test_every_problem_in_the_file_is_reported_together(tmp_path: Path) -> None:
     with pytest.raises(SpecError) as raised:
         load_config(path)
 
-    assert [line.split(": ")[1] for line in raised.value.problems] == [
+    assert {line.split(": ")[1] for line in raised.value.problems} == {
         "base_url",
         "timeout",
-    ]
+    }
 
 
 def test_a_config_that_is_not_a_mapping_is_rejected(tmp_path: Path) -> None:
@@ -318,6 +377,42 @@ def test_a_missing_config_is_a_spec_error(tmp_path: Path) -> None:
 def test_yaml_that_changes_no_value_is_accepted(tmp_path: Path) -> None:
     # ADR-0030: an anchor with no alias, and a tag naming the type a value
     # already has; `no` stays Norwegian's language tag.
-    path = write(tmp_path, "browser: &b { locale: !!str no }\n")
+    path = write(
+        tmp_path,
+        "browser: !!map &b { locale: !!str no, viewport: !!seq [800, 600] }\n",
+    )
 
     assert load_config(path).browser.locale == "no"
+
+
+def test_integers_are_decimal(tmp_path: Path) -> None:
+    # YAML 1.1 reads 017 as octal 15 (ADR-0030).
+    path = write(tmp_path, "budgets: { attempts: 017 }\n")
+
+    assert load_config(path).budgets.attempts == 17
+
+
+def test_yaml_nested_too_deeply_is_a_spec_error(tmp_path: Path) -> None:
+    path = write(tmp_path, "browser: " + "[" * 5000 + "]" * 5000 + "\n")
+
+    with pytest.raises(SpecError) as raised:
+        load_config(path)
+
+    assert raised.value.problems == (f"{path}: nested too deeply",)
+
+
+def test_a_config_that_is_not_utf8_is_a_spec_error(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_bytes(b"roles: { navigator: { model: caf\xe9 } }\n")
+
+    with pytest.raises(SpecError) as raised:
+        load_config(path)
+
+    assert raised.value.problems == (f"{path}: not UTF-8 text",)
+
+
+def test_a_loaded_config_cannot_be_changed(tmp_path: Path) -> None:
+    config = load_config(write(tmp_path, "base_url: http://127.0.0.1:4100\n"))
+
+    with pytest.raises(ValidationError):
+        config.base_url = "https://elsewhere.example.test"
