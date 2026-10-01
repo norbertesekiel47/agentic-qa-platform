@@ -170,14 +170,18 @@ class RecordingChromium:
         self.requested: list[bool] = []
         self.launched: list[Browser] = []
 
-    async def launch(self, *, chromium_sandbox: bool) -> Browser:
+    async def launch(
+        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
+    ) -> Browser:
         self.requested.append(chromium_sandbox)
-        browser = await self.start(chromium_sandbox=chromium_sandbox)
+        browser = await self.start(chromium_sandbox=chromium_sandbox, env=env)
         self.launched.append(browser)
         return browser
 
-    async def start(self, *, chromium_sandbox: bool) -> Browser:
-        return await self.chromium.launch(chromium_sandbox=chromium_sandbox)
+    async def start(
+        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
+    ) -> Browser:
+        return await self.chromium.launch(chromium_sandbox=chromium_sandbox, env=env)
 
 
 class UnsandboxedChromium(RecordingChromium):
@@ -185,9 +189,12 @@ class UnsandboxedChromium(RecordingChromium):
     sandbox ends up off, `launch` must refuse the browser."""
 
     @override
-    async def start(self, *, chromium_sandbox: bool) -> Browser:
+    async def start(
+        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
+    ) -> Browser:
         return await self.chromium.launch(
             chromium_sandbox=False,  # ADR-0026: a negative control for launch
+            env=env,
         )
 
 
@@ -305,9 +312,13 @@ class FailingChromium:
     def __init__(self, message: str) -> None:
         self.message = message
         self.requested: list[bool] = []
+        self.environments: list[dict[str, str | float | bool]] = []
 
-    async def launch(self, *, chromium_sandbox: bool) -> Browser:
+    async def launch(
+        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
+    ) -> Browser:
         self.requested.append(chromium_sandbox)
+        self.environments.append(env)
         raise Error(self.message)
 
 
@@ -318,6 +329,7 @@ def test_launch_that_cannot_start_the_sandbox_names_the_host_fix() -> None:
         asyncio.run(launch(chromium))
 
     assert chromium.requested == [True]
+    assert chromium.environments == [{}], "launch passed the browser an environment"
     assert refused.value.exit_code >= 10  # an infrastructure error (API.md §7)
     assert HOST_FIX_ON["linux"] in str(refused.value), str(refused.value)
 
