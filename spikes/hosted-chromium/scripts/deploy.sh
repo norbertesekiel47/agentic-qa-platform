@@ -124,7 +124,7 @@ deploy_fargate() {
   fi
   # No inbound rule: the task only reaches out, to pull its image and to log.
   aws ec2 create-security-group --group-name "$NAME" --vpc-id "$vpc" \
-    --description "The hosted-compute spike's Fargate task: no inbound traffic" \
+    --description "The hosted-compute spike Fargate task: no inbound traffic" \
     --tag-specifications "ResourceType=security-group,Tags=[{Key=$TAG_KEY,Value=$TAG_VALUE}]" \
     > /dev/null
   # The task gets no task role, so its container holds no AWS credentials. Its

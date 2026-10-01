@@ -1,6 +1,8 @@
 """The spike's budget.sh and deploy.sh, in the dry run (dry_run.py): the budget
 alarm comes before any other resource, and a deploy stops where it fails."""
 
+import re
+
 import pytest
 from dry_run import (
     CANDIDATES,
@@ -170,6 +172,19 @@ def test_a_microvm_deploy_creates_its_bucket_in_the_spikes_region(
     [call] = calls_of(dry_run.calls, "s3api", "create-bucket")
     assert option(call, "--create-bucket-configuration") == (
         "LocationConstraint=us-east-2"
+    )
+
+
+def test_the_fargate_security_group_description_is_one_ec2_accepts(
+    dry_run: DryRun,
+) -> None:
+    result = dry_run.run("deploy.sh", "fargate", scenario=DEPLOYABLE)
+
+    assert result.returncode == 0, result.stderr
+    # The characters EC2's CreateSecurityGroup error lists as valid.
+    [call] = calls_of(dry_run.calls, "ec2", "create-security-group")
+    assert re.fullmatch(
+        r"[a-zA-Z0-9. _\-:/()#,@\[\]+=&;{}!$*]{1,255}", option(call, "--description")
     )
 
 
