@@ -1,0 +1,500 @@
+"""The browser session every run uses (ADR-0025, ADR-0026). These tests launch
+real Chromium on the OS that runs them: Linux in CI, macOS locally."""
+
+import asyncio
+import re
+import subprocess
+import sys
+import threading
+from collections import Counter
+from collections.abc import Iterator
+from dataclasses import dataclass
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import override
+from urllib.parse import quote
+
+import pytest
+from aqa_core.browser import BrowserSettings
+from aqa_runner.sandbox import SandboxUnavailableError
+from aqa_runner.session import BrowserSession, RefError, open_session
+from playwright.async_api import Browser, BrowserType, Error, async_playwright
+
+# What the runner's own environment may hold and the browser's must not:
+# provider keys, cloud credentials and test secrets (ADR-0026, SECURITY §5).
+RUNNER_SECRETS = [
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AQA_SECRET_TEST_PASSWORD",
+]
+
+
+def fake_value(name: str) -> str:
+    """A fake value for `name` that no real environment holds, so finding it
+    in a process shows where it came from."""
+    return f"fake-{name.lower()}-for-the-environment-test"
+
+
+def environment_of(pid: int) -> str:
+    """A process's environment, as this host reports it."""
+    if sys.platform == "linux":
+        return Path("/proc", str(pid), "environ").read_bytes().decode(errors="replace")
+    # macOS's ps prints the environment after the command line.
+    return subprocess.run(
+        ["ps", "-E", "-ww", "-o", "command=", "-p", str(pid)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
+async def chromium_processes(session: BrowserSession) -> list[tuple[str, int]]:
+    """Each of the session's Chromium processes, by type and PID, from CDP."""
+    browser = session.page.context.browser
+    assert browser is not None
+    cdp = await browser.new_browser_cdp_session()
+    try:
+        info = await cdp.send("SystemInfo.getProcessInfo")
+    finally:
+        await cdp.detach()
+    return [(str(each["type"]), int(each["id"])) for each in info["processInfo"]]
+
+
+def test_environment_reader_sees_a_process_environment() -> None:
+    value = fake_value("AQA_SECRET_CONTROL")
+    with subprocess.Popen(
+        [sys.executable, "-c", "print('ready', flush=True); input()"],
+        env={"AQA_SECRET_CONTROL": value},
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    ) as child:
+        try:
+            assert child.stdout is not None
+            child.stdout.readline()  # the child has exec'd with its own environment
+
+            assert value in environment_of(child.pid)
+        finally:
+            child.kill()
+
+
+def test_browser_environment_holds_none_of_the_runners_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Set before Playwright's driver starts, so the driver inherits them.
+    for name in RUNNER_SECRETS:
+        monkeypatch.setenv(name, fake_value(name))
+
+    async def scenario() -> list[tuple[str, str]]:
+        async with (
+            async_playwright() as playwright,
+            open_session(playwright.chromium) as session,
+        ):
+            return [
+                (kind, environment_of(pid))
+                for kind, pid in await chromium_processes(session)
+            ]
+
+    environments = asyncio.run(scenario())
+
+    assert {"browser", "renderer"} <= {kind for kind, _ in environments}
+    leaks = [
+        (kind, name)
+        for kind, environment in environments
+        for name in RUNNER_SECRETS
+        if fake_value(name) in environment
+    ]
+    assert leaks == []
+
+
+class RecordingChromium:
+    """Real Chromium, launched as `launch` asks, recording each sandbox request."""
+
+    def __init__(self, chromium: BrowserType) -> None:
+        self.chromium = chromium
+        self.requested: list[bool] = []
+
+    async def launch(
+        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
+    ) -> Browser:
+        self.requested.append(chromium_sandbox)
+        return await self.chromium.launch(chromium_sandbox=chromium_sandbox, env=env)
+
+
+# A zone far from UTC (UTC+14), outside the UTC-10 to UTC+13 range where
+# Conduit's seeded dates show correctly (#21).
+HOST_ZONE = "Pacific/Kiritimati"
+
+
+class FarZoneChromium(RecordingChromium):
+    """Real Chromium on a host whose time zone is `HOST_ZONE`, set the way a
+    host sets it: through the browser's environment. CI's runners use UTC, so
+    without this the default-settings test couldn't tell a pin from the host."""
+
+    @override
+    async def launch(
+        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
+    ) -> Browser:
+        return await super().launch(
+            chromium_sandbox=chromium_sandbox, env={**env, "TZ": HOST_ZONE}
+        )
+
+
+# What the page itself reports about the settings it runs under.
+REPORT_SETTINGS = """() => ({
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    locale: navigator.language,
+    viewport: [window.innerWidth, window.innerHeight],
+    device_scale_factor: window.devicePixelRatio,
+    color_scheme: ["light", "dark"].filter(
+        (scheme) => matchMedia(`(prefers-color-scheme: ${scheme})`).matches
+    ),
+})"""
+
+
+def test_session_runs_in_utc_and_the_other_pinned_settings_by_default() -> None:
+    async def scenario() -> tuple[object, object]:
+        async with (
+            async_playwright() as playwright,
+            open_session(FarZoneChromium(playwright.chromium)) as session,
+        ):
+            # The control: a context of the same browser without the pins.
+            browser = session.page.context.browser
+            assert browser is not None
+            unpinned = await (await browser.new_context()).new_page()
+            host_zone = await unpinned.evaluate(
+                "Intl.DateTimeFormat().resolvedOptions().timeZone"
+            )
+            return host_zone, await session.page.evaluate(REPORT_SETTINGS)
+
+    host_zone, reported = asyncio.run(scenario())
+
+    assert host_zone == HOST_ZONE
+    assert reported == {
+        "timezone": "UTC",
+        "locale": "en-US",
+        "viewport": [1280, 800],
+        "device_scale_factor": 1,
+        "color_scheme": ["light"],
+    }
+
+
+def test_explicit_settings_override_each_pinned_setting() -> None:
+    settings = BrowserSettings(
+        timezone="Asia/Tokyo",
+        locale="de-DE",
+        viewport=(1440, 900),
+        device_scale_factor=2,
+        color_scheme="dark",
+    )
+
+    async def scenario() -> object:
+        async with (
+            async_playwright() as playwright,
+            open_session(playwright.chromium, settings=settings) as session,
+        ):
+            return await session.page.evaluate(REPORT_SETTINGS)
+
+    assert asyncio.run(scenario()) == {
+        "timezone": "Asia/Tokyo",
+        "locale": "de-DE",
+        "viewport": [1440, 900],
+        "device_scale_factor": 2,
+        "color_scheme": ["dark"],
+    }
+
+
+def test_session_launches_through_the_sandbox_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> tuple[list[bool], SandboxUnavailableError]:
+        async with async_playwright() as playwright:
+            chromium = RecordingChromium(playwright.chromium)
+            async with open_session(chromium):
+                pass
+            # An OS with no sandbox check: only the check itself refuses it.
+            monkeypatch.setattr(sys, "platform", "win32")
+            try:
+                with pytest.raises(SandboxUnavailableError) as refused:
+                    async with open_session(chromium):
+                        pass
+            finally:
+                monkeypatch.undo()
+            return chromium.requested, refused.value
+
+    requested, error = asyncio.run(scenario())
+
+    assert requested == [True, True], "the session didn't ask for the sandbox"
+    assert "no sandbox check exists for win32" in str(error), str(error)
+
+
+# The fixture site the tests below browse: a page, a resource the HTTP cache
+# may keep for an hour, and an attachment.
+PAGES = {
+    "/": (
+        "text/html",
+        b'<!doctype html><title>Fixture</title><a href="/file.bin">Download</a>',
+        {},
+    ),
+    "/cached.txt": ("text/plain", b"cached", {"Cache-Control": "max-age=3600"}),
+    "/file.bin": (
+        "application/octet-stream",
+        b"attachment",
+        {"Content-Disposition": "attachment; filename=file.bin"},
+    ),
+}
+
+
+@dataclass
+class Site:
+    """The fixture site's address, and how many requests each path got."""
+
+    origin: str
+    hits: Counter[str]
+
+
+@pytest.fixture
+def site() -> Iterator[Site]:
+    hits: Counter[str] = Counter()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            hits[self.path] += 1
+            if self.path not in PAGES:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            content_type, body, headers = PAGES[self.path]
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            for name, value in headers.items():
+                self.send_header(name, value)
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        yield Site(f"http://127.0.0.1:{server.server_port}", hits)
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
+async def browser_pid(session: BrowserSession) -> int:
+    """The PID of the session's browser process."""
+    [pid] = [
+        pid for kind, pid in await chromium_processes(session) if kind == "browser"
+    ]
+    return pid
+
+
+def profile_of(pid: int) -> Path:
+    """The profile directory a browser process runs with, from its command line."""
+    command = subprocess.run(
+        ["ps", "-ww", "-o", "command=", "-p", str(pid)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    found = re.search(r"--user-data-dir=(\S+)", command)
+    assert found is not None, command
+    return Path(found[1])
+
+
+STORE = "document.cookie = 'run=first'; localStorage.setItem('run', 'first')"
+READ_STORAGE = "({cookie: document.cookie, local: localStorage.getItem('run')})"
+FETCH_CACHED = "fetch('/cached.txt').then((response) => response.text())"
+
+
+def test_two_sessions_share_no_profile_storage_or_cache(site: Site) -> None:
+    async def scenario() -> tuple[object, object, int, list[Path]]:
+        async with (
+            async_playwright() as playwright,
+            open_session(playwright.chromium) as first,
+            open_session(playwright.chromium) as second,
+        ):
+            await first.page.goto(site.origin)
+            await first.page.evaluate(STORE)
+            seen_by_first = await first.page.evaluate(READ_STORAGE)
+            for _ in range(2):
+                await first.page.evaluate(FETCH_CACHED)
+            fetched_by_first = site.hits["/cached.txt"]
+
+            await second.page.goto(site.origin)
+            seen_by_second = await second.page.evaluate(READ_STORAGE)
+            await second.page.evaluate(FETCH_CACHED)
+            profiles = [profile_of(await browser_pid(each)) for each in (first, second)]
+        assert fetched_by_first == 1, "the first session's own cache didn't serve it"
+        return seen_by_first, seen_by_second, site.hits["/cached.txt"], profiles
+
+    seen_by_first, seen_by_second, fetched, profiles = asyncio.run(scenario())
+
+    assert seen_by_first == {"cookie": "run=first", "local": "first"}
+    assert seen_by_second == {"cookie": "", "local": None}
+    assert fetched == 2, "the second session's fetch came from the first's cache"
+    assert profiles[0] != profiles[1]
+    assert [profile.exists() for profile in profiles] == [False, False]
+
+
+def test_downloads_are_refused(site: Site) -> None:
+    async def scenario() -> str | None:
+        async with (
+            async_playwright() as playwright,
+            open_session(playwright.chromium) as session,
+        ):
+            await session.page.goto(site.origin)
+            async with session.page.expect_download() as started:
+                await session.page.get_by_role("link", name="Download").click()
+            download = await started.value
+            with pytest.raises(Error):
+                await download.path()
+            return await download.failure()
+
+    assert asyncio.run(scenario()) is not None, "the download was accepted"
+
+
+# Two of each kind of element, so acting on the wrong one shows, and a button
+# in a same-origin frame. Every click is logged on the top-level page.
+REFS_PAGE = """<!doctype html><title>Refs</title>
+<p id="log"></p>
+<button onclick="log.textContent += 'save;'">Save</button>
+<button onclick="log.textContent += 'cancel;'">Cancel</button>
+<label>Name <input id="name"></label>
+<label>Email <input id="email"></label>
+<iframe srcdoc="<button onclick=&quot;parent.log.textContent += 'inner;'&quot;>Inner</button>">
+</iframe>"""
+
+
+def ref_for(snapshot: str, role: str, name: str) -> str:
+    """The ref the snapshot gives the element with `role` and `name`."""
+    found = re.search(rf'- {role} "{re.escape(name)}" \[ref=([^\]]+)\]', snapshot)
+    assert found is not None, snapshot
+    return found[1]
+
+
+def test_refs_act_on_their_elements() -> None:
+    async def scenario() -> tuple[str | None, str, str]:
+        async with (
+            async_playwright() as playwright,
+            open_session(playwright.chromium) as session,
+        ):
+            page = session.page
+            await page.set_content(REFS_PAGE)
+            snapshot = await session.snapshot()
+            await session.locate(ref_for(snapshot, "button", "Cancel")).click()
+            await session.locate(ref_for(snapshot, "textbox", "Email")).fill("a@x.test")
+            await session.locate(ref_for(snapshot, "button", "Inner")).click()
+            return (
+                await page.locator("#log").text_content(),
+                await page.locator("#name").input_value(),
+                await page.locator("#email").input_value(),
+            )
+
+    log, name, email = asyncio.run(scenario())
+
+    assert log == "cancel;inner;"
+    assert (name, email) == ("", "a@x.test")
+
+
+def page_url(html: str) -> str:
+    """A URL whose document is `html`: navigating to it starts a new document."""
+    return "data:text/html," + quote(html)
+
+
+# Playwright numbers its refs afresh in each new document, and a page's first
+# navigation away from about:blank keeps its frame's ref prefix, so these two
+# pages' buttons get the same raw ref (LAB_NOTES, 2026-10-01).
+BEFORE = '<p id="log"></p><button onclick="log.textContent += \'keep;\'">Keep</button>'
+AFTER = (
+    '<p id="log"></p><button onclick="log.textContent += \'publish;\'">Publish</button>'
+)
+
+
+def test_ref_from_an_older_snapshot_is_refused() -> None:
+    async def scenario() -> tuple[str, RefError, RefError, str | None]:
+        async with (
+            async_playwright() as playwright,
+            open_session(playwright.chromium) as session,
+        ):
+            page = session.page
+            await page.set_content(BEFORE)
+            keep = ref_for(await session.snapshot(), "button", "Keep")
+            await page.goto(page_url(AFTER))
+            publish = ref_for(await session.snapshot(), "button", "Publish")
+            with pytest.raises(RefError) as after_navigating:
+                await session.locate(keep).click()
+
+            # A new snapshot of the same page retires the old refs too.
+            current = ref_for(await session.snapshot(), "button", "Publish")
+            with pytest.raises(RefError) as after_resnapshotting:
+                await session.locate(publish).click()
+            await session.locate(current).click()
+            return (
+                keep,
+                after_navigating.value,
+                after_resnapshotting.value,
+                await page.locator("#log").text_content(),
+            )
+
+    keep, after_navigating, after_resnapshotting, log = asyncio.run(scenario())
+
+    assert log == "publish;", "a stale ref acted, or the current one didn't"
+    for error in (after_navigating, after_resnapshotting):
+        assert "older snapshot" in str(error), str(error)
+        assert "take a new snapshot" in str(error), str(error)
+    assert str(after_navigating).startswith(f"{keep} "), str(after_navigating)
+
+
+# Strings no snapshot of this session gave: past its last ref, outside its
+# numbering, in Playwright's numbering, and selectors.
+NEVER_GIVEN = ["e999", "e0", "f1e2", "aria-ref=e1", "e1 >> css=body"]
+
+
+def test_ref_never_given_is_refused() -> None:
+    async def scenario() -> list[str]:
+        async with (
+            async_playwright() as playwright,
+            open_session(playwright.chromium) as session,
+        ):
+            await session.page.set_content(REFS_PAGE)
+            await session.snapshot()
+            messages = []
+            for ref in NEVER_GIVEN:
+                with pytest.raises(RefError) as refused:
+                    session.locate(ref)
+                messages.append(str(refused.value))
+            return messages
+
+    for ref, message in zip(NEVER_GIVEN, asyncio.run(scenario()), strict=True):
+        assert message.startswith(f"{ref} "), message
+        assert "isn't a ref in the current snapshot" in message, message
+
+
+def test_page_text_imitating_a_ref_is_renumbered_with_it() -> None:
+    async def scenario() -> str:
+        async with (
+            async_playwright() as playwright,
+            open_session(playwright.chromium) as session,
+        ):
+            # Playwright calls the page's body e1, and the text says it too.
+            await session.page.set_content(
+                "<p>Press [ref=e1], then [ref=e1].</p><button>Save</button>"
+            )
+            await session.snapshot()
+            return await session.snapshot()
+
+    snapshot = asyncio.run(scenario())
+
+    found = re.search(r"- generic \[active\] \[ref=(e\d+)\]", snapshot)
+    assert found is not None, snapshot
+    body = found[1]
+    assert body != "e1", "the second snapshot reused the first one's numbers"
+    assert f"Press [ref={body}], then [ref={body}]." in snapshot, snapshot

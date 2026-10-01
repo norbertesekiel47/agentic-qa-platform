@@ -1,5 +1,7 @@
 """Chromium's sandbox: always on, and proved by the sandbox check before any
-page loads (ADR-0026 and its 2026-09-30 amendment; SECURITY.md §6)."""
+page loads (ADR-0026 and its 2026-09-30 amendment; SECURITY.md §6). The same
+launch gives the browser an empty environment (ADR-0026's 2026-10-01
+amendment; SECURITY.md §5)."""
 
 import ctypes
 import sys
@@ -129,15 +131,24 @@ class SandboxUnavailableError(RuntimeError):
 class Chromium(Protocol):
     """The part of Playwright's `BrowserType` that `launch` uses."""
 
-    async def launch(self, *, chromium_sandbox: bool) -> Browser: ...
+    async def launch(
+        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
+    ) -> Browser: ...
 
 
 async def launch(chromium: Chromium) -> Browser:
-    """Launch Chromium with its sandbox on, and return it only once the sandbox
-    check has proved the sandbox. Nothing skips the check: `launch` takes no
-    option and reads no setting or environment variable (ADR-0026)."""
+    """Launch Chromium with its sandbox on and an empty environment, and return
+    it only once the sandbox check has proved the sandbox. Nothing skips the
+    check: `launch` takes no option and reads no setting or environment
+    variable (ADR-0026)."""
     try:
-        browser = await chromium.launch(chromium_sandbox=True)
+        # Playwright's default environment for the browser is the runner's
+        # own, provider keys and cloud credentials included
+        # (https://playwright.dev/python/docs/api/class-browsertype#browser-type-launch-option-env).
+        # An empty one keeps them, and every AQA_SECRET_* value, out of every
+        # Chromium process; a test secret reaches a page only through
+        # fill_secret.
+        browser = await chromium.launch(chromium_sandbox=True, env={})
     except Error as error:
         fixes = [fix for line, fix in NO_SANDBOX_LOGS.items() if line in error.message]
         if not fixes:

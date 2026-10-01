@@ -72,9 +72,13 @@ class FailingChromium:
     def __init__(self, error: Exception) -> None:
         self.error = error
         self.requested: list[bool] = []
+        self.environments: list[dict[str, str | float | bool]] = []
 
-    async def launch(self, *, chromium_sandbox: bool) -> Browser:
+    async def launch(
+        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
+    ) -> Browser:
         self.requested.append(chromium_sandbox)
+        self.environments.append(env)
         raise self.error
 
 
@@ -91,10 +95,12 @@ class DelayedChromium:
         self.delay = delay
         self.requested: list[bool] = []
 
-    async def launch(self, *, chromium_sandbox: bool) -> Browser:
+    async def launch(
+        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
+    ) -> Browser:
         self.requested.append(chromium_sandbox)
         await asyncio.sleep(self.delay)
-        return await self.chromium.launch(chromium_sandbox=chromium_sandbox)
+        return await self.chromium.launch(chromium_sandbox=chromium_sandbox, env=env)
 
 
 def test_trial_reports_a_sandboxed_browser(tmp_path: Path, runs: Path) -> None:
@@ -149,6 +155,7 @@ def test_trial_reports_a_sandbox_the_runner_refuses(proc: Path, runs: Path) -> N
     report = asyncio.run(run_trial(chromium, proc, runs))
 
     assert chromium.requested == [True], "the trial didn't ask for the sandbox"
+    assert chromium.environments == [{}], "the trial's browser got an environment"
     assert report["sandbox"] == {"on": False, "error": REFUSED}
     assert report["ready_seconds"] is None
     assert report["ready_at"] is None
@@ -247,11 +254,13 @@ class SwellingChromium(FailingChromium):
         super().__init__(SandboxUnavailableError(REFUSED))
         self.proc = proc
 
-    async def launch(self, *, chromium_sandbox: bool) -> Browser:
+    async def launch(
+        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
+    ) -> Browser:
         set_process(self.proc, os.getpid(), 1, 999_999)
         await asyncio.sleep(4 * SAMPLE_SECONDS)
         set_process(self.proc, os.getpid(), 1, 512)
-        return await super().launch(chromium_sandbox=chromium_sandbox)
+        return await super().launch(chromium_sandbox=chromium_sandbox, env=env)
 
 
 def test_the_launch_is_timed_without_sampling_memory(proc: Path, runs: Path) -> None:
@@ -269,9 +278,11 @@ class LingeringChromium(FailingChromium):
         self.proc = proc
         self.lingering: list[asyncio.Task[None]] = []
 
-    async def launch(self, *, chromium_sandbox: bool) -> Browser:
+    async def launch(
+        self, *, chromium_sandbox: bool, env: dict[str, str | float | bool]
+    ) -> Browser:
         self.lingering.append(asyncio.create_task(self.linger()))
-        return await super().launch(chromium_sandbox=chromium_sandbox)
+        return await super().launch(chromium_sandbox=chromium_sandbox, env=env)
 
     async def linger(self) -> None:
         await asyncio.sleep(SAMPLE_SECONDS)
