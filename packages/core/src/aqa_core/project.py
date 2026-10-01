@@ -12,6 +12,7 @@ from pydantic import BaseModel, ValidationError
 from yaml.constructor import ConstructorError
 
 from aqa_core.config import ProjectConfig
+from aqa_core.spec import Spec, SpecFrontmatter, secret_references, spec_hash
 
 
 class SpecError(Exception):
@@ -202,3 +203,39 @@ def load_config(path: Path) -> ProjectConfig:
     if not isinstance(data, dict):
         raise SpecError([f"{path}: the project config must be a mapping of keys"])
     return _validate(ProjectConfig, data, path)
+
+
+# A spec file opens with its frontmatter, between two lines of three dashes.
+_FRONTMATTER = re.compile(r"---\n(.*?)^---[ \t]*$", re.DOTALL | re.MULTILINE)
+
+
+def load_spec(path: Path, config: ProjectConfig) -> Spec:
+    """The spec at `path`. Its secret references must name secrets `config`
+    declares, and its id must be its file name without `.spec.md`."""
+    match = _FRONTMATTER.match(path.read_text(encoding="utf-8"))
+    if match is None:
+        raise SpecError(
+            [f"{path}: a spec starts with its frontmatter between two --- lines"]
+        )
+    data = _read_yaml(match[1], path, first_line=2)
+    if not isinstance(data, dict):
+        raise SpecError([f"{path}: the frontmatter must be a mapping of keys"])
+    problems = []
+    name = path.name.removesuffix(".spec.md")
+    if isinstance(data.get("id"), str) and data["id"] != name:
+        problems.append(
+            f"{path}: id: '{data['id']}' doesn't match the file name: a spec's id is its "
+            f"file name without .spec.md, here '{name}'"
+        )
+    try:
+        frontmatter = _validate(SpecFrontmatter, data, path)
+    except SpecError as error:
+        raise SpecError([*problems, *error.problems]) from None
+    problems.extend(
+        f"{path}: {key}: secret {secret} is not declared in the project config's secrets"
+        for key, secret in secret_references(frontmatter)
+        if secret not in config.secrets
+    )
+    if problems:
+        raise SpecError(problems)
+    return Spec(path, frontmatter, spec_hash(data))
