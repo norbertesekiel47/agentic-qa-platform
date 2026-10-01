@@ -23,7 +23,7 @@ What the parser has to get right:
 3. **strictyaml**: a restricted YAML that refuses flow style by default, which every pilot spec uses.
 
 ## Decision
-PyYAML 6.0.3 (option 1), with a loader narrowed to YAML 1.2's core schema (`aqa_core.project`), then Pydantic for the shape:
+PyYAML 6.0.3 (option 1), with a loader narrowed to YAML 1.2's core schema (`aqa_core.strict_yaml`), then Pydantic for the shape:
 - **Types.** Plain scalars resolve to null (`~`, `null`, empty), `true`/`false`, decimal integers and floats, and everything else is a string. There's no `.inf` or `.nan`, and no dates.
 - **Tags.** The loader constructs only those types, sequences and mappings, so any other tag (`!!set`, `!!timestamp`, `!custom`) has no constructor and is refused. An explicit tag that changes a scalar's type, such as `!!int '3'`, is refused too.
 - **Keys** must be strings, each once in its mapping. A problem is reported at its line in the file.
@@ -34,7 +34,7 @@ PyYAML 6.0.3 (option 1), with a loader narrowed to YAML 1.2's core schema (`aqa_
 Option 2 would trade a few dozen lines of narrowing for a new dependency, and it would still need our own refusal of dates and aliases for the hash. The pure-Python loader is fast enough: a spec is a few hundred bytes.
 
 ## Consequences
-- **What a spec can't write:** anchors and aliases, tags, `yes`/`no`/`on`/`off` as booleans, octal or sexagesimal numbers. A date is a string, quoted or not.
+- **What a spec can't write:** aliases, tags that change a value's type, `yes`/`no`/`on`/`off` as booleans, octal or sexagesimal numbers. A date is a string, quoted or not. An anchor with no alias, and a tag that names the type a value already has (`!!str no`), change nothing and are accepted.
 - **Hashes are stable** across machines and runs: the canonical JSON holds only JSON values, and the hash covers the YAML as parsed, not a model that could gain defaults.
 - **The manifest validator reads specs through the parser**, with each app's `qa/config.yaml`, replacing the layout-based reading in ADR-0022's 2026-09-28 amendment ("invariant ground truth and spec-file checks"). The harness therefore runs in the workspace (`uv run python bench/harness/…`). That ends ADR-0022's "standard library only until M1 brings uv and Pydantic", and ADR-0023's `toggle.py` is no longer standard library only. `toggle_checks.py`, which runs in the checks image, imports neither.
 - **DATA_MODEL §6 drops its layout rule.**

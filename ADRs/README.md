@@ -27,8 +27,8 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | [0019](0019-ci-switchable-runner.md) | CI on GitHub Actions with a switchable runner (Blacksmith-ready) | Accepted (amended 2026-09-29) |
 | [0020](0020-benchmark-apps-conduit-medusa.md) | Benchmark apps: RealWorld Conduit first, Medusa second | Accepted (amended 2026-09-28) |
 | [0021](0021-bench-apps-gate-carve-out.md) | Vendored benchmark apps (`bench/apps/`): a narrow gate carve-out | Accepted |
-| [0022](0022-bench-flags-test-api-manifest.md) | Benchmark feature flags, test-only endpoints and the ground-truth manifest | Accepted (amended 2026-09-28, 2026-09-29) |
-| [0023](0023-bench-pilot-toggle-checks-dry-review.md) | Benchmark pilot: browser toggle checks and a written dry compile review | Accepted (amended 2026-09-28, 2026-09-29) |
+| [0022](0022-bench-flags-test-api-manifest.md) | Benchmark feature flags, test-only endpoints and the ground-truth manifest | Accepted (amended 2026-09-28, 2026-09-29, 2026-10-01) |
+| [0023](0023-bench-pilot-toggle-checks-dry-review.md) | Benchmark pilot: browser toggle checks and a written dry compile review | Accepted (amended 2026-09-28, 2026-09-29, 2026-10-01) |
 | [0024](0024-explore-runs.md) | Explore runs: coverage plan, stateless navigator and confirmation replay | Accepted |
 | [0025](0025-compiled-targets-checks-flags.md) | Compiled scripts: meanings, locators, checks and step flags | Accepted |
 | [0026](0026-local-ci-browser-boundary.md) | The browser boundary for local and CI runs: sandbox, egress and test secrets | Accepted (amended 2026-09-30, 2026-10-01) |

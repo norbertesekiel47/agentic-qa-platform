@@ -78,3 +78,7 @@ So the guarantee rests on the system under test never reading page or script sou
 ## Amendment (2026-09-29): CI runs the harness under pytest
 
 ADR-0029 moves the harness's CI checks from `guardrails` to the `python` job. They now run from `uv.lock`: `ruff`, `mypy --strict --no-explicit-package-bases` and `pytest`, which collects the harness's unittest tests.
+
+## Amendment (2026-10-01): the validator reads specs with the spec parser
+
+The 2026-09-28 amendment's spec-file checks now read each spec through `aqa_core`'s parser, with its app's `qa/config.yaml`, instead of relying on DATA_MODEL §6's layout, which is gone (ADR-0030, #39). A spec the parser refuses fails the manifest with the parser's own problems. The harness is no longer standard library only, so its scripts run under uv: `uv run python bench/harness/manifest.py` (bench/README.md).
