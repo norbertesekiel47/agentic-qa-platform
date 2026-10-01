@@ -223,6 +223,10 @@ _Avoid_: "session" alone where a MicroVM's session could be meant
 The proof, before a run loads any page, that the browser's renderer is confined by Chromium's sandbox, made by comparing a renderer process with the browser process. It is the first half of the fresh-VM predicate that hosted compute must meet.
 _Avoid_: startup check, sandbox probe
 
+**Fresh VM**:
+A virtual machine in which no earlier run has executed. A VM restored from a snapshot taken before any run still counts as fresh. Giving every hosted run a fresh VM is the second half of the fresh-VM predicate.
+_Avoid_: cold start (that names a latency, not a boundary: a VM restored from a cached snapshot starts warm yet is fresh)
+
 **Run token**:
 The short-lived credential a runner uses for one run under one lease. Only a hosted-execution token, issued for a hosted run, may also read that run's test secrets and provider key.
 
