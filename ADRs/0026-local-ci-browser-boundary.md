@@ -126,35 +126,18 @@ Chromium won't start its sandbox in a browser that runs as root, a container's d
 
 ## Amendment (2026-10-01): the browser session (#36)
 
-Every run's browser comes from one **browser session** (CONTEXT.md), `aqa_runner.session.open_session`, for explore and replay alike. It launches through `launch`, so the sandbox check runs for every session. #44's document-origin checks will live in it too.
+Every browser a run uses comes from a **browser session** (CONTEXT.md): one for each attempt or replay, opened by `aqa_runner.browser_session.open_browser_session`, for explore and replay alike. It launches through `launch`, so the sandbox check runs for every session. #44's document-origin checks will live in it too.
 
-- **The browser's environment is empty.** `launch` passes Chromium `env={}`. Playwright's default is the runner's own environment ([`env`](https://playwright.dev/python/docs/api/class-browsertype#browser-type-launch-option-env)).
-  - The `Chromium` protocol takes `env` for this, and `launch` still takes no option.
-  - So no Chromium process holds the runner's provider keys, cloud credentials or `AQA_SECRET_*` values, and no proxy setting from the host's environment can redirect the browser.
-  - Measured: with an empty environment, Chromium starts and passes the sandbox check on macOS, and in the spike's Amazon Linux 2023 image under Playwright's seccomp profile.
-  - The test reads each Chromium process's environment: `/proc/<pid>/environ` on Linux, `ps -E` on macOS. A positive control shows the reader finds a variable that is there.
-  - *Residual risk:* Playwright's driver, a Node process, and the runner itself keep the runner's environment. They run as the same user as the browser, so an exploit that escapes the sandbox can read their environments. The sandbox, and on hosted runs the VM, are the defences against that. The empty environment stops the accidental paths: inherited variables, crash reports and child processes.
-- **Fresh state.**
-  - Each session launches a browser of its own.
-  - Playwright gives each launch a new, randomly named profile directory (`playwright_chromiumdev_profile-*` in the temp directory) and deletes it when the browser closes, so the session doesn't make one of its own.
-  - The page runs in a new context, never a persistent one.
-  - The context refuses downloads (`accept_downloads=False`). Playwright accepts them by default ([`accept_downloads`](https://playwright.dev/python/docs/api/class-browser#browser-new-context-option-accept-downloads)).
-- **Browser settings.**
-  - `aqa_core.browser.BrowserSettings` holds the five settings, with ADR-0025's pins as its defaults.
-  - The session applies them to its context, and the caller may pass its own.
-  - #39 merges the project's and the spec's overrides into one, and #45 and #46 record and replay it.
-- **Element refs.** The snapshot is Playwright's AI mode ([`page.aria_snapshot(mode="ai")`](https://playwright.dev/python/docs/api/class-page#page-aria-snapshot), added in 1.59). It gives refs to elements that are visible and receive pointer events. Playwright's built-in `aria-ref=` selector engine resolves them; it isn't in Playwright's public docs, so the session's tests pin its behavior on 1.63.
-  - *Why Playwright's refs aren't enough* (measured on 1.63, LAB_NOTES 2026-10-01):
-    - Its counter restarts in every new document.
-    - A frame prefix (`f2e5`) tells documents apart only when the main frame leaves a page other than about:blank. A page's first navigation away from about:blank, and any iframe's new document, keep the prefix. So an old ref can name a different element: in the test, an old ref to "Keep" clicked "Publish".
-    - Elsewhere an old ref names nothing, and the action waits until it times out.
-    - Within one document, a new snapshot gives an unchanged element its old ref, so an old ref still resolves.
+- **The browser's environment is empty.** `launch` passes Chromium `env={}`; Playwright's default is the runner's own environment ([`env`](https://playwright.dev/python/docs/api/class-browsertype#browser-type-launch-option-env)). The `Chromium` protocol takes `env` for this, and `launch` still takes no option. No Chromium process holds the runner's provider keys, cloud credentials or `AQA_SECRET_*` values, and no proxy variable of the host's can steer the browser. The session's tests read each Chromium process's environment (`/proc/<pid>/environ` on Linux, `ps -E` on macOS, with a positive control for the reader), in CI on Linux and locally on macOS. The hosted runner image isn't covered yet: the spike's image has no fonts (LAB_NOTES, 2026-10-01), and its `HOME=/tmp` no longer reaches the browser.
+  - *Residual risk:* Playwright's driver (a Node process) and the runner itself keep the runner's environment. They run as the same user as the browser, so an exploit that escapes the sandbox can read them; the sandbox, and on hosted runs the VM, are the defences there. The empty environment stops the accidental paths: inherited variables, crash reports and child processes.
+- **Fresh state.** Each session launches its own browser. Playwright gives each launch a new, randomly named profile directory (`playwright_chromiumdev_profile-*` in the temp directory) and deletes it when the browser closes, so the session makes none of its own. The page runs in a new context, never a persistent one, which refuses downloads (`accept_downloads=False`; Playwright accepts them by default, [`accept_downloads`](https://playwright.dev/python/docs/api/class-browser#browser-new-context-option-accept-downloads)). Blocking service workers belongs to #43.
+- **Browser settings.** `aqa_core.browser.BrowserSettings` holds the five settings, with ADR-0025's pins as its defaults. The session applies them to its context, and the caller may pass its own. #39 merges the project's and the spec's overrides into one and validates it, and #45 and #46 record and replay it.
+- **Element refs.** The snapshot is Playwright's AI mode ([`page.aria_snapshot(mode="ai")`](https://playwright.dev/python/docs/api/class-page#page-aria-snapshot), added in 1.59), which gives refs to elements that are visible and receive pointer events. Playwright's built-in `aria-ref=` selector engine resolves them against each frame's latest snapshot; it isn't in Playwright's public docs, so the session's tests pin its behavior on 1.63.
+  - *Why not Playwright's refs:* they can name a different element in a later snapshot, and otherwise an old one names nothing and the action waits out its timeout (LAB_NOTES, 2026-10-01). Page text can also write `[ref=e2]` wherever Playwright renders text.
   - *Decision:*
-    - The session renumbers every `[ref=…]` token in each snapshot to `e<n>`, a number it never gives again.
-    - It maps them back to Playwright's refs for the current snapshot only.
-    - `locate(ref)` resolves only refs in that map. A number from an earlier snapshot raises `RefError`, which says to take a new snapshot, and any other string raises `RefError` too. So the model's text never reaches a selector.
-  - Page text that imitates a ref is renumbered the same way as real refs. It can't keep Playwright's numbering, but it can still point the model at a real element, as any page text can (SECURITY §4).
-  - *Rejected:*
-    - Refs prefixed with their snapshot's number (`s3e12`). They need no map, but they make every ref longer and expose the frame structure.
-    - Playwright's refs, unchanged. They can't refuse a stale ref.
-  - A current ref whose element has gone names nothing, so the action waits until the timeout the agent's tools set (#53).
+    - The session renumbers each element's own ref, the last token of its line's key (page text can't end a key that way), to `e<n>`, a number it never gives again. Every other `[ref=…]` in the snapshot, which only page text writes, reads `(ref=…)`.
+    - A snapshot retires the earlier refs before it calls Playwright, which may store a snapshot the session never sees, and snapshots run one at a time.
+    - `locate(ref)` resolves only the current snapshot's refs and returns the element itself, which never becomes another element. A ref from an older snapshot, one never given and one whose element has left the page each raise `RefError`, and no other string reaches a selector.
+    - Only the session takes accessibility snapshots of its page, since any other snapshot changes what Playwright's refs resolve to. Keeping the page private to the session is for #44 and #53, which add its observations and actions.
+  - *Rejected:* refs prefixed with their snapshot's number (`s3e12`), which need no map but lengthen every ref and expose frame structure, and Playwright's refs unchanged, which can't refuse a stale ref.
+  - *Not decided here:* which frame each ref came from, which #44's checks on cross-origin frames need.
