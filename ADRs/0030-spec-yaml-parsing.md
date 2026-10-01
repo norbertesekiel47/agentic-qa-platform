@@ -25,7 +25,7 @@ What the parser has to get right:
 ## Decision
 PyYAML 6.0.3 (option 1), with a loader narrowed to YAML 1.2's core schema (`aqa_core.strict_yaml`), then Pydantic for the shape:
 - **Types.** Plain scalars resolve to null (`~`, `null`, empty), `true`/`false`, decimal integers and floats, and everything else is a string. There's no `.inf` or `.nan`, and no dates.
-- **Tags.** The loader constructs only those types, sequences and mappings, so any other tag (`!!set`, `!!timestamp`, `!custom`) has no constructor and is refused. An explicit tag that changes a scalar's type, such as `!!int '3'`, is refused too.
+- **Tags.** Every node's tag must be the one it would have with none written, so `!!set`, `!!timestamp`, `!custom`, a scalar tag on a collection (`!!null {a: 1}`) and a tag that changes a scalar's type (`!!int '3'`) are refused. Replacing SafeLoader's constructors isn't enough on its own: PyYAML reads a collection whose tag has no constructor as a plain mapping or list (LAB_NOTES, 2026-10-01).
 - **Keys** must be strings, each once in its mapping. A problem is reported at its line in the file.
 - **Aliases** are refused, reported at the anchor's line.
 - **Shape.** Pydantic models with `extra="forbid"`, strict types and frozen instances check the result. Each problem reads `<file>: <key>: <problem>`, and every problem in the files read is reported together, as a `SpecError` (ADR-0024's `spec_error`).
@@ -34,7 +34,8 @@ PyYAML 6.0.3 (option 1), with a loader narrowed to YAML 1.2's core schema (`aqa_
 Option 2 would trade a few dozen lines of narrowing for a new dependency, and it would still need our own refusal of dates and aliases for the hash. The pure-Python loader is fast enough: a spec is a few hundred bytes.
 
 ## Consequences
-- **What a spec can't write:** aliases, tags that change a value's type, `yes`/`no`/`on`/`off` as booleans, octal or sexagesimal numbers. A date is a string, quoted or not. An anchor with no alias, and a tag that names the type a value already has (`!!str no`), change nothing and are accepted.
+- **What a spec can't write:** aliases, tags that change a value's type, `yes`/`no`/`on`/`off` as booleans, octal or sexagesimal numbers. A date is a string, quoted or not. An anchor with no alias, and a tag that names the type a value already has (`!!str no`, `!!map {…}`), change nothing and are accepted.
+- **Text YAML can't read is a spec error too:** a control character, a file that isn't UTF-8, nesting too deep for the parser, and a number too long for Python.
 - **Hashes are stable** across machines and runs: the canonical JSON holds only JSON values, and the hash covers the YAML as parsed, not a model that could gain defaults.
 - **The manifest validator reads specs through the parser**, with each app's `qa/config.yaml`, replacing the layout-based reading in ADR-0022's 2026-09-28 amendment ("invariant ground truth and spec-file checks"). The harness therefore runs in the workspace (`uv run python bench/harness/…`). That ends ADR-0022's "standard library only until M1 brings uv and Pydantic", and ADR-0023's `toggle.py` is no longer standard library only. `toggle_checks.py`, which runs in the checks image, imports neither.
 - **DATA_MODEL §6 drops its layout rule.**
