@@ -66,7 +66,7 @@ docker run --rm --platform linux/arm64 aqa-spike-trial:fargate
 
 ## Scripts
 
-AWS CLI v2 only, in us-east-1 (Terraform arrives in M4). They need a CLI that has the `aws lambda-microvms` commands (AWS doesn't state the first version that does), credentials in the environment or a profile, and Docker, jq, curl and python3. Nothing in them holds a secret: the ECR password reaches `docker login` on stdin, and a MicroVM's auth token reaches curl in a header file.
+AWS CLI v2 only, in us-east-2 (Terraform arrives in M4): the account they run in is a project account, which denies Lambda, ECS, ECR, EC2 and S3 outside its own region (ADR-0030). They need a CLI that has the `aws lambda-microvms` commands, 2.35.10 or later ([CLI changelog](https://github.com/aws/aws-cli/blob/v2/CHANGELOG.rst)), credentials in the environment or a profile, and Docker, jq, curl and python3. Nothing in them holds a secret: the ECR password reaches `docker login` on stdin, and a MicroVM's auth token reaches curl in a header file.
 
 ```bash
 spikes/hosted-chromium/scripts/budget.sh <email>        # first: the budget alarm, $10 a month, emails at 50% and 100%
@@ -131,7 +131,7 @@ What #38 records for each candidate, with the command and the commit that produc
 - `trial.earlier_runs` must be empty, and the platform's ID must be new: the log stream in `platform.log_stream` (one per Lambda execution environment), the task ARN in `platform.task`, the MicroVM ID in `platform.microvm`.
 - A warm Lambda trial whose `earlier_runs` lists the cold one records the reuse that rules Lambda functions out.
 
-**Cost per 60-second run.** A run is 60 seconds of work, the browser's launch included, plus the time each platform bills before the work can start, both measured above. Prices are us-east-1 list prices, checked 2026-09-30: [Lambda](https://aws.amazon.com/lambda/pricing/), [Fargate](https://aws.amazon.com/fargate/pricing/), [public IPv4](https://aws.amazon.com/vpc/pricing/) and [ECR](https://aws.amazon.com/ecr/pricing/).
+**Cost per 60-second run.** A run is 60 seconds of work, the browser's launch included, plus the time each platform bills before the work can start, both measured above. Prices are us-east-2 list prices, checked 2026-09-30, and equal to us-east-1's for every item below: [Lambda](https://aws.amazon.com/lambda/pricing/), [Fargate](https://aws.amazon.com/fargate/pricing/), [public IPv4](https://aws.amazon.com/vpc/pricing/) and [ECR](https://aws.amazon.com/ecr/pricing/). The Lambda page shows MicroVM prices for us-east-1 only; AWS's [Price List](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSLambda/current/us-east-2/index.json) gives us-east-2's.
 
 - **Lambda function** (arm64, 2 GB). Container-image functions bill their Init phase.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The account's billed usage in us-east-1, by usage type and day, from Cost
+# The account's billed usage in us-east-2, by usage type and day, from Cost
 # Explorer (ADR-0008 amendment, 2026-09-30), printed as JSON. It is the only
 # source for a MicroVM's snapshot storage (GB-hours) and snapshot reads (GB):
 # no MicroVM API reports a snapshot's size. Cost Explorer lags by about a day,
