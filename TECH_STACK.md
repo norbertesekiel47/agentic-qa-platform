@@ -83,7 +83,7 @@ Notes:
 | Cloud | AWS (ADR-0008, ADR-0009) |
 | IaC | Terraform |
 | Container registry | Amazon ECR |
-| Runner compute | **Decided by the M1 spike (ADR-0008 amendment, 2026-09-29).** Hosted compute must run sandboxed Chromium and give every run a fresh VM. Candidates:<ul><li>**Lambda MicroVMs** (GA 2026-06-22): a Firecracker VM and kernel per session, snapshot starts, sessions up to 8 h. ARM compute costs $0.0000276944 per vCPU-second plus $0.0000036667 per GB-second, plus snapshot storage and reads.</li><li>**Fargate:** one task per run. Only `SYS_PTRACE` can be added and custom seccomp is unavailable, so the sandbox most likely fails.</li><li>**Lambda functions:** measured only, since they reuse environments.</li><li>**ECS on EC2:** qualifies only with a fresh instance per run.</li></ul> |
+| Runner compute | **Lambda MicroVMs, one per run (ADR-0030).** A Firecracker VM and kernel per MicroVM, restored from the runner image's snapshot, for up to 8 h. arm64 only; Lambda builds the image from our Dockerfile. ARM compute costs $0.0000276944 per vCPU-second plus $0.0000036667 per GB-second, plus snapshot storage and reads. M1's spike ruled out Fargate and Lambda functions: neither could start Chromium's sandbox, and Lambda functions reuse environments |
 | Browser egress | In-runner forward proxy (allowlist, validated-IP connects pinned per run, IP policy by run location, redirect, WebSocket and UDP coverage) + Playwright routing + allowed-origin checks before each observation and action (ADR-0026) |
 | API | Lambda + API Gateway HTTP API; WebSocket API for live runs |
 | Queue | SQS (standard) + dispatcher Lambda |
@@ -109,15 +109,16 @@ Portfolio-traffic estimate (us-east-1, approximate — validate in the AWS Prici
 | CloudFront + S3 (dashboard, artifacts), SQS, API Gateway, CloudWatch | $1–5 |
 | Control-plane Lambdas (API, dispatcher, realtime) | $0 within the always-free tier (1M requests + 400,000 GB-s/month) |
 | **Total (base infrastructure)** | **≈ $20–30** |
-| Hosted-runner compute | Pending the M1 spike. MicroVM compute is about $0.004 per 60-second run at 2 vCPU / 4 GB, plus snapshot storage and reads |
+| Hosted-runner compute | Per 60-second run at the 2 GB, 1 vCPU baseline: $0.0024 compute cold, $0.0022 warm (median, back-to-back runs), plus burst, snapshot and data-transfer costs SESSION-3 (ADR-0030). No free tier |
 
 Free-tier facts (verified 2026-09-27): accounts created on/after 2025-07-15 receive $100 in credits at signup plus up to $100 more for guided activities (one is setting up an AWS Budget); the Free Plan lasts 6 months or until credits run out. RDS has **no** separate free allowance for these accounts — it draws from credits. Lambda's 1M requests + 400,000 GB-seconds per month is always free. Sources: [AWS announcement](https://aws.amazon.com/about-aws/whats-new/2025/07/aws-free-tier-credits-month-free-plan/), [Lambda pricing](https://aws.amazon.com/lambda/pricing/).
 
-Runner budget math if the spike picked Lambda functions: a 3,008 MB runner for 60 s ≈ 176 GB-s, so ~2,270 runs/month fit in the always-free compute allowance.
+Hosted runners run on Lambda MicroVMs (ADR-0030), which have no free tier, so Lambda's always-free allowance covers only the control plane. From M1's spike, at the 2 GB, 1 vCPU baseline:
+- compute for a 60-second run costs $0.0024 cold and $0.0022 warm (median of back-to-back runs), the browser's launch included, if billing starts at `startedAt` as AWS's pricing page implies;
+- burst, snapshot reads and snapshot storage add SESSION-3;
+- data transfer bills at standard AWS rates, and M6 measures a real run's.
 
-The 2026-09-29 rule excludes Lambda functions, though. If Lambda MicroVMs win, compute has no free tier:
-- 2 vCPU and 4 GB for 60 s costs about $0.004 at the list prices above, before snapshot storage and reads.
-- The spike measures the real cost per run (ADR-0008 amendment).
+A runner sized at 2 vCPU and 4 GB doubles the compute rate. M6 measures the real runner's ready time and memory before choosing its size.
 
 ## 6. Alternatives considered
 
@@ -125,7 +126,7 @@ The 2026-09-29 rule excludes Lambda functions, though. If Lambda MicroVMs win, c
 |---|---|---|
 | Language | TypeScript end-to-end | Less signal for Python-heavy AI postings; team fluency (ADR-0005) |
 | Agent framework | Pydantic AI, custom loop | LangGraph chosen for checkpointing/interrupts and market signal (ADR-0006) |
-| Runners | Fargate Spot, EC2 Spot | Slower start / idle cost (ADR-0008). Reopened by the M1 spike, which tests hosted candidates against the fresh-VM rule (ADR-0008 amendment, 2026-09-29) |
+| Runners | Lambda functions, Fargate, ECS on EC2 | In M1's spike, neither Lambda functions nor Fargate could start Chromium's sandbox, and Lambda functions reuse environments. ECS on EC2 with an instance per run, the unmeasured last resort, wasn't needed (ADR-0030) |
 | DB | Aurora Serverless v2, DynamoDB | ~15 s resume on demo; no relational model/RLS (ADR-0009) |
 | Auth | Cognito, WorkOS | No org primitives / preference for Clerk DX (ADR-0010) |
 | Tracing | Langfuse, AWS-only | LangSmith pairs with LangGraph (ADR-0014) |

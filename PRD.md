@@ -82,7 +82,7 @@ A multi-tenant SaaS, CLI, GitHub Action, and GitHub App that turns structured na
 - FR-20 Dashboard spec edits open a PR; the repo remains the source of truth.
 
 ### 4.6 Hosted runs (SaaS)
-- FR-21 Dashboard-triggered runs execute on hosted compute chosen by the M1 **sandbox decision gate**. The compute qualifies only if it runs sandboxed Chromium and gives every run a fresh VM. Candidates are a Lambda MicroVM, a Fargate task and, measured only for the record, a Lambda function (ADR-0008 amendment). Browser egress goes through a local proxy that enforces the allowlist at the connection level. Isolation guarantees are stated precisely in [SECURITY §6](SECURITY.md#6-runner-isolation-precise-boundary).
+- FR-21 Dashboard-triggered runs execute on hosted compute chosen by the M1 **sandbox decision gate**. The compute qualifies only if it runs sandboxed Chromium and gives every run a fresh VM. M1's spike measured a Lambda MicroVM, a Fargate task and, for the record, a Lambda function; only the MicroVM qualified, so each hosted run gets its own Lambda MicroVM (ADR-0030). Browser egress goes through a local proxy that enforces the allowlist at the connection level. Isolation guarantees are stated precisely in [SECURITY §6](SECURITY.md#6-runner-isolation-precise-boundary).
 - FR-22 Hosted runs may only target **verified domains** (DNS TXT or `/.well-known/` file). In every mode, the browser's egress is restricted to the run's allowed origins and the project's subresource hosts (ADR-0026). CI runs need no domain verification.
 - FR-23 Per-org rate limits and concurrency caps.
 - FR-24 BYOK: org provider keys encrypted with KMS envelope encryption; decrypted only in memory for the duration of a run.
@@ -111,7 +111,7 @@ A multi-tenant SaaS, CLI, GitHub Action, and GitHub App that turns structured na
 | Security | See [SECURITY](SECURITY.md); our tools never give secret values to the model; logs/artifacts scrubbed |
 | Accessibility | Dashboard meets WCAG 2.2 AA on core flows |
 | Observability | OpenTelemetry traces across CLI → API → runner; CloudWatch for infra |
-| Portability | Runner is one container image used in both CI and Lambda |
+| Portability | The same runner runs in customer CI and on hosted Lambda MicroVMs; how its two builds stay equivalent is decided at M5 (ADR-0030) |
 
 ## 6. Release criteria (v1 targets, measured on the frozen test split)
 
@@ -134,7 +134,7 @@ Native mobile · load testing · non-GitHub SCM integrations beyond CLI + API ke
 ## 8. Open questions
 
 1. ~~Which two open-source apps for the benchmark?~~ **Resolved (ADR-0020):** RealWorld Conduit (Angular + Nitro/Prisma/Zod) first, in M0; Medusa second, in M3, confirmed by a spike at M3 start.
-2. **Hosted compute with a sandboxed browser** (decision gate). The M1 spike tests a Lambda MicroVM, a Fargate task and a Lambda function against one rule: sandboxed Chromium and a fresh VM per run (ADR-0008 amendment, 2026-09-29). It also measures packaging, start time, memory and cost.
+2. ~~Hosted compute with a sandboxed browser (decision gate)~~ **Resolved (ADR-0030):** one Lambda MicroVM per run, the only candidate in M1's spike that ran sandboxed Chromium in a fresh VM per run.
 3. Clerk client-only auth in a Next.js static export — proven by the M7 skeleton task.
 4. Pixel-diff baselines for deterministic visual checks: where baseline images live (repo vs artifact store) — decide in M2.
 5. What a fallback-locator match means for verdicts, side-effect steps and benign-case scoring — decide in M2, before M3's numbers (#25).

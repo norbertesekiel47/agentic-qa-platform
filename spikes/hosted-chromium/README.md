@@ -145,7 +145,7 @@ What #38 records for each candidate, with the command and the commit that produc
   cost = s × (1 × $0.0000089944 + 2 × $0.0000009889 + $0.005 / 3,600)
 
   Ephemeral storage is within the 20 GB included.
-- **MicroVM** (a 2 GB, 1 vCPU baseline, and up to 4 × that in bursts). Compute runs while the MicroVM runs. Snapshot storage and reads come from `collect.sh`, because no MicroVM API reports a snapshot's size.
+- **MicroVM** (a 2 GB, 1 vCPU baseline, and up to 4 × that in bursts). Compute runs while the MicroVM runs. Snapshot reads come from `collect.sh`. A snapshot's size comes from `get-microvm-image-build`, per build of the image version (`list-microvm-image-builds`), and `collect.sh` shows how its storage bills.
 
   s = (the trial's start − startedAt) + 60, where the trial's start = trial.ready_at − trial.ready_seconds
 
@@ -154,7 +154,11 @@ What #38 records for each candidate, with the command and the commit that produc
   - *When billing starts:* Lambda bills the baseline "while your MicroVM is running", so from `startedAt`. #38 checks that against the compute seconds `collect.sh` reports.
   - *Burst* is billed only for use above the baseline. The trial's peak memory sits below 2 GB, so any burst is CPU during the launch; #38 reads its cost from `collect.sh`.
   - *Snapshot reads:* each MicroVM reads its snapshot on start. The per-run cost is `R × $0.00155`, where R is the GB that `collect.sh` bills as snapshot reads, divided by the number of MicroVMs run.
-  - *Snapshot storage:* $0.08 per GB-month for the image's snapshot, with a one-week minimum per image version. Per run, it is the monthly storage cost divided by the runs in a month. #38 reports it at 1,000 and at 10,000 runs a month. The snapshot's size, in GB, is the snapshot-storage GB-hours `collect.sh` shows for one whole UTC day inside the image's life, divided by 24. That holds however the one-week minimum is billed, which AWS doesn't describe. #38 runs `collect.sh` at least eight days after the image's creation, so the minimum has posted, and records how it shows up.
+  - *Snapshot storage:* $0.08 per GB-month for the image's snapshot, with a one-week minimum per image version. Per run, it is the monthly storage cost divided by the runs in a month. #38 reports it at 1,000 and at 10,000 runs a month. The snapshot's size is the memory and disk snapshot sizes `get-microvm-image-build` reports for each build; #37 missed that call, and #38 records it before the teardown. As a cross-check, the snapshot-storage GB-hours `collect.sh` shows for one whole UTC day inside the image's life, divided by 24, should match. AWS doesn't describe how the one-week minimum is billed. #38 runs `collect.sh` at least eight days after the image's creation, so the minimum has posted, and records how it shows up.
   - *Snapshot writes* ($0.0038 per GB): `invoke.sh` terminates each MicroVM before its one-minute idle window can suspend it, and suspending writes a snapshot. Whether the image build's own snapshot bills as a write is for `collect.sh` to show.
 - **Every candidate** also stores its package: ECR at $0.10 per GB-month for the Lambda function's and the Fargate task's image, and S3 Standard ([S3](https://aws.amazon.com/s3/pricing/)) for the MicroVM's zip. Per run: the package's GB × the monthly price ÷ the runs in a month.
 
+
+## Results
+
+#38 ran the trials on 2026-10-01. Their rows are in `results/2026-10-01.jsonl`, redacted for the public repository, and ADR-0030 holds every figure, with the commands that derive it from those rows.
