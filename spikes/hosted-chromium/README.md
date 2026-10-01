@@ -13,7 +13,7 @@ M1's decision gate (ADR-0008 amendment, 2026-09-29): which hosted compute runs C
 | `Dockerfile` | One target per candidate: `fargate`, `lambda` and `microvm` (the last stage, which Lambda builds) |
 | `package.sh` | Builds a candidate's package locally, from HEAD |
 | `scripts/` | The AWS CLI scripts #38 runs: budget alarm, deploy, invoke, collect, teardown |
-| `tests/` | The trial's tests and the scripts' dry run, run by the test gate (AGENTS.md §4) |
+| `tests/` | The trial's tests, and the scripts' dry run: its harness and scenarios (`dry_run.py`), the fake CLI (`fake_cli.py`) and a test file per script group. The test gate runs them (AGENTS.md §4) |
 
 ## The trial's report
 
@@ -93,7 +93,7 @@ spikes/hosted-chromium/scripts/teardown.sh              # deletes everything, ch
   - the MicroVM: an S3 bucket for the zip, a MicroVM image, and the MicroVMs `invoke.sh` runs.
 
   AWS may add the ECS service-linked role with the first cluster; it costs nothing and stays.
-- **Teardown** lists what exists under those names, deletes it, and lists again for up to five minutes, since some deletes finish later. Only once nothing else is left does it delete the budget alarm and check that too; otherwise it fails, names what is left, and keeps the alarm. `tests/test_scripts.py` runs every script against fake `aws`, `docker`, `curl` and `sleep` commands that answer a listing only when it names the spike's resources exactly. Its dry run fails when a script creates something that `teardown.sh` doesn't delete, or when a create isn't classified in the test's table.
+- **Teardown** lists what exists under those names, deletes it, and lists again for up to five minutes, since some deletes finish later. Only once nothing else is left does it delete the budget alarm and check that too; otherwise it fails, names what is left, and keeps the alarm. The dry run (`tests/dry_run.py` and the tests that use it) runs every script against fake `aws`, `docker`, `curl` and `sleep` commands that answer a listing only when it names the spike's resources exactly. Its dry run fails when a script creates something that `teardown.sh` doesn't delete, or when a create isn't classified in the test's table.
 - **#38 needs to know.**
   - Lambda's MicroVM builder runs the Dockerfile itself, so it must reach the internet to pull the base image, dnf packages, Python, wheels and the headless shell. The docs don't say which network a build gets.
   - Lambda MicroVM images keep their storage for at least a week, and billed usage keeps posting for about a day after the teardown, after the budget alarm is gone.
