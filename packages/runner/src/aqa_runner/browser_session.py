@@ -24,6 +24,7 @@ from aqa_runner.document_origins import (
     Records,
     document_origin,
     frame_origin,
+    navigable_origin,
 )
 from aqa_runner.egress import EgressPolicy
 from aqa_runner.egress_proxy import EgressProxy
@@ -194,6 +195,29 @@ class BrowserSession:
             await self._require_allowed(frame, "frame")
         return found
 
+    async def navigate(self, url: str) -> None:
+        """Load `url`, an absolute URL on one of the run's allowed origins. Any
+        other is a policy event (kind `navigation`), refused before anything
+        is requested. The current page needn't be on an allowed origin:
+        navigating is the way back after a policy event. The page it lands
+        on, after any redirects, is checked as every page is. A network
+        failure raises Playwright's `Error` as it is; the egress gate's
+        records tell an egress block from an infrastructure failure."""
+        async with self._turn:
+            origin = navigable_origin(url)
+            if origin not in self._policy.allowed_origins:
+                raise self._refuse(PolicyEvent("navigation", url, origin))
+            # https://playwright.dev/python/docs/api/class-page#page-goto
+            await self.page.goto(url)
+            await self._require_allowed_page()
+
+    async def url(self) -> str:
+        """The page's URL, once the page is checked: an observation, as
+        `url_matches` makes it."""
+        async with self._turn:
+            await self._require_allowed_page()
+            return self.page.url
+
     async def _frames_left_out(self, snapshot: str) -> set[str]:
         """Playwright's refs of the iframes in `snapshot` whose frame isn't on
         one of the run's allowed origins. Each resolves, as Playwright's own
@@ -242,9 +266,12 @@ class BrowserSession:
         of the run's allowed origins."""
         origin = await frame_origin(frame)
         if origin not in self._policy.allowed_origins:
-            event = PolicyEvent(kind, frame.url, origin)
-            self.policy_events.add(event)
-            raise PolicyEventError(event)
+            raise self._refuse(PolicyEvent(kind, frame.url, origin))
+
+    def _refuse(self, event: PolicyEvent) -> PolicyEventError:
+        """Record `event`, and the error to raise for it."""
+        self.policy_events.add(event)
+        return PolicyEventError(event)
 
 
 def renumber(
