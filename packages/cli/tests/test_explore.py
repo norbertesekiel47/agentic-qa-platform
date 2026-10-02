@@ -19,6 +19,7 @@ from aqa_cli import explore as explore_module
 from aqa_cli.main import app
 from aqa_core.coverage_plan import CoveragePlan, plan_hash
 from aqa_core.model_costs import Usage
+from aqa_core.project import load_project
 from aqa_runner.chat_client import Reply
 from aqa_runner.model_router import ModelCallError
 from langchain_core.messages import AIMessage
@@ -169,19 +170,23 @@ def test_plan_only_writes_the_plan_and_its_hash_and_exits_0_without_a_browser(
     assert result.exit_code == 0, result.output
     assert factory.built == [("anthropic", SONNET, None)]
     record = record_of(tmp_path / "qa")
-    assert record["outcome"] == "planned"
-    assert CoveragePlan.model_validate(record["plan"]) == PLAN
+    assert (record["outcome"], record["reasons"]) == ("planned", [])
+    assert record["plan"] == PLAN.model_dump(mode="json", exclude_none=True)
     assert record["plan_hash"] == plan_hash(PLAN)
     assert record["spec_id"] == "checkout"
-    assert record["spec_hash"].startswith("sha256:")
+    assert (
+        record["spec_hash"] == load_project(tmp_path / "qa").specs["checkout"].spec_hash
+    )
     [call] = record["calls"]
     assert (call["role"], call["mode"], call["status"]) == (
         "navigator",
         "explore",
         "ok",
     )
-    assert plan_hash(PLAN) in result.stdout
-    assert str(tmp_path / "qa" / ".aqa" / "runs") in result.stdout
+    assert result.stdout.startswith(
+        f"planned checkout: plan {plan_hash(PLAN)}, 2 expectations covered, "
+        f"${call['cost_usd']}, run record: {tmp_path / 'qa' / '.aqa' / 'runs'}"
+    )
 
 
 def test_the_plan_is_written_to_a_run_record_that_ignores_itself(
@@ -211,6 +216,22 @@ def test_explore_finds_the_spec_root_above_the_spec(tmp_path: Path, run: Run) ->
     assert record_of(root)["spec_id"] == "checkout"
 
 
+def test_the_nearest_project_config_above_the_spec_is_its_spec_root(
+    tmp_path: Path, run: Run
+) -> None:
+    # A project inside another: the inner config is the spec's.
+    (tmp_path / "config.yaml").write_text(CONFIG)
+    spec = project(tmp_path / "inner")
+
+    result, _ = run(
+        [str(spec), "--plan-only"], **{SONNET: FakeClient(reply(parsed=PLAN))}
+    )
+
+    assert result.exit_code == 0, result.output
+    assert record_of(tmp_path / "inner")["spec_id"] == "checkout"
+    assert not (tmp_path / ".aqa").exists()
+
+
 def test_an_expectation_the_plan_cannot_cover_exits_5_and_is_named(
     tmp_path: Path, run: Run
 ) -> None:
@@ -225,7 +246,12 @@ def test_an_expectation_the_plan_cannot_cover_exits_5_and_is_named(
     assert 'expect[1] "The Pay button is visible and not covered"' in result.stderr
     assert "no M1 check can establish it" in result.stderr
     assert "it is about how it looks" in result.stderr
-    assert record_of(tmp_path / "qa")["outcome"] == "spec_error"
+    record = record_of(tmp_path / "qa")
+    assert record["outcome"] == "spec_error"
+    assert record["reasons"][0] == "an expectation has no establishing check"
+    assert record["reasons"][1].startswith('expect[1] "The Pay button')
+    # What it cost is printed too, not only kept in the record.
+    assert f"cost: ${record['calls'][0]['cost_usd']}" in result.stderr
 
 
 @pytest.mark.parametrize("needs", ["pixel_diff", "contrast_min"])
@@ -247,14 +273,20 @@ def test_a_model_written_reason_is_printed_with_its_control_characters_visible(
     tmp_path: Path, run: Run
 ) -> None:
     spec = project(tmp_path / "qa")
-    plan = unsupported(None, reason="first line\nsecond \x1b[31mred\x1b[0m")
+    # A newline, ANSI colour, a C1 control sequence introducer, a line
+    # separator, and each kind of bidi control: a mark, an embedding or
+    # override, an isolate.
+    reason = "one\ntwo \x1b[31mred\x9b0m \u2028 \u061c\u200e\u200f \u202e \u2067"
+    plan = unsupported(None, reason=reason)
 
     result, _ = run(
         [str(spec), "--plan-only"], **{SONNET: FakeClient(reply(parsed=plan))}
     )
 
-    assert "first line\\nsecond \\x1b[31mred\\x1b[0m" in result.stderr
-    assert "\x1b" not in result.stderr
+    shown = (
+        "one\\ntwo \\x1b[31mred\\x9b0m \\u2028 \\u061c\\u200e\\u200f \\u202e \\u2067"
+    )
+    assert shown in result.stderr
 
 
 # Each kind of problem #39's parser reports: the spec as written, the problem
@@ -409,14 +441,17 @@ def test_a_path_that_is_not_a_spec_of_the_project_exits_5(
     assert factory.built == []
 
 
+@pytest.mark.parametrize("key", [None, ""])
 def test_no_provider_key_exits_5_before_any_model_call(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, run: Run
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, run: Run, key: str | None
 ) -> None:
     spec = project(tmp_path / "qa")
-    factory_run = run
-    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    if key is None:
+        monkeypatch.delenv("ANTHROPIC_API_KEY")
+    else:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", key)
 
-    result, factory = factory_run([str(spec), "--plan-only"])
+    result, factory = run([str(spec), "--plan-only"])
 
     assert result.exit_code == 5, result.output
     assert "ANTHROPIC_API_KEY" in result.stderr
@@ -443,9 +478,10 @@ def test_a_refused_plan_exits_3(tmp_path: Path, run: Run) -> None:
     )
 
     assert result.exit_code == 3, result.output
-    assert "refused" in result.stderr
+    assert "gave_up checkout: the model refused to write the plan" in result.stderr
     record = record_of(tmp_path / "qa")
     assert (record["outcome"], record["plan"]) == ("gave_up", None)
+    assert record["reasons"] == ["the model refused to write the plan"]
     assert [call["status"] for call in record["calls"]] == ["refusal"]
 
 
@@ -529,6 +565,7 @@ def test_a_fallback_that_gives_no_response_exits_11_and_keeps_the_refusal(
 
     assert result.exit_code == 11, result.output
     record = record_of(tmp_path / "qa")
+    assert record["outcome"] == "no_response"
     assert [call["status"] for call in record["calls"]] == ["refusal"]
 
 
@@ -548,11 +585,12 @@ def test_a_fallback_that_fails_otherwise_is_not_called_no_response(
         },
     )
 
+    # Raised as it is: CliRunner reports an uncaught exception as exit 1.
     assert isinstance(result.exception, ModelCallError)
-    assert result.exit_code not in {0, 3, 5, 11}
-    assert [call["status"] for call in record_of(tmp_path / "qa")["calls"]] == [
-        "refusal"
-    ]
+    assert result.exit_code == 1
+    record = record_of(tmp_path / "qa")
+    assert record["outcome"] == "error"
+    assert [call["status"] for call in record["calls"]] == ["refusal"]
 
 
 def test_explore_switches_ambient_tracing_off_before_its_model_call(
