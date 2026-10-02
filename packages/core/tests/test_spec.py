@@ -533,3 +533,16 @@ def test_a_canonical_hash_refuses_a_number_json_cannot_write(number: float) -> N
     # so the canonical form would have two spellings of nothing standard.
     with pytest.raises(ValueError, match="not JSON compliant"):
         canonical_hash({"value": number})
+
+
+def test_a_spec_with_secret_references_dumps_as_it_was_written(tmp_path: Path) -> None:
+    # The coverage plan's request is the frontmatter, dumped (#41); a
+    # serializer warning there is an error under pytest's filters.
+    spec = load_spec(write(tmp_path, LOGIN), CONFIG)
+
+    dumped = spec.frontmatter.model_dump(mode="json", exclude_unset=True)
+
+    assert dumped["preconditions"]["account"] == {
+        "email": "reader@conduit.test",
+        "password": {"secret": "TEST_PASSWORD"},
+    }

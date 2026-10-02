@@ -9,6 +9,7 @@ from typing import Annotated, Literal, Self, TypedDict, cast
 
 from pydantic import (
     Field,
+    PlainSerializer,
     PlainValidator,
     StrictBool,
     ValidationInfo,
@@ -74,7 +75,18 @@ def _credential(value: object, info: ValidationInfo) -> str | SecretReference:
     raise ValueError("must be a string, or { secret: NAME }")
 
 
-_Credential = Annotated[str | SecretReference, PlainValidator(_credential)]
+def _dump_credential(value: str | SecretReference) -> str | dict[str, str]:
+    return value if isinstance(value, str) else {"secret": value.secret}
+
+
+# pydantic 2.13.5 dumps a PlainValidator's value with a warning when its type
+# holds a model (PydanticSerializationUnexpectedValue), so the dump is
+# spelled out (LAB_NOTES).
+_Credential = Annotated[
+    str | SecretReference,
+    PlainValidator(_credential),
+    PlainSerializer(_dump_credential),
+]
 
 
 class Account(StrictModel):
