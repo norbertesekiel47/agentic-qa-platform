@@ -2,8 +2,9 @@
 (`tests/packet_capture.py`), Linux only, without root: a user, network and
 mount namespace of its own, where every address is local, with a veth pair
 for WebRTC, and with the host's resolver daemons out of reach, so that every
-lookup a scenario makes is a packet in the namespace. Standard library only:
-rtnetlink and the interface ioctls over sockets, `mount` through libc."""
+lookup through the name services it allows is a packet in the namespace.
+Standard library only: rtnetlink and the interface ioctls over sockets,
+`mount` through libc."""
 
 import ctypes
 import fcntl
@@ -59,6 +60,24 @@ RESOLVER_SOCKETS = (
 )
 MS_REC, MS_PRIVATE = 0x4000, 1 << 18
 
+# The host-lookup sources whose daemons the hiding covers, or that need none
+# (nsswitch.conf(5)). Any other (sss, ldap, wins, ...) could resolve through
+# a daemon left in reach, so the capture refuses to start with it.
+KNOWN_HOST_SOURCES = {
+    "files",
+    "dns",
+    "resolve",
+    "myhostname",
+    "mymachines",
+    "mdns",
+    "mdns4",
+    "mdns6",
+    "mdns_minimal",
+    "mdns4_minimal",
+    "mdns6_minimal",
+}
+NSSWITCH = Path("/etc/nsswitch.conf")
+
 
 def enter() -> None:
     """Enter a user, network and mount namespace of this process's own,
@@ -109,10 +128,28 @@ def mount(source: str | None, target: str, kind: str | None, flags: int) -> None
         raise OSError(error, f"mount {target}: {os.strerror(error)}")
 
 
+def host_sources(nsswitch: str) -> list[str]:
+    """The sources the `hosts:` line of an nsswitch.conf names, in order,
+    without its `[STATUS=action]` items."""
+    for line in nsswitch.splitlines():
+        key, _, sources = line.partition("#")[0].partition(":")
+        if key.strip() == "hosts":
+            return [each for each in sources.split() if not each.startswith("[")]
+    return []
+
+
 def hide_host_resolvers() -> None:
     """Put an empty tmpfs over each resolver daemon's socket directory, in
     this mount namespace only, which first stops sharing mounts with the
-    host's."""
+    host's. Refuses a host whose `hosts:` sources it doesn't cover. A daemon
+    directory made later, on the host's `/run`, would show here."""
+    if NSSWITCH.exists():
+        unknown = set(host_sources(NSSWITCH.read_text())) - KNOWN_HOST_SOURCES
+        if unknown:
+            raise RuntimeError(
+                f"the packet capture can't keep lookups through {sorted(unknown)} "
+                "inside its network; give the host's nsswitch.conf `hosts: files dns`"
+            )
     mount(None, "/", None, MS_REC | MS_PRIVATE)
     for directory in RESOLVER_SOCKETS:
         if Path(directory).is_dir():
