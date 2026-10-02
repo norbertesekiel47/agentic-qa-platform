@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from aqa_core.config import ProjectConfig
 from aqa_core.project import SpecError, load_spec
-from aqa_core.spec import SecretReference, secret_references
+from aqa_core.spec import SecretReference, canonical_hash, secret_references
 
 CONFIG = ProjectConfig.model_validate(
     {"secrets": {"TEST_PASSWORD": {"origins": ["start"], "field": "password"}}}
@@ -525,3 +525,11 @@ def test_spec_hash_changes_with_any_other_frontmatter_edit(
     after = load_spec(write(tmp_path, LOGIN.replace(old, new, 1)), CONFIG)
 
     assert after.spec_hash != before
+
+
+@pytest.mark.parametrize("number", [float("nan"), float("inf")])
+def test_a_canonical_hash_refuses_a_number_json_cannot_write(number: float) -> None:
+    # Python's json would write NaN or Infinity, which no JSON reader takes,
+    # so the canonical form would have two spellings of nothing standard.
+    with pytest.raises(ValueError, match="not JSON compliant"):
+        canonical_hash({"value": number})
