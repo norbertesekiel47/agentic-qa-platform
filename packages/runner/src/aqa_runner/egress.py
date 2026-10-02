@@ -269,7 +269,7 @@ class EgressGate:
         address's certificate must verify for `host`: one that doesn't fails
         like an address that doesn't answer."""
         if not self.policy.allows(host, port, requester):
-            raise self._refuse(
+            raise self.record_refusal(
                 host, port, "host", "not an allowed origin or a subresource host"
             )
         return await self._open(host, port, await self._addresses(host, port), tls=tls)
@@ -312,7 +312,7 @@ class EgressGate:
         for address in answer:
             problem = address_refusal(address, private_allowed=private_allowed)
             if problem is not None:
-                raise self._refuse(host, port, "address", problem)
+                raise self.record_refusal(host, port, "address", problem)
         return answer
 
     async def _open(
@@ -344,9 +344,12 @@ class EgressGate:
                 problems.append(f"{address}: {str(error) or type(error).__name__}")
         raise self.record_failure(host, port, "; ".join(problems))
 
-    def _refuse(
+    def record_refusal(
         self, host: str, port: int, kind: RefusalKind, detail: str
     ) -> EgressRefusedError:
+        """Record that a connection to `host` and `port` was refused, and the
+        error to raise for it: the gate's own refusals, and a runner-side
+        request's whose origin the run doesn't allow on its scheme."""
         refusal = Refusal(host, port, kind, detail)
         self.refusals.append(refusal)
         return EgressRefusedError(refusal)
