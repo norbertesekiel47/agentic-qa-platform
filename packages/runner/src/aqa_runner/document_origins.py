@@ -38,7 +38,8 @@ class PolicyEvent:
 class Popup:
     """A page another page opened, which the session recorded and closed.
     `url` is its first URL as Playwright reports it once it has navigated
-    there; `opener` is the opener's URL, None when Playwright reports none."""
+    there; `opener` is the opener's URL, None when Playwright reports none,
+    as once the opener has closed."""
 
     url: str
     opener: str | None
@@ -91,8 +92,9 @@ def document_origin(url: str, inherited: str | None) -> str | None:
     written as an origin writes it; None when it has none a run could allow.
 
     - An http(s) document is on its URL's origin, and a blob on its maker's.
-    - about:blank and about:srcdoc are on `inherited`: a frame's parent's
-      origin, a popup's opener's, or None for the session's own page.
+    - about:blank and about:srcdoc are on `inherited`: for a frame, its
+      parent's origin when `frame_origin` finds the parent's is theirs, and
+      None for a top-level page.
     - Any other document, such as data:, Chromium's error page or a file, is
       on none."""
     parts = urlsplit(url)
@@ -117,10 +119,39 @@ def document_origin(url: str, inherited: str | None) -> str | None:
             return None
 
 
-def frame_origin(frame: Frame) -> str | None:
+async def frame_origin(frame: Frame) -> str | None:
     """The origin of `frame`'s document, from the URL Chromium reports for it
     (https://playwright.dev/python/docs/api/class-frame#frame-url), which the
-    page's scripts can't forge. about:blank and about:srcdoc inherit their
-    parent frame's."""
+    page's scripts can't forge.
+
+    about:srcdoc is on its parent frame's origin: only the parent's srcdoc
+    attribute makes one, and Chromium refuses a navigation to it. about:blank
+    is on its parent's only when the parent can reach its document. A
+    document reached by navigating to about:blank is on the origin of the
+    frame that navigated it there, which may be a subresource host's that
+    then writes into it; the parent reaching it is the browser's own
+    same-origin check, run in the parent's world, where that host can't."""
     parent = frame.parent_frame
-    return document_origin(frame.url, None if parent is None else frame_origin(parent))
+    if parent is None:
+        return document_origin(frame.url, None)
+    inherited = await frame_origin(parent)
+    if inherited is not None and is_blank(frame.url) and not await reaches(frame):
+        inherited = None
+    return document_origin(frame.url, inherited)
+
+
+def is_blank(url: str) -> bool:
+    parts = urlsplit(url)
+    return parts.scheme == "about" and parts.path == "blank"
+
+
+async def reaches(frame: Frame) -> bool:
+    """Whether `frame`'s parent can reach its document: whether they are on
+    one origin."""
+    iframe = await frame.frame_element()
+    try:
+        # contentDocument is null for a frame on another origin:
+        # https://html.spec.whatwg.org/multipage/iframe-embed-object.html#dom-iframe-contentdocument
+        return bool(await iframe.evaluate("(frame) => frame.contentDocument !== null"))
+    finally:
+        await iframe.dispose()
