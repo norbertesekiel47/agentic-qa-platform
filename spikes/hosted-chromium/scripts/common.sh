@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # us-east-2: the AWS account the spike runs in, a project account, denies
-# Lambda, ECS, ECR, EC2 and S3 outside its own region (ADR-0030).
+# Lambda, ECS, ECR, EC2 and S3 outside its own region (ADR-0032).
 export AWS_REGION=us-east-2 AWS_DEFAULT_REGION=us-east-2 AWS_PAGER=""
 
 # Fails unless each tool is on PATH. Every script needs aws, jq and python3;

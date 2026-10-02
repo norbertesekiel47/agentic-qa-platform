@@ -13,7 +13,7 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | [0005](0005-python-backend-nextjs-dashboard.md) | Python backend + Next.js dashboard with generated client | Accepted |
 | [0006](0006-langgraph-run-graph.md) | LangGraph for the run graph with an API-backed checkpointer | Accepted (amended 2026-09-27, 2026-09-28) |
 | [0007](0007-model-agnostic-role-routing.md) | Model-agnostic, role-based model routing | Accepted (amended 2026-09-29, 2026-10-01) |
-| [0008](0008-runner-image-lambda.md) | One runner image, two locations; Lambda for hosted runs | Superseded in part by [0030](0030-hosted-compute-lambda-microvms.md) (hosted compute; amended 2026-09-27, 2026-09-29, 2026-09-30) |
+| [0008](0008-runner-image-lambda.md) | One runner image, two locations; Lambda for hosted runs | Superseded in part by [0032](0032-hosted-compute-lambda-microvms.md) (hosted compute; amended 2026-09-27, 2026-09-29, 2026-09-30) |
 | [0009](0009-rds-postgres-rls.md) | RDS PostgreSQL with row-level security; fck-nat | Accepted |
 | [0010](0010-clerk-organizations.md) | Clerk Organizations for identity and tenancy | Accepted |
 | [0011](0011-byok-envelope-encryption.md) | BYOK only, with KMS envelope encryption | Accepted |
@@ -37,7 +37,7 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | [0029](0029-ci-on-the-uv-workspace.md) | CI on the uv workspace: jobs, installs, the mypy split and the dependency audit | Accepted (amended 2026-10-01) |
 | [0030](0030-spec-yaml-parsing.md) | Reading specs and the project config: PyYAML narrowed to YAML 1.2's core schema | Accepted |
 | [0031](0031-renovate-weekly-dependency-updates.md) | Renovate for weekly dependency updates, and how a bump keeps TECH_STACK.md true | Accepted |
-| [0030](0030-hosted-compute-lambda-microvms.md) | Hosted compute: one Lambda MicroVM per run | Accepted |
+| [0032](0032-hosted-compute-lambda-microvms.md) | Hosted compute: one Lambda MicroVM per run | Accepted |
 | [0033](0033-m1-saves-no-screenshots.md) | M1 saves no screenshots; bound-field masking moves to M2 | Accepted |
 
 ## Template
