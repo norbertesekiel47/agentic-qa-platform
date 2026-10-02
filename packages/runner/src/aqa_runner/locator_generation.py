@@ -121,7 +121,7 @@ _IDENTITY_ENGINE = """(() => {
 })()"""
 
 # What a use puts a target to (aqa_runner.locators.Use).
-type GeneratedUse = Literal["action"]
+type GeneratedUse = Literal["action", "assertion"]
 
 # The meaning of the one-locator targets each candidate is resolved as.
 _CANDIDATE_MEANING = "the element a use put a target to"
@@ -436,12 +436,18 @@ async def _dropped(element: ElementHandle, token: str) -> bool:
     return True
 
 
+def _role_and_name(used: Seen) -> tuple[str | None, str]:
+    """The role a role locator may take, and the name only a control's name
+    may carry, or "" (ADR-0025)."""
+    role = used.role if used.role in _ROLES else None
+    return role, normalize(used.name or "") if role in _NAMED_ROLES else ""
+
+
 def _action_kinds(used: Seen, element: _Element) -> list[list[Locator]]:
     """The grammar's kinds for an action, in its order, each with its
     candidates in order: role and name, label, placeholder, test ID, stable
     id, then structure (ADR-0025)."""
-    role = used.role if used.role in _ROLES else None
-    name = normalize(used.name or "") if role in _NAMED_ROLES else ""
+    role, name = _role_and_name(used)
     labels = [normalize(label) for label in element["labels"]]
     placeholder = (element["placeholder"] or "").strip()
     return [
@@ -450,6 +456,26 @@ def _action_kinds(used: Seen, element: _Element) -> list[list[Locator]]:
         [ByPlaceholder(placeholder=placeholder)] if placeholder else [],
         [ByTestId(testid=element["testid"])] if element["testid"] else [],
         [ByCss(css=f"#{element['id']}")] if _stable(element["id"]) else [],
+        list(_structural(element)),
+    ]
+
+
+def _assertion_kinds(
+    used: Seen, element: _Element, *, checks_text: bool
+) -> list[list[Locator]]:
+    """The grammar's kinds for an assertion, in its order: test ID, stable
+    id, role, then structure (ADR-0025). A control's role carries its name
+    only when the assertion checks no text: a name and the rendered text can
+    share words without either accepting the other, as `aria-label="Save"`
+    and "Save changes" do."""
+    role, name = _role_and_name(used)
+    by_role = (
+        {"role": role, "name": name} if name and not checks_text else {"role": role}
+    )
+    return [
+        [ByTestId(testid=element["testid"])] if element["testid"] else [],
+        [ByCss(css=f"#{element['id']}")] if _stable(element["id"]) else [],
+        [ByRole.model_validate(by_role)] if role is not None else [],
         list(_structural(element)),
     ]
 
@@ -508,4 +534,22 @@ async def generate_for_action(page: Page, used: Seen) -> tuple[Locator, ...]:
     locator does."""
     return await _generate(
         page, used, "action", lambda element: _action_kinds(used, element)
+    )
+
+
+async def generate_for_assertion(
+    page: Page, used: Seen, *, checks_text: bool
+) -> tuple[Locator, ...]:
+    """An assertion target's locators: one of each kind that finds the
+    element `used`, in the grammar's order, each resolved alone, as an
+    assertion's target, to that element on the page as it is now.
+    `checks_text` says whether any use of the target checks its text
+    (`text_in_target`); then it is located by no name, and the caller passes
+    True for every use of a target one of whose uses checks its text.
+    Raises `LocatorError` when no locator does."""
+    return await _generate(
+        page,
+        used,
+        "assertion",
+        lambda element: _assertion_kinds(used, element, checks_text=checks_text),
     )
