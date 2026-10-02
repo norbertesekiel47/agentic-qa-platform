@@ -73,10 +73,10 @@ def _host(host: str) -> str | None:
     return str(address)
 
 
-def parse_origin(text: str) -> str:
-    """`text` as an origin: http or https, a host and an optional port, with a
-    lone trailing slash allowed. Returned lowercase, without the scheme's
-    default port or the slash, so equal origins compare equal."""
+def _origin_parts(text: str) -> tuple[str, str, int]:
+    """`text`'s scheme, host as an origin writes it, and port, the scheme's
+    default when it writes none. Raises ValueError unless `text` is an origin
+    as `parse_origin` reads one."""
     problem = ValueError(
         f"'{text}' is not an origin: write a scheme, a host and an optional port, "
         "such as https://shop.example.test"
@@ -102,9 +102,26 @@ def parse_origin(text: str) -> str:
     # such as [v1.example.test], leaving a different host.
     if host is None or port == 0 or ("[" in parts.netloc) != host.startswith("["):
         raise problem
-    if port is None or port == DEFAULT_PORTS[parts.scheme]:
-        return f"{parts.scheme}://{host}"
-    return f"{parts.scheme}://{host}:{port}"
+    return parts.scheme, host, DEFAULT_PORTS[parts.scheme] if port is None else port
+
+
+def parse_origin(text: str) -> str:
+    """`text` as an origin: http or https, a host and an optional port, with a
+    lone trailing slash allowed. Returned lowercase, without the scheme's
+    default port or the slash, so equal origins compare equal."""
+    scheme, host, port = _origin_parts(text)
+    if port == DEFAULT_PORTS[scheme]:
+        return f"{scheme}://{host}"
+    return f"{scheme}://{host}:{port}"
+
+
+def authority(origin: str) -> tuple[str, int]:
+    """The host and port `origin` names, read as `parse_origin` reads it: the
+    host lowercase, an IPv6 address in brackets, and the port the scheme's
+    default when the origin writes none. Raises ValueError for anything that
+    isn't an origin."""
+    _, host, port = _origin_parts(origin)
+    return host, port
 
 
 def _parse_host(text: str) -> str:
