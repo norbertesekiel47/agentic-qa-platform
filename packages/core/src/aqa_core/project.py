@@ -207,9 +207,9 @@ def allowed_origins(spec: Spec, start: str) -> tuple[str, ...]:
 
 def start_url(spec: Spec, start: str) -> str:
     """Where the run's first navigation goes: `start`, the run's start origin
-    as start_origin gives it, followed by the spec's start_url as written
-    (ADR-0026). Joined as text, never percent-decoded or resolved: decoded,
-    /%2f%2fevil.test would be //evil.test, another origin."""
+    as start_origin gives it, followed by the spec's start_url as written.
+    Joined as text, never percent-decoded or resolved (ADR-0026's start URL
+    amendment)."""
     return start + spec.frontmatter.preconditions.start_url
 
 
