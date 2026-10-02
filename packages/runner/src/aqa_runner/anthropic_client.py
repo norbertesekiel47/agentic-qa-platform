@@ -8,6 +8,7 @@ import os
 from collections.abc import Sequence
 from typing import Any, cast
 
+import anthropic
 from aqa_core.config import Effort
 from aqa_core.model_costs import Usage
 from aqa_core.model_roles import RoutedModel
@@ -21,6 +22,10 @@ from aqa_runner.chat_client import Reply
 API_URL = "https://api.anthropic.com"
 # The one variable the adapter reads Anthropic's key from.
 KEY_VARIABLE = "ANTHROPIC_API_KEY"
+# What a call that got no usable answer from Anthropic raises: a connection
+# error, a timeout, an HTTP error. langchain-anthropic raises the SDK's own
+# errors, subclassed (AnthropicConnectionError and the like).
+ProviderError = anthropic.APIError
 # The one stop reason that ends a complete answer. Anything else (`max_tokens`,
 # `pause_turn`, a stop sequence, ...) can leave a half-written one, which
 # LangChain would repair into something that parses.
