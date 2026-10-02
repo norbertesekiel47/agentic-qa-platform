@@ -1,13 +1,13 @@
 # Constraints
 
-Last reviewed: 2026-09-30 (#37: `spikes/` joins the type check and the coverage scope).
+Last reviewed: 2026-10-01 (#66: CI's `floor` job runs `policy_guard.py --diff`, so the floor's approval-class rules reach pull requests).
 
 This file owns the project's quality bar: the floor every change keeps and the thresholds the gates hold. The floor applies to every file policy_guard checks. The thresholds cover the Python code; fallow gates TypeScript (ADR-0018) once the dashboard exists.
 - The tool configs in `pyproject.toml` mirror it, and `tests/test_constraints.py` fails when a config drifts from a number here.
 - TESTING.md §8 keeps the list of gates.
 - [ADR-0028](ADRs/0028-quality-bar.md) records why each choice was made.
 
-Read this file before writing code. Never weaken it to make a change pass. A threshold moves only in a change of its own, with the maintainer's approval: policy_guard asks before any edit to this file.
+Read this file before writing code. Never weaken it to make a change pass. A threshold moves only in a change of its own, with the maintainer's approval: policy_guard asks before any edit to this file, and CI's `floor` job fails on one until the maintainer approves it.
 
 ## Floor
 
@@ -15,15 +15,15 @@ Always enforced. Each rule has exactly one enforcer.
 
 | Rule | Enforced by | Runs at |
 |---|---|---|
-| No new suppression comments: `# type: ignore`, `# noqa`, `pyright:` and `mypy:` pragmas, `@ts-ignore`, `@ts-expect-error`, `eslint-disable`, `fallow-ignore`, coverage pragmas | policy_guard, refused | Each edit and shell write in Claude Code; the Stop hook's tree scan; `--scan` (CI's `guardrails` job runs it) |
+| No new suppression comments: `# type: ignore`, `# noqa`, `pyright:` and `mypy:` pragmas, `@ts-ignore`, `@ts-expect-error`, `eslint-disable`, `fallow-ignore`, coverage pragmas | policy_guard, refused | Each edit and shell write in Claude Code; the Stop hook's tree scan; `--scan` (CI's `guardrails` job runs it); `--diff` (CI's `floor` job runs it) |
 | No skipped, focused or rerun-until-green tests | policy_guard, refused | Same |
 | No tautological assertions (`assert True`, `expect(true).toBe(true)`) | policy_guard, refused | Same |
 | No unimplemented stubs outside tests (`raise NotImplementedError`, `throw new Error("Not implemented")`) | policy_guard, refused | Same |
 | No empty bodies in functions that return a value (`...` or `pass`) | mypy's `empty-body` | Both mypy runs in the Types row below |
 | No `TODO`, `FIXME`, `XXX` or `HACK` comments | Ruff `FIX` | `uv run ruff check .` |
 | No broad exception handlers that swallow the error: a bare `except`, `except Exception` or `except BaseException` that doesn't re-raise | Ruff `E722`, `BLE001`, `S110`, `S112` | `uv run ruff check .` |
-| No `suppress(Exception)` or `suppress(BaseException)`, the rewrite Ruff's `SIM105` suggests for `try`-`except`-`pass` | policy_guard, refused | Each edit and shell write in Claude Code; the Stop hook's tree scan; `--scan` |
-| No deleted or renamed-away tests, stripped assertions, or changed gate configs or thresholds without the maintainer's approval | policy_guard, asks | Each edit and shell command in Claude Code only, until the `--diff` follow-up brings it to CI |
+| No `suppress(Exception)` or `suppress(BaseException)`, the rewrite Ruff's `SIM105` suggests for `try`-`except`-`pass` | policy_guard, refused | Each edit and shell write in Claude Code; the Stop hook's tree scan; `--scan`; `--diff` |
+| No deleted or renamed-away tests, stripped assertions, changes to an existing test that proves the bar (under the root `tests/`, and the guard's `.claude/hooks/test_*.py`), or changed gate configs or thresholds without the maintainer's approval | policy_guard, asks | Each edit and shell command in Claude Code; `--diff` in CI's `floor` job, on every pull request, which passes once the maintainer puts the `floor-change-approved` label on the pull request's latest push |
 
 A refused line passes when it cites an existing `ADR-NNNN`, so write the ADR first. Abstract and Protocol methods use `...` as their body, which mypy allows. Ruff's `PLR0124` and `PLR0133` also flag a comparison of a value with itself or of two constants, wherever it appears, so the `x == x` form of a tautological assertion has a second, broader check.
 
@@ -54,7 +54,6 @@ Recorded now, enforced once the code or the pipeline they need exists.
 |---|---|---|
 | Coverage of each test-first module (TESTING.md §2) | 100% line and branch, via `uv run coverage report --include=<the module's paths> --fail-under=100` | The ticket that adds the first test-first module, which also adds the command |
 | Mutation testing | Chosen then | The replay engine, the first test-first module |
-| The floor in CI: deleted tests, stripped assertions, changed gate configs | `policy_guard.py --diff <base>` finds none, or the maintainer approved them | A follow-up ticket, which first splits the guard, now near its 1000-line limit |
 
 ## Exceptions
 
