@@ -114,6 +114,10 @@ _Avoid_: replay, replay viewer, run replay
 The record of an action a runner writes before dispatching it (under the current lease, when the run has one) and completes afterwards. An unresolved step intent on a side-effect step means its outcome is unknown.
 _Avoid_: bare "intent", since the healer can never observe author intent (see `drift_consistent`)
 
+**Settle window**:
+The requests a page sends from one action of a run until the next. The run waits until they have finished and the page has been quiet before it goes on, and a write that arrives after that but before the next action still counts against the step.
+_Avoid_: "network idle", which counts every request on the page
+
 **Lease**:
 The dispatcher's grant that lets one runner invocation record progress for a run. Every continuation gets a new lease, and writes under a superseded lease are rejected.
 _Avoid_: lock

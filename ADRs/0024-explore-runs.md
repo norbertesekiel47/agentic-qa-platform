@@ -129,14 +129,14 @@ Building the executor (#46) settled choices the Consequences above left open. DA
 ### Bounded text searches
 A `pattern` comes from the script and the text from the page, and Python's `re` can backtrack for exponential time: `(a+)+$` against forty `a`s and a `b`. A `text` literal's search is a regex too, built with lookarounds, whose cost grows with the text.
 - **Options:**
-  1. *A thread with a timeout.* `re` holds the GIL while it matches, so the event loop's thread would stall as well. Measured with Python 3.14.7 on macOS at `0690045`: while `re.search(r"(a+)+$", "a" * 24 + "b")` ran in a `threading.Thread` for 0.78 s, a `while t.is_alive(): time.sleep(0.01)` loop in the main thread ran once (`uv run python -c` with those lines). Nor can a thread be stopped, so it would keep its core after the deadline.
+  1. *A thread with a timeout.* `re` holds the GIL while it matches, so the event loop's thread would stall as well. Measured with Python 3.14.7 on macOS at `199754d`: while `re.search(r"(a+)+$", "a" * 24 + "b")` ran in a `threading.Thread` for 0.78 s, a `while t.is_alive(): time.sleep(0.01)` loop in the main thread ran once (`uv run python -c` with those lines). Nor can a thread be stopped, so it would keep its core after the deadline.
   2. *The `regex` package's `timeout`.* It can be interrupted, but it is another engine than the `re.search` the format names, with its own syntax and behaviour, and a new dependency.
   3. *A child process per search, killed at the deadline.*
 - **Chosen: 3** (`aqa_runner.text_search`).
   - The child runs fixed code in isolated mode (`-I`) with an empty environment, so it never holds the runner's keys or test secrets. The search's kind, needle and text reach it on stdin as ASCII-only JSON, so no locale changes them and a lone surrogate survives.
   - Matching is `aqa_core.text`'s, as in the format. A URL is searched as it is.
   - The deadline is 2 s per search, starting the process included. A timeout or a cancellation kills the child, so no search outlives its check.
-  - *Cost:* one process start per text check, a median of 25.4 ms (51.9 ms at most) over 50 `url_matches` calls on macOS at `0690045` (`uv run python -c` timing each call with `time.perf_counter`). No model and no network are involved.
+  - *Cost:* one process start per text check, a median of 25.4 ms (51.9 ms at most) over 50 `url_matches` calls on macOS at `199754d` (`uv run python -c` timing each call with `time.perf_counter`). No model and no network are involved.
 - **What a timed-out search reports.**
   - *Options:*
     1. a fourth assertion outcome, `check_timed_out`;
@@ -144,6 +144,33 @@ A `pattern` comes from the script and the text from the page, and Python's `re` 
     3. the run ends `errored`.
   - *Chosen: 1.* A timed-out search established neither a pass nor a failure. Option 2 would let M2 file a finding the page never showed, and option 3 would leave the other assertions unevaluated, though every assertion is evaluated so the report is complete.
   - *Rule:* a run with any timed-out check can't pass, and M2 maps the outcome to `inconclusive`, never to `expectation_violated`.
+
+### Settling
+The Decision's step readiness, as the browser session builds it (`aqa_runner.settling`, `BrowserSession.settle`).
+- **Options:**
+  1. *Playwright's `networkidle`* (no connection for 500 ms, on the whole page). The Decision rules it out: it can fire before a client-side write. A request any earlier action left open, such as an app's long poll, would also keep it from ever firing.
+  2. *A count of the page's open requests.* The second flaw again.
+  3. *A settle window per action, and a quiet page.*
+- **Chosen: 3.**
+  - *The settle window.* Each action (`navigate`, `reload`, `click`, `fill`, `select`, `press`) returns the window of the requests it starts (CONTEXT.md). A request joins the window that is latest when Playwright reports it ([`request`](https://playwright.dev/python/docs/api/class-page#page-event-request)). A redirect's next hop joins the window of the request it continues ([`redirected_from`](https://playwright.dev/python/docs/api/class-request#request-redirected-from)), so a slow chain never leaks into the next action's window. A window opens once the action's checks pass, so a refused action opens none, and what the page sends next stays in the previous action's window. It keeps the method and URL of its first 100 requests and counts all, as the session's other records do, so a write that arrives after settling but before the next action counts against the step (ADR-0025).
+  - *Idle.* `settle(window)` looks every 100 ms. It returns `idle` once the window has no open request and, for the last 500 ms, no request in it has started or ended and the page's document had no mutation. The quiet period covers requests too, so the moment between a redirect hop's end and the next hop's start, or between a fetch and one chained after it, isn't idle. Otherwise it returns `timeout` at 10 s, even while a look is under way. Every step costs at least 0.5 s.
+- **What doesn't hold a window.**
+  - *WebSockets.* Playwright reports no request for one, only the page's `websocket` event (measured on 1.63, and pinned by `test_an_open_websocket_doesnt_hold_settling`).
+  - *Event streams.* An EventSource's request stays open for as long as the page listens (measured). It is kept in the window but never holds it open, as a WebSocket doesn't: both are streams the page keeps open, and an EventSource is a GET, so it hides no write. What either's messages do to the page shows as DOM changes. Chosen by the coordinator (2026-10-02) over letting it hold the window, which would settle every step that opens a live stream as a timeout.
+  - Any other request that stays open, such as a long-poll fetch, holds the window, and the step settles as a timeout.
+- **How a quiet page is seen.** Each look takes the session's lock and checks the page as every observation does: a page off the allowed origins raises `PolicyEventError` and records the event. It then runs a fixed script, a `MutationObserver` on the whole document (subtree, children, attributes and text), installed at the first look, which counts as a change.
+  - The script runs in the page's world, so its answer is the page's word, as the locators' hit test is. A page can look busy or quiet, and tells the run nothing else.
+  - A look that Playwright fails while the page is open counts as a change: a navigation replaced the document, or the page's own scripts broke the observer. Whether the page changed can't be told, so a page that breaks the observer settles only as a timeout. A closed page raises.
+  - Settling catches nothing else. `PolicyEventError` and `DocumentChangedError` reach the caller, and an action's own error, such as a navigation another one interrupted, is raised by the action before any settling.
+- **Consequences.**
+  - A page that changes its DOM for good, such as a clock, settles every step as a timeout, after 10 s.
+  - Only the page's own document is watched. A change inside a shadow root or a frame isn't seen, though a frame's navigation is a request in the window.
+  - Playwright's default action timeout (30 s) still holds the session's lock while an action waits (ADR-0026's amendment on actions). The executor sets its own from its budget, in #46's third pull request.
+
+### Reading text
+- **`text_of(element)`** is the element's rendered text: its innerText, as `aqa_runner.locators.rendered_text` reads it, in Playwright's utility world. It is an observation (`text_in_target`), so the page and the element's frame are checked first. The element is held, so it can't read a document that replaced its own.
+- **`visible_text()`** is the rendered text of the page's `body`, read the same way (`text_visible`), or empty when the page has none. It counts frame changes from before the page's check, as `resolve` does. If any happened, it discards what it read and raises `DocumentChangedError`.
+- **Known limit, chosen for M1** (coordinator, 2026-10-02): rendered text never enters a frame, so text inside a frame, even one on an allowed origin, never satisfies `text_visible`. Reading allowed frames would need each one checked. Revisit when a spec needs frame text.
 
 ## Amendment (2026-10-02): the coverage plan (#41)
 
