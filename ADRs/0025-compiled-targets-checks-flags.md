@@ -234,13 +234,21 @@ Building the compiler's locator generation (#52) settled choices that "Locator g
   - The element's facts (tag, id, classes, attributes, labels and ancestors) are read in the page's own world, so they are the page's word. They are checked strictly, with bounded sizes.
   - Each candidate is resolved alone, for the use, on the live page, and kept only if it finds that element.
   - *Which element it found is judged outside the page's world.*
-    - *Options:* compare the two elements in the page's own world, or mark the element and read the mark back through Playwright's utility world.
-    - *Chosen:* the mark. Playwright's evaluation in the page's own world passes arguments through iterators the page can rewrite, and a page did make two elements compare equal (#52's adversarial review). So the element gets a random `data-aqa-generating` value for the trial. Playwright's `get_attribute` and a css count, both in the utility world the page's scripts can't reach, then say whether a found element carries it and nothing else does.
-    - A page that keeps the mark off the element, or copies it, gets no locator, and the mark is removed afterwards.
-  - A page can make the generator build fewer or odder locators, but never one that finds another element (`test_the_page_cannot_fake_which_element_a_locator_found`).
+    - *Options:*
+      1. compare the two elements in the page's own world;
+      2. mark the element with a random attribute and read the mark back through Playwright's utility world;
+      3. hold the element in a selector engine of our own that runs in the utility world.
+    - *Chosen:* the third. #52's reviews defeated the first two.
+      - Playwright's evaluation in the page's own world passes arguments through iterators the page can rewrite, and a page made two elements compare equal.
+      - A mark is DOM state, which the page can move onto a decoy. Its listeners run when Playwright marks the target of `get_attribute`, and its hit test runs in the page's world. Waiting for an attribute could also hang for good on an element moved into another document.
+    - The engine (`aqa-identity`, registered with `content_script=True`) keeps the used element in a closure in the utility world, and answers one query: is this the element it holds? It reads no DOM state and fires no event, and a query on an element that has left the document fails at once.
+    - Engines reach only browser contexts created after them, so whoever opens the session calls `register_identity_engine` first. Generating without it is a programming error, which says so.
+  - A page can make the generator build fewer or odder locators, but never one that finds another element (`test_the_page_cannot_fake_which_element_a_locator_found`, `test_a_page_that_tampers_with_the_trial_gets_no_locator_for_another_element`).
 - **The work per element is bounded.**
-  - Only the nearest 16 ancestors and the first 16 stable classes of a node are tried, each scope is counted on the page once, and one element costs at most 400 page round trips.
-  - A page whose scripts busy-loop can still stall one round trip. Only a bound on the whole explore run's time closes that (ADR-0024, `minutes`).
+  - Only the nearest 16 ancestors and the first 16 stable classes of a node are tried, and each scope is counted on the page once.
+  - One element costs at most 400 tries, each a resolution or a count. Tries that run out keep the locators already found.
+  - A page whose scripts busy-loop can still stall one call. Only a bound on the whole explore run's time closes that (ADR-0024, `minutes`).
+  - Resolution's `is_enabled` waits on an element moved into another document, as `get_attribute` did. That is the executor's path (#46), outside the generator.
 - **Known limits, for the callers (#53, #46):**
   - A class that flips with state, such as Bootstrap's `btn-outline-primary` and `btn-primary`, can't be told from a stable one. A target used before and after such a flip is checked at both uses (#52's third pull request).
   - A page can copy a filled secret into a name, a test ID or a placeholder, and a locator built on it would carry the secret. Before a script is written, its caller must drop, never redact, any locator that reveals a secret value.

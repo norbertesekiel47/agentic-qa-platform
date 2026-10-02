@@ -4,6 +4,7 @@ DATA_MODEL §7, Locators). The rules are tested on the pilot's pages
 (`pilot_pages.py`) where the pilot has an example, and on fixture pages where
 it has none, in real Chromium through the browser session."""
 
+import asyncio
 import re
 from typing import Any
 
@@ -17,7 +18,7 @@ from aqa_core.compiled import (
     Locator,
 )
 from aqa_core.text import normalize
-from aqa_runner.browser_session import BrowserSession
+from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.locator_generation import (
     LocatorError,
     Seen,
@@ -25,8 +26,9 @@ from aqa_runner.locator_generation import (
     seen_element,
     snapshot_elements,
 )
-from playwright.async_api import ElementHandle, Error, Page
+from playwright.async_api import ElementHandle, Error, Page, async_playwright
 
+from packages.runner.tests.egress_fixtures import egress_proxy
 from packages.runner.tests.pilot_pages import RENDERINGS, in_session, show
 
 
@@ -335,18 +337,22 @@ def test_a_page_that_garbles_the_elements_facts_gets_no_locator(
         in_session(scenario)
 
 
-@pytest.mark.parametrize("method", ["evaluate", "get_attribute"])
+@pytest.mark.parametrize(
+    ("method", "when"),
+    [("evaluate", ""), ("query_selector", "=hold:"), ("query_selector", "=is:")],
+    ids=["reading the facts", "holding the element", "judging a candidate"],
+)
 def test_a_page_closed_during_generating_still_raises(
-    monkeypatch: pytest.MonkeyPatch, method: str
+    monkeypatch: pytest.MonkeyPatch, method: str, when: str
 ) -> None:
     # Only the page's own doing becomes LocatorError; a closed page is not,
-    # whether it closes while the facts are read (evaluate) or while the mark
-    # is read back (get_attribute).
+    # whenever it closes.
     real = getattr(ElementHandle, method)
     closing: list[Page] = []
 
     async def closes_the_page(self: ElementHandle, *args: Any) -> Any:
-        await closing[0].close()
+        if when in str(args[0]):
+            await closing[0].close()
         return await real(self, *args)
 
     async def scenario(session: BrowserSession) -> None:
@@ -395,28 +401,99 @@ def test_the_page_cannot_fake_which_element_a_locator_found() -> None:
     assert ByCss(css="#decoy") not in in_session(scenario)
 
 
-def test_a_page_that_copies_the_mark_gets_no_locator() -> None:
-    # The page copies the mark onto every button, so no locator can be shown
-    # to find the one used: generating fails rather than trust either.
-    html = """<button class="mine">Mine</button><button>Other</button><script>
-      const copier = new MutationObserver(() => {
-        const mark = document.querySelector(".mine").getAttribute("data-aqa-generating");
-        if (!mark) return;
-        copier.disconnect();
-        for (const button of document.querySelectorAll("button"))
-          button.setAttribute("data-aqa-generating", mark);
-      });
-      copier.observe(document.body, { attributes: true, subtree: true });
-    </script>"""
+# Two buttons, and a page that says the one used has the other's test ID. The
+# facts are the page's word, so a candidate resolves to the other button.
+# The page also hooks what it can see of a trial: Playwright's own marking
+# events, and the hit test that runs in its world for an action.
+TAMPERING = """<div id="a"><button data-testid="keep">Cancel</button></div>
+<div id="b"><button data-testid="evil">Delete account</button></div>
+<script>
+  const keep = document.querySelector("[data-testid=keep]");
+  const real = Element.prototype.getAttribute;
+  Element.prototype.getAttribute = function (name) {
+    return this === keep && name === "data-testid" ? "evil" : real.call(this, name);
+  };
+  window.seen = [];
+  document.addEventListener("__playwright_mark_target__", (event) => {
+    window.seen.push(event.composedPath()[0].textContent);
+  }, true);
+  const rects = Element.prototype.getClientRects;
+  Element.prototype.getClientRects = function () {
+    window.seen.push(this.textContent);
+    return rects.call(this);
+  };
+</script>"""
+
+
+def test_a_page_that_tampers_with_the_trial_gets_no_locator_for_another_element() -> (
+    None
+):
+    # Which element a candidate found is judged in Playwright's utility
+    # world, from no DOM state, so the lie about the test ID only costs that
+    # candidate (#52's security review).
+    async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
+        await session.page.set_content(TAMPERING)
+        snapshot = await session.snapshot()
+        used = await seen_element(
+            session, snapshot, ref_of(snapshot, "button", "Cancel")
+        )
+        return await generate_for_action(session.page, used)
+
+    locators = in_session(scenario)
+
+    assert ByTestId(testid="evil") not in locators
+    assert locators[0] == ByRole(role="button", name="Cancel")
+
+
+MOVE_INTO_TEMPLATE = (
+    "(button) => document.querySelector('template').content.appendChild(button)"
+)
+
+
+@pytest.mark.parametrize("when", ["before", "during"])
+def test_an_element_moved_into_another_document_gets_no_locator(when: str) -> None:
+    # Playwright can't hold it in its own world any more, before the trial
+    # or from inside the trial's first hit test, and a check that waited for
+    # it would wait forever.
+    hook = (
+        "const rects = Element.prototype.getClientRects;"
+        "Element.prototype.getClientRects = function () {"
+        "  const result = rects.call(this);"
+        "  document.querySelector('template').content.appendChild(this);"
+        "  return result; };"
+    )
+    html = "<button class='go'>Go</button><template></template>" + (
+        f"<script>{hook}</script>" if when == "during" else ""
+    )
 
     async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
         await session.page.set_content(html)
         snapshot = await session.snapshot()
-        used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Mine"))
+        used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Go"))
+        if when == "before":
+            await used.element.evaluate(MOVE_INTO_TEMPLATE)
         return await generate_for_action(session.page, used)
 
-    with pytest.raises(LocatorError, match="kept the mark off the element, or copied"):
+    with pytest.raises(LocatorError):
         in_session(scenario)
+
+
+def test_generating_without_the_identity_engine_says_so() -> None:
+    async def scenario() -> tuple[Locator, ...]:
+        async with (
+            async_playwright() as playwright,
+            egress_proxy() as egress,
+            open_browser_session(playwright.chromium, egress=egress) as session,
+        ):
+            await session.page.set_content("<button>Go</button>")
+            snapshot = await session.snapshot()
+            used = await seen_element(
+                session, snapshot, ref_of(snapshot, "button", "Go")
+            )
+            return await generate_for_action(session.page, used)
+
+    with pytest.raises(RuntimeError, match="register_identity_engine"):
+        asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(
@@ -559,10 +636,16 @@ def test_the_work_one_element_costs_is_bounded() -> None:
         in_session(scenario)
 
 
-def test_a_name_with_a_lone_surrogate_is_no_name() -> None:
-    # No locator can carry one, so the button is found by structure.
-    html = """<button class="save">x</button><button>y</button><script>
-      document.querySelector(".save").setAttribute("aria-label", "Save \\uD800");
+@pytest.mark.parametrize(
+    "label",
+    ['"Save \\uD800"', '"x".repeat(2000)'],
+    ids=["a lone surrogate", "too long"],
+)
+def test_a_name_no_locator_can_carry_is_no_name(label: str) -> None:
+    # A lone surrogate can't be written, and the snapshot gives a name of
+    # thousands of characters as none, so the button is found by structure.
+    html = f"""<button class="save">x</button><button>y</button><script>
+      document.querySelector(".save").setAttribute("aria-label", {label});
     </script>"""
 
     async def scenario(
@@ -581,15 +664,15 @@ def test_a_name_with_a_lone_surrogate_is_no_name() -> None:
 
 
 def test_a_page_that_navigates_mid_trial_gets_no_locator() -> None:
-    # The page reloads as soon as the element is marked, which destroys the
+    # The page reloads from inside the first hit test, which destroys the
     # element's world: whatever the trial was doing then, it ends in
     # LocatorError, never a raw error.
     html = """<button class="go">Go</button><script>
-      const reloader = new MutationObserver(() => {
-        reloader.disconnect();
+      const rects = Element.prototype.getClientRects;
+      Element.prototype.getClientRects = function () {
         location.reload();
-      });
-      reloader.observe(document.body, { attributes: true, subtree: true });
+        return rects.call(this);
+      };
     </script>"""
 
     async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
@@ -600,3 +683,28 @@ def test_a_page_that_navigates_mid_trial_gets_no_locator() -> None:
 
     with pytest.raises(LocatorError):
         in_session(scenario)
+
+
+def test_tries_running_out_keep_the_locators_found() -> None:
+    # The button's name finds it on the first try; its structure, shared
+    # with its twin under sixteen ancestors that each look worth a try,
+    # spends the rest. What was found stands.
+    letters = "abcdefghijklmnop"
+    opening = "".join(
+        f"<div class='{' '.join(f'l{level}{each}' for each in letters)}'>"
+        for level in range(16)
+    )
+    inner = " ".join(f"c{each}" for each in letters)
+    html = (
+        opening
+        + f"<button class='{inner}'>Go</button><button class='{inner}'>Stop</button>"
+        + "</div>" * 16
+    )
+
+    async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
+        await session.page.set_content(html)
+        snapshot = await session.snapshot()
+        used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Go"))
+        return await generate_for_action(session.page, used)
+
+    assert in_session(scenario) == (ByRole(role="button", name="Go"),)
