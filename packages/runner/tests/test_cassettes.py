@@ -7,6 +7,7 @@ import asyncio
 import gzip
 import http.client
 import json
+import os
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from pathlib import Path
@@ -17,6 +18,7 @@ import yaml
 from aqa_core.model_roles import RoutedModel
 from aqa_runner.anthropic_client import AnthropicClient
 from langchain_core.messages import HumanMessage
+from langsmith.utils import tracing_is_enabled
 from vcr.errors import CannotOverwriteExistingCassetteException
 
 CASSETTES = Path(__file__).parent / "cassettes"
@@ -26,6 +28,8 @@ MESSAGES = "/v1/messages"
 RECORD = "AQA_RECORD_CASSETTES"
 KEY = "ANTHROPIC_API_KEY"
 COMMITTED = "# the cassette as committed\n"
+
+pytestmark = pytest.mark.usefixtures("reset_tracing")
 
 
 class Stub(Protocol):
@@ -272,6 +276,24 @@ def test_a_recording_keeps_no_credential_and_the_api_address(
     assert json.loads(interaction["response"]["body"]["string"]) == HELLO
 
 
+def test_a_recording_through_a_gateway_keeps_nothing_of_its_address(
+    monkeypatch: pytest.MonkeyPatch,
+    cassette: Cassette,
+    sonnet: RoutedModel,
+    recording_against_a_stub: Path,
+) -> None:
+    gateway = os.environ["ANTHROPIC_BASE_URL"] + "/accounts/fake-account/gateway"
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", gateway)
+
+    with cassette("hello", library=recording_against_a_stub):
+        say_hello(sonnet)
+
+    text = (recording_against_a_stub / "hello.yaml").read_text()
+    (interaction,) = yaml.safe_load(text)["interactions"]
+    assert interaction["request"]["uri"] == f"https://{API}{MESSAGES}"
+    assert "fake-account" not in text
+
+
 def test_a_recording_replays_against_the_apis_own_address(
     monkeypatch: pytest.MonkeyPatch,
     cassette: Cassette,
@@ -288,7 +310,7 @@ def test_a_recording_replays_against_the_apis_own_address(
     assert replay.responses == [HELLO]
 
 
-def test_a_recording_replaces_the_cassette_only_when_the_test_passes(
+def test_a_recording_that_fails_inside_the_block_leaves_the_cassette_alone(
     cassette: Cassette, sonnet: RoutedModel, recording_against_a_stub: Path
 ) -> None:
     committed = recording_against_a_stub / "hello.yaml"
@@ -316,3 +338,25 @@ def test_a_recording_run_that_makes_no_request_says_so_and_keeps_the_cassette(
         pass
 
     assert committed.read_text() == COMMITTED
+
+
+@pytest.fixture
+def ambient_tracing(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    """A developer's environment, with tracing on, before any fixture runs.
+    LangSmith's own state is reset first, or the reset would hide a stale read
+    of the environment."""
+    request.getfixturevalue("reset_tracing")
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("LANGCHAIN_HANDLER", "true")
+    assert tracing_is_enabled()
+
+
+@pytest.mark.usefixtures("ambient_tracing", "cassette")
+def test_the_cassette_fixture_drops_the_tracing_a_run_inherits() -> None:
+    # A recording holds the live API's answers, which must not reach the
+    # developer's LangSmith.
+    assert "LANGSMITH_TRACING" not in os.environ
+    assert "LANGCHAIN_HANDLER" not in os.environ
+    assert not tracing_is_enabled()
