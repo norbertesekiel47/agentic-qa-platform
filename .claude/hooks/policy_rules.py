@@ -137,7 +137,7 @@ GATE_WHOLE_NAMES = NameShapes(
         r"eslint\.config\.[cm]?[jt]s",
         r"\.eslintrc(?:\.\w+)?",
         r"vitest\.(?:config|workspace)\.[cm]?[jt]s",
-        r"tsconfig[\w.-]*\.json",
+        r"{name}tsconfig[\w.-]*\.json",  # extends can read any variant
         r"\.fallowrc(?:\.jsonc?)?",
         r"\.?fallow\.toml",
         r"osv-scanner\.toml",
