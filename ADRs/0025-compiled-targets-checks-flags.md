@@ -119,7 +119,7 @@ Building the strict reader (#45) and its reviews raised choices this ADR left op
   - *Chosen:* one class per kind. `name` then exists only beside `role`, and the executor and the compiler dispatch on the class with nothing left optional. The JSON is the same either way.
 - **A `css` value has no `>>`.**
   - *Options:* refuse it, escape it, or parse CSS to allow it inside quoted attribute values.
-  - *Chosen:* refuse it. Playwright chains selectors at `>>` even after `css=`. On 1.63 a value chained into XPath and into an engine that enters frames. Escaping would hide the author's mistake, and an attribute value can write `\>\>`. Resolution must send the value as `css=<value>` (#45), so no other engine is reachable.
+  - *Chosen:* refuse it. Playwright chains selectors at `>>` even after `css=`. On 1.63 a value chained into XPath and into an engine that enters frames. Escaping would hide the author's mistake, and an attribute value can write `\>\>`. Resolution must send the value as `css=<value>` (#45), so no other engine is reachable. Playwright's own CSS extensions, such as `:has-text()`, still work inside it, and the compiler doesn't write them (#52).
 - **`side_effect_basis` goes only with a true flag.**
   - *Options:* refuse it on a false flag, or allow it.
   - *Chosen:* refuse it. A person who lowers a flag removes its basis in the same edit, so the pull request shows both.
@@ -132,23 +132,26 @@ Building the strict reader (#45) and its reviews raised choices this ADR left op
 
 Building resolution (#45) settled three choices that "Resolution per use" left open. DATA_MODEL §7 holds the rules.
 
-- **A negative check's absence must be unanimous (Q1).**
+- **A negative check's absence must be unanimous.**
   - *Options:*
-    - A: the first locator whose scope resolves decides, so its zero matches is absence;
-    - B: absence only when no locator finds the element.
-  - *Chosen:* B.
-    - Under A, a button relabeled from "Delete" to "Remove" finds nothing by role and name. A `not_visible` check would then pass in strict replay while the structural fallback still sees the button: a weaker check than the claim.
-    - Under B, any unique match resolves the element. Several matches are drift. The element is absent only when no locator finds one, none finds several, and at least one finds its scope empty.
-- **Actionable is one look at the page (Q2).**
+    - the first locator whose scope resolves decides, so its zero matches is absence;
+    - absence only when no locator finds the element.
+  - *Chosen:* the second.
+    - Under the first, a button relabeled from "Delete" to "Remove" finds nothing by role and name. A `not_visible` check would then pass in strict replay while the structural fallback still sees the button: a weaker check than the claim.
+    - Under the second, any unique match resolves the element. Several matches are drift. The element is absent only when no locator finds one, none finds several, and at least one finds its scope empty.
+- **Actionable is one look at the page.**
   - *Options:*
-    - J: visible, enabled, and a hit test at the element's center finds it, after scrolling it into view if needed;
-    - P: Playwright's trial click with a timeout, which also waits for stability.
-  - *Chosen:* J.
+    - visible, enabled, and a hit test at the element's center finds it, after scrolling it into view if needed;
+    - Playwright's trial click with a timeout, which also waits for stability.
+  - *Chosen:* the first.
     - Resolution stays a single judgement, and the executor's loop owns waiting within `resolve_seconds`. A trial click would wait inside every locator's turn, so the waits would add up across fallbacks.
     - The rule is the same for every targeted step, `fill` and `select` included. That is stricter than Playwright's own fill, which skips the hit test, because a person can't fill a field under an overlay either.
-    - An element in a shadow root or a frame fails the document's hit test, which is drift, never a wrong action.
-- **`pattern` searches the normalized rendered text (Q3),** the same text `text` matches, so a pattern spans line items without `(?s)`. `url_matches` searches the URL as it is.
+    - An element in a shadow root or a frame fails the document's hit test. So does a native control hidden under its own label, as some styled checkboxes are. Each is drift, never a wrong action.
+- **`pattern` searches the normalized rendered text,** the same text `text` matches, so a pattern spans line items without `(?s)`. `url_matches` searches the URL as it is.
 - **Role names are matched by Playwright's own role engine.**
   - The name is matched with an anchored pattern built from the normalized name. The pattern lets private-use glyphs sit anywhere and lets a space be any run of whitespace and glyphs.
-  - Each non-alphanumeric character is written `\uXXXX`, which Python and JavaScript read alike, so no character of a name becomes selector syntax.
-  - Only the Basic Multilingual Plane's private-use range is allowed. Playwright passes the pattern to JavaScript without the `u` flag, so a name holding an astral glyph doesn't match, which is drift.
+  - Each character other than an ASCII letter or digit is written `\uXXXX`, which Python and JavaScript read alike, so no character of a name becomes selector syntax. An astral character stays literal.
+  - Playwright passes the pattern to JavaScript without the `u` flag, so an astral private-use glyph is matched as a surrogate pair (LAB_NOTES, 2026-10-02).
+- **A scope is one element.**
+  - *Options:* search inside every element the scope matches, or require the scope to match exactly one.
+  - *Chosen:* exactly one. The scope is there to pick out one place, such as the banner rather than the footer. A scope that matches twice can't tell them apart, so its locator misses with "no scope".

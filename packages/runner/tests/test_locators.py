@@ -27,6 +27,9 @@ PAGE = r"""<!doctype html><title>Locators</title>
   /* An icon font's glyph and a non-breaking space, from CSS (LAB_NOTES,
      2026-09-29). */
   .icon::before { content: "\f218\a0"; }
+  /* A glyph outside the Basic Multilingual Plane, where Material Design
+     Icons' webfont puts its glyphs. */
+  .mdi::before { content: "\F0001\a0"; }
   .upper { text-transform: uppercase; }
   .cover { position: relative; display: inline-block; }
   .overlay { position: absolute; inset: 0; }
@@ -34,6 +37,7 @@ PAGE = r"""<!doctype html><title>Locators</title>
 <header class="banner">
   <a href="#" data-is="new-article"><i class="icon"></i>New Article</a>
   <button data-is="banner-favorite">Favorite Article</button>
+  <a href="#" data-is="saved"><i class="mdi"></i>Saved</a>
 </header>
 <main>
   <label>Email <input id="email" data-is="email" placeholder="you@example.test"></label>
@@ -42,6 +46,8 @@ PAGE = r"""<!doctype html><title>Locators</title>
   <button disabled data-is="publish">Publish</button>
   <button aria-disabled="true" data-is="archive">Archive</button>
   <button data-is="odd-name">C++ / "quoted" &gt;&gt; 'names'</button>
+  <button data-is="cafe">Caf&eacute; &#x2713;</button>
+  <button data-is="hot-deals">&#x1F525; Hot deals</button>
   <button class="delete" data-is="remove">Remove</button>
   <span class="cover"><button data-is="pay">Pay</button><span class="overlay"></span></span>
   <section class="empty"></section>
@@ -91,7 +97,7 @@ def test_role_and_name_match_a_name_with_an_icon_glyph() -> None:
         return (
             exact,
             [await marker(each) for each in found],
-            [each.locator for each in found if isinstance(each, Resolved)],
+            [each.locator_index for each in found if isinstance(each, Resolved)],
         )
 
     exact, markers, locators = on_page(scenario)
@@ -107,6 +113,9 @@ def test_role_and_name_match_a_name_with_an_icon_glyph() -> None:
         ({"role": "textbox"}, "email"),
         ({"role": "button", "name": "Post Comment"}, "post-comment"),
         ({"role": "button", "name": "C++ / \"quoted\" >> 'names'"}, "odd-name"),
+        ({"role": "button", "name": "Caf\u00e9 \u2713"}, "cafe"),
+        ({"role": "button", "name": "\U0001f525 Hot deals"}, "hot-deals"),
+        ({"role": "link", "name": "Saved"}, "saved"),
         ({"label": "Email"}, "email"),
         ({"placeholder": "you@example.test"}, "email"),
         ({"testid": "count"}, "count"),
@@ -238,25 +247,34 @@ def test_zero_matches_inside_a_negative_checks_scope_is_a_result() -> None:
 def test_absence_must_be_unanimous() -> None:
     # The button was relabeled from "Delete" to "Remove": its role and name
     # find nothing, but its structural locator still finds it, so a
-    # not_visible check must see it rather than pass (ADR-0025, Q1).
+    # not_visible check must see it rather than pass (ADR-0025, "resolving a
+    # target per use").
     relabeled = target({"role": "button", "name": "Delete"}, {"css": "button.delete"})
     # Nothing and two things: absence can't be established.
     unclear = target(
         {"css": "button.missing"}, {"role": "button", "name": "Favorite Article"}
     )
+    # A scope that is gone says nothing, so another locator's empty scope
+    # still establishes absence.
+    partly_gone = target(
+        {"css": "p", "scope": {"css": "nav.missing"}},
+        {"role": "alert", "scope": {"css": "section.empty"}},
+    )
 
     async def scenario(page: Page) -> tuple[Any, ...]:
         found = await resolve(page, relabeled, "negative_check")
         return (
-            found.locator if isinstance(found, Resolved) else found,
+            found.locator_index if isinstance(found, Resolved) else found,
             await marker(found),
             await resolve(page, unclear, "negative_check"),
+            await resolve(page, partly_gone, "negative_check"),
         )
 
-    locator, found, unclear_result = on_page(scenario)
+    locator, found, unclear_result, partly_gone_result = on_page(scenario)
 
     assert (locator, found) == (1, "remove")
     assert unclear_result == Unresolved(("no match", "ambiguous"))
+    assert partly_gone_result == Absent(1)
 
 
 def test_resolution_reports_the_locator_that_resolved() -> None:
@@ -265,7 +283,7 @@ def test_resolution_reports_the_locator_that_resolved() -> None:
     async def scenario(page: Page) -> tuple[int, str | None]:
         found = await resolve(page, fallback, "action")
         assert isinstance(found, Resolved)
-        return found.locator, await marker(found)
+        return found.locator_index, await marker(found)
 
     assert on_page(scenario) == (1, "email")
 
