@@ -5,6 +5,7 @@ and an exit code for every outcome. No browser is launched."""
 
 import json
 import os
+import re
 import subprocess
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -74,6 +75,9 @@ PLAN = CoveragePlan.model_validate(
 )
 
 SONNET = "claude-sonnet-5-5"
+
+# A terminal style sequence, such as ESC [1;33m.
+ANSI_STYLE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def project(root: Path, *, config: str = CONFIG, spec: str = SPEC) -> Path:
@@ -466,7 +470,10 @@ def test_explore_without_plan_only_is_refused_before_any_model_call(
     result, factory = run([str(spec)])
 
     assert result.exit_code == 2, result.output
-    assert "--plan-only" in result.stderr
+    # Typer prints a usage error through Rich, in colour where it decides the
+    # output is a terminal: on CI, where GITHUB_ACTIONS forces one, or with
+    # FORCE_COLOR. The message is read with its escape sequences taken out.
+    assert "'--plan-only'" in ANSI_STYLE.sub("", result.stderr)
     assert factory.built == []
 
 
