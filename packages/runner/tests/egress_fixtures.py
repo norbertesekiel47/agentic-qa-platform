@@ -145,6 +145,15 @@ def serving(host: str = "127.0.0.1", port: int = 0) -> Iterator[Origin]:
         server.server_close()
 
 
+def egress_proxy(start: str = "http://127.0.0.1:9") -> EgressProxy:
+    """The egress proxy every browser session goes through, for a run whose
+    start origin is `start`: a fixture site, or one no test reaches."""
+    policy = EgressPolicy(
+        allowed_origins=(start,), subresource_hosts=(), private_origins=(start,)
+    )
+    return EgressProxy(EgressGate(policy))
+
+
 def gate(
     *,
     allowed: tuple[str, ...],

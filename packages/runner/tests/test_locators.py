@@ -22,6 +22,8 @@ from playwright.async_api import ElementHandle, Error, Page, async_playwright
 from playwright.async_api import Locator as PlaywrightLocator
 from pydantic import ValidationError
 
+from packages.runner.tests.egress_fixtures import egress_proxy
+
 # Every element a test finds carries a data-is marker naming it, so a test
 # can tell which element resolved.
 PAGE = r"""<!doctype html><title>Locators</title>
@@ -78,7 +80,8 @@ def on_page[T](scenario: Callable[[Page], Awaitable[T]], html: str = PAGE) -> T:
     async def run() -> T:
         async with (
             async_playwright() as playwright,
-            open_browser_session(playwright.chromium) as session,
+            egress_proxy() as egress,
+            open_browser_session(playwright.chromium, egress=egress) as session,
         ):
             await session.page.set_content(html)
             return await scenario(session.page)
