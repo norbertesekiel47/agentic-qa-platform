@@ -67,6 +67,10 @@ python3 .claude/hooks/policy_guard.py --scan                                   #
 uv run ruff check .                                                            # lint
 uv run ruff format --check .                                                   # format
 uv run mypy                                                                    # types: packages, spikes and tests
+# mypy reads a `sys.platform` check as a constant for the host it runs on, so on macOS a Linux-only
+# branch goes unchecked, and CI, on Linux, fails it (LAB_NOTES, 2026-09-30). This run checks as CI
+# does; the run above also checks what only macOS reaches, such as the sandbox check's darwin branch.
+uv run mypy --platform linux                                                   # types: the same files, as Linux
 uv run mypy --strict --no-explicit-package-bases .claude/hooks bench/harness   # types: scripts
 uv run pytest --cov                                                            # every test, and the coverage floor
 # With osv-scanner, gitleaks and fallow at the versions .github/workflows/ci.yml pins:

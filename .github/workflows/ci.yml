@@ -87,7 +87,7 @@ jobs:
         run: uv run ruff check .
       - name: Format
         run: uv run ruff format --check .
-      - name: Types (packages and tests)
+      - name: Types (packages, spikes and tests)
         run: uv run mypy
       # Scripts import each other by bare name, so they are named by file, in
       # a run of their own (ADR-0029).

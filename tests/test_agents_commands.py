@@ -149,6 +149,16 @@ def test_section4_runs_every_uv_command_constraints_names() -> None:
     assert not missing, f"CONSTRAINTS.md names {missing} and §4 doesn't run them"
 
 
+def test_section4_type_checks_as_linux() -> None:
+    # CI type-checks on Linux, and mypy reads `sys.platform` checks as constants
+    # for the host it runs on, so on macOS only this run reaches a Linux-only
+    # branch (LAB_NOTES, 2026-09-30).
+    assert "uv run mypy --platform linux" in section4(), (
+        "§4 must run `uv run mypy --platform linux`, so that a green local run "
+        "predicts CI's type check"
+    )
+
+
 WORKFLOW = """\
 jobs:
   guardrails:
