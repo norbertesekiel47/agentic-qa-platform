@@ -361,6 +361,8 @@ budgets:                      # per explore run (ADR-0024)
 
 **Start origin.** `base_url` must be an origin: `http` or `https`, a host and an optional port, with no path, query or user (a lone trailing `/` is allowed). `aqa explore --url` overrides it and is held to the same form. Origins compare lowercase and without the scheme's default port. A host is a DNS name, a dotted-decimal IPv4 address or a bracketed IPv6 address; the other IPv4 spellings a browser reads (`0x7f000001`, `127.1`) and IPv4-mapped IPv6 addresses are refused, so a stored origin is the one the browser reports. With neither, the run fails before the browser starts.
 
+**Start URL.** A run's first navigation goes to the start origin followed by the spec's `start_url` as written: joined as text, never percent-decoded or resolved, so `/%2f%2fevil.test` stays a path on the start origin (ADR-0026's 2026-10-01 amendment). `aqa_core.project.start_url` builds it, and the executor's first navigation (#46), explore's and the confirmation replay's (#53) call it rather than building it. A compiled `navigate` path (§7) is joined to the start origin by the same rule: its single leading `/`, then the path as written, never decoded.
+
 **Egress hosts.** `subresource_hosts` and `expected_blocked` list bare host names or IP addresses (an IPv6 address in brackets), with no scheme, port or wildcard. `private_origins` lists origins.
 
 **Model overrides.** A model missing from the pinned price map must be declared under `models`, with its capabilities and prices; otherwise config validation rejects it. Its cost records carry `price_source: config` and the rates they applied (`applied_prices`, §2), so a later change to this file doesn't change what past costs meant.
