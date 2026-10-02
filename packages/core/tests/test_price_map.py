@@ -366,3 +366,15 @@ def test_a_loaded_map_cannot_be_changed(tmp_path: Path) -> None:
 def test_the_vendored_map_is_loaded_once() -> None:
     assert vendored() is vendored()
     assert vendored().version == load_price_map().version
+
+
+def test_a_rate_is_written_without_an_exponent(tmp_path: Path) -> None:
+    # $0.001 a token is $1000 a million: never 1E+3.
+    write_map(tmp_path, entry(input_cost_per_token=1e-03, output_cost_per_token=2e-03))
+
+    info = load_price_map(tmp_path).models["model-a"]
+
+    assert (str(info.input_usd_per_mtok), str(info.output_usd_per_mtok)) == (
+        "1000",
+        "2000",
+    )

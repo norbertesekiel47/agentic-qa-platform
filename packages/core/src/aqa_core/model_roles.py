@@ -13,7 +13,7 @@ from aqa_core.config import (
     ModelRoleName,
     ProjectConfig,
 )
-from aqa_core.price_map import Capability, ModelInfo, PriceMap
+from aqa_core.price_map import Capability, ModelInfo, PriceMap, plain
 
 DEFAULT_PROVIDER: Final = "anthropic"
 # TECH_STACK §3: every role starts on Claude Sonnet 5.5.
@@ -38,11 +38,13 @@ _LABELS: Final[Mapping[Capability, str]] = {
 
 @dataclass(frozen=True)
 class RoutedModel:
-    """A model to call: whose it is, its name, and what it can do and costs."""
+    """A model to call: whose it is, its name, what it can do and costs, and the
+    pinned price map's version in force."""
 
     provider: str
     name: str
     info: ModelInfo
+    price_map_version: str
 
 
 @dataclass(frozen=True)
@@ -66,7 +68,7 @@ class RoleError(Exception):
 
 def _exact(price: float) -> Decimal:
     """`price`, a float read from YAML, as the decimal it was written as."""
-    return Decimal(format(Decimal(str(price)).normalize(), "f"))
+    return plain(Decimal(str(price)))
 
 
 def _declared(entry: ModelOverride) -> ModelInfo:
@@ -105,7 +107,7 @@ def _routed(
     missing = [_LABELS[need] for need in NEEDS[role] if need not in info.capabilities]
     if missing:
         return f"'{name}' lacks {_and(missing)}, which {role} needs"
-    return RoutedModel(provider, name, info)
+    return RoutedModel(provider, name, info, price_map.version)
 
 
 def _role(
