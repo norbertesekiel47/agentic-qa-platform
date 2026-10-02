@@ -64,4 +64,4 @@ A test now refuses any Chromium launch in `packages/` outside `aqa_runner.sandbo
   - `launch` is async, and the checks use Playwright's sync API throughout.
 - **Why the exemption is acceptable.** The checks aren't the system under test, and no run executes them. They run in a throwaway container as `pwuser` under Playwright's seccomp profile, and `chromium_sandbox=True` makes a launch that can't sandbox fail (the 2026-09-28 amendment). What remains: no sandbox check proves that the sandbox is on there.
 - **An empty environment.** The launch passes `env={}`, as `launch` does (ADR-0026's 2026-10-01 amendment, #36). `BENCH_FIXTURE_PASSWORD` and the container's other variables stay out of the browser, while the checks' Python still reads the password to sign in through the API.
-- **Not enforced.** The test scans `packages/*/src` only, so review keeps this launch's `chromium_sandbox=True` and `env={}`.
+- **Partly enforced.** The test scans `packages/*/src` only. policy_guard refuses `chromium_sandbox=False` here as everywhere. But dropping the keyword, which leaves Playwright's default of no sandbox, or dropping `env={}`, is left to review.
