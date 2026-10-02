@@ -58,16 +58,14 @@ def manifest(*constraints: str) -> str:
     return table
 
 
+MANIFEST_WITH_BAN = manifest('{ name = "litellm", specifier = "<0" }', OTHER_CONSTRAINT)
+
+
 def write_lock(tmp_path: Path, manifest_table: str, *packages: str) -> Path:
     """A fixture lock in `tmp_path`: the tables, then the workspace and `packages`."""
     lock = tmp_path / "uv.lock"
     lock.write_text("\n".join([HEADER, manifest_table, WORKSPACE_PACKAGE, *packages]))
     return lock
-
-
-def banned(*others: str) -> str:
-    """A `[manifest]` that keeps the ban, beside `others`."""
-    return manifest('{ name = "litellm", specifier = "<0" }', *others)
 
 
 # --- the real lock ---------------------------------------------------------------
@@ -81,13 +79,13 @@ def test_the_lock_keeps_litellm_out() -> None:
 
 
 def test_the_fixture_lock_baseline_passes(tmp_path: Path) -> None:
-    lock = write_lock(tmp_path, banned(OTHER_CONSTRAINT))
+    lock = write_lock(tmp_path, MANIFEST_WITH_BAN)
 
     assert litellm_problems(lock) == []
 
 
 def test_a_lock_with_a_litellm_package_fails(tmp_path: Path) -> None:
-    lock = write_lock(tmp_path, banned(OTHER_CONSTRAINT), LITELLM_PACKAGE)
+    lock = write_lock(tmp_path, MANIFEST_WITH_BAN, LITELLM_PACKAGE)
 
     problems = litellm_problems(lock)
 
