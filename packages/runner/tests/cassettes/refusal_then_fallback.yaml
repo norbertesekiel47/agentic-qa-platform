@@ -27,7 +27,7 @@ interactions:
       code: 200
       message: OK
 - request:
-    body: '{"max_tokens":128000,"messages":[{"role":"user","content":"Is the cart
+    body: '{"max_tokens":4096,"messages":[{"role":"user","content":"Is the cart
       empty? Answer with ok and a reason."}],"model":"claude-opus-5-5","output_config":{"format":{"type":"json_schema","schema":{"type":"object","title":"Verdict","properties":{"ok":{"type":"boolean","title":"Ok"},"reason":{"type":"string","title":"Reason"}},"additionalProperties":false,"required":["ok","reason"]}}}}'
     headers:
       anthropic-version:

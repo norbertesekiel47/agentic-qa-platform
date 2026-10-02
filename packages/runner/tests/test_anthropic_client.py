@@ -8,17 +8,21 @@ hand-written (see each cassette's header and TESTING §4)."""
 import asyncio
 import json
 import re
+import socket
+import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any, cast
 
+import anthropic
 import pytest
 import yaml
 from aqa_core.config import Effort
 from aqa_core.model_costs import Usage
 from aqa_core.model_roles import RoutedModel
-from aqa_runner.anthropic_client import AnthropicClient
+from aqa_runner import anthropic_client
+from aqa_runner.anthropic_client import MAX_OUTPUT_TOKENS, AnthropicClient
 from aqa_runner.chat_client import Reply
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
@@ -322,6 +326,42 @@ def test_every_request_in_every_cassette_leaves_the_tool_choice_free() -> None:
         assert interactions, path.name
         for interaction in interactions:
             assert not forced(json.loads(interaction["request"]["body"])), path.name
+
+
+def test_every_request_in_every_cassette_asks_for_the_output_bound() -> None:
+    # The bound is the adapter's, not langchain-anthropic's: left to the
+    # library, max_tokens comes from its model profiles, which give
+    # claude-opus-5-5 128,000 and claude-sonnet-5-5 none (so 4096).
+    for path in sorted(CASSETTES.glob("*.yaml")):
+        for interaction in yaml.safe_load(path.read_text())["interactions"]:
+            body = json.loads(interaction["request"]["body"])
+            assert body["max_tokens"] == MAX_OUTPUT_TOKENS, (path.name, body["model"])
+
+
+@pytest.mark.usefixtures("quiet_tracing")
+def test_a_request_that_gets_no_answer_times_out(
+    monkeypatch: pytest.MonkeyPatch, sonnet: RoutedModel
+) -> None:
+    # A server that accepts the connection (the kernel does, from the listen
+    # backlog) and never answers it.
+    silent = socket.create_server(("127.0.0.1", 0))
+    monkeypatch.setenv(
+        "ANTHROPIC_BASE_URL", f"http://127.0.0.1:{silent.getsockname()[1]}"
+    )
+    monkeypatch.delenv("ANTHROPIC_API_URL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-tests")
+    monkeypatch.setattr(anthropic_client, "REQUEST_TIMEOUT_SECONDS", 0.2)
+    client = AnthropicClient(sonnet, None)
+    started = time.monotonic()
+
+    with silent, pytest.raises(anthropic.APITimeoutError):
+        # The guard only keeps a missing timeout from hanging the test.
+        asyncio.run(
+            asyncio.wait_for(client.call([HumanMessage(content="hi")], [], None), 15)
+        )
+
+    # Three tries of 0.2 s, and the SDK's backoff between them.
+    assert time.monotonic() - started < 10
 
 
 def test_langchains_default_structured_output_would_force_a_tool(
