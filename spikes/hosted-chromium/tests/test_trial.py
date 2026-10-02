@@ -2,7 +2,7 @@
 sandboxed Chromium, its readiness, its memory and the environment it ran in.
 
 How a launch is judged sandboxed belongs to `aqa_runner.sandbox` and its tests;
-the trial reports what `launch` decides."""
+the trial reports what `launch_with_observations` decides and observed."""
 
 import asyncio
 import json

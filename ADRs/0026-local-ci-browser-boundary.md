@@ -153,15 +153,15 @@ A run's first navigation goes to its **start URL** (CONTEXT.md): the start origi
 
 ## Amendment (2026-10-01): what the sandbox check observed (#81)
 
-The spike's trial reported only the check's verdict, so #38's outcome ADR could cite a boolean but not the measurements behind it. The check now reports what it read alongside its verdict.
+The spike's trial reported only whether the check proved the sandbox, so #38's outcome ADR could cite a boolean but not the measurements behind it. The check now reports what it read alongside its reasons.
 
 - **What it reads.** `SandboxObservations` holds the browser process and each renderer the check compared with it. On Linux each is a `LinuxProcess`: its PID, its `user`, `pid` and `net` namespace links, and its `Seccomp_filters` count. On macOS each is a `MacProcess`: its PID, and whether `sandbox_check` reported it sandboxed. Nothing new is read.
-- **The same reads as the verdict.** `check_processes` returns the observations with its reasons. It reads each process once and compares exactly those reads, so an observation can't vouch for a renderer the check refuses: the report never comes from a second read or a subset. An OS with no sandbox check reads nothing (`None`).
+- **The same reads as the reasons.** `check_processes` returns the observations with its reasons. It reads each process once and compares exactly those reads, so an observation can't vouch for a renderer the check refuses: the report never comes from a second read or a subset. An OS with no sandbox check reads nothing (`None`).
 - **How the observations leave the check.**
   - `launch_with_observations(chromium)` runs `launch`'s steps and also returns the observations. A check that read nothing has proved nothing, so a browser it returns always comes with them. `launch` delegates to it and still returns only the browser, so its callers and the existing tests are unchanged.
-  - A refusal carries them in `SandboxUnavailableError.observed`. That is `None` when the sandbox couldn't start, since no browser ran.
+  - A refusal carries them in `SandboxUnavailableError.observed`. That is `None` when the check read nothing: the sandbox couldn't start, so no browser ran, or the OS has no sandbox check.
   - Neither function takes an option or reads a setting, so nothing skips the check.
   - *Rejected:* `launch` returning a pair, which would change every caller; and reading the processes again after `launch`, which would observe other renderers than the ones judged, and finds nothing once a refused browser is closed.
 - **The spike's trial** launches through `launch_with_observations`, where ADR-0008's 2026-09-30 amendment names `launch`. It reports the observations on success and on refusal in a new top-level key, `sandbox_observed` (spikes/hosted-chromium/README.md). Every existing key keeps its value, so trials recorded before this change stay comparable.
   - *Rejected:* nesting the observations under `sandbox`, which would change that key's value.
-- **The verdict is unchanged.** `packages/runner/tests/test_sandbox.py`'s existing tests pass unedited, its negative controls included. The new tests are added at the end of that file, since one of them reuses its unsandboxed launch.
+- **What the check decides is unchanged.** `packages/runner/tests/test_sandbox.py`'s existing tests pass unedited, its negative controls included.
