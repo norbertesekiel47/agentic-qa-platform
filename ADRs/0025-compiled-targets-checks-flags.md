@@ -119,7 +119,7 @@ Building the strict reader (#45) and its reviews raised choices this ADR left op
   - *Chosen:* one class per kind. `name` then exists only beside `role`, and the executor and the compiler dispatch on the class with nothing left optional. The JSON is the same either way.
 - **A `css` value has no `>>`.**
   - *Options:* refuse it, escape it, or parse CSS to allow it inside quoted attribute values.
-  - *Chosen:* refuse it. Playwright chains selectors at `>>` even after `css=`. On 1.63 a value chained into XPath and into an engine that enters frames. Escaping would hide the author's mistake, and an attribute value can write `\>\>`. Resolution must send the value as `css=<value>` (#45), so no other engine is reachable. Playwright's own CSS extensions, such as `:has-text()`, still work inside it, and the compiler doesn't write them (#52).
+  - *Chosen:* refuse it. Playwright chains selectors at `>>` even after `css=`. On 1.63 a value chained into XPath and into an engine that enters frames. Escaping would hide the author's mistake, and an attribute value can write `\>\>`. A value must also leave no quote or escape open by Playwright's count, which includes quotes inside CSS comments: an open quote swallowed the separator Playwright puts before a scoped locator, and the inner locator chained into a frame (LAB_NOTES, 2026-10-02). Resolution must send the value as `css=<value>` (#45), so no other engine is reachable. Playwright's own CSS extensions, such as `:has-text()`, still work inside it, and the compiler doesn't write them (#52).
 - **`side_effect_basis` goes only with a true flag.**
   - *Options:* refuse it on a false flag, or allow it.
   - *Chosen:* refuse it. A person who lowers a flag removes its basis in the same edit, so the pull request shows both.
@@ -139,15 +139,18 @@ Building resolution (#45) settled three choices that "Resolution per use" left o
   - *Chosen:* the second.
     - Under the first, a button relabeled from "Delete" to "Remove" finds nothing by role and name. A `not_visible` check would then pass in strict replay while the structural fallback still sees the button: a weaker check than the claim.
     - Under the second, any unique match resolves the element. Several matches are drift. The element is absent only when no locator finds one, none finds several, and at least one finds its scope empty.
+    - An unscoped locator's scope is the page. A role locator in a negative check also sees elements the accessibility tree hides, as the other kinds do, so a visible button under `aria-hidden` is seen rather than read as absent.
 - **Actionable is one look at the page.**
   - *Options:*
-    - visible, enabled, and a hit test at the element's center finds it, after scrolling it into view if needed;
+    - visible, enabled, and a hit test finds the element: at the center of its first box, through its own root, and again after an instant scroll into view if the first test misses;
     - Playwright's trial click with a timeout, which also waits for stability.
   - *Chosen:* the first.
     - Resolution stays a single judgement, and the executor's loop owns waiting within `resolve_seconds`. A trial click would wait inside every locator's turn, so the waits would add up across fallbacks.
     - The rule is the same for every targeted step, `fill` and `select` included. That is stricter than Playwright's own fill, which skips the hit test, because a person can't fill a field under an overlay either.
-    - An element in a shadow root or a frame fails the document's hit test. So does a native control hidden under its own label, as some styled checkboxes are. Each is drift, never a wrong action.
-- **`pattern` searches the normalized rendered text,** the same text `text` matches, so a pattern spans line items without `(?s)`. `url_matches` searches the URL as it is.
+    - An element in an open shadow root is tested through its own root, so it counts. Page locators never enter a frame, so a frame's element is no match. A native control hidden under its own label, as some styled checkboxes are, fails the hit test: drift, never a wrong action.
+    - The hit test runs in the page's own world, so it is the page's word, not a control. A page can make it pass or fail, but not choose which element it judges. An error from it, such as an element removed between two checks, is drift; only a closed page raises.
+- **`pattern` searches the normalized rendered text,** the same text `text` matches, so a pattern spans line items without `(?s)`. `url_matches` searches the URL as it is. The search runs in the runner on text the page controls, and Python's `re` can't be interrupted, so the executor bounds it (#46).
+- **`text` is whole words only where its edges are word characters,** so "(3)" is found in "Cart(3)" while "1" isn't found in "10". Text written without spaces between words, such as Japanese, needs a `pattern`.
 - **Role names are matched by Playwright's own role engine.**
   - The name is matched with an anchored pattern built from the normalized name. The pattern lets private-use glyphs sit anywhere and lets a space be any run of whitespace and glyphs.
   - Each character other than an ASCII letter or digit is written `\uXXXX`, which Python and JavaScript read alike, so no character of a name becomes selector syntax. An astral character stays literal.

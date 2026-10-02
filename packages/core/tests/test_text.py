@@ -54,7 +54,17 @@ def test_normalize_strips_private_use_glyphs_and_collapses_whitespace(
         # A literal that ends in punctuation still matches at a sentence's end.
         ("Your card has expired.", "card has expired.", True),
         ("Your card has expired.", "has exp", False),
+        # The boundary applies only at a literal's edge that is a word
+        # character, so punctuation at its edge needs none.
+        ("Cart(3)", "(3)", True),
+        ("USD$5", "$5", True),
+        ("Price: $9.99", "$9.99", True),
+        ("A1", "1", False),
+        # Text without spaces between words (CJK) has no word boundaries to
+        # find, so a claim about part of it needs a pattern.
+        ("\u4fdd\u5b58\u3057\u307e\u3057\u305f", "\u4fdd\u5b58", False),
         # Both sides are compared normalized.
+        ("Payment due", "Pay\xadment", True),
         ("card \n has   expired", "card has expired", True),
         ("Pay\xadment due", "Payment", True),
     ],

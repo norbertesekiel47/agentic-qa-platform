@@ -24,12 +24,18 @@ def normalize(text: str) -> str:
 
 def has_text(rendered: str, literal: str) -> bool:
     """Whether `literal` is in `rendered` as whole words, ignoring case: both
-    normalized and casefolded, with no word character just before or after
-    the literal, so "1" isn't found in "10" (ADR-0025)."""
-    words = re.escape(normalize(literal).casefold())
-    return (
-        re.search(rf"(?<!\w){words}(?!\w)", normalize(rendered).casefold()) is not None
+    normalized and casefolded. Where the literal starts or ends with a word
+    character, no word character may touch it there, so "1" isn't found in
+    "10" but "(3)" is found in "Cart(3)" (ADR-0025). Text with no spaces
+    between words, such as Japanese, has no boundaries to find, so a claim
+    about part of it needs a `pattern`."""
+    words = normalize(literal).casefold()
+    before = r"(?<!\w)" if re.match(r"\w", words) else ""
+    after = r"(?!\w)" if re.search(r"\w\Z", words) else ""
+    found = re.search(
+        f"{before}{re.escape(words)}{after}", normalize(rendered).casefold()
     )
+    return found is not None
 
 
 def has_pattern(rendered: str, pattern: str) -> bool:

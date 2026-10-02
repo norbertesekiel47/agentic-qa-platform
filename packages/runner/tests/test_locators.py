@@ -18,7 +18,9 @@ from aqa_runner.locators import (
     rendered_text,
     resolve,
 )
-from playwright.async_api import Error, Page, async_playwright
+from playwright.async_api import ElementHandle, Error, Page, async_playwright
+from playwright.async_api import Locator as PlaywrightLocator
+from pydantic import ValidationError
 
 # Every element a test finds carries a data-is marker naming it, so a test
 # can tell which element resolved.
@@ -70,15 +72,15 @@ async def marker(resolution: Resolved | Absent | Unresolved) -> str | None:
     return await resolution.element.get_attribute("data-is")
 
 
-def on_page[T](scenario: Callable[[Page], Awaitable[T]]) -> T:
-    """`scenario`'s result on the fixture page, in a fresh browser session."""
+def on_page[T](scenario: Callable[[Page], Awaitable[T]], html: str = PAGE) -> T:
+    """`scenario`'s result on a fixture page, in a fresh browser session."""
 
     async def run() -> T:
         async with (
             async_playwright() as playwright,
             open_browser_session(playwright.chromium) as session,
         ):
-            await session.page.set_content(PAGE)
+            await session.page.set_content(html)
             return await scenario(session.page)
 
     return asyncio.run(run())
@@ -343,3 +345,277 @@ def test_the_roles_are_playwrights() -> None:
     playwrights = typing.get_type_hints(Page.get_by_role)["role"]
 
     assert set(typing.get_args(AriaRole)) == set(typing.get_args(playwrights))
+
+
+# Layouts where a click works, each with one button marked "b": the hit test
+# must find it there too.
+ACTIONABLE_LAYOUTS = {
+    "smooth scrolling": (
+        "<style>html { scroll-behavior: smooth; }</style>"
+        '<div style="height: 3000px"></div><button data-is="b">Go</button>'
+    ),
+    "clipped by a scrolled box": (
+        '<div style="height: 200px; overflow: auto"><div style="height: 300px"></div>'
+        '<button data-is="b">Go</button></div><div style="height: 1000px"></div>'
+    ),
+    "wrapped onto two lines": (
+        # The link's two pieces sit at opposite ends of their lines, so the
+        # center of its bounding box lands on neither.
+        '<p style="width: 200px; font: 16px/30px monospace">xxxxxxxxxxxxxxxxx '
+        '<a href="#" data-is="b">yy zz</a></p>'
+    ),
+    "in an open shadow root": (
+        '<div id="host"></div><script>document.getElementById("host")'
+        '.attachShadow({mode: "open"}).innerHTML = '
+        "'<button data-is=\"b\">Go</button>';</script>"
+    ),
+    "right of the viewport": (
+        '<div style="display: flex"><div style="flex: none; width: 3000px"></div>'
+        '<button data-is="b">Go</button></div>'
+    ),
+    "hit on a child": (
+        '<button data-is="b"><span style="display: block; padding: 20px">Go</span></button>'
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "html", ACTIONABLE_LAYOUTS.values(), ids=ACTIONABLE_LAYOUTS.keys()
+)
+def test_an_element_a_click_reaches_is_actionable(html: str) -> None:
+    go = target({"role": "button", "name": "Go"}, {"role": "link"})
+
+    async def scenario(page: Page) -> str | None:
+        return await marker(await resolve(page, go, "action"))
+
+    assert on_page(scenario, html) == "b"
+
+
+def test_a_hidden_element_with_a_visible_child_is_not_actionable() -> None:
+    # The hit test lands on the visible child, so only the visibility check
+    # refuses the hidden button itself.
+    html = (
+        '<button data-is="b" style="visibility: hidden">'
+        '<span style="visibility: visible">Ghost</span></button>'
+    )
+
+    async def scenario(page: Page) -> Resolved | Absent | Unresolved:
+        return await resolve(page, target({"css": "button"}), "action")
+
+    assert on_page(scenario, html) == Unresolved(("not actionable",))
+
+
+def test_an_element_that_leaves_during_the_checks_is_not_actionable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A page that re-renders between two of the checks makes Playwright raise
+    # for the detached element: that is drift, not a broken script.
+    seen = ElementHandle.is_visible
+
+    async def visible_then_removed(self: ElementHandle) -> bool:
+        visible = await seen(self)
+        await self.evaluate("(element) => element.remove()")
+        return visible
+
+    monkeypatch.setattr(ElementHandle, "is_visible", visible_then_removed)
+
+    async def scenario(page: Page) -> Resolved | Absent | Unresolved:
+        return await resolve(
+            page, target({"role": "button", "name": "Post Comment"}), "action"
+        )
+
+    assert on_page(scenario) == Unresolved(("not actionable",))
+
+
+def test_a_page_that_breaks_the_hit_test_makes_it_not_actionable() -> None:
+    # The hit test runs in the page's own world, so it is only the page's word.
+    html = (
+        "<script>Element.prototype.getClientRects = () => { throw new Error('no'); };"
+        "Element.prototype.getBoundingClientRect = Element.prototype.getClientRects;"
+        '</script><button data-is="b">Go</button>'
+    )
+
+    async def scenario(page: Page) -> Resolved | Absent | Unresolved:
+        return await resolve(page, target({"role": "button", "name": "Go"}), "action")
+
+    assert on_page(scenario, html) == Unresolved(("not actionable",))
+
+
+def test_a_page_closed_during_the_checks_still_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closing: list[Page] = []
+
+    async def closes_the_page(self: ElementHandle) -> bool:
+        await closing[0].close()
+        return await self.is_enabled()
+
+    monkeypatch.setattr(ElementHandle, "is_visible", closes_the_page)
+
+    async def scenario(page: Page) -> None:
+        closing.append(page)
+        await resolve(
+            page, target({"role": "button", "name": "Post Comment"}), "action"
+        )
+
+    with pytest.raises(Error):
+        on_page(scenario)
+
+
+# Near-duplicates and glyphs in odd places, each element marked.
+NAMES_PAGE = r"""<!doctype html><style>
+  .bmp::before { content: "\e900"; }
+  .after::after { content: "\a0\f218"; }
+</style>
+<button data-is="pay">Pay</button>
+<button data-is="pay-later">Pay later</button>
+<button data-is="spaced">Post Comment</button>
+<button data-is="joined">PostComment</button>
+<button data-is="mid-word">Sa<i class="bmp"></i>ve</button>
+<button data-is="after-space">Keep <i class="bmp"></i>draft</button>
+<a href="#" class="after" data-is="next">Next</a>
+<label>Name <input data-is="name"></label>
+<label>Username <input data-is="username"></label>
+<input placeholder="Search" data-is="search">
+<input placeholder="Search orders" data-is="search-orders">
+"""
+
+
+@pytest.mark.parametrize(
+    ("locator", "expected"),
+    [
+        # Exact, not a substring: "Pay later" contains "Pay".
+        ({"role": "button", "name": "Pay"}, "pay"),
+        ({"role": "button", "name": "Post Comment"}, "spaced"),
+        ({"role": "button", "name": "PostComment"}, "joined"),
+        ({"label": "Name"}, "name"),
+        ({"placeholder": "Search"}, "search"),
+        # Glyphs inside a word, right after a space, and after the name.
+        ({"role": "button", "name": "Save"}, "mid-word"),
+        ({"role": "button", "name": "Keep draft"}, "after-space"),
+        ({"role": "link", "name": "Next"}, "next"),
+    ],
+    ids=lambda part: (
+        str(part.get("name") or next(iter(part.values())))
+        if isinstance(part, dict)
+        else None
+    ),
+)
+def test_names_match_exactly_wherever_the_glyphs_sit(
+    locator: dict[str, Any], expected: str
+) -> None:
+    async def scenario(page: Page) -> str | None:
+        return await marker(await resolve(page, target(locator), "assertion"))
+
+    assert on_page(scenario, NAMES_PAGE) == expected
+
+
+def test_a_scope_may_have_a_scope() -> None:
+    html = (
+        '<div class="a"><div class="s"><button data-is="a-go">Go</button></div></div>'
+        '<div class="b"><div class="s"><button data-is="b-go">Go</button></div></div>'
+    )
+    nested = target(
+        {"role": "button", "name": "Go", "scope": {"css": ".s", "scope": {"css": ".a"}}}
+    )
+    twice = target({"role": "button", "name": "Go", "scope": {"css": ".s"}})
+    outer_gone = target(
+        {
+            "role": "button",
+            "name": "Go",
+            "scope": {"css": ".s", "scope": {"css": ".gone"}},
+        }
+    )
+
+    async def scenario(page: Page) -> tuple[Any, ...]:
+        return (
+            await marker(await resolve(page, nested, "assertion")),
+            await resolve(page, twice, "assertion"),
+            await resolve(page, outer_gone, "assertion"),
+        )
+
+    assert on_page(scenario, html) == (
+        "a-go",
+        Unresolved(("no scope",)),
+        Unresolved(("no scope",)),
+    )
+
+
+def test_a_negative_check_sees_elements_the_accessibility_tree_hides() -> None:
+    # A visible button under aria-hidden is still on screen: its role locator
+    # must find it, so not_visible fails rather than passes.
+    html = (
+        '<div aria-hidden="true"><button data-is="b">Delete</button></div>'
+        '<button style="display: none" data-is="hidden">Archive</button>'
+    )
+
+    async def scenario(page: Page) -> list[str | None]:
+        return [
+            await marker(
+                await resolve(
+                    page, target({"role": "button", "name": name}), "negative_check"
+                )
+            )
+            for name in ("Delete", "Archive")
+        ]
+
+    assert on_page(scenario, html) == ["b", "hidden"]
+
+
+def test_only_a_negative_check_is_ever_absent() -> None:
+    nothing = target({"role": "alert"})
+    pay = target({"role": "button", "name": "Pay"})
+    publish = target({"role": "button", "name": "Publish"})
+
+    async def scenario(page: Page) -> tuple[Any, ...]:
+        return (
+            # Unscoped, the page is the locator's scope.
+            await resolve(page, nothing, "negative_check"),
+            await resolve(page, nothing, "assertion"),
+            await resolve(page, nothing, "action"),
+            # A negative check needs the element, not that it is actionable.
+            await marker(await resolve(page, pay, "negative_check")),
+            await marker(await resolve(page, publish, "negative_check")),
+        )
+
+    assert on_page(scenario) == (
+        Absent(0),
+        Unresolved(("no match",)),
+        Unresolved(("no match",)),
+        "pay",
+        "publish",
+    )
+
+
+def test_a_label_cannot_chain_into_another_engine() -> None:
+    # A scope that leaves a quote open would let the label after it chain into
+    # a frame; the format refuses it, and with closed quotes the label is only
+    # ever a label (ADR-0025, "resolving a target per use").
+    smuggled = "*/ >> internal:control=enter-frame >> css=input /*"
+    html = "<iframe srcdoc='<label>Secret <input type=password></label>'></iframe>"
+    with pytest.raises(ValidationError, match="leaves a quote or escape open"):
+        target({"label": smuggled, "scope": {"css": 'iframe /* "'}})
+    closed = target({"label": smuggled, "scope": {"css": "body"}})
+
+    async def scenario(page: Page) -> Resolved | Absent | Unresolved:
+        return await resolve(page, closed, "assertion")
+
+    assert on_page(scenario, html) == Unresolved(("no match",))
+
+
+def test_a_page_that_changes_between_count_and_lookup_is_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The count says one, but by the lookup a second has appeared: the second
+    # look decides, so nothing unique is claimed.
+    async def one(_locator: PlaywrightLocator) -> int:
+        return 1
+
+    monkeypatch.setattr(PlaywrightLocator, "count", one)
+
+    async def scenario(page: Page) -> Resolved | Absent | Unresolved:
+        return await resolve(
+            page, target({"role": "button", "name": "Favorite Article"}), "assertion"
+        )
+
+    assert on_page(scenario) == Unresolved(("ambiguous",))
