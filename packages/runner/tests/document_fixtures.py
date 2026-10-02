@@ -60,7 +60,11 @@ const step = setInterval(() => {
         }
     } catch (error) {}  // the sibling isn't there yet, or still loading
 }, 20);
-""".replace("PLANTED_HTML", json.dumps(PLANTED))
+""".replace(
+    # Written as a string inside a <script>, where "</script>" would end it.
+    "PLANTED_HTML",
+    json.dumps(PLANTED).replace("</", "<\\/"),
+)
 
 
 @dataclass
