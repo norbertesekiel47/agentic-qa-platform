@@ -44,7 +44,7 @@ SMALL_MAP = """{
   },
   "model-a": {
     "input_cost_per_token": 2e-06, "output_cost_per_token": 1e-05,
-    "cache_read_input_token_cost": 1.1e-07,
+    "cache_read_input_token_cost": 2e-07,
     "supports_vision": true, "supports_function_calling": true
   },
   "image-model": {"mode": "image_generation", "input_cost_per_token": 1e-06}
@@ -80,9 +80,9 @@ def test_prices_load_as_exact_decimals_per_million_tokens(tmp_path: Path) -> Non
 
     assert info.input_usd_per_mtok == Decimal(2)
     assert info.output_usd_per_mtok == Decimal(10)
-    # 1.1e-07 per token as a float times a million is 0.10999999999999999.
-    assert info.cached_input_usd_per_mtok == Decimal("0.11")
-    assert str(info.cached_input_usd_per_mtok) == "0.11"
+    # 2e-07 a token as a float times a million is 0.19999999999999998.
+    assert info.cached_input_usd_per_mtok == Decimal("0.2")
+    assert str(info.cached_input_usd_per_mtok) == "0.2"
     assert info.source == "map"
 
 
