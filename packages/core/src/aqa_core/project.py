@@ -115,12 +115,17 @@ _FRONTMATTER = re.compile(r"---\n(.*?)^---[ \t]*$", re.DOTALL | re.MULTILINE)
 
 
 def load_spec(path: Path, config: ProjectConfig) -> Spec:
-    """The spec at `path`. Its secret references must name secrets `config`
-    declares, and its id must be its file name without `.spec.md`."""
-    return _load_spec(path, frozenset(config.secrets))
+    """The spec at `path`, carrying the bindings in `config` of exactly the
+    test secrets it references. Its secret references must name secrets
+    `config` declares, and its id must be its file name without `.spec.md`."""
+    frontmatter, hashed = _read_spec(path, frozenset(config.secrets))
+    return _spec(path, frontmatter, hashed, config)
 
 
-def _load_spec(path: Path, declared_secrets: frozenset[str] | None) -> Spec:
+def _read_spec(
+    path: Path, declared_secrets: frozenset[str] | None
+) -> tuple[SpecFrontmatter, str]:
+    """The frontmatter of the spec at `path`, and its spec_hash."""
     match = _FRONTMATTER.match(_read_text(path))
     if match is None:
         raise SpecError(
@@ -132,7 +137,17 @@ def _load_spec(path: Path, declared_secrets: frozenset[str] | None) -> Spec:
     context = SpecContext(
         file_id=path.name.removesuffix(".spec.md"), declared_secrets=declared_secrets
     )
-    return Spec(path, _validate(SpecFrontmatter, data, path, context), spec_hash(data))
+    return _validate(SpecFrontmatter, data, path, context), spec_hash(data)
+
+
+def _spec(
+    path: Path, frontmatter: SpecFrontmatter, hashed: str, config: ProjectConfig
+) -> Spec:
+    """The spec, with the bindings in `config` of the secrets `frontmatter`
+    references, which _read_spec checked `config` declares."""
+    referenced = {name for _, name in secret_references(frontmatter)}
+    bindings = {name: b for name, b in config.secrets.items() if name in referenced}
+    return Spec(path, frontmatter, hashed, bindings)
 
 
 @dataclass(frozen=True)
@@ -146,7 +161,8 @@ class Project:
 
 def load_project(spec_root: Path) -> Project:
     """The project whose config is `spec_root/config.yaml`, with every
-    `*.spec.md` below it, in subdirectories too. Spec ids are unique in a
+    `*.spec.md` below it, in subdirectories too, each carrying the config's
+    bindings of exactly the test secrets it references. Spec ids are unique in a
     project (DATA_MODEL §6). An invalid config doesn't stop the specs being
     read: every problem in every file is reported together."""
     problems: list[str] = []
@@ -157,21 +173,23 @@ def load_project(spec_root: Path) -> Project:
         problems.extend(error.problems)
     # Unknown when the config is invalid, so references aren't checked then.
     declared = None if config is None else frozenset(config.secrets)
-    specs: dict[str, Spec] = {}
+    read: dict[str, tuple[Path, SpecFrontmatter, str]] = {}
     for path in sorted(p for p in spec_root.rglob("*.spec.md") if p.is_file()):
         try:
-            spec = _load_spec(path, declared)
+            frontmatter, hashed = _read_spec(path, declared)
         except SpecError as error:
             problems.extend(error.problems)
             continue
-        first = specs.setdefault(spec.frontmatter.id, spec)
-        if first is not spec:
+        first, _, _ = read.setdefault(frontmatter.id, (path, frontmatter, hashed))
+        if first != path:
             problems.append(
-                f"{path}: id: '{spec.frontmatter.id}' is already the id of {first.path}: "
+                f"{path}: id: '{frontmatter.id}' is already the id of {first}: "
                 "spec ids are unique in a project"
             )
     if config is None or problems:
         raise SpecError(problems)
+    # Built only now: an invalid config has no bindings to give them.
+    specs = {spec_id: _spec(*entry, config) for spec_id, entry in read.items()}
     return Project(spec_root, config, specs)
 
 
@@ -221,20 +239,20 @@ class SecretDestination:
     field: Literal["password"] | RoleField
 
 
-def secret_destinations(
-    spec: Spec, config: ProjectConfig, start: str
-) -> dict[str, SecretDestination]:
-    """For each test secret `spec` references, its binding in `config`
-    intersected with the run's allowed origins (ADR-0026), where `start` is
-    the run's start origin. A bound origin the run doesn't allow is an error,
-    never dropped: the secret could otherwise be left with nowhere to go."""
+def secret_destinations(spec: Spec, start: str) -> dict[str, SecretDestination]:
+    """For each test secret `spec` references, its binding, which `spec`
+    carries from the config it was loaded with, intersected with the run's
+    allowed origins (ADR-0026), where `start` is the run's start origin. A
+    bound origin the run doesn't allow is an error, never dropped: the secret
+    could otherwise be left with nowhere to go. fill_secret takes each
+    secret's origins and field from here, never from `spec.secret_bindings`."""
     allowed = allowed_origins(spec, start)
     destinations: dict[str, SecretDestination] = {}
     problems: list[str] = []
     for key, name in secret_references(spec.frontmatter):
         if name in destinations:
             continue
-        binding = config.secrets[name]
+        binding = spec.secret_bindings[name]
         origins = tuple(
             dict.fromkeys(start if o == "start" else o for o in binding.origins)
         )
