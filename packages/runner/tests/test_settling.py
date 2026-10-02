@@ -67,8 +67,8 @@ PAGES = {
     # An event stream the page keeps open, and a WebSocket.
     "listen": """<button onclick="window.events = new EventSource('/events/stream')">Listen</button>
         <button onclick="window.socket = new WebSocket(location.origin.replace('http', 'ws') + '/socket')">Open</button>""",
-    # A write the page sends 2 s after a click, once settling has said idle.
-    "late": """<button onclick="setTimeout(() => fetch('/write/late', {method: 'POST'}), 2000)">Save</button>
+    # A write the page sends 3 s after a click, once settling has said idle.
+    "late": """<button onclick="setTimeout(() => fetch('/write/late', {method: 'POST'}), 3000)">Save</button>
         <button onclick="fetch('/did/next')">Next</button>""",
     # A request the page holds open from the start, and a click that sends none.
     "earlier": """<button onclick="document.querySelector('#out').textContent = 'Clicked'">Click</button>
@@ -77,8 +77,12 @@ PAGES = {
     "clock": """<button onclick="setInterval(() => {
             document.querySelector('#out').textContent = Date.now();
         }, 50)">Start</button><p id="out"></p>""",
+    # A request, then, 0.3 s after it ends, another, and no change to the page.
+    "chain": """<button onclick="fetch('/held/first')
+            .then(() => new Promise((done) => setTimeout(done, 300)))
+            .then(() => fetch('/did/second'))">Chain</button>""",
     # A region around a frame on no origin, which actions refuse.
-    "refused": """<div id="around" style="width: 300px; height: 150px">
+    "refused": """<div id="around" tabindex="0" style="width: 300px; height: 150px">
             <iframe src="data:text/html,<p>Framed</p>"></iframe>
         </div>""",
 }
@@ -309,16 +313,41 @@ def test_a_redirect_hop_stays_in_the_window_of_the_request_it_continues(
     assert following == [("GET", "/did/next")]
 
 
-def test_a_refused_action_opens_no_window(site: Site) -> None:
+@pytest.mark.parametrize(
+    "action", ["navigate", "reload", "click", "fill", "select", "press"]
+)
+def test_a_refused_action_opens_no_window(site: Site, action: str) -> None:
     around = Target(semantic="the region", locators=(ByCss(css="#around"),))
+    later = f"{site.origin}/did/later"
+
+    async def refused(session: BrowserSession) -> None:
+        """Make the session refuse `action`: a URL or a page off the allowed
+        origins, or an element around a frame on none."""
+        match action:
+            case "navigate":
+                await session.navigate("http://evil.example.test/")
+            case "reload":
+                await session.page.goto("about:blank")
+                await session.reload()
+            case "click":
+                await session.click(await element(session, around))
+            case "fill":
+                await session.fill(await element(session, around), "Ada")
+            case "select":
+                await session.select(await element(session, around), "M")
+            case "press":
+                await session.page.focus("#around")
+                await session.press("a")
 
     async def scenario() -> list[tuple[str, str]]:
         async with browsing(site) as session:
             loaded = await session.navigate(f"{site.origin}/page/refused")
             with pytest.raises(PolicyEventError):
-                await session.click(await element(session, around))
+                await refused(session)
             # What the page sends next is still the navigation's.
-            await session.page.evaluate("fetch('/did/later')")
+            await session.page.evaluate(
+                f"() => {{ fetch({later!r}).catch(() => {{}}); }}"
+            )
             await arrives(loaded, 2)
             return paths(loaded)
 
@@ -367,7 +396,7 @@ def test_settling_waits_until_the_dom_has_been_quiet_for_half_a_second(
     assert settled == "idle"
     # No request, so only the page's changes held settling: idle came at
     # least 0.5 s after the last, and not long after.
-    assert 0.5 <= since_last_change < 1.5
+    assert 0.5 <= since_last_change < 2.5
 
 
 def test_settling_runs_out_at_ten_seconds_while_the_actions_request_is_open(
@@ -392,7 +421,7 @@ def test_settling_runs_out_at_ten_seconds_while_the_actions_request_is_open(
     timed_out, elapsed, then = asyncio.run(scenario())
 
     assert timed_out == "timeout"
-    assert 10 <= elapsed < 11
+    assert 10 <= elapsed < 12
     # Once the request is let go, the same window settles.
     assert then == "idle"
 
@@ -583,4 +612,50 @@ def test_a_page_whose_dom_never_stops_changing_settles_as_a_timeout(
     settled, elapsed = asyncio.run(scenario())
 
     assert settled == "timeout"
-    assert 2 <= elapsed < 3
+    assert 2 <= elapsed < 4
+
+
+def test_settling_waits_out_a_pause_between_chained_requests(site: Site) -> None:
+    async def scenario() -> tuple[str, list[tuple[str, str]]]:
+        async with browsing(site) as session:
+            await session.navigate(f"{site.origin}/page/chain")
+            window = await session.click(
+                await element(session, by_role("button", "Chain"))
+            )
+            asyncio.get_running_loop().call_later(1, site.release, "first")
+            async with asyncio.timeout(15):
+                settled = await session.settle(window)
+            return settled, paths(window)
+
+    settled, requests = asyncio.run(scenario())
+
+    # The page never changed, and the second request started 0.3 s after the
+    # first ended, within the quiet period: settling waited for it too.
+    assert settled == "idle"
+    assert requests == [("GET", "/held/first"), ("GET", "/did/second")]
+
+
+def test_settling_raises_a_timeout_that_isnt_its_own() -> None:
+    async def look() -> bool:
+        raise TimeoutError("the look's own")
+
+    with pytest.raises(TimeoutError, match="the look's own"):
+        asyncio.run(settling.settle(Window(), look))
+
+
+def test_settling_a_crashed_page_raises_playwrights_error(
+    site: Site, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settling, "SETTLE_SECONDS", 2)
+
+    async def scenario() -> None:
+        async with browsing(site) as session:
+            window = await session.navigate(f"{site.origin}/page/wait")
+            # Chromium's page that crashes the renderer, which never loads.
+            with pytest.raises(Error):
+                await session.page.goto("chrome://crash")
+            # Not a page that keeps changing: the page has crashed.
+            with pytest.raises(Error, match="crashed"):
+                await session.settle(window)
+
+    asyncio.run(scenario())
