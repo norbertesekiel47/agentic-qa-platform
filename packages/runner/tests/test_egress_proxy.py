@@ -4,8 +4,11 @@ proxy; SECURITY.md §7). Test-first (TESTING.md §2). The browser tests launch
 real Chromium on the OS that runs them: Linux in CI, macOS locally."""
 
 import asyncio
+import contextlib
 import socket
+import struct
 import threading
+import time
 from collections import Counter
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
@@ -90,6 +93,23 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_response(HTTPStatus.FOUND)
             self.send_header("Location", parse_qs(target.query)["to"][0])
             self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if target.path == "/slow":
+            # 1 MB, the second half a moment after the first.
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Length", str(2**20))
+            self.end_headers()
+            with contextlib.suppress(ConnectionError):  # the reader may be gone
+                self.wfile.write(b"x" * 2**19)
+                time.sleep(0.3)
+                self.wfile.write(b"x" * 2**19)
+            return
+        if target.path == "/hop":
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self.send_header("Connection", "close, X-Hop")
+            self.send_header("X-Hop", "only for the proxy")
+            self.send_header("X-Kept", "yes")
             self.end_headers()
             return
         if target.path == "/drop":
@@ -385,7 +405,11 @@ def test_the_proxy_listens_on_loopback_only() -> None:
         b"GET https://a.example.test/ HTTP/1.1",
         b"GET http://a.example.test:99999/ HTTP/1.1",
         b"GET http:///no-host HTTP/1.1",
+        # Not as an origin writes it, so not the allowed 127.0.0.1:9.
+        b"GET http://user@127.0.0.1:9/ HTTP/1.1",
+        b"GET http://127.0.0.1:0/ HTTP/1.1",
         b"CONNECT nonsense HTTP/1.1",
+        b"CONNECT 127.0.0.1:0x9 HTTP/1.1",
     ],
 )
 def test_a_request_the_proxy_cannot_read_is_dropped(request_line: bytes) -> None:
@@ -396,6 +420,47 @@ def test_a_request_the_proxy_cannot_read_is_dropped(request_line: bytes) -> None
             return await exchange(proxy, request_line + b"\r\nHost: x\r\n\r\n")
 
     assert asyncio.run(scenario()) == b""
+    # Dropped before the gate: nothing was asked for, refused or dialled.
+    assert (egress.refusals, egress.infrastructure_events) == ([], [])
+
+
+def test_headers_a_connection_header_names_stay_behind() -> None:
+    with serving() as origin:
+        start = f"http://127.0.0.1:{origin.port}"
+
+        async def scenario() -> bytes:
+            async with EgressProxy(gate(allowed=(start,))) as proxy:
+                return await exchange(proxy, get(f"{start}/hop", close=True))
+
+        response = asyncio.run(scenario()).lower()
+
+    # RFC 9110 §7.6.1: a header the Connection header names is hop-by-hop.
+    assert b"x-kept: yes" in response
+    assert b"x-hop" not in response
+
+
+def test_a_browser_that_goes_away_mid_response_is_no_upstream_failure() -> None:
+    with serving() as origin:
+        start = f"http://127.0.0.1:{origin.port}"
+        egress = gate(allowed=(start,))
+
+        async def scenario() -> None:
+            async with EgressProxy(egress) as proxy:
+                port = int(proxy.url.rsplit(":", 1)[1])
+                reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                writer.write(get(f"{start}/slow", close=True))
+                await reader.readuntil(b"\r\n\r\n")
+                # Reset, as a closed tab or a cancelled navigation would.
+                raw = writer.get_extra_info("socket")
+                raw.setsockopt(
+                    socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+                )
+                writer.close()
+                await asyncio.sleep(1)  # the rest arrives while nobody reads it
+
+        asyncio.run(scenario())
+
+    assert egress.infrastructure_events == []
 
 
 # Browser sessions: Chromium's every request goes through the proxy.
