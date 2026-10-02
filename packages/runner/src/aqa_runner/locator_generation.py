@@ -303,16 +303,16 @@ def _structural(element: _Element) -> Iterator[ByCss]:
             yield ByCss(css=f"{custom} {structure}")
 
 
-async def _unless_the_page_breaks(page: Page, check: Awaitable[bool]) -> bool:
-    """`check`'s answer, or no when the page breaks it: Playwright's general
-    error type, raised here when the page navigates away or drops an element
-    mid-check, which is the page's doing. A closed page raises."""
+async def _unless_the_page_breaks[T](page: Page, check: Awaitable[T], broken: T) -> T:
+    """`check`'s answer, or `broken` when the page breaks it: Playwright's
+    general error type, raised here when the page navigates away or drops an
+    element mid-check, which is the page's doing. A closed page raises."""
     try:
         return await check
     except Error:
         if page.is_closed():
             raise
-        return False
+        return broken
 
 
 class _OutOfTriesError(Exception):
@@ -360,7 +360,7 @@ class _Trial:
         """Whether `locator`, alone, resolves for the use to the element
         used."""
         self._spend()
-        return await _unless_the_page_breaks(self.page, self._found(locator))
+        return await _unless_the_page_breaks(self.page, self._found(locator), False)
 
     async def _count_is_one(self, scope: str) -> bool:
         return await self.page.locator(f"css={scope}").count() == 1
@@ -370,7 +370,7 @@ class _Trial:
         if scope not in self.counted:
             self._spend()
             self.counted[scope] = await _unless_the_page_breaks(
-                self.page, self._count_is_one(scope)
+                self.page, self._count_is_one(scope), False
             )
         return self.counted[scope]
 
@@ -456,7 +456,7 @@ async def _holding(page: Page, element: ElementHandle) -> AsyncIterator[str]:
     try:
         yield token
     finally:
-        await _unless_the_page_breaks(page, _dropped(element, token))
+        await _unless_the_page_breaks(page, _dropped(element, token), False)
 
 
 def _role_and_name(used: Seen) -> tuple[str | None, str]:
@@ -501,14 +501,6 @@ def _assertion_kinds(used: Seen, element: _Element, *, checks_text: bool) -> _By
     ]
 
 
-# How each use needs a locator to find the element, for a message.
-_HOW = {
-    "action": "alone for an action",
-    "assertion": "alone for an assertion",
-    "negative_check": "under a scope for a negative check",
-}
-
-
 async def _placed(
     page: Page,
     used: Seen,
@@ -516,14 +508,16 @@ async def _placed(
     kinds_of: Callable[[_Element], _ByKind],
 ) -> _ByKind:
     """For each of the grammar's kinds, in order, its candidates where they
-    find the element `used` for `use` (`_place`). Raises `LocatorError` when
-    none does."""
+    find the element `used` for `use`: for an action or an assertion, the
+    first (`_first_of_each_kind`); for a negative check, every one under
+    every scope (`_every_scoped`). Raises `LocatorError` when none does."""
     element = await _facts(page, used.element)
     kinds = kinds_of(element)
     placed: _ByKind = [[] for _ in kinds]
+    place = _every_scoped if use == "negative_check" else _first_of_each_kind
     async with _holding(page, used.element) as token:
         try:
-            await _place(_Trial(page, use, token), kinds, _scopes(element), placed)
+            await place(_Trial(page, use, token), kinds, _scopes(element), placed)
         except _OutOfTriesError:
             # Out of tries, the kinds found so far stand; with none, the
             # budget is the reason.
@@ -533,32 +527,39 @@ async def _placed(
                 ) from None
     if not any(placed):
         what = f"the {element['tag']} element" if _stable(element["tag"]) else "it"
-        raise LocatorError(f"no locator of the grammar finds {what} {_HOW[use]}")
+        how = (
+            "under a scope for a negative check"
+            if use == "negative_check"
+            else f"alone for an {use}"
+        )
+        raise LocatorError(f"no locator of the grammar finds {what} {how}")
     return placed
 
 
-async def _place(
-    trial: _Trial,
-    kinds: _ByKind,
-    scopes: list[str],
-    placed: _ByKind,
+async def _first_of_each_kind(
+    trial: _Trial, kinds: _ByKind, scopes: list[str], placed: _ByKind
 ) -> None:
-    """Append to each kind's list in `placed` its candidates where they find
-    the element. For an action or an assertion, that is the first candidate
-    that does, scoped as needed. For a negative check, it is every candidate
-    under every scope that makes it find the element, nearest first: the
-    check runs on another page, where a scope unique here may not be."""
+    """Append to each kind's list in `placed` the kind's first candidate that
+    finds the element, scoped as needed."""
     for kind, found in zip(kinds, placed, strict=True):
         for candidate in kind:
-            if trial.use == "negative_check":
-                for scope in scopes:
-                    if (scoped := await trial.under(candidate, scope)) is not None:
-                        found.append(scoped)
-            elif (
-                working := await trial.scoped_as_needed(candidate, scopes)
-            ) is not None:
+            working = await trial.scoped_as_needed(candidate, scopes)
+            if working is not None:
                 found.append(working)
                 break
+
+
+async def _every_scoped(
+    trial: _Trial, kinds: _ByKind, scopes: list[str], placed: _ByKind
+) -> None:
+    """Append to each kind's list in `placed` every candidate under every
+    scope that makes it find the element, nearest first: a negative check
+    runs on another page, where a scope unique here may not be."""
+    for kind, found in zip(kinds, placed, strict=True):
+        for candidate in kind:
+            for scope in scopes:
+                if (scoped := await trial.under(candidate, scope)) is not None:
+                    found.append(scoped)
 
 
 async def _generate(
@@ -626,8 +627,10 @@ class TargetUses:
         """The index in `targets` of the target this use of the element
         `used` gets."""
         with self._named():
-            async with _holding(page, used.element) as token:
-                joins = await self._holds(use, _Trial(page, use, token).finds)
+            joins = False
+            if self._targets:
+                async with _holding(page, used.element) as token:
+                    joins = await self._holds(use, _Trial(page, use, token).finds)
             if not joins:
                 if use == "action":
                     locators = await generate_for_action(page, used)
@@ -643,6 +646,7 @@ class TargetUses:
         later negative check of the meaning starts its target from: an
         assertion's kinds, each scoped (ADR-0025's 2026-10-02 amendment)."""
         with self._named():
+            self._seen = []
             self._seen = await _placed(
                 page,
                 seen,
@@ -655,22 +659,22 @@ class TargetUses:
     async def add_negative_check(self, page: Page) -> int:
         """The index in `targets` of the target a negative check of the
         meaning, on the page now, gets. The caller calls
-        `see_for_negative_check` first, while the element is on screen: a new
-        target keeps, of each kind, the first locator seen there whose scope
-        is on this page with nothing visible in it."""
+        `see_for_negative_check` first, while the element is on screen. Of
+        each kind, the first locator seen there whose scope is on this page
+        decides: with nothing visible in that scope it is kept, for a new
+        target; with something visible, the element is still shown, and the
+        check fails by name. The current target, if every locator is scoped
+        and finds nothing visible, serves the check instead."""
         with self._named():
-            absent = await self._holds(
+            kept = await _first_absent(page, self._seen)
+            joins = bool(self._targets) and await self._holds(
                 "negative_check", lambda locator: _absent(page, locator)
             )
-            if not absent:
+            if not joins:
                 if not self._seen:
                     raise LocatorError("it wasn't seen before its negative check")
-                kept = await _first_absent(page, self._seen)
                 if not kept:
-                    raise LocatorError(
-                        "no locator it was seen by finds its scope on the page "
-                        "with nothing visible in it"
-                    )
+                    raise LocatorError("no scope it was seen under is on the page")
                 self._targets.append(Target(semantic=self.meaning, locators=kept))
         return len(self._targets) - 1
 
@@ -680,7 +684,7 @@ class TargetUses:
         try:
             yield
         except LocatorError as error:
-            raise LocatorError(f"{self.meaning}: {error}") from None
+            raise LocatorError(f"{self.meaning}: {error}") from error
 
     def _allows(self, locator: Locator, use: Use) -> bool:
         """Whether the grammar lets `locator` find the target for `use`: an
@@ -697,10 +701,10 @@ class TargetUses:
     async def _holds(
         self, use: Use, holds: Callable[[Locator], Awaitable[bool]]
     ) -> bool:
-        """Whether the meaning has a current target, and every one of its
-        locators is one the grammar allows for `use` and `holds` now."""
-        locators = self._targets[-1].locators if self._targets else ()
-        if not locators or not all(self._allows(each, use) for each in locators):
+        """Whether every locator of the current target is one the grammar
+        allows for `use` and `holds` now."""
+        locators = self._targets[-1].locators
+        if not all(self._allows(each, use) for each in locators):
             return False
         for locator in locators:
             if not await holds(locator):
@@ -708,27 +712,47 @@ class TargetUses:
         return True
 
 
-async def _absent(page: Page, locator: Locator) -> bool:
-    """Whether `locator`, alone, finds its scope on the page with nothing
-    visible in it: a negative check's absence. A page that breaks the look
-    gets no."""
+# What a locator, alone, finds at a negative check: its scope with nothing
+# visible in it, something visible there (one match or several), or no scope.
+type _Look = Literal["absent", "shown", "no scope"]
 
-    async def look() -> bool:
+
+async def _look(page: Page, locator: Locator) -> _Look:
+    """What `locator`, alone, finds on the page now, as a negative check
+    counts. A page that breaks the look shows no scope: it established
+    nothing."""
+
+    async def look() -> _Look:
         target = Target(semantic=_CANDIDATE_MEANING, locators=(locator,))
         found = await resolve(page, target, "negative_check")
+        if isinstance(found, Absent):
+            return "absent"
         if isinstance(found, Resolved):
             await found.element.dispose()
-        return isinstance(found, Absent)
+            return "shown"
+        return "no scope" if found.misses == ("no scope",) else "shown"
 
-    return await _unless_the_page_breaks(page, look())
+    return await _unless_the_page_breaks(page, look(), "no scope")
+
+
+async def _absent(page: Page, locator: Locator) -> bool:
+    return await _look(page, locator) == "absent"
 
 
 async def _first_absent(page: Page, seen: _ByKind) -> tuple[Locator, ...]:
-    """Of each kind, the first locator seen that is absent from the page."""
+    """Of each kind, the first locator seen whose scope is on the page, when
+    nothing is visible in that scope. Raises `LocatorError` when something
+    is: the element is still shown."""
     kept: list[Locator] = []
     for found in seen:
         for locator in found:
-            if await _absent(page, locator):
+            look = await _look(page, locator)
+            if look == "shown":
+                raise LocatorError(
+                    "it is still shown: a locator it was seen by finds "
+                    "something visible in its scope"
+                )
+            if look == "absent":
                 kept.append(locator)
                 break
     return tuple(kept)

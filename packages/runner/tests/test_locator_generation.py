@@ -1125,29 +1125,31 @@ FOLLOW = """<button class="btn btn-outline-primary">Follow anna</button>
 
 
 def test_a_class_that_flips_with_state_splits_the_target() -> None:
-    # Clicking the button flips its class, as Bootstrap's btn-outline-primary
-    # becomes btn-primary. The second click checks every locator, and the
-    # class no longer finds the button, so that click starts a target. The
-    # first target keeps the class: a locator is never dropped to keep a
-    # target whole.
+    # The first click flips the button's class, as Bootstrap's
+    # btn-outline-primary becomes btn-primary. The second click checks every
+    # locator, and the class no longer finds the button, so that click starts
+    # a target. The first target keeps the class: a locator is never dropped
+    # to keep a target whole. The third click, with nothing flipped, joins
+    # the current target, the second.
     async def scenario(session: BrowserSession) -> tuple[list[int], tuple[Target, ...]]:
         uses = TargetUses("the follow button", checks_text=False)
         await put(session, FOLLOW)
         indexes = []
-        for _ in range(2):
+        for click in range(3):
             snapshot = await session.snapshot()
             ref = ref_of(snapshot, "button", "Follow anna")
             used = await seen_element(session, snapshot, ref)
             indexes.append(await uses.add(session.page, used, "action"))
-            await used.element.evaluate(
-                "(button) => button.classList.replace('btn-outline-primary', 'btn-primary')"
-            )
+            if click == 0:
+                await used.element.evaluate(
+                    "(button) => button.classList.replace('btn-outline-primary', 'btn-primary')"
+                )
         return indexes, uses.targets
 
     indexes, targets = in_session(scenario)
 
     by_name = ByRole(role="button", name="Follow anna")
-    assert indexes == [0, 1]
+    assert indexes == [0, 1, 1]
     assert targets == (
         Target(
             semantic="the follow button",
@@ -1240,26 +1242,30 @@ async def see_header_link(session: BrowserSession, uses: TargetUses, name: str) 
 
 
 @pytest.mark.parametrize(
-    ("name", "expected"),
+    ("name", "checks_text", "expected"),
     [
-        ("Sign in", (ByRole(role="link", name="Sign in", scope=HEADER_LINKS),)),
+        ("Sign in", False, (ByRole(role="link", name="Sign in", scope=HEADER_LINKS),)),
         (
             "Sign up",
+            False,
             (
                 ByRole(role="link", name="Sign up", scope=HEADER_LINKS),
                 ByCss(css="a.nav-signup", scope=HEADER_LINKS),
             ),
         ),
+        ("Sign up", True, (ByCss(css="a.nav-signup", scope=HEADER_LINKS),)),
     ],
+    ids=["Sign in", "Sign up", "Sign up, its text checked"],
 )
 def test_a_negative_check_target_is_always_scoped(
-    name: str, expected: tuple[Locator, ...]
+    name: str, checks_text: bool, expected: tuple[Locator, ...]
 ) -> None:
     # login checks that the header has no Sign in or Sign up link once
     # signed in. The link is seen on the login page, where it is unique
     # without a scope, and checked on the home page. Its locators are scoped
     # under the nearest ancestor that holds at both: ul.nav is unique on the
-    # login page, but the home page's feed tabs are a ul.nav too.
+    # login page, but the home page's feed tabs are a ul.nav too. A meaning
+    # whose text another check reads gets no name here either.
     meaning = f"the header's {name} link"
 
     async def scenario(
@@ -1270,7 +1276,7 @@ def test_a_negative_check_target_is_always_scoped(
         tuple[Target, ...],
         Resolved | Absent | Unresolved,
     ]:
-        uses = TargetUses(meaning, checks_text=False)
+        uses = TargetUses(meaning, checks_text=checks_text)
         await see_header_link(session, uses, name)
         unscoped = Target(semantic=meaning, locators=(ByRole(role="link", name=name),))
         alone = await resolve(session.page, unscoped, "negative_check")
@@ -1300,7 +1306,10 @@ def test_a_negative_check_target_fails_by_name_when_its_scope_is_gone() -> None:
         await put(session, "<main><h1>Bad gateway</h1></main>")
         return await uses.add_negative_check(session.page)
 
-    with pytest.raises(LocatorError, match=r"^the header's Sign in link: .*scope"):
+    with pytest.raises(
+        LocatorError,
+        match=r"^the header's Sign in link: no scope it was seen under is on the page$",
+    ):
         in_session(scenario)
 
 
@@ -1420,15 +1429,31 @@ def test_a_negative_check_never_joins_a_target_with_an_unscoped_locator() -> Non
     ]
 
 
-def test_a_negative_check_of_an_element_still_shown_gets_no_target() -> None:
-    # Every locator the link was seen by still finds it: the check would
-    # fail, so it gets no target to fail with.
+# A header with two Sign in links, under the scope the link was seen in.
+TWO_SIGN_INS = """<nav class="navbar"><ul class="nav navbar-nav">
+<li class="nav-item"><a class="nav-link" href="/login">Sign in</a></li>
+<li class="nav-item"><a class="nav-link" href="/login">Sign in</a></li>
+</ul></nav>"""
+
+
+@pytest.mark.parametrize("again", [False, True], ids=["the link", "two such links"])
+def test_a_negative_check_of_an_element_still_shown_gets_no_target(
+    again: bool,
+) -> None:
+    # The link is still on the login page, or a header shows two like it:
+    # either way the nearest scope it was seen under that is on the page has
+    # something visible in it, so the check would fail, and it gets no
+    # target to fail with.
     async def scenario(session: BrowserSession) -> int:
         uses = TargetUses("the header's Sign in link", checks_text=False)
         await see_header_link(session, uses, "Sign in")
+        if again:
+            await put(session, TWO_SIGN_INS)
         return await uses.add_negative_check(session.page)
 
-    with pytest.raises(LocatorError, match="nothing visible in it"):
+    with pytest.raises(
+        LocatorError, match=r"^the header's Sign in link: it is still shown"
+    ):
         in_session(scenario)
 
 
@@ -1472,3 +1497,77 @@ def test_an_id_is_used_only_when_it_is_one_plain_identifier(
     ]
     assert actual_id == given
     assert by_id == ([ByCss(css="#pay")] if used else [])
+
+
+TESTED_SIGN_OUT = """<nav class="top">
+<a href="#" class="out" data-testid="sign-out">Sign out</a></nav>
+<main><p>Signed in</p></main>"""
+
+
+def test_a_negative_check_fails_by_name_while_any_kind_still_finds_the_element() -> (
+    None
+):
+    # The page changes the link's test ID and keeps the link on screen. The
+    # test ID finds nothing, but the link's name and class still find it, so
+    # keeping the test ID alone would pass on a page that shows the link
+    # (#52's security review).
+    async def scenario(session: BrowserSession) -> int:
+        uses = TargetUses("the sign-out link", checks_text=False)
+        await put(session, TESTED_SIGN_OUT)
+        snapshot = await session.snapshot()
+        seen = await seen_element(
+            session, snapshot, ref_of(snapshot, "link", "Sign out")
+        )
+        await uses.see_for_negative_check(session.page, seen)
+        await seen.element.evaluate(
+            "(link) => link.setAttribute('data-testid', 'gone')"
+        )
+        return await uses.add_negative_check(session.page)
+
+    with pytest.raises(LocatorError, match=r"^the sign-out link: it is still shown"):
+        in_session(scenario)
+
+
+def test_a_failed_sighting_forgets_the_one_before() -> None:
+    # The second sighting fails, so a check after it must not use the first
+    # one's locators, which were seen on another page.
+    async def scenario(session: BrowserSession) -> int:
+        uses = TargetUses("the header's Sign in link", checks_text=False)
+        await see_header_link(session, uses, "Sign in")
+        await put(session, "<button>Sign in</button>")
+        snapshot = await session.snapshot()
+        seen = await seen_element(
+            session, snapshot, ref_of(snapshot, "button", "Sign in")
+        )
+        with pytest.raises(LocatorError):
+            await uses.see_for_negative_check(session.page, seen)
+        await put(session, "<main><p>Saved</p></main>")
+        return await uses.add_negative_check(session.page)
+
+    with pytest.raises(LocatorError, match="wasn't seen before its negative check"):
+        in_session(scenario)
+
+
+def test_tries_running_out_keep_a_later_kinds_locator() -> None:
+    # The element has no role locator, so its test ID is the first kind to
+    # find it; its structure, shared with its twin under sixteen ancestors
+    # that each look worth a try, spends the rest. The test ID stands.
+    letters = "abcdefghijklmnop"
+    opening = "".join(
+        f"<div class='{' '.join(f'l{level}{each}' for each in letters)}'>"
+        for level in range(16)
+    )
+    inner = " ".join(f"c{each}" for each in letters)
+    html = (
+        opening
+        + f"<b data-testid='mine' class='{inner}'>x</b><b class='{inner}'>x</b>"
+        + "</div>" * 16
+    )
+
+    async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
+        await put(session, html)
+        element = await session.page.query_selector("[data-testid=mine]")
+        assert element is not None
+        return await generate_for_action(session.page, Seen(element))
+
+    assert in_session(scenario) == (ByTestId(testid="mine"),)
