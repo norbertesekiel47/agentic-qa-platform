@@ -141,6 +141,7 @@ async def open_browser_session(
     `settings`, downloads refused and every request through `egress`, the
     run's egress proxy, and close the browser, its temporary profile with it,
     when the session ends."""
+    proxy = egress.url  # an egress proxy that isn't serving fails before a launch
     browser = await launch(chromium)
     try:
         width, height = settings.viewport
@@ -160,7 +161,7 @@ async def open_browser_session(
             # naming it here makes that variable irrelevant (ADR-0026
             # amendment, 2026-10-01).
             # https://playwright.dev/python/docs/api/class-browser#browser-new-context-option-proxy
-            proxy={"server": egress.url, "bypass": "<-loopback>"},
+            proxy={"server": proxy, "bypass": "<-loopback>"},
         )
         yield BrowserSession(await context.new_page())
     finally:

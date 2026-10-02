@@ -3,35 +3,38 @@ only way out (ADR-0026 and its 2026-10-01 amendment on the egress proxy;
 SECURITY.md §7). It asks the run's egress gate for every connection, and the
 gate's policy makes every allowlist decision.
 
-- A plain request arrives in absolute form, one at a time on a kept-alive
-  connection, and each one is checked. A refused or failed one closes the
-  connection with nothing sent: a synthesized status would reach the page as
-  the app's own response.
+- A plain request arrives in absolute form, one per browser connection: the
+  response says `Connection: close`, so a failure never lands on a reused
+  connection, which Chromium would answer by sending the request again. A
+  refused or failed request closes the connection with nothing sent: a
+  synthesized status would reach the page as the app's own response.
 - A `CONNECT` carries https and WebSockets. A refused or failed one fails the
   tunnel with a non-2xx status, which Chromium never shows a page. The proxy
   never terminates TLS; a tunnel's bytes pass through unread.
+- A failure on the upstream side is an infrastructure event, recorded with the
+  gate; one on the browser's side, such as a closed tab, isn't.
 
 h11 frames HTTP/1.1 on both sides: https://h11.readthedocs.io/en/v0.16.0/api.html
 """
 
 import asyncio
 import contextlib
-from collections.abc import Iterable, Iterator
+from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Self
 from urllib.parse import urlsplit
 
 import h11
-from aqa_core.schema import authority
+from aqa_core.schema import DEFAULT_PORTS
 
 from aqa_runner.egress import EgressGate, EgressRefusedError, EgressUpstreamError
 
 # Headers that describe one hop and are never forwarded, with any header the
-# Connection header names (RFC 9110 §7.6.1). A request goes upstream with
-# `Connection: close`, so each upstream connection carries one request while
-# the browser's may stay open. `Upgrade` stays behind too: Chromium opens
-# WebSockets through CONNECT.
+# Connection header names (RFC 9110 §7.6.1). `Upgrade` stays behind too:
+# Chromium opens WebSockets through CONNECT. Content-Length and
+# Transfer-Encoding are forwarded on purpose: h11 frames each side's body
+# from them.
 HOP_BY_HOP = {
     b"connection",
     b"keep-alive",
@@ -49,7 +52,8 @@ CHUNK = 65536
 
 @dataclass(frozen=True)
 class _Peer:
-    """One side of a proxied exchange: the browser, or the upstream server."""
+    """One side of a proxied exchange; this one is the browser's, whose
+    failures end the exchange and nothing more."""
 
     http: h11.Connection
     reader: asyncio.StreamReader
@@ -58,20 +62,58 @@ class _Peer:
     async def next(self) -> h11.Event:
         """The peer's next event, reading as much as it needs. The end of the
         stream is h11's to judge: ConnectionClosed between messages, a
-        RemoteProtocolError within one. The proxy reads a peer only when the
-        peer owes an event, never while it waits on the proxy (PAUSED)."""
+        RemoteProtocolError within one."""
         while True:
             event = self.http.next_event()
             if isinstance(event, h11.Event):
                 return event
             if event is h11.PAUSED:
-                raise h11.RemoteProtocolError("read while the peer waits on the proxy")
-            self.http.receive_data(await self.reader.read(CHUNK))
+                # The proxy reads a peer only when the peer owes an event.
+                raise RuntimeError("the egress proxy read a peer that waits on it")
+            self.http.receive_data(await self.read())
 
     async def send(self, event: h11.Event) -> None:
         if data := self.http.send(event):
-            self.writer.write(data)
-            await self.writer.drain()
+            await self.write(data)
+
+    async def read(self) -> bytes:
+        return await self.reader.read(CHUNK)
+
+    async def write(self, data: bytes) -> None:
+        self.writer.write(data)
+        await self.writer.drain()
+
+
+@dataclass(frozen=True)
+class _Upstream(_Peer):
+    """The upstream server's side: any failure is an infrastructure event,
+    recorded with the gate."""
+
+    gate: EgressGate
+    host: str
+    port: int
+
+    async def read(self) -> bytes:
+        with self._failures():
+            return await super().read()
+
+    async def write(self, data: bytes) -> None:
+        with self._failures():
+            await super().write(data)
+
+    async def next(self) -> h11.Event:
+        with self._failures():
+            return await super().next()
+
+    @contextlib.contextmanager
+    def _failures(self) -> Iterator[None]:
+        try:
+            yield
+        # A reset, an unreachable host, a timeout, or a message cut short.
+        except (h11.RemoteProtocolError, OSError) as error:
+            raise self.gate.record_failure(
+                self.host, self.port, f"the exchange broke off: {error}"
+            ) from error
 
 
 class EgressProxy:
@@ -82,10 +124,13 @@ class EgressProxy:
     def __init__(self, gate: EgressGate) -> None:
         self._gate = gate
         self._server: asyncio.Server | None = None
+        # Each browser connection's handler, so closing the proxy ends them
+        # all: none may forward a request after the proxy has closed.
+        self._handlers: set[asyncio.Task[None]] = set()
 
     async def __aenter__(self) -> Self:
         # https://docs.python.org/3.14/library/asyncio-stream.html#asyncio.start_server
-        self._server = await asyncio.start_server(self._serve, "127.0.0.1", 0)
+        self._server = await asyncio.start_server(self._accept, "127.0.0.1", 0)
         return self
 
     async def __aexit__(
@@ -97,150 +142,160 @@ class EgressProxy:
         server = self._serving()
         self._server = None
         server.close()
-        # Kept-alive browser connections would hold wait_closed open:
-        # https://docs.python.org/3.14/library/asyncio-eventloop.html#asyncio.Server.close_clients
-        server.close_clients()
+        for handler in self._handlers:
+            handler.cancel()
+        # Each handler closes its connections as it ends, so wait_closed,
+        # which waits for every accepted connection, returns.
+        await asyncio.gather(*self._handlers, return_exceptions=True)
         await server.wait_closed()
 
     @property
     def url(self) -> str:
-        """Where the browser sends its traffic."""
-        port = self._serving().sockets[0].getsockname()[1]
-        return f"http://127.0.0.1:{port}"
+        """Where the browser sends its traffic: the address it listens on."""
+        host, port = self._serving().sockets[0].getsockname()[:2]
+        return f"http://{host}:{port}"
 
     def _serving(self) -> asyncio.Server:
         if self._server is None:
             raise RuntimeError("the egress proxy serves only inside `async with`")
         return self._server
 
+    def _accept(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        """Serve a new browser connection in a task the proxy can end."""
+        handler = asyncio.create_task(self._serve(reader, writer))
+        self._handlers.add(handler)
+        handler.add_done_callback(self._handlers.discard)
+
     async def _serve(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
-        """One browser connection: plain requests in turn, or one tunnel. A
-        request the proxy can't read, a refusal or an upstream failure (both
-        recorded by the gate), or a browser that went away ends it, with
-        nothing more sent."""
+        """One browser connection: one plain request, or one tunnel. A request
+        the proxy can't read, a refusal or an upstream failure (both recorded
+        by the gate), or a browser that went away ends it, with nothing more
+        sent."""
         browser = _Peer(h11.Connection(h11.SERVER), reader, writer)
-        with contextlib.suppress(
-            h11.RemoteProtocolError,
-            EgressRefusedError,
-            EgressUpstreamError,
-            ConnectionError,
-        ):
-            while isinstance(request := await browser.next(), h11.Request):
-                if request.method == b"CONNECT":
-                    await self._tunnel(request, browser)
-                    break
-                await self._forward(request, browser)
-                # Kept alive only when both sides finished their messages.
-                if (browser.http.our_state, browser.http.their_state) != (
-                    h11.DONE,
-                    h11.DONE,
-                ):
-                    break
-                browser.http.start_next_cycle()
-        writer.close()
+        try:
+            with contextlib.suppress(
+                h11.RemoteProtocolError,
+                EgressRefusedError,
+                EgressUpstreamError,
+                OSError,
+            ):
+                request = await browser.next()
+                if isinstance(request, h11.Request):
+                    serve = (
+                        self._tunnel if request.method == b"CONNECT" else self._forward
+                    )
+                    await serve(request, browser)
+        finally:
+            writer.close()
 
     async def _forward(self, request: h11.Request, browser: _Peer) -> None:
-        """Send one plain request upstream, and its response back. A failure
-        on the upstream side is an infrastructure event; one on the browser's
-        side, such as a closed tab, isn't."""
-        target = urlsplit(request.target.decode("ascii"))
-        if target.scheme != "http":
-            raise h11.RemoteProtocolError("a plain request names an http URL")
-        host, port = _authority(f"http://{target.netloc}")
-        upstream = _Peer(
-            h11.Connection(h11.CLIENT),
-            *await self._gate.connect(host, port, "request"),
+        """Send one plain request upstream, and its response back."""
+        host, port, path = _plain_target(request.target)
+        reader, writer = await self._gate.connect(host, port, "request")
+        upstream = _Upstream(
+            h11.Connection(h11.CLIENT), reader, writer, self._gate, host, port
         )
         try:
-            path = (target.path or "/") + (f"?{target.query}" if target.query else "")
-            with self._upstream_failures(host, port):
-                await upstream.send(
-                    h11.Request(
-                        method=request.method,
-                        target=path,
+            await upstream.send(
+                h11.Request(
+                    method=request.method,
+                    target=path,
+                    headers=[
                         # The target's own Host, whatever the browser's said
                         # (RFC 9112 §3.2.2).
-                        headers=[
-                            (
-                                b"host",
-                                (host if port == 80 else f"{host}:{port}").encode(),
-                            ),
-                            *_end_to_end(request.headers),
-                            (b"connection", b"close"),
-                        ],
-                    )
+                        (b"host", _host_header(host, port)),
+                        *_request_headers(request.headers),
+                        (b"connection", b"close"),
+                    ],
                 )
-            # The body, then its EndOfMessage: a body cut short is h11's
-            # RemoteProtocolError.
-            while True:
-                event = await browser.next()
-                with self._upstream_failures(host, port):
-                    await upstream.send(event)
-                if not isinstance(event, h11.Data):
-                    break
-            while True:
-                with self._upstream_failures(host, port):
-                    event = await upstream.next()
-                if isinstance(event, h11.InformationalResponse | h11.Response):
-                    event = type(event)(
-                        status_code=event.status_code,
-                        reason=event.reason,
-                        headers=_end_to_end(event.headers),
-                    )
-                await browser.send(event)
-                if isinstance(event, h11.EndOfMessage):
-                    return
+            )
+            await _relay(browser, upstream)  # the body
+            await _unless_browser_leaves(_relay(upstream, browser), browser)
         finally:
-            upstream.writer.close()
-
-    @contextlib.contextmanager
-    def _upstream_failures(self, host: str, port: int) -> Iterator[None]:
-        """Record an upstream server that breaks off mid-exchange with the
-        gate, as an infrastructure event, and end the exchange."""
-        try:
-            yield
-        except (h11.RemoteProtocolError, ConnectionError) as error:
-            raise self._gate.record_failure(
-                host, port, f"the exchange broke off: {error}"
-            ) from error
+            writer.close()
 
     async def _tunnel(self, request: h11.Request, browser: _Peer) -> None:
         """Open a tunnel and pass its bytes both ways until either side ends."""
-        target = request.target.decode("ascii")
-        if not target.rpartition(":")[2].isdecimal():
-            raise h11.RemoteProtocolError("CONNECT names a host and a port")
-        host, port = _authority(f"http://{target}")
+        host, port = _host_and_port(request.target.decode("ascii"), default_port=None)
         await browser.next()  # CONNECT's EndOfMessage
         try:
-            upstream_reader, upstream_writer = await self._gate.connect(
-                host, port, "tunnel"
-            )
+            reader, writer = await self._gate.connect(host, port, "tunnel")
         except EgressRefusedError:
             await _fail_tunnel(browser, 403)
             raise
         except EgressUpstreamError:
             await _fail_tunnel(browser, 502)
             raise
-        await browser.send(
-            h11.Response(status_code=200, reason=b"Connection established", headers=[])
+        upstream = _Upstream(
+            h11.Connection(h11.CLIENT), reader, writer, self._gate, host, port
         )
-        early, _ = browser.http.trailing_data
-        upstream_writer.write(early)
-        await asyncio.gather(
-            _pipe(browser.reader, upstream_writer),
-            _pipe(upstream_reader, browser.writer),
-        )
+        try:
+            await browser.send(
+                h11.Response(
+                    status_code=200, reason=b"Connection established", headers=[]
+                )
+            )
+            early, _ = browser.http.trailing_data
+            await upstream.write(early)
+            await _first_to_end(
+                _carry(browser.read, upstream.write),
+                _carry(upstream.read, browser.write),
+            )
+        finally:
+            writer.close()
 
 
-def _authority(origin: str) -> tuple[str, int]:
-    """A request's host and port, read as an origin is: a host written any
-    other way, with a user or port 0, is a request the proxy can't read."""
+def _plain_target(target: bytes) -> tuple[str, int, str]:
+    """A plain request's host, port and origin-form target, as written. A
+    host the policy can't match, written in some other form, is the gate's
+    to refuse and record."""
+    scheme, separator, rest = target.decode("ascii").partition("://")
+    if scheme != "http" or not separator:
+        raise h11.RemoteProtocolError("a plain request names an http URL")
+    netloc, slash, path = rest.partition("/")
+    host, port = _host_and_port(netloc, default_port=DEFAULT_PORTS["http"])
+    # Never rewritten: the app's URL reaches it as the page wrote it.
+    return host, port, f"/{path}" if slash else "/"
+
+
+def _host_and_port(authority: str, *, default_port: int | None) -> tuple[str, int]:
+    """An authority's host, lowercase with an IPv6 address in brackets, and
+    its port. Only an authority no browser writes is one the proxy can't
+    read."""
     try:
-        return authority(origin)
-    except ValueError as error:
+        parts = urlsplit(f"//{authority}")
+        port = parts.port
+    except ValueError as error:  # brackets that don't close, a port out of range
         raise h11.RemoteProtocolError(str(error)) from error
+    if not parts.hostname or "@" in authority:
+        raise h11.RemoteProtocolError(f"'{authority}' names no host alone")
+    if port is None:
+        if default_port is None:
+            raise h11.RemoteProtocolError("CONNECT names a host and a port")
+        port = default_port
+    host = parts.hostname
+    return (f"[{host}]" if ":" in host else host), port
+
+
+def _host_header(host: str, port: int) -> bytes:
+    if port == DEFAULT_PORTS["http"]:
+        return host.encode()
+    return f"{host}:{port}".encode()
+
+
+def _request_headers(
+    headers: Iterable[tuple[bytes, bytes]],
+) -> list[tuple[bytes, bytes]]:
+    """A request's end-to-end headers, framed one way only: with
+    Transfer-Encoding, never Content-Length as well (RFC 9112 §6.3)."""
+    forwarded = _end_to_end(headers)
+    if any(name == b"transfer-encoding" for name, _ in forwarded):
+        return [(name, value) for name, value in forwarded if name != b"content-length"]
+    return forwarded
 
 
 def _end_to_end(headers: Iterable[tuple[bytes, bytes]]) -> list[tuple[bytes, bytes]]:
@@ -257,18 +312,71 @@ def _end_to_end(headers: Iterable[tuple[bytes, bytes]]) -> list[tuple[bytes, byt
     return [(name, value) for name, value in pairs if name not in dropped]
 
 
+async def _relay(source: _Peer, sink: _Peer) -> None:
+    """Pass one message from `source` to `sink`, up to its EndOfMessage. A
+    response head loses its hop-by-hop headers, and a final one closes the
+    browser's connection after it."""
+    while True:
+        event = await source.next()
+        if isinstance(event, h11.InformationalResponse):
+            event = h11.InformationalResponse(
+                status_code=event.status_code,
+                reason=event.reason,
+                headers=_end_to_end(event.headers),
+            )
+        elif isinstance(event, h11.Response):
+            event = h11.Response(
+                status_code=event.status_code,
+                reason=event.reason,
+                headers=[*_end_to_end(event.headers), (b"connection", b"close")],
+            )
+        await sink.send(event)
+        if isinstance(event, h11.EndOfMessage):
+            return
+
+
+async def _unless_browser_leaves(
+    exchange: Coroutine[None, None, None], browser: _Peer
+) -> None:
+    """Run `exchange` until it ends, or until the browser closes its side, as
+    it does when a page aborts the request: then the upstream is let go,
+    rather than held until it answers."""
+
+    async def browser_gone() -> None:
+        with contextlib.suppress(OSError):
+            while await browser.read():
+                pass  # nothing more is expected on this connection
+
+    await _first_to_end(exchange, browser_gone())
+
+
+async def _first_to_end(*coroutines: Coroutine[None, None, None]) -> None:
+    """Run `coroutines` until one ends, cancel the rest, and raise what the
+    first to end raised."""
+    tasks = [asyncio.create_task(coroutine) for coroutine in coroutines]
+    try:
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    for task in done:
+        task.result()
+
+
+async def _carry(
+    read: Callable[[], Awaitable[bytes]], write: Callable[[bytes], Awaitable[None]]
+) -> None:
+    """Copy one direction of a tunnel until it ends. The browser's side
+    ending, cleanly or not, just ends it; the upstream's failures are the
+    gate's infrastructure events, raised by its `read` and `write`."""
+    with contextlib.suppress(OSError):
+        while data := await read():
+            await write(data)
+
+
 async def _fail_tunnel(browser: _Peer, status: int) -> None:
     await browser.send(
         h11.Response(status_code=status, headers=[(b"content-length", b"0")])
     )
     await browser.send(h11.EndOfMessage())
-
-
-async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-    """Copy bytes until the reader's side ends, then close the writer, which
-    ends the other direction too."""
-    with contextlib.suppress(ConnectionError):  # a side reset: the tunnel ends
-        while data := await reader.read(CHUNK):
-            writer.write(data)
-            await writer.drain()
-    writer.close()
