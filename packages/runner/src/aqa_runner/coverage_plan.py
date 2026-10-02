@@ -96,8 +96,9 @@ _QUERY = re.compile(r"[?#].*", re.DOTALL)
 def plan_request(spec: Spec) -> list[BaseMessage]:
     """The plan's request: the instructions, then the spec's frontmatter as
     validated, as JSON, without `tags`, the account or the reset hook, and
-    with the start URL and each probe cut at its query. All of it is covered
-    by `spec_hash`, so a change to the request means a change to the hash. Only what the spec sets is written, so a field the spec
+    with the start URL and each probe cut at its query. All of it comes from
+    what `spec_hash` covers, so a change to the request means a change to
+    the hash. Only what the spec sets is written, so a field the spec
     format gains later leaves existing requests, and their cassettes, as they
     were. The path, the Markdown body, the start origin and the environment
     never enter it."""
