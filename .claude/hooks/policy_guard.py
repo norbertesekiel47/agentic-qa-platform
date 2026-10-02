@@ -108,6 +108,7 @@ from policy_rules import (
     ADR_REF,
     AGENT_CONFIG_INSTALLER,
     ASSERTION,
+    BAR_TESTS,
     BROWSER_LAUNCH,
     CONTENT_RULES,
     DOC_SUFFIXES,
@@ -639,7 +640,18 @@ def diff_verdicts(project: Path, base: str) -> list[Verdict]:
             else git(project, "cat-file", "blob", f"{merge_base}:{rel}")
         )
         after = "" if status == "D" else read_text(project / rel)
-        verdicts.append(judge_change(rel, before, after, project))
+        verdict = judge_change(rel, before, after, project)
+        if status == "D" and TEST_FILE.search(rel) and not is_exempt(rel):
+            verdict.asks.append(
+                f"{rel}: this change deletes a test file. Approve only if its "
+                "checks are obsolete, not inconvenient."
+            )
+        elif status not in {"A", "?"} and BAR_TESTS.search(rel):
+            verdict.asks.append(
+                f"{rel} proves the bar: a change there can weaken an expectation "
+                "without removing an assertion."
+            )
+        verdicts.append(verdict)
     return verdicts
 
 
@@ -657,7 +669,18 @@ def diff_cli(base: str, project: Path) -> int:
     refused = [v for v in verdicts if v.findings or v.secrets]
     for verdict in refused:
         sys.stdout.write(render(verdict))
-    return 1 if refused else 0
+    asks = [ask for verdict in verdicts for ask in verdict.asks]
+    # CI sets this from the maintainer's label; it never excuses a refusal.
+    approved = os.environ.get("AQA_FLOOR_CHANGE_APPROVED") == "true"
+    if asks:
+        heading = (
+            "approved by the maintainer (AQA_FLOOR_CHANGE_APPROVED=true)"
+            if approved
+            else "needs the maintainer's approval (in CI, the floor-change-approved label)"
+        )
+        print(f"policy_guard --diff {base}: {heading}:")
+        print("\n".join(f"- {ask}" for ask in asks))
+    return 1 if refused or (asks and not approved) else 0
 
 
 # --- entry points -------------------------------------------------------------------
