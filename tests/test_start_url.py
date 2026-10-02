@@ -15,6 +15,8 @@ from aqa_core.config import ProjectConfig
 from aqa_core.project import load_spec, start_url
 from aqa_core.spec import Preconditions, Spec
 from aqa_runner.browser_session import open_browser_session
+from aqa_runner.egress import EgressGate, EgressPolicy
+from aqa_runner.egress_proxy import EgressProxy
 from playwright.async_api import async_playwright
 from pydantic import ValidationError
 
@@ -94,10 +96,18 @@ def test_chromium_reads_every_start_url_on_the_start_origin(tmp_path: Path) -> N
         [start, start_url(spec, start)] for start in START_ORIGINS for spec in specs
     ]
 
+    # Every session goes through an egress proxy (ADR-0026); this one's page
+    # loads nothing.
+    nowhere = "http://127.0.0.1:9"
+    policy = EgressPolicy(
+        allowed_origins=(nowhere,), subresource_hosts=(), private_origins=(nowhere,)
+    )
+
     async def scenario() -> object:
         async with (
             async_playwright() as playwright,
-            open_browser_session(playwright.chromium) as session,
+            EgressProxy(EgressGate(policy)) as egress,
+            open_browser_session(playwright.chromium, egress=egress) as session,
         ):
             # JSON text, since Playwright serializes a list argument item by
             # item: about 6 s for these pairs, against 1 s.
