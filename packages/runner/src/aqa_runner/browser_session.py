@@ -11,8 +11,10 @@ import re
 from collections.abc import AsyncIterator
 from collections.abc import Set as AbstractSet
 from contextlib import asynccontextmanager
+from typing import Literal, overload
 
 from aqa_core.browser import BrowserSettings
+from aqa_core.compiled import Target
 from playwright.async_api import ElementHandle, Error, Frame, Page
 
 from aqa_runner.document_origins import (
@@ -28,6 +30,8 @@ from aqa_runner.document_origins import (
 )
 from aqa_runner.egress import EgressPolicy
 from aqa_runner.egress_proxy import EgressProxy
+from aqa_runner.locators import Absent, Resolved, Unresolved, Use
+from aqa_runner.locators import resolve as resolve_target
 from aqa_runner.routing import install_routes
 from aqa_runner.sandbox import Chromium, launch
 
@@ -211,6 +215,75 @@ class BrowserSession:
             await self.page.goto(url)
             await self._require_allowed_page()
 
+    async def reload(self) -> None:
+        """Reload the page, which must be on one of the run's allowed origins,
+        and check the page it lands on."""
+        async with self._turn:
+            await self._require_allowed_page()
+            # https://playwright.dev/python/docs/api/class-page#page-reload
+            await self.page.reload()
+            await self._require_allowed_page()
+
+    async def click(self, element: ElementHandle) -> None:
+        """Click `element`, from `locate` or `resolve`, once the page and the
+        element's frame are checked."""
+        async with self._turn:
+            await self._require_actionable(element)
+            # https://playwright.dev/python/docs/api/class-elementhandle#element-handle-click
+            await element.click()
+
+    async def fill(self, element: ElementHandle, value: str) -> None:
+        """Fill `element` with `value`, once the page and the element's frame
+        are checked."""
+        async with self._turn:
+            await self._require_actionable(element)
+            # https://playwright.dev/python/docs/api/class-elementhandle#element-handle-fill
+            await element.fill(value)
+
+    async def select(self, element: ElementHandle, option: str) -> None:
+        """Select the option of `element` whose value or label is `option`,
+        once the page and the element's frame are checked."""
+        async with self._turn:
+            await self._require_actionable(element)
+            # A string matches an option's value or its label:
+            # https://playwright.dev/python/docs/api/class-elementhandle#element-handle-select-option
+            await element.select_option(option)
+
+    async def press(self, key: str) -> None:
+        """Press `key` on the keyboard, once the page and the frame whose
+        document has the focus, where the key goes, are checked."""
+        async with self._turn:
+            await self._require_allowed_page()
+            await self._require_allowed(await self._focused_frame(), "frame")
+            # https://playwright.dev/python/docs/api/class-keyboard#keyboard-press
+            await self.page.keyboard.press(key)
+
+    @overload
+    async def resolve(
+        self, target: Target, use: Literal["action", "assertion"]
+    ) -> Resolved | Unresolved: ...
+
+    @overload
+    async def resolve(
+        self, target: Target, use: Literal["negative_check"]
+    ) -> Resolved | Absent | Unresolved: ...
+
+    async def resolve(self, target: Target, use: Use) -> Resolved | Absent | Unresolved:
+        """`target`'s element for `use`, as `aqa_runner.locators.resolve`
+        finds it on the page: an observation, so the page is checked before
+        and after, which also covers a page that navigated meanwhile. The
+        caller owns a resolved element's handle."""
+        async with self._turn:
+            await self._require_allowed_page()
+            found = await resolve_target(self.page, target, use)
+            try:
+                await self._require_allowed_page()
+            except PolicyEventError:
+                if isinstance(found, Resolved):
+                    await found.element.dispose()
+                raise
+            return found
+
     async def url(self) -> str:
         """The page's URL, once the page is checked: an observation, as
         `url_matches` makes it."""
@@ -257,6 +330,32 @@ class BrowserSession:
         if origin not in self._policy.allowed_origins:
             self.policy_events.add(PolicyEvent("popup", url, origin))
         await popup.close()
+
+    async def _require_actionable(self, element: ElementHandle) -> None:
+        """Record and raise a policy event unless the page, and the frame of
+        `element`, are on the run's allowed origins. An element in no frame
+        is on none."""
+        await self._require_allowed_page()
+        frame = await element.owner_frame()
+        if frame is None:
+            raise self._refuse(PolicyEvent("frame", "", None))
+        await self._require_allowed(frame, "frame")
+
+    async def _focused_frame(self) -> Frame:
+        """The frame whose document has the focus, found from the page down
+        through each focused frame element. It looks only into documents on
+        the run's allowed origins: the first frame that isn't is where a key
+        would go, or the way there."""
+        frame = self.page.main_frame
+        while await frame_origin(frame) in self._policy.allowed_origins:
+            focused = await frame.evaluate_handle("document.activeElement")
+            element = focused.as_element()
+            child = None if element is None else await element.content_frame()
+            await focused.dispose()
+            if child is None:
+                return frame
+            frame = child
+        return frame
 
     async def _require_allowed_page(self) -> None:
         await self._require_allowed(self.page.main_frame, "document")
