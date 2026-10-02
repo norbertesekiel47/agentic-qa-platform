@@ -180,6 +180,16 @@ def test_the_plan_request_leaves_out_the_query_of_each_url(tmp_path: Path) -> No
     }
 
 
+# The benchmark pilot's spec root (bench/apps/conduit/qa).
+PILOT = Path(__file__).resolve().parents[3] / "bench" / "apps" / "conduit" / "qa"
+
+
+def test_a_spec_that_declares_no_probe_sends_none() -> None:
+    _, human = plan_request(load_project(PILOT).specs["read-article"])
+
+    assert json.loads(str(human.content))["preconditions"] == {"start_url": "/"}
+
+
 def test_the_plan_request_keeps_the_specs_own_characters(tmp_path: Path) -> None:
     # Written as the author wrote it, not as \u escapes.
     spec = checkout(
