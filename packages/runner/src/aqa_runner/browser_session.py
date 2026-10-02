@@ -374,20 +374,33 @@ class BrowserSession:
         return None
 
     async def _focused_frame(self) -> Frame:
-        """The frame whose document has the focus, found from the page down
-        through each focused frame element. It looks only into documents on
-        the run's allowed origins: the first frame that isn't is where a key
-        would go, or the way there."""
+        """The frame where a key would go, asking only documents on the run's
+        allowed origins, from the page down.
+
+        It descends into the allowed child frame whose document has the
+        focus (`document.hasFocus()`). Where none has, the focus is in the
+        frame itself, unless its focused element is a frame's: then in that
+        frame, which isn't allowed, and so isn't asked. Chromium can leave a
+        document's `activeElement` on a frame that lost the focus to a
+        sibling, so `activeElement` alone can't lead the way down."""
         frame = self.page.main_frame
-        while await frame_origin(frame) in self._policy.allowed_origins:
-            focused = await frame.evaluate_handle("document.activeElement")
-            element = focused.as_element()
-            child = None if element is None else await element.content_frame()
-            await focused.dispose()
-            if child is None:
-                return frame
+        while (child := await self._focused_child(frame)) is not None:
             frame = child
-        return frame
+        focused = await frame.evaluate_handle("document.activeElement")
+        element = focused.as_element()
+        child = None if element is None else await element.content_frame()
+        await focused.dispose()
+        return frame if child is None else child
+
+    async def _focused_child(self, frame: Frame) -> Frame | None:
+        """The child frame of `frame` on an allowed origin whose document has
+        the focus, if one has."""
+        for child in frame.child_frames:
+            if await frame_origin(child) not in self._policy.allowed_origins:
+                continue
+            if await child.evaluate("document.hasFocus()") is True:
+                return child
+        return None
 
     async def _require_allowed_page(self) -> None:
         await self._require_allowed(self.page.main_frame, "document")

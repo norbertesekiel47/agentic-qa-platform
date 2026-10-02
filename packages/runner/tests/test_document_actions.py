@@ -409,3 +409,35 @@ def test_reload_checks_the_page_it_lands_on(
 
     assert sites.seen[before:][:2] == [("app.example.test", "/kept")] * 2
     assert refused.event == PolicyEvent("document", landed, sites.cdn)
+
+
+def test_keys_are_never_pressed_into_a_frame_off_the_allowed_origins(
+    sites: Sites,
+) -> None:
+    async def scenario() -> tuple[PolicyEventError, list[str]]:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/focus")
+            [card] = [f for f in session.page.frames if f.url == f"{sites.cdn}/typing"]
+            # The page gives the subresource host's frame the focus.
+            await session.page.locator("iframe").first.focus()
+            await card.wait_for_function("document.activeElement === card")
+            with pytest.raises(PolicyEventError) as refused:
+                await session.press("a")
+            values = [await card.locator("#card").input_value()]
+            # The control: Playwright's own key press, unchecked, lands there.
+            await session.page.keyboard.press("x")
+            values.append(await card.locator("#card").input_value())
+            # A field in the start origin's frame takes keys.
+            snapshot = await session.snapshot()
+            await session.click(
+                await session.locate(ref_for(snapshot, "textbox", "Inner"))
+            )
+            await session.press("b")
+            inner = session.page.frame_locator("iframe >> nth=1").get_by_label("Inner")
+            values.append(await inner.input_value())
+            return refused.value, values
+
+    refused, values = asyncio.run(scenario())
+
+    assert refused.event == PolicyEvent("frame", f"{sites.cdn}/typing", sites.cdn)
+    assert values == ["", "x", "b"]
