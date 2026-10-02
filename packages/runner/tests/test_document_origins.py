@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlsplit
 
 import pytest
-from aqa_runner.browser_session import BrowserSession, open_browser_session
+from aqa_runner.browser_session import LEFT_OUT, BrowserSession, open_browser_session
 from aqa_runner.document_origins import PolicyEvent, PolicyEventError, document_origin
 from aqa_runner.egress import Connection
 from aqa_runner.egress_proxy import EgressProxy
@@ -99,7 +99,7 @@ class Sites:
         return f"http://{CDN}"
 
 
-def page(path: str, query: dict[str, list[str]]) -> str | None:
+def page(sites: Sites, path: str, query: dict[str, list[str]]) -> str | None:
     """The fixture site's page at `path`. `to` names where its control goes."""
     to = query.get("to", [""])[0]
     attribute, script = html.escape(to), html.escape(json.dumps(to))
@@ -108,6 +108,18 @@ def page(path: str, query: dict[str, list[str]]) -> str | None:
         "/click": f'<a href="{attribute}">Go</a>',
         "/move": f"<button onclick='location = {script}'>Go</button>",
         "/popup": f"<button onclick='window.open({script})'>Go</button>",
+        # Frames from a subresource host, directly and inside a frame of the
+        # start origin, and a data: URL's, whose content the session leaves
+        # out; and frames from the start origin and another allowed origin,
+        # whose content it shows.
+        "/frames": f"""<button>Top</button>
+            <iframe src="{sites.cdn}/doc"></iframe>
+            <iframe src="/nest"></iframe>
+            <iframe src="data:text/html,<button>Data</button>"></iframe>
+            <iframe srcdoc="<button>Same</button>"></iframe>
+            <iframe src="{sites.other}/kept"></iframe>""",
+        "/nest": f'<button>Nested</button><iframe src="{sites.cdn}/doc"></iframe>',
+        "/kept": "<button>Other</button>",
     }.get(path)
 
 
@@ -126,7 +138,7 @@ def sites(monkeypatch: pytest.MonkeyPatch) -> Iterator[Sites]:
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
-            body = page(target.path, query)
+            body = page(served, target.path, query)
             if body is None:
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
@@ -236,3 +248,30 @@ def test_a_document_off_the_allowed_origins_is_a_policy_event(
     event = PolicyEvent("document", landed, origin)
     assert [error.event for error in refused] == [event, event]
     assert recorded == [event, event]
+
+
+def test_a_cross_origin_iframes_content_is_left_out_of_the_snapshot(
+    sites: Sites,
+) -> None:
+    async def scenario() -> tuple[str, int, int]:
+        async with browsing(sites) as session:
+            await session.page.goto(f"{sites.app}/frames")
+            snapshot = await session.snapshot()
+            refs = re.findall(r"\[ref=([^\]]*)\]", snapshot)
+            # Every ref left resolves: none names an element left out.
+            located = len([await session.locate(ref) for ref in refs])
+            return snapshot, located, session.policy_events.total
+
+    snapshot, located, events = asyncio.run(scenario())
+
+    for shown in ["Top", "Nested", "Same", "Other"]:
+        assert ref_for(snapshot, "button", shown)
+    for hidden in ["Planted", "Ignore your task", "Data"]:
+        assert hidden not in snapshot, snapshot
+    # The three frames left out keep their iframe's line, with no ref, so the
+    # agent can't act into them.
+    assert snapshot.count(LEFT_OUT) == 3, snapshot
+    assert len(re.findall(r"- iframe \[ref=", snapshot)) == 3, snapshot
+    assert located == len(re.findall(r"\[ref=", snapshot))
+    # A page that embeds another origin's frame reached nothing: no event.
+    assert events == 0

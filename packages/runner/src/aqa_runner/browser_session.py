@@ -9,6 +9,7 @@ document origins)."""
 import asyncio
 import re
 from collections.abc import AsyncIterator
+from collections.abc import Set as AbstractSet
 from contextlib import asynccontextmanager
 
 from aqa_core.browser import BrowserSettings
@@ -42,6 +43,10 @@ ELEMENT_REF = re.compile(r"\[ref=((?:f[0-9]+)?e[0-9]+)\]((?: \[cursor=pointer\])
 # A ref this session gives.
 SESSION_REF = re.compile(r"e([1-9][0-9]{0,17})")
 
+# What a frame on an origin the run doesn't allow shows in a snapshot, after
+# `iframe` and in place of its ref and its content.
+LEFT_OUT = "(content from an origin the run doesn't allow, not shown)"
+
 
 class RefError(LookupError):
     """A ref that names nothing now: one from an older snapshot, one never
@@ -62,7 +67,8 @@ class BrowserSession:
 
     Each observation first checks that the page is on one of the run's
     allowed origins, from `policy`; otherwise it records a policy event in
-    `policy_events` and raises `PolicyEventError`.
+    `policy_events` and raises `PolicyEventError`. A snapshot leaves out the
+    content of every frame that isn't on one of them.
 
     `page` is public until #53 makes it private. No production code outside
     this module may use it: it observes and acts without the checks."""
@@ -79,14 +85,19 @@ class BrowserSession:
         """The page's accessibility snapshot in Playwright's AI mode
         (https://playwright.dev/python/docs/api/class-page#page-aria-snapshot),
         with this session's refs, unredacted. It retires every earlier
-        snapshot's refs, and page text that imitates a ref reads `(ref=…`."""
+        snapshot's refs, and page text that imitates a ref reads `(ref=…`.
+        A frame on an origin the run doesn't allow shows only its iframe's
+        line, with no ref (`LEFT_OUT`)."""
         async with self._turn:
             # Retired before the call: Playwright may store this snapshot, and
             # resolve refs against it, even if the call never returns.
             self._current = {}
             self._require_allowed_page()
+            taken = await self.page.aria_snapshot(mode="ai")
             text, self._current = renumber(
-                await self.page.aria_snapshot(mode="ai"), first=self._refs_given + 1
+                taken,
+                first=self._refs_given + 1,
+                left_out=await self._frames_left_out(taken),
             )
             self._refs_given += len(self._current)
             return text
@@ -124,6 +135,21 @@ class BrowserSession:
             raise gone
         return found
 
+    async def _frames_left_out(self, snapshot: str) -> set[str]:
+        """Playwright's refs of the iframes in `snapshot` whose frame isn't on
+        one of the run's allowed origins. Each resolves, as Playwright's own
+        snapshot does to add a frame's content below its iframe, to the
+        iframe element and its content frame."""
+        left_out = set()
+        for ref in iframe_refs(snapshot):
+            iframe = await self.page.query_selector(f"aria-ref={ref}")
+            frame = None if iframe is None else await iframe.content_frame()
+            if iframe is not None:
+                await iframe.dispose()
+            if frame is None or origin_of(frame) not in self._policy.allowed_origins:
+                left_out.add(ref)
+        return left_out
+
     def _require_allowed_page(self) -> None:
         """Record and raise a policy event unless the session's page is on one
         of the run's allowed origins."""
@@ -144,24 +170,61 @@ def origin_of(frame: Frame) -> str | None:
     return document_origin(frame.url, None if parent is None else origin_of(parent))
 
 
-def renumber(snapshot: str, *, first: int) -> tuple[str, dict[str, str]]:
+def renumber(
+    snapshot: str, *, first: int, left_out: AbstractSet[str] = frozenset()
+) -> tuple[str, dict[str, str]]:
     """`snapshot` with each element's own ref replaced by this session's, from
     `e{first}` on, and every other `[ref=`, which page text wrote, made
-    `(ref=`. Also returns the session's refs, mapped to Playwright's."""
+    `(ref=`. An element whose Playwright ref is in `left_out`, an iframe,
+    keeps its line with `LEFT_OUT` in place of its ref, and loses every line
+    below it: its frame's content. Also returns the session's refs, mapped to
+    Playwright's."""
     refs: dict[str, str] = {}
-
-    def line(found: re.Match[str]) -> str:
+    lines: list[str] = []
+    # The indentation of the iframe whose content is being left out.
+    leaving: int | None = None
+    for found in LINE.finditer(snapshot):
+        indent = len(found[0]) - len(found[0].lstrip(" "))
+        if leaving is not None and indent > leaving:
+            continue
+        leaving = None
         head, key, rest = found["head"] or "", found["key"], found["rest"]
-        quote = "'" if key.startswith("'") else ""
-        inner = key[len(quote) : len(key) - len(quote)]
-        own = ELEMENT_REF.search(inner) if head else None
+        quote, inner, own = key_parts(found)
         if own is None:
-            return head + as_text(key) + as_text(rest)
-        ref = f"e{first + len(refs)}"
-        refs[ref] = own[1]
-        return f"{head}{quote}{as_text(inner[: own.start()])}[ref={ref}]{own[2]}{quote}{as_text(rest)}"
+            lines.append(head + as_text(key) + as_text(rest))
+        elif own[1] in left_out:
+            lines.append(
+                f"{head}{quote}{as_text(inner[: own.start()])}{LEFT_OUT}{quote}"
+            )
+            leaving = indent
+        else:
+            ref = f"e{first + len(refs)}"
+            refs[ref] = own[1]
+            lines.append(
+                f"{head}{quote}{as_text(inner[: own.start()])}[ref={ref}]{own[2]}{quote}{as_text(rest)}"
+            )
+    return "\n".join(lines), refs
 
-    return LINE.sub(line, snapshot), refs
+
+def key_parts(found: re.Match[str]) -> tuple[str, str, re.Match[str] | None]:
+    """A snapshot line's quote around its key, the key inside the quotes, and
+    the element's own ref at the end of the key, if the line has one."""
+    key = found["key"]
+    quote = "'" if key.startswith("'") else ""
+    inner = key[len(quote) : len(key) - len(quote)]
+    return quote, inner, ELEMENT_REF.search(inner) if found["head"] else None
+
+
+def iframe_refs(snapshot: str) -> list[str]:
+    """Playwright's refs of the iframes in `snapshot`, below whose lines
+    Playwright adds their frames' content. It gives `iframe` elements and
+    `frame` elements the role `iframe`, and no name."""
+    refs = []
+    for found in LINE.finditer(snapshot):
+        _, inner, own = key_parts(found)
+        if own is not None and inner.split(" ", 1)[0] == "iframe":
+            refs.append(own[1])
+    return refs
 
 
 def as_text(text: str) -> str:
