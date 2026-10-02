@@ -145,6 +145,15 @@ def page(sites: Sites, path: str, query: dict[str, list[str]]) -> str | None:
                 host.attachShadow({{mode: "open"}}).innerHTML =
                     '<iframe src="{sites.cdn}/doc"></iframe>';
             </script>""",
+        # A frame from the subresource host that, once it has the focus,
+        # gives it to its card field, which reports each key to the site as
+        # /typed; and a field in a frame of the start origin.
+        "/focus": f"""<iframe src="{sites.cdn}/typing"></iframe>
+            <iframe srcdoc="<label>Inner <input></label>"></iframe>""",
+        "/typing": """<label>Card <input id="card"></label><script>
+            addEventListener("focus", () => card.focus());
+            card.addEventListener("keydown", () => fetch("/typed"));
+        </script>""",
         # A form, and a link to where `to` names.
         "/form": f"""<a href="{attribute}">Go</a>
             <label>Name <input></label>
