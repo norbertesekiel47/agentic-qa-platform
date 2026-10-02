@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from ipaddress import IPv4Address, ip_address
 from pathlib import Path
+from typing import Any
 
 import pytest
 from aqa_core.project import load_config, load_spec
@@ -315,7 +316,7 @@ def spy_on_dialling(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Every address the gate dials from now on, none of which answers."""
     dialled: list[str] = []
 
-    async def dial(host: str, port: int) -> Connection:
+    async def dial(host: str, port: int, **_tls: object) -> Connection:
         dialled.append(f"{host} {port}")
         raise ConnectionRefusedError
 
@@ -568,10 +569,10 @@ def test_an_address_that_never_answers_times_out_and_the_next_is_tried(
 ) -> None:
     open_connection = asyncio.open_connection
 
-    async def dropping_ipv6(host: str, port: int) -> Connection:
+    async def dropping_ipv6(host: str, port: int, **tls: Any) -> Connection:
         if host == "::1":
             await asyncio.Event().wait()  # an address that drops every packet
-        return await open_connection(host, port)
+        return await open_connection(host, port, **tls)
 
     monkeypatch.setattr(asyncio, "open_connection", dropping_ipv6)
     monkeypatch.setattr(egress_module, "CONNECT_TIMEOUT", 0.05)

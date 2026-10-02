@@ -38,8 +38,8 @@ async def runner_request(gate: EgressGate, method: Method, url: str) -> RunnerRe
     infrastructure error, when the origin can't be reached, its certificate
     doesn't verify, or its response breaks off. The gate records both.
 
-    It has no deadline of its own past the gate's for connecting and TLS's
-    for its handshake: a caller bounds it with `asyncio.timeout`."""
+    It has no deadline of its own past the gate's for connecting, its TLS
+    handshake included: a caller bounds it with `asyncio.timeout`."""
     parts = urlsplit(url)
     origin = parse_origin(f"{parts.scheme}://{parts.netloc}")
     host, port = authority(origin)
@@ -60,15 +60,13 @@ async def runner_request(gate: EgressGate, method: Method, url: str) -> RunnerRe
         raise ValueError(
             f"'{url}': '{target}' is not a request target: {error}"
         ) from error
-    reader, writer = await gate.connect(host, port, "runner")
+    # https speaks TLS from the first byte, with the certificate checked for
+    # the URL's host on the connection to its pinned address: nothing the
+    # server sends before the handshake can pass for the response.
+    tls = ssl.create_default_context() if parts.scheme == "https" else None
+    reader, writer = await gate.connect(host, port, "runner", tls=tls)
     upstream = Upstream(h11.Connection(h11.CLIENT), reader, writer, gate, host, port)
     try:
-        if parts.scheme == "https":
-            # The certificate is checked against the URL's host, on the
-            # connection the gate made to its pinned address.
-            await upstream.start_tls(
-                ssl.create_default_context(), host.removeprefix("[").removesuffix("]")
-            )
         await upstream.send(request)
         await upstream.send(h11.EndOfMessage())
         return await _response(upstream)
