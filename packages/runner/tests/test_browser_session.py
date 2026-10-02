@@ -374,6 +374,12 @@ FETCH_CACHED = "fetch('/cached.txt').then((response) => response.text())"
 
 
 def test_two_sessions_share_no_profile_storage_or_cache(site: Site) -> None:
+    """Each session has a profile and storage of its own. Sessions have no
+    HTTP cache under routing: Playwright turns Chromium's off while routes
+    are in place (ADR-0026 amendment, 2026-10-02), so a repeat fetch within
+    one session reaches the server, and no session's cache can serve
+    another's."""
+
     async def scenario() -> tuple[object, object, int, list[Path], list[bool]]:
         async with (
             async_playwright() as playwright,
@@ -386,8 +392,9 @@ def test_two_sessions_share_no_profile_storage_or_cache(site: Site) -> None:
                 await first.page.goto(site.origin)
                 await first.page.evaluate(STORE)
                 seen_by_first = await first.page.evaluate(READ_STORAGE)
-                for _ in range(2):
-                    await first.page.evaluate(FETCH_CACHED)
+                await first.page.evaluate(FETCH_CACHED)
+                fetched_once = site.hits["/cached.txt"]
+                await first.page.evaluate(FETCH_CACHED)
                 fetched_by_first = site.hits["/cached.txt"]
 
                 await second.page.goto(site.origin)
@@ -401,14 +408,17 @@ def test_two_sessions_share_no_profile_storage_or_cache(site: Site) -> None:
                 (browser is not None and browser.is_connected()) or profile.exists()
                 for browser, profile in zip(browsers, profiles, strict=True)
             ]
-        assert fetched_by_first == 1, "the first session's own cache didn't serve it"
+        assert fetched_by_first == fetched_once + 1, (
+            "a repeat fetch within the session didn't reach the server"
+        )
+        assert fetched_by_first == 2, "the first session's fetches didn't both reach it"
         return seen_by_first, seen_by_second, site.hits["/cached.txt"], profiles, left
 
     seen_by_first, seen_by_second, fetched, profiles, left = asyncio.run(scenario())
 
     assert seen_by_first == {"cookie": "run=first", "local": "first"}
     assert seen_by_second == {"cookie": "", "local": None}
-    assert fetched == 2, "the second session's fetch came from the first's cache"
+    assert fetched == 3, "the second session's fetch didn't reach the server"
     assert profiles[0] != profiles[1]
     assert left == [False, False], "a session left its browser or profile behind"
 
