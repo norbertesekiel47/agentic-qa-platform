@@ -17,6 +17,7 @@ from pydantic import (
 )
 
 from aqa_core.browser import BrowserOverrides
+from aqa_core.config import SecretBinding
 from aqa_core.schema import (
     AtLeastOne,
     DistinctListOf,
@@ -167,11 +168,28 @@ class SpecFrontmatter(StrictModel):
 @dataclass(frozen=True)
 class Spec:
     """A spec as read from its file, with the hash a compiled script records
-    (DATA_MODEL §7)."""
+    (DATA_MODEL §7), and the bindings of exactly the test secrets it
+    references."""
 
     path: Path
     frontmatter: SpecFrontmatter
     spec_hash: str
+    # By secret name, as the project config binds them (DATA_MODEL §9), with
+    # `start` unresolved and not checked against the run's allowed origins: a
+    # run reads them through secret_destinations. Not part of spec_hash.
+    secret_bindings: Mapping[str, SecretBinding]
+
+    def __post_init__(self) -> None:
+        # Its own copy, so a later change to the mapping it was given can't
+        # reach it.
+        object.__setattr__(self, "secret_bindings", dict(self.secret_bindings))
+        referenced = {name for _, name in secret_references(self.frontmatter)}
+        if set(self.secret_bindings) != referenced:
+            raise ValueError(
+                f"{self.path}: bindings for secrets {sorted(self.secret_bindings)} but "
+                f"references to {sorted(referenced)}: a spec carries the bindings of "
+                "exactly the secrets it references"
+            )
 
 
 def secret_references(frontmatter: SpecFrontmatter) -> Iterator[tuple[str, str]]:

@@ -2,16 +2,19 @@
 derives from them before its browser starts (DATA_MODEL §6, §7, §9;
 ADR-0025; ADR-0026; #39)."""
 
+import dataclasses
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from aqa_core.browser import BrowserSettings
-from aqa_core.config import ProjectConfig, RoleField
+from aqa_core.config import ProjectConfig, RoleField, SecretBinding
 from aqa_core.project import (
     SecretDestination,
     SpecError,
@@ -24,7 +27,7 @@ from aqa_core.project import (
     start_origin,
     start_url,
 )
-from aqa_core.spec import Spec
+from aqa_core.spec import Account, Spec
 
 PILOT = Path(__file__).resolve().parents[3] / "bench" / "apps" / "conduit" / "qa"
 PILOT_SPECS = [
@@ -338,9 +341,7 @@ def test_the_start_url_is_on_the_runs_start_origin_never_the_specs(
 def test_start_in_a_binding_is_the_runs_start_origin() -> None:
     project = load_project(PILOT)
 
-    destinations = secret_destinations(
-        project.specs["login"], project.config, "http://localhost:4100"
-    )
+    destinations = secret_destinations(project.specs["login"], "http://localhost:4100")
 
     assert destinations == {
         "TEST_PASSWORD": SecretDestination(
@@ -350,14 +351,14 @@ def test_start_in_a_binding_is_the_runs_start_origin() -> None:
 
 
 def test_a_binding_keeps_the_allowed_origins_it_names(tmp_path: Path) -> None:
-    config, spec = load_one(
+    _, spec = load_one(
         tmp_path,
         "secrets: { TEST_PASSWORD: { origins: [start, 'https://pay.example.test'], "
         "field: { role: textbox, name: Password } } }\n",
         extra="allowed_origins: ['https://pay.example.test']\n",
     )
 
-    assert secret_destinations(spec, config, "http://127.0.0.1:4100") == {
+    assert secret_destinations(spec, "http://127.0.0.1:4100") == {
         "TEST_PASSWORD": SecretDestination(
             origins=("http://127.0.0.1:4100", "https://pay.example.test"),
             field=RoleField(role="textbox", name="Password"),
@@ -369,13 +370,13 @@ def test_a_binding_to_an_origin_the_run_does_not_allow_is_rejected(
     tmp_path: Path,
 ) -> None:
     # Bound to the base URL by name, but this run starts elsewhere (--url).
-    config, spec = load_one(
+    _, spec = load_one(
         tmp_path,
         "secrets: { TEST_PASSWORD: { origins: ['http://127.0.0.1:4100'], field: password } }\n",
     )
 
     with pytest.raises(SpecError) as raised:
-        secret_destinations(spec, config, "http://localhost:4100")
+        secret_destinations(spec, "http://localhost:4100")
 
     assert raised.value.problems == (
         (
@@ -387,24 +388,24 @@ def test_a_binding_to_an_origin_the_run_does_not_allow_is_rejected(
 
 
 def test_a_binding_to_the_start_origin_by_name_is_allowed(tmp_path: Path) -> None:
-    config, spec = load_one(
+    _, spec = load_one(
         tmp_path,
         "secrets: { TEST_PASSWORD: { origins: ['http://127.0.0.1:4100'], field: password } }\n",
     )
 
-    destinations = secret_destinations(spec, config, "http://127.0.0.1:4100")
+    destinations = secret_destinations(spec, "http://127.0.0.1:4100")
 
     assert destinations["TEST_PASSWORD"].origins == ("http://127.0.0.1:4100",)
 
 
 def test_a_binding_naming_the_start_origin_twice_lists_it_once(tmp_path: Path) -> None:
-    config, spec = load_one(
+    _, spec = load_one(
         tmp_path,
         "secrets: { TEST_PASSWORD: { origins: [start, 'http://127.0.0.1:4100'], "
         "field: password } }\n",
     )
 
-    destinations = secret_destinations(spec, config, "http://127.0.0.1:4100")
+    destinations = secret_destinations(spec, "http://127.0.0.1:4100")
 
     assert destinations["TEST_PASSWORD"].origins == ("http://127.0.0.1:4100",)
 
@@ -423,20 +424,147 @@ def test_a_secret_referenced_twice_is_checked_once(tmp_path: Path) -> None:
     )
 
     with pytest.raises(SpecError) as raised:
-        secret_destinations(load_spec(path, config), config, "http://localhost:4100")
+        secret_destinations(load_spec(path, config), "http://localhost:4100")
 
     assert len(raised.value.problems) == 1
 
 
 def test_only_the_secrets_the_spec_references_get_destinations(tmp_path: Path) -> None:
     # API_TOKEN's origin isn't allowed in this run, but the spec never uses it.
-    config, spec = load_one(
+    _, spec = load_one(
         tmp_path,
         "secrets:\n"
         "  TEST_PASSWORD: { origins: [start], field: password }\n"
         "  API_TOKEN: { origins: ['https://admin.example.test'], field: password }\n",
     )
 
-    assert list(secret_destinations(spec, config, "http://127.0.0.1:4100")) == [
-        "TEST_PASSWORD"
-    ]
+    assert list(secret_destinations(spec, "http://127.0.0.1:4100")) == ["TEST_PASSWORD"]
+
+
+# Secret bindings on the loaded spec (#88).
+
+PASSWORD_AT_START = SecretBinding(origins=("start",), field="password")
+
+
+def test_a_loaded_spec_carries_the_bindings_of_exactly_the_secrets_it_references(
+    tmp_path: Path,
+) -> None:
+    _, spec = load_one(
+        tmp_path,
+        "secrets:\n"
+        "  TEST_PASSWORD: { origins: [start], field: password }\n"
+        "  API_TOKEN: { origins: ['https://admin.example.test'], field: password }\n",
+    )
+
+    assert spec.secret_bindings == {"TEST_PASSWORD": PASSWORD_AT_START}
+
+
+def test_a_spec_that_references_no_secret_carries_no_bindings(tmp_path: Path) -> None:
+    root = write_project(tmp_path / "qa", BOUND)
+    path = write_spec(root / "login.spec.md")
+    path.write_text(
+        path.read_text().replace(", password: { secret: TEST_PASSWORD }", "")
+    )
+
+    spec = load_spec(path, load_config(root / "config.yaml"))
+
+    assert spec.frontmatter.preconditions.account == Account(
+        email="reader@example.test"
+    )
+    assert spec.secret_bindings == {}
+
+
+def test_each_spec_in_a_project_carries_its_referenced_secrets_bindings() -> None:
+    project = load_project(PILOT)
+
+    assert {i: dict(s.secret_bindings) for i, s in project.specs.items()} == {
+        "favorite-article": {"TEST_PASSWORD": PASSWORD_AT_START},
+        "login": {"TEST_PASSWORD": PASSWORD_AT_START},
+        "post-comment": {"TEST_PASSWORD": PASSWORD_AT_START},
+        "publish-article": {"TEST_PASSWORD": PASSWORD_AT_START},
+        "read-article": {},
+    }
+
+
+@pytest.mark.parametrize(
+    ("build", "name", "bound", "referenced"),
+    [
+        # A secret the spec references, left unbound.
+        (
+            lambda login, _: dataclasses.replace(login, secret_bindings={}),
+            "login",
+            [],
+            ["TEST_PASSWORD"],
+        ),
+        # A secret the spec doesn't reference, bound too.
+        (
+            lambda login, _: dataclasses.replace(
+                login,
+                secret_bindings={
+                    **login.secret_bindings,
+                    "API_TOKEN": PASSWORD_AT_START,
+                },
+            ),
+            "login",
+            ["API_TOKEN", "TEST_PASSWORD"],
+            ["TEST_PASSWORD"],
+        ),
+        # Another spec's references, in a spec loaded without any.
+        (
+            lambda login, browse: dataclasses.replace(
+                browse, frontmatter=login.frontmatter
+            ),
+            "browse",
+            [],
+            ["TEST_PASSWORD"],
+        ),
+    ],
+)
+def test_a_spec_cannot_hold_bindings_other_than_those_of_its_references(
+    tmp_path: Path,
+    build: Callable[[Spec, Spec], Spec],
+    name: str,
+    bound: list[str],
+    referenced: list[str],
+) -> None:
+    root = write_project(tmp_path / "qa", BOUND)
+    config = load_config(root / "config.yaml")
+    login = load_spec(write_spec(root / "login.spec.md"), config)
+    browse = write_spec(root / "browse.spec.md")
+    browse.write_text(
+        browse.read_text().replace(", password: { secret: TEST_PASSWORD }", "")
+    )
+
+    problem = (
+        f"{root / f'{name}.spec.md'}: bindings for secrets {bound} but references to "
+        f"{referenced}: a spec carries the bindings of exactly the secrets it references"
+    )
+
+    with pytest.raises(ValueError, match=f"^{re.escape(problem)}$"):
+        build(login, load_spec(browse, config))
+
+
+def test_a_spec_keeps_its_own_copy_of_its_bindings(tmp_path: Path) -> None:
+    _, spec = load_one(tmp_path, BOUND)
+    bindings = dict(spec.secret_bindings)
+    built = dataclasses.replace(spec, secret_bindings=bindings)
+
+    bindings.clear()
+
+    assert built.secret_bindings == {"TEST_PASSWORD": PASSWORD_AT_START}
+
+
+def test_changing_the_config_after_loading_does_not_change_the_specs_destinations(
+    tmp_path: Path,
+) -> None:
+    config, spec = load_one(tmp_path, BOUND)
+
+    config.secrets["TEST_PASSWORD"] = SecretBinding(
+        origins=("https://evil.example.test",), field="password"
+    )
+
+    assert secret_destinations(spec, "http://127.0.0.1:4100") == {
+        "TEST_PASSWORD": SecretDestination(
+            origins=("http://127.0.0.1:4100",), field="password"
+        )
+    }
