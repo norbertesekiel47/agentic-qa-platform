@@ -55,7 +55,8 @@ uv run playwright install --with-deps --only-shell chromium                     
 # Chromium's sandbox can't start where AppArmor restricts unprivileged user namespaces
 # (Ubuntu 23.10 and later, CI's runners included), so the browser tests fail there. CI logs
 # the setting, then relaxes it (ADR-0026); on a machine you keep, prefer the AppArmor
-# profile that the failure's message links to.
+# profile that the failure's message links to. The packet-capture tests (tests/test_packet_capture.py)
+# need unprivileged user namespaces for Python too, so on Linux they need the setting relaxed.
 sysctl kernel.apparmor_restrict_unprivileged_userns                            # 1 means restricted
 sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0                  # allow them until the next reboot
 
