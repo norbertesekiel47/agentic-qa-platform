@@ -25,6 +25,8 @@ from aqa_runner.browser_session import (
     open_browser_session,
     renumber,
 )
+from aqa_runner.egress import EgressGate, EgressPolicy
+from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.sandbox import Environment, SandboxUnavailableError
 from playwright.async_api import (
     Browser,
@@ -47,6 +49,16 @@ RUNNER_SECRETS = [
     "AWS_SESSION_TOKEN",
     "AQA_SECRET_TEST_PASSWORD",
 ]
+
+
+def egress_proxy(start: str = "http://127.0.0.1:9") -> EgressProxy:
+    """The egress proxy every session goes through, for a run whose start
+    origin is `start`: the fixture site, or one no test reaches (ADR-0026
+    amendment, 2026-10-01)."""
+    policy = EgressPolicy(
+        allowed_origins=(start,), subresource_hosts=(), private_origins=(start,)
+    )
+    return EgressProxy(EgressGate(policy))
 
 
 def fake_value(name: str) -> str:
@@ -119,10 +131,13 @@ def test_browser_environment_holds_none_of_the_runners_secrets(
     async def scenario() -> tuple[list[tuple[str, str]], list[str]]:
         async with (
             async_playwright() as playwright,
+            egress_proxy() as egress,
             # Launched as every run launches it.
-            open_browser_session(playwright.chromium) as session,
+            open_browser_session(playwright.chromium, egress=egress) as session,
             # The control: launched with one variable, which must be readable.
-            open_browser_session(FarZoneChromium(playwright.chromium)) as control,
+            open_browser_session(
+                FarZoneChromium(playwright.chromium), egress=egress
+            ) as control,
         ):
             processes = await chromium_processes(session)
             control_processes = await chromium_processes(control)
@@ -193,7 +208,10 @@ def test_session_runs_in_utc_and_the_other_pinned_settings_by_default() -> None:
     async def scenario() -> tuple[object, object]:
         async with (
             async_playwright() as playwright,
-            open_browser_session(FarZoneChromium(playwright.chromium)) as session,
+            egress_proxy() as egress,
+            open_browser_session(
+                FarZoneChromium(playwright.chromium), egress=egress
+            ) as session,
         ):
             # The control: a context of the same browser without the pins.
             browser = session.page.context.browser
@@ -228,7 +246,10 @@ def test_explicit_settings_override_each_pinned_setting() -> None:
     async def scenario() -> object:
         async with (
             async_playwright() as playwright,
-            open_browser_session(playwright.chromium, settings=settings) as session,
+            egress_proxy() as egress,
+            open_browser_session(
+                playwright.chromium, settings=settings, egress=egress
+            ) as session,
         ):
             return await session.page.evaluate(REPORT_SETTINGS)
 
@@ -245,15 +266,15 @@ def test_session_launches_through_the_sandbox_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> tuple[list[bool], SandboxUnavailableError]:
-        async with async_playwright() as playwright:
+        async with async_playwright() as playwright, egress_proxy() as egress:
             chromium = RecordingChromium(playwright.chromium)
-            async with open_browser_session(chromium):
+            async with open_browser_session(chromium, egress=egress):
                 pass
             # An OS with no sandbox check: only the check itself refuses it.
             monkeypatch.setattr(sys, "platform", "win32")
             try:
                 with pytest.raises(SandboxUnavailableError) as refused:
-                    async with open_browser_session(chromium):
+                    async with open_browser_session(chromium, egress=egress):
                         pass
             finally:
                 monkeypatch.undo()
@@ -343,10 +364,13 @@ FETCH_CACHED = "fetch('/cached.txt').then((response) => response.text())"
 
 def test_two_sessions_share_no_profile_storage_or_cache(site: Site) -> None:
     async def scenario() -> tuple[object, object, int, list[Path], list[bool]]:
-        async with async_playwright() as playwright:
+        async with (
+            async_playwright() as playwright,
+            egress_proxy(site.origin) as egress,
+        ):
             async with (
-                open_browser_session(playwright.chromium) as first,
-                open_browser_session(playwright.chromium) as second,
+                open_browser_session(playwright.chromium, egress=egress) as first,
+                open_browser_session(playwright.chromium, egress=egress) as second,
             ):
                 await first.page.goto(site.origin)
                 await first.page.evaluate(STORE)
@@ -382,7 +406,8 @@ def test_downloads_are_refused(site: Site) -> None:
     async def scenario() -> str | None:
         async with (
             async_playwright() as playwright,
-            open_browser_session(playwright.chromium) as session,
+            egress_proxy(site.origin) as egress,
+            open_browser_session(playwright.chromium, egress=egress) as session,
         ):
             await session.page.goto(site.origin)
             async with session.page.expect_download() as started:
@@ -418,7 +443,8 @@ def test_refs_act_on_their_elements() -> None:
     async def scenario() -> tuple[str | None, str, str]:
         async with (
             async_playwright() as playwright,
-            open_browser_session(playwright.chromium) as session,
+            egress_proxy() as egress,
+            open_browser_session(playwright.chromium, egress=egress) as session,
         ):
             page = session.page
             await page.set_content(REFS_PAGE)
@@ -460,7 +486,8 @@ def test_ref_from_an_older_snapshot_is_refused() -> None:
     async def scenario() -> tuple[list[str], RefError, RefError, str | None]:
         async with (
             async_playwright() as playwright,
-            open_browser_session(playwright.chromium) as session,
+            egress_proxy() as egress,
+            open_browser_session(playwright.chromium, egress=egress) as session,
         ):
             page = session.page
             await page.set_content(BEFORE)
@@ -509,7 +536,8 @@ def test_ref_never_given_is_refused() -> None:
     async def scenario() -> list[str]:
         async with (
             async_playwright() as playwright,
-            open_browser_session(playwright.chromium) as session,
+            egress_proxy() as egress,
+            open_browser_session(playwright.chromium, egress=egress) as session,
         ):
             await session.page.set_content(REFS_PAGE)
             for _ in range(3):  # past e10, so the session has given it
@@ -530,7 +558,8 @@ def test_unfinished_snapshot_retires_the_earlier_refs() -> None:
     async def scenario() -> list[str]:
         async with (
             async_playwright() as playwright,
-            open_browser_session(playwright.chromium) as session,
+            egress_proxy() as egress,
+            open_browser_session(playwright.chromium, egress=egress) as session,
         ):
             await session.page.set_content(REFS_PAGE)
             snapshot = await session.snapshot()
@@ -566,7 +595,8 @@ def test_ref_whose_element_has_left_the_page_is_refused() -> None:
     async def scenario() -> RefError:
         async with (
             async_playwright() as playwright,
-            open_browser_session(playwright.chromium) as session,
+            egress_proxy() as egress,
+            open_browser_session(playwright.chromium, egress=egress) as session,
         ):
             await session.page.set_content(REFS_PAGE)
             save = ref_for(await session.snapshot(), "button", "Save")
@@ -584,7 +614,8 @@ def test_ref_into_a_document_or_frame_that_has_gone_is_refused() -> None:
     async def scenario() -> list[RefError]:
         async with (
             async_playwright() as playwright,
-            open_browser_session(playwright.chromium) as session,
+            egress_proxy() as egress,
+            open_browser_session(playwright.chromium, egress=egress) as session,
         ):
             page = session.page
             refused = []
@@ -614,7 +645,8 @@ def test_ref_on_a_closed_page_is_not_blamed_on_the_ref() -> None:
     async def scenario() -> Error:
         async with (
             async_playwright() as playwright,
-            open_browser_session(playwright.chromium) as session,
+            egress_proxy() as egress,
+            open_browser_session(playwright.chromium, egress=egress) as session,
         ):
             await session.page.set_content(REFS_PAGE)
             save = ref_for(await session.snapshot(), "button", "Save")
@@ -631,7 +663,8 @@ def test_located_element_never_becomes_another() -> None:
     async def scenario() -> str | None:
         async with (
             async_playwright() as playwright,
-            open_browser_session(playwright.chromium) as session,
+            egress_proxy() as egress,
+            open_browser_session(playwright.chromium, egress=egress) as session,
         ):
             page = session.page
             await page.set_content(BEFORE)
@@ -675,7 +708,8 @@ def test_page_text_cannot_mint_a_ref() -> None:
     async def scenario() -> tuple[str, list[str], int]:
         async with (
             async_playwright() as playwright,
-            open_browser_session(playwright.chromium) as session,
+            egress_proxy() as egress,
+            open_browser_session(playwright.chromium, egress=egress) as session,
         ):
             await session.page.set_content(MINTING_PAGE)
             snapshot = await session.snapshot()
@@ -726,7 +760,8 @@ def test_snapshot_taken_during_another_never_lets_the_older_win(
         monkeypatch.setattr(Page, "aria_snapshot", first_held)
         async with (
             async_playwright() as playwright,
-            open_browser_session(playwright.chromium) as session,
+            egress_proxy() as egress,
+            open_browser_session(playwright.chromium, egress=egress) as session,
         ):
             await session.page.set_content(BEFORE)
             first = asyncio.create_task(session.snapshot())
@@ -763,7 +798,8 @@ def test_ref_located_during_a_snapshot_resolves_against_its_own(
 
         async with (
             async_playwright() as playwright,
-            open_browser_session(playwright.chromium) as session,
+            egress_proxy() as egress,
+            open_browser_session(playwright.chromium, egress=egress) as session,
         ):
             await session.page.set_content(BEFORE)
             keep = ref_for(await session.snapshot(), "button", "Keep")

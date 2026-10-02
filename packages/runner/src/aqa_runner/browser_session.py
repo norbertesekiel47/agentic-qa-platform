@@ -1,7 +1,8 @@
 """The browser session every run uses, for explore and replay alike: a fresh
-browser launched through the sandbox check, with an empty environment and the
-run's browser settings, and an accessibility snapshot whose element refs the
-agent's tools act on (ADR-0025, ADR-0026 and its 2026-10-01 amendment)."""
+browser launched through the sandbox check, with an empty environment, the
+run's browser settings and all its traffic through the run's egress proxy, and
+an accessibility snapshot whose element refs the agent's tools act on
+(ADR-0025, ADR-0026 and its 2026-10-01 amendments)."""
 
 import asyncio
 import re
@@ -11,6 +12,7 @@ from contextlib import asynccontextmanager
 from aqa_core.browser import BrowserSettings
 from playwright.async_api import ElementHandle, Error, Page
 
+from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.sandbox import Chromium, launch
 
 # The settings every run uses unless the caller passes its own (ADR-0025).
@@ -130,11 +132,15 @@ def as_text(text: str) -> str:
 
 @asynccontextmanager
 async def open_browser_session(
-    chromium: Chromium, *, settings: BrowserSettings = PINNED_SETTINGS
+    chromium: Chromium,
+    *,
+    egress: EgressProxy,
+    settings: BrowserSettings = PINNED_SETTINGS,
 ) -> AsyncIterator[BrowserSession]:
     """Launch a fresh browser through the sandbox check, open one page with
-    `settings` and downloads refused, and close the browser, its temporary
-    profile with it, when the session ends."""
+    `settings`, downloads refused and every request through `egress`, the
+    run's egress proxy, and close the browser, its temporary profile with it,
+    when the session ends."""
     browser = await launch(chromium)
     try:
         width, height = settings.viewport
@@ -148,6 +154,13 @@ async def open_browser_session(
             device_scale_factor=settings.device_scale_factor,
             color_scheme=settings.color_scheme,
             accept_downloads=False,
+            # The only way out, loopback included. Playwright adds
+            # `<-loopback>` itself unless its driver's environment, the
+            # runner's, sets PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK;
+            # naming it here makes that variable irrelevant (ADR-0026
+            # amendment, 2026-10-01).
+            # https://playwright.dev/python/docs/api/class-browser#browser-new-context-option-proxy
+            proxy={"server": egress.url, "bypass": "<-loopback>"},
         )
         yield BrowserSession(await context.new_page())
     finally:
