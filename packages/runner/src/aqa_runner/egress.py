@@ -26,11 +26,12 @@ type Connection = tuple[asyncio.StreamReader, asyncio.StreamWriter]
 # Who asks for a connection: the egress proxy, for one of the browser's plain
 # requests (http's) or for a tunnel (CONNECT, which carries https or wss), or
 # the runner, for a runner-side request (a reset hook's or a probe's).
-type Requester = Literal["request", "tunnel", "runner"]
+type BrowserRequester = Literal["request", "tunnel"]
+type Requester = BrowserRequester | Literal["runner"]
 
-# The one port a subresource host passes on, by requester: its scheme's
-# default. The runner has none: its requests reach allowed origins only.
-SUBRESOURCE_PORTS: dict[Requester, int] = {
+# The one port a subresource host passes on, for the browser's requests: its
+# scheme's default.
+SUBRESOURCE_PORTS: dict[BrowserRequester, int] = {
     "request": DEFAULT_PORTS["http"],
     "tunnel": DEFAULT_PORTS["https"],
 }
@@ -149,9 +150,9 @@ class EgressPolicy:
         a tunnel."""
         if (host, port) in map(authority, self.allowed_origins):
             return True
-        return host in self.subresource_hosts and port == SUBRESOURCE_PORTS.get(
-            requester
-        )
+        if requester == "runner":
+            return False  # runner-side requests reach allowed origins only
+        return host in self.subresource_hosts and port == SUBRESOURCE_PORTS[requester]
 
     def may_be_private(self, host: str, port: int) -> bool:
         """Whether `host` and `port` may resolve to a loopback or private

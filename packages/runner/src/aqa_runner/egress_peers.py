@@ -19,8 +19,9 @@ CHUNK = 65536
 
 @dataclass(frozen=True)
 class Peer:
-    """One side of an exchange; this one is the browser's, in the egress
-    proxy, whose failures end the exchange and nothing more."""
+    """One side of an exchange, whose failures end the exchange and nothing
+    more: the browser's, in the egress proxy. The upstream's side is an
+    `Upstream`."""
 
     http: h11.Connection
     reader: asyncio.StreamReader
