@@ -155,7 +155,7 @@ def _normalized(text: str) -> str:
 
 
 # Text written as it is compared (ADR-0025), so it can match.
-_Normalized = Annotated[NonEmpty, AfterValidator(_normalized)]
+NormalizedText = Annotated[NonEmpty, AfterValidator(_normalized)]
 
 
 # warnings.catch_warnings swaps the process-wide warning filters, so checks
@@ -182,7 +182,7 @@ def _regex(pattern: str) -> str:
 
 # A Python regex, used with re.search and only the flags it writes inline,
 # such as (?i) (ADR-0025).
-_Regex = Annotated[NonEmpty, AfterValidator(_regex)]
+PythonRegex = Annotated[NonEmpty, AfterValidator(_regex)]
 
 
 def _left_open(css: str) -> bool:
@@ -379,7 +379,7 @@ class ByRole(_Locator):
     """A role, and optionally the accessible name, compared normalized."""
 
     role: AriaRole
-    name: _Normalized | None = None
+    name: NormalizedText | None = None
 
 
 class ByLabel(_Locator):
@@ -520,8 +520,8 @@ class _TextCheck(_Assertion):
     """A check of rendered text, by a literal `text` or a regex `pattern`
     (ADR-0025)."""
 
-    text: _Normalized | None = None
-    pattern: _Regex | None = None
+    text: NormalizedText | None = None
+    pattern: PythonRegex | None = None
 
     @model_validator(mode="after")
     def _text_or_pattern(self) -> Self:
@@ -555,15 +555,19 @@ class NotVisible(_Assertion):
 
 class UrlMatches(_Assertion):
     check: Literal["url_matches"]
-    pattern: _Regex
+    pattern: PythonRegex
+
+
+HttpMethod = Literal["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+StatusClass = Literal["1xx", "2xx", "3xx", "4xx", "5xx"]
 
 
 class _NetworkCheck(_Assertion):
     """A request in the browser's own traffic, by method, URL and status."""
 
-    method: Literal["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    method: HttpMethod
     url_pattern: NonEmpty
-    status_class: Literal["1xx", "2xx", "3xx", "4xx", "5xx"]
+    status_class: StatusClass
 
 
 class NetworkNone(_NetworkCheck):

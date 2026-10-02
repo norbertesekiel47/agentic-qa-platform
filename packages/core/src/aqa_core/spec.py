@@ -203,12 +203,18 @@ def secret_references(frontmatter: SpecFrontmatter) -> Iterator[tuple[str, str]]
             yield f"preconditions.account.{key}", value.secret
 
 
-def spec_hash(frontmatter: Mapping[str, object]) -> str:
-    """The sha256 of the canonical JSON (sorted keys, no whitespace, Python's
-    ASCII escapes) of the frontmatter as parsed, without `tags`. The body never
-    counts (DATA_MODEL §7)."""
-    hashed = {key: value for key, value in frontmatter.items() if key != "tags"}
+def canonical_hash(value: object) -> str:
+    """`sha256:` and the sha256 of `value`'s canonical JSON: sorted keys, no
+    whitespace, Python's ASCII escapes (DATA_MODEL §7)."""
     canonical = json.dumps(
-        hashed, sort_keys=True, separators=(",", ":"), allow_nan=False
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False
     )
     return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def spec_hash(frontmatter: Mapping[str, object]) -> str:
+    """The canonical hash of the frontmatter as parsed, without `tags`. The
+    body never counts (DATA_MODEL §7)."""
+    return canonical_hash(
+        {key: value for key, value in frontmatter.items() if key != "tags"}
+    )
