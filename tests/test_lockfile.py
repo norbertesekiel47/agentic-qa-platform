@@ -1,9 +1,11 @@
-"""uv.lock keeps litellm out of the workspace (ADR-0007, ADR-0027).
+"""uv.lock and the checks image's lock keep litellm out (ADR-0007, ADR-0027).
 
 `constraint-dependencies = ["litellm<0"]` is the ban, and a `[tool.uv.sources]`
 entry or a hand edit can take it out of the lock without a resolution failing,
 so this test reads the lock itself. ADR-0027's 2026-10-01 amendment says why.
-The fixture locks below prove that each check can fail.
+The checks image installs bench/harness/checks-requirements.txt with
+`--require-hashes`, which the ban doesn't reach either (ADR-0029, #71). The
+fixture locks below prove that each check can fail.
 """
 
 import re
@@ -41,14 +43,16 @@ def litellm_problems(lock: Path) -> list[str]:
     return problems
 
 
-def pinned_names(requirements: str) -> set[str]:
-    """The lowercased names a pip requirements file lists, one per requirement.
+def requirement_names(requirements: str) -> set[str]:
+    """The lowercased names a pip requirements file lists, pinned or not.
 
-    A requirement starts its line, so the `--hash` lines under it, which are
-    indented or start with `-`, and comments don't name anything. Lowercasing
-    suffices for litellm, as in `litellm_problems`.
+    A requirement starts its line, after any indent, which pip ignores. The
+    `--hash` lines under it start with `-`, so they and comments name nothing.
+    Lowercasing suffices for litellm, as in `litellm_problems`.
     """
-    names = re.findall(r"^[A-Za-z0-9][A-Za-z0-9._-]*", requirements, re.MULTILINE)
+    names = re.findall(
+        r"^[ \t]*([A-Za-z0-9][A-Za-z0-9._-]*)", requirements, re.MULTILINE
+    )
     return {name.lower() for name in names}
 
 
@@ -185,7 +189,7 @@ CHECKS_LOCK = REPO / "bench/harness/checks-requirements.txt"
 def test_the_checks_lock_keeps_litellm_out() -> None:
     # checks.Dockerfile installs this file with `--require-hashes`, a second
     # install path that `constraint-dependencies` doesn't reach (ADR-0023, #71).
-    names = pinned_names(CHECKS_LOCK.read_text())
+    names = requirement_names(CHECKS_LOCK.read_text())
 
     # The check read the pins, not nothing: playwright is what the image is for.
     assert "playwright" in names
@@ -200,16 +204,17 @@ def test_the_checks_lock_keeps_litellm_out() -> None:
         "litellm[proxy]==1.82.7 \\",
         "litellm>=1.82",
         "litellm @ https://example.invalid/litellm.whl",
+        "  litellm==1.82.7",
     ],
-    ids=["pinned", "mixed-case", "extra", "range", "url"],
+    ids=["pinned", "mixed-case", "extra", "range", "url", "indented"],
 )
 def test_litellm_is_read_from_a_requirements_file_in_any_spelling(line: str) -> None:
     lines = ["greenlet==3.5.6 \\", "    --hash=sha256:00", line, "    --hash=sha256:11"]
 
-    assert pinned_names("\n".join(lines)) == {"greenlet", "litellm"}
+    assert requirement_names("\n".join(lines)) == {"greenlet", "litellm"}
 
 
 def test_a_hash_a_comment_and_a_lookalike_name_are_not_litellm() -> None:
     lines = ["litellm-extras==1.0 \\", "    --hash=sha256:litellm", "# litellm"]
 
-    assert pinned_names("\n".join(lines)) == {"litellm-extras"}
+    assert requirement_names("\n".join(lines)) == {"litellm-extras"}

@@ -14,8 +14,9 @@
 # osv-scanner exits 1 on an advisory of any severity, so the script judges its
 # JSON, and fails closed: any other nonzero exit is passed through, JSON
 # without the expected keys is a jq error, an exit 1 whose JSON gives no rows
-# fails, and so does a call with no lockfile. Every lockfile is judged before
-# the script fails.
+# fails, and so does a call with no lockfile. A failing advisory doesn't stop
+# the next lockfile from being judged, so every finding is listed; a scanner
+# error or an unreadable report stops the script at once.
 set -euo pipefail
 
 scanner=$1
