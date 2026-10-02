@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
 
 HOOK = Path(__file__).with_name("policy_guard.py")
@@ -132,9 +133,11 @@ class DiffTestCase(unittest.TestCase):
         result = self.diff()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn(rel, result.stdout)
+        self.assertIn("needs the maintainer's approval", result.stdout)
         approved = self.diff(**APPROVED)
         self.assertEqual(approved.returncode, 0, approved.stdout + approved.stderr)
         self.assertIn(rel, approved.stdout)
+        self.assertIn("approved by the maintainer", approved.stdout)
         return result.stdout
 
     def assert_clean(self) -> None:
@@ -142,13 +145,25 @@ class DiffTestCase(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stdout, "")
 
-    def on_main(self, files: dict[str, str]) -> None:
+    def on_main(self, files: Mapping[str, str | bytes]) -> None:
         """Commit `files` to the base, so the branch starts from them."""
         self.git("switch", "-q", "main")
-        for rel, text in files.items():
-            self.put(rel, text)
+        for rel, content in files.items():
+            if isinstance(content, bytes):
+                path = self.project / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+            else:
+                self.put(rel, content)
         self.commit("base files")
         self.git("switch", "-q", "-C", "work")
+
+    def link(self, rel: str, target: str) -> None:
+        """Make `rel` a symbolic link to `target`, replacing any file there."""
+        path = self.project / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.unlink(missing_ok=True)
+        path.symlink_to(target)
 
 
 class RefusedTests(DiffTestCase):
@@ -200,6 +215,13 @@ class RefusedTests(DiffTestCase):
         self.assertIn("GitHub token", output)
         self.assertNotIn(token, output)
 
+    def test_a_committed_change_to_an_existing_file_is_judged(self) -> None:
+        # CI checks out the pull request's head: HEAD and the working tree agree.
+        self.on_main({"packages/core/a.py": "x = f()\n"})
+        self.put("packages/core/a.py", "x = f()  # type: ignore\n")
+        self.commit("work")
+        self.assertIn("`# type: ignore`", self.assert_refused("packages/core/a.py"))
+
     def test_a_suppression_already_at_the_merge_base_is_not_new(self) -> None:
         self.on_main({"packages/core/a.py": "x = f()  # type: ignore\ny = 1\n"})
         self.put("packages/core/a.py", "x = f()  # type: ignore\ny = 2\n")
@@ -219,6 +241,22 @@ class ScopeTests(DiffTestCase):
     def test_untracked_files_are_included(self) -> None:
         self.put("packages/core/new.py", "x = f()  # noqa\n")
         self.assertIn("`# noqa`", self.assert_refused("packages/core/new.py"))
+
+    def test_untracked_files_with_non_ascii_names_are_included(self) -> None:
+        self.put("packages/core/café.py", "x = f()  # noqa\n")
+        self.assertIn("`# noqa`", self.assert_refused("packages/core/café.py"))
+
+    def test_a_file_dropped_from_the_index_but_kept_on_disk_is_unchanged(self) -> None:
+        # The working tree still matches the merge base (#66's blind verifier).
+        self.on_main({"tests/test_a.py": TestChangeTests.TEST_A})
+        self.git("rm", "-q", "--cached", "tests/test_a.py")
+        self.assert_clean()
+
+    def test_binaries_and_lockfiles_are_not_read(self) -> None:
+        self.on_main({"docs/a.png": b"\x89PNG\n", "uv.lock": "version = 1\n"})
+        (self.project / "docs/a.png").write_bytes(b"\x89PNG\nx = f()  # noqa\n")
+        self.put("uv.lock", "version = 1\nx = f()  # noqa\n")
+        self.assert_clean()
 
     def test_ignored_files_are_not(self) -> None:
         self.put(".gitignore", "local/\n")
@@ -272,7 +310,8 @@ class TestChangeTests(DiffTestCase):
         self.git("rm", "-q", f"{self.TESTS}/test_a.py", "conftest.py")
         self.commit("work")
         output = self.assert_needs_approval("conftest.py")
-        self.assertIn(f"{self.TESTS}/test_a.py", output)
+        # One ask per file: dropping its assertions already says it.
+        self.assertEqual(output.count(f"- {self.TESTS}/test_a.py"), 1, output)
 
     def test_a_moved_test_file_reports_as_deleted(self) -> None:
         self.on_main({f"{self.TESTS}/test_a.py": self.TEST_A})
@@ -296,21 +335,33 @@ class TestChangeTests(DiffTestCase):
         output = self.assert_needs_approval(f"{self.TESTS}/test_a.py")
         self.assertIn("0 test(s) where there were 1", output)
 
-    def test_any_change_to_a_bar_test_needs_approval(self) -> None:
-        # Flipping an expected outcome keeps every assertion (#60's review).
-        bar = "@pytest.mark.parametrize('passes', [True, False])\ndef test_cut(passes):\n    assert audit() is passes\n"
-        bar_tests = {
-            "tests/test_constraints.py": bar,
-            ".claude/hooks/test_guard.py": bar,
-        }
-        self.on_main(bar_tests)
-        for rel, text in bar_tests.items():
-            with self.subTest(rel=rel):
-                self.put(rel, text.replace("[True, False]", "[True, True]"))
-                self.assertIn("proves the bar", self.assert_needs_approval(rel))
-                self.git("rm", "-qf", rel)
-                self.assert_needs_approval(rel)
-                self.put(rel, text)
+    # Flipping an expected outcome keeps every assertion (#60's review).
+    BAR = (
+        "@pytest.mark.parametrize('passes', [True, False])\n"
+        "def test_cut(passes):\n    assert audit() is passes\n"
+    )
+
+    def assert_a_flipped_outcome_needs_approval(self, rel: str) -> None:
+        self.on_main({rel: self.BAR})
+        self.put(rel, self.BAR.replace("[True, False]", "[True, True]"))
+        self.assertIn("proves the bar", self.assert_needs_approval(rel))
+
+    def test_a_changed_bar_test_needs_approval(self) -> None:
+        self.assert_a_flipped_outcome_needs_approval("tests/test_constraints.py")
+
+    def test_a_changed_bar_test_in_a_subdirectory_needs_approval(self) -> None:
+        self.assert_a_flipped_outcome_needs_approval("tests/isolation/test_runs.py")
+
+    def test_a_changed_binary_under_tests_needs_approval(self) -> None:
+        # Its content isn't read, so a changed fixture is taken as rewritten.
+        self.on_main({"tests/fixtures/page.png": b"\x89PNG\none\n"})
+        (self.project / "tests/fixtures/page.png").write_bytes(b"\x89PNG\ntwo\n")
+        self.assertIn("proves the bar", self.assert_needs_approval("tests/fixtures"))
+
+    def test_a_deleted_bar_test_needs_approval(self) -> None:
+        self.on_main({"tests/test_constraints.py": self.BAR})
+        self.git("rm", "-q", "tests/test_constraints.py")
+        self.assert_needs_approval("tests/test_constraints.py")
 
     def test_a_new_bar_test_needs_no_approval(self) -> None:
         # Adding a test can't lower the floor.
@@ -353,9 +404,19 @@ class GateTests(DiffTestCase):
         self.put("CONSTRAINTS.md", CONSTRAINTS_MD.replace("≥ 94%", "≥ 90%"))
         self.assertIn("≥ 90%", self.assert_needs_approval("CONSTRAINTS.md"))
 
+    def test_pytest_config_files_need_approval(self) -> None:
+        # pytest 9 reads these ahead of pyproject.toml's [tool.pytest].
+        for rel in ("pytest.toml", ".pytest.toml", ".pytest.ini"):
+            with self.subTest(rel=rel):
+                self.put(rel, "[pytest]\naddopts = --cov-fail-under=0\n")
+                self.assert_needs_approval(rel)
+                (self.project / rel).unlink()
+
     def test_an_edit_to_the_guard_or_its_settings_needs_approval(self) -> None:
+        # The guard's own tests prove the bar too; they ask as part of the guard.
         guard = {
             ".claude/hooks/policy_guard.py": "RULES = 1\n",
+            ".claude/hooks/test_guard.py": "def test_a():\n    assert f() == 1\n",
             ".claude/settings.json": '{"hooks": {}}\n',
         }
         self.on_main(guard)
@@ -382,6 +443,64 @@ class GateTests(DiffTestCase):
         self.put(script, "jq -e 'all(.score < 7)'\n")
         self.put("osv-scanner.toml", '[[IgnoredVulns]]\nid = "GHSA-fake-0000-0000"\n')
         self.assert_needs_approval("osv-scanner.toml")
+
+
+class OutputTests(DiffTestCase):
+    # Assembled at runtime, so this file holds no credential-shaped literal.
+    TOKEN = "gh" + "p_" + "R8x2" * 9
+    WORKFLOW = ".github/workflows/ci.yml"
+
+    def test_a_credential_added_to_a_gate_file_is_never_printed(self) -> None:
+        self.on_main({self.WORKFLOW: WORKFLOW_YML})
+        self.put(
+            self.WORKFLOW, WORKFLOW_YML + f"        env: {{TOKEN: {self.TOKEN}}}\n"
+        )
+        result = self.diff(**APPROVED)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(self.WORKFLOW, result.stdout)
+        self.assertNotIn(self.TOKEN, result.stdout + result.stderr)
+
+    def test_a_credential_removed_from_a_gate_file_is_never_printed(self) -> None:
+        line = f"        env: {{TOKEN: {self.TOKEN}}}\n"
+        self.on_main({self.WORKFLOW: WORKFLOW_YML + line})
+        self.put(self.WORKFLOW, WORKFLOW_YML)
+        self.assertNotIn(self.TOKEN, self.assert_needs_approval(self.WORKFLOW))
+
+    def test_a_gate_file_with_a_non_utf8_byte_shows_only_its_change(self) -> None:
+        script = ".github/scripts/audit.sh"
+        self.on_main({script: b"# caf\xe9\njq -e 'all(.score < 7)'\n"})
+        (self.project / script).write_bytes(b"# caf\xe9\njq -e 'all(.score < 11)'\n")
+        output = self.assert_needs_approval(script)
+        self.assertIn("+jq -e 'all(.score < 11)'", output)
+        self.assertNotIn("caf", output)
+
+
+class LinkTests(DiffTestCase):
+    def test_a_gate_file_turned_into_a_link_needs_approval(self) -> None:
+        # Step one of a two-step bypass: later edits would go to a name no rule
+        # watches, behind the link.
+        self.on_main({"pyproject.toml": PYPROJECT})
+        self.put("config/project.toml", PYPROJECT)
+        self.link("pyproject.toml", "config/project.toml")
+        self.assertIn("symbolic link", self.assert_needs_approval("pyproject.toml"))
+
+    def test_a_link_is_judged_by_its_target_name_never_followed(self) -> None:
+        with tempfile.TemporaryDirectory() as elsewhere:
+            outside = Path(elsewhere) / "outside.txt"
+            outside.write_text("OUTSIDE-THE-REPOSITORY\n")
+            self.link(".github/scripts/peek", str(outside))
+            output = self.assert_needs_approval(".github/scripts/peek")
+        self.assertIn("symbolic link", output)
+        self.assertNotIn("OUTSIDE-THE-REPOSITORY", output)
+
+
+class CommandLineTests(DiffTestCase):
+    def test_scan_takes_an_explicit_path(self) -> None:
+        self.put("packages/core/a.py", "x = f()  # type: ignore\n")
+        with tempfile.TemporaryDirectory() as elsewhere:
+            result = self.guard("--scan", str(self.project), cwd=Path(elsewhere))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("packages/core/a.py:1", result.stdout)
 
 
 class ApprovalTests(DiffTestCase):
@@ -436,7 +555,7 @@ class ExitCodeTests(DiffTestCase):
             with self.subTest(base=base):
                 result = self.diff(base)
                 self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-                self.assertIn(base, result.stderr)
+                self.assertIn("rev-parse --verify", result.stderr)
                 self.assertEqual(result.stdout, "")
 
     def test_a_base_with_no_history_in_common_exits_2(self) -> None:
@@ -445,7 +564,7 @@ class ExitCodeTests(DiffTestCase):
         self.git("switch", "-q", "work")
         result = self.diff("elsewhere")
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn("elsewhere", result.stderr)
+        self.assertIn("merge-base", result.stderr)
 
     def test_no_base_exits_2(self) -> None:
         result = self.guard("--diff")
@@ -456,7 +575,7 @@ class ExitCodeTests(DiffTestCase):
         with tempfile.TemporaryDirectory() as empty:
             result = self.diff("main", PATH=empty)
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn("main", result.stderr)
+        self.assertIn("'git'", result.stderr)
 
     def test_a_directory_outside_a_repository_exits_2(self) -> None:
         with tempfile.TemporaryDirectory() as elsewhere:
@@ -467,9 +586,11 @@ class ExitCodeTests(DiffTestCase):
                 env={"GIT_CEILING_DIRECTORIES": elsewhere},
             )
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("rev-parse --show-toplevel", result.stderr)
 
     def test_a_file_it_cannot_read_exits_2(self) -> None:
-        # Judged as emptied, its new content would go unchecked.
+        # Judged as emptied, its new content would go unchecked. chmod can't
+        # stop root from reading; CI's runner isn't root.
         self.on_main({"packages/core/a.py": "x = 1\n"})
         self.put("packages/core/a.py", "x = f()  # type: ignore\n")
         (self.project / "packages/core/a.py").chmod(0)

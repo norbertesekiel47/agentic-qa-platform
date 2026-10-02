@@ -258,7 +258,7 @@ FILE_SECRET_GUIDANCE = (
 # --- rule 4: quality-gate configs -------------------------------------------------
 
 GATE_WHOLE_FILE = re.compile(
-    r"(?:^|/)(?:\.?ruff\.toml|\.?mypy\.ini|pytest\.ini|\.coveragerc|pyrightconfig\.json"
+    r"(?:^|/)(?:\.?ruff\.toml|\.?mypy\.ini|\.?pytest\.(?:ini|toml)|\.coveragerc|pyrightconfig\.json"
     r"|\.pre-commit-config\.ya?ml|eslint\.config\.[cm]?[jt]s|\.eslintrc(?:\.\w+)?"
     r"|vitest\.(?:config|workspace)\.[cm]?[jt]s|tsconfig[\w.-]*\.json|\.github/scripts/[^/]+"
     r"|\.fallowrc(?:\.jsonc?)?|\.?fallow\.toml|osv-scanner\.toml|CONSTRAINTS\.md)$"
@@ -289,11 +289,12 @@ ASSERTION = re.compile(
 )
 # Counted too: renaming a test away drops it without touching an assertion.
 TEST_DEF = re.compile(r"^\s*(?:async\s+)?def\s+test|\b(?:it|test)\(", re.MULTILINE)
-# The tests that prove the bar: the root tests/ (CONSTRAINTS.md's threshold
-# checks, AGENTS.md §4's command checks) and the guard's own. Flipping an
-# expected outcome there weakens the bar and keeps every assertion, so --diff
-# asks about any change to an existing one. A new one can't lower the floor.
-BAR_TESTS = re.compile(r"^(?:tests/|\.claude/hooks/test_[^/]*\.py$)")
+# The tests that prove the bar, under the root tests/ (CONSTRAINTS.md's threshold
+# checks, AGENTS.md §4's command checks). Flipping an expected outcome there
+# weakens the bar and keeps every assertion, so --diff asks about any change to
+# an existing file. A new one can't lower the floor. The guard's own tests ask
+# as part of the guard (PROTECTED).
+BAR_TESTS = re.compile(r"^tests/")
 
 # --- shell heuristics ---------------------------------------------------------------
 

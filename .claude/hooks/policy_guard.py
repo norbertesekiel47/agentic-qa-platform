@@ -44,9 +44,9 @@ Escalated to the user
    once, which is how the initial bar gets approved.
 5. A test-file edit that leaves fewer assertions or tests, and a shell
    command that may delete, move or rewrite a test file. ``--diff`` adds a
-   deleted test file (a moved one reads as deleted) and any change to an
+   deleted test file (a moved one reads as deleted), any change to an
    existing file that proves the bar (``BAR_TESTS``), where a flipped
-   expectation keeps every assertion.
+   expectation keeps every assertion, and a symbolic link.
 6. Edits to this guard or the settings that load it (``.claude/hooks/``,
    ``.claude/settings*.json``), including shell writes that name them and
    installers that rewrite them without naming them (``fallow hooks install``,
@@ -70,6 +70,9 @@ checks do not. The tree scan also skips dependency and build directories,
 lockfiles, binaries and files with a generated-code header. It lists files
 with ``git ls-files`` once the project is a repo, and until then walks the
 tree honouring the plain (glob-free) entries of the root ``.gitignore``.
+``--diff`` reads each file as git stores it (a link is the name it points to)
+and skips the content of lockfiles and binaries. It cuts every credential it
+recognises short in what it prints, so a CI log never holds one.
 
 Known gaps, stated rather than hidden
 -------------------------------------
@@ -86,9 +89,10 @@ Known gaps, stated rather than hidden
 * This is a guardrail, not a security boundary. Other agents (Codex, Cursor)
   do not run Claude Code hooks. CI's ``--diff`` sees their changes, but runs
   the pull request's own copy of this guard and of its workflow, so a pull
-  request that weakens either is judged by the weakened copy. After a push,
-  any label event or reopening the pull request, not only re-applying the
-  approval label, brings the approval back (ADR-0028 amendment, 2026-10-01).
+  request that weakens either is judged by the weakened copy, compiled
+  files included; a link it approved hides later changes behind it; and the
+  approval label can outlive a push. ADR-0028's amendment (2026-10-01) lists
+  these gaps.
 
 Contract (code.claude.com/docs/en/hooks): stdin is the hook payload as JSON.
 PreToolUse: exit 2 refuses and shows stderr to the model; a JSON
@@ -575,8 +579,14 @@ def walk_files(project: Path) -> Iterator[tuple[Path, str]]:
                 yield Path(root) / name, prefix + name
 
 
+def binary_or_lockfile(rel: str) -> bool:
+    """A file whose content no rule reads."""
+    path = Path(rel)
+    return path.suffix.lower() in SKIP_SUFFIXES or path.name in LOCKFILES
+
+
 def scan_file(path: Path, rel: str, project: Path) -> list[str]:
-    if is_exempt(rel) or path.suffix.lower() in SKIP_SUFFIXES or path.name in LOCKFILES:
+    if is_exempt(rel) or binary_or_lockfile(rel):
         return []
     try:
         if path.stat().st_size > MAX_SCAN_BYTES:
@@ -612,65 +622,135 @@ def scan(project: Path) -> list[str]:
 
 # --- diff: the floor's moves since a base -------------------------------------------
 
+LINK_MODE = "120000"  # git's mode for a symbolic link
 
-def git(project: Path, *args: str) -> str:
-    return os.fsdecode(
-        subprocess.run(
-            ["git", "-C", str(project), *args],
-            capture_output=True,
-            check=True,
-            timeout=20,
-        ).stdout
+
+@dataclass(frozen=True)
+class Change:
+    """One file the working tree changes since the merge base."""
+
+    rel: str
+    added: bool  # absent at the merge base: new, or untracked
+    deleted: bool  # absent from the working tree
+    link: bool  # a symbolic link on either side
+
+
+def git(cwd: Path, *args: str) -> bytes:
+    return subprocess.run(
+        ["git", "-C", str(cwd), *args], capture_output=True, check=True, timeout=20
+    ).stdout
+
+
+def names(output: bytes) -> list[str]:
+    """git's -z output as file names: each one ends with a NUL."""
+    return os.fsdecode(output).split("\0")[:-1]
+
+
+def merge_base(cwd: Path, base: str) -> tuple[Path, str]:
+    """The repository's top level, and the merge base of `base` and HEAD there."""
+    # git names files from the top level, whichever directory it runs in.
+    root = Path(os.fsdecode(git(cwd, "rev-parse", "--show-toplevel")).strip())
+    commit = git(
+        root, "rev-parse", "--verify", "--end-of-options", f"{base}^{{commit}}"
     )
+    return root, git(
+        root, "merge-base", commit.decode().strip(), "HEAD"
+    ).decode().strip()
 
 
-def changed_files(project: Path, merge_base: str) -> list[tuple[str, str]]:
-    """(status, path) per file the working tree changes since `merge_base`:
-    git's A, M, D or T for tracked files, committed or not, and ? for untracked."""
-    # -z ends each field with a NUL, so the last item of the split is empty.
-    fields = git(
-        project, "diff", "--name-status", "--no-renames", "-z", merge_base
-    ).split("\0")[:-1]
-    untracked = git(project, "ls-files", "-z", "--others", "--exclude-standard")
-    return list(zip(fields[0::2], fields[1::2], strict=True)) + [
-        ("?", rel) for rel in untracked.split("\0")[:-1]
-    ]
+def changed_files(root: Path, since: str) -> list[Change]:
+    """Each file the working tree changes since `since`, untracked files included."""
+    # --raw: ":<old mode> <new mode> <old blob> <new blob> <status>", then the path.
+    fields = names(git(root, "diff", "--raw", "--no-renames", "-z", since))
+    changes: dict[str, Change] = {}
+    for meta, rel in zip(fields[0::2], fields[1::2], strict=True):
+        old_mode, new_mode, _, _, status = meta.lstrip(":").split()
+        link = LINK_MODE in {old_mode, new_mode}
+        changes[rel] = Change(rel, status == "A", status == "D", link)
+    for rel in names(git(root, "ls-files", "-z", "--others", "--exclude-standard")):
+        # Dropped from the index but still on disk, a file has changed content,
+        # if any, not gone.
+        tracked = changes.get(rel)
+        link = (root / rel).is_symlink() or bool(tracked and tracked.link)
+        changes[rel] = Change(rel, tracked is None, False, link)
+    return list(changes.values())
+
+
+def texts(root: Path, since: str, change: Change) -> tuple[str, str] | None:
+    """The file at `since` and in the working tree, as git stores it: a link is
+    the name it points to, never the file behind it. None for a binary or a
+    lockfile, whose content no rule reads."""
+    if binary_or_lockfile(change.rel):
+        return None
+    blob = (
+        b"" if change.added else git(root, "cat-file", "blob", f"{since}:{change.rel}")
+    )
+    path = root / change.rel
+    if change.deleted:
+        after = b""
+    elif path.is_symlink():
+        after = os.fsencode(path.readlink())
+    else:
+        # A read error ends the run (exit 2): judged as emptied, the file
+        # would go unchecked.
+        after = path.read_bytes()
+    return blob.decode(errors="replace"), after.decode(errors="replace")
+
+
+def diff_asks(change: Change, judged: list[str], *, rewritten: bool) -> list[str]:
+    """What --diff asks about beyond an edit's judgment (`judged`), which never
+    sees a whole file go or a link. `rewritten`: its content changed, or wasn't
+    read."""
+    rel = change.rel
+    if is_exempt(rel):
+        return []
+    asks = []
+    if change.link:
+        asks.append(
+            f"{rel} is or was a symbolic link. --diff judges a link by the name it "
+            "points to, so a later change to the file behind it goes unseen."
+        )
+    if judged:  # the judgment already explains this file
+        return asks
+    if change.deleted and TEST_FILE.search(rel):
+        asks.append(
+            f"{rel}: this change deletes a test file. Approve only if its "
+            "checks are obsolete, not inconvenient."
+        )
+    elif not change.added and rewritten and BAR_TESTS.search(rel):
+        asks.append(
+            f"{rel} proves the bar: a change there can weaken an expectation "
+            "without removing an assertion."
+        )
+    return asks
 
 
 def diff_verdicts(cwd: Path, base: str) -> list[Verdict]:
     """A verdict per file the working tree changes since `base`'s merge base."""
-    # git names files from the top level, whichever directory it runs in.
-    root = Path(git(cwd, "rev-parse", "--show-toplevel").strip())
-    commit = git(
-        root, "rev-parse", "--verify", "--end-of-options", f"{base}^{{commit}}"
-    )
-    merge_base = git(root, "merge-base", commit.strip(), "HEAD").strip()
+    root, since = merge_base(cwd, base)
     verdicts = []
-    for status, rel in changed_files(root, merge_base):
-        new, deleted = status in {"A", "?"}, status == "D"
-        before = "" if new else git(root, "cat-file", "blob", f"{merge_base}:{rel}")
-        # Not read_text(): a file judged as emptied would go unchecked, so a
-        # read error ends the run (exit 2).
-        after = "" if deleted else (root / rel).read_text(errors="replace")
-        verdict = judge_change(rel, before, after, root)
-        if deleted and TEST_FILE.search(rel) and not is_exempt(rel):
-            verdict.asks.append(
-                f"{rel}: this change deletes a test file. Approve only if its "
-                "checks are obsolete, not inconvenient."
-            )
-        elif not new and BAR_TESTS.search(rel):
-            verdict.asks.append(
-                f"{rel} proves the bar: a change there can weaken an expectation "
-                "without removing an assertion."
-            )
+    for change in changed_files(root, since):
+        read = texts(root, since, change)
+        before, after = read or ("", "")
+        verdict = judge_change(change.rel, before, after, root)
+        rewritten = read is None or before != after
+        verdict.asks.extend(diff_asks(change, verdict.asks, rewritten=rewritten))
         verdicts.append(verdict)
     return verdicts
 
 
-def diff_cli(base: str, project: Path) -> int:
+def redacted(text: str) -> str:
+    """`text` with each known-format credential and inline database password cut
+    short, as credential_hits() shows them, so a CI log never holds one."""
+    for _, pattern in SECRET_FORMATS:
+        text = pattern.sub(lambda match: match[0][:4] + "…", text)
+    return DSN.sub(lambda match: match[0].replace(match["value"], "…"), text)
+
+
+def diff_cli(base: str, cwd: Path) -> int:
     """Exit 0 when clean, 1 on findings and 2 when the diff can't be taken."""
     try:
-        verdicts = diff_verdicts(project, base)
+        verdicts = diff_verdicts(cwd, base)
     except subprocess.CalledProcessError as error:
         reason = os.fsdecode(error.stderr).strip() or f"exit {error.returncode}"
         command = " ".join(map(str, error.cmd))
@@ -682,7 +762,7 @@ def diff_cli(base: str, project: Path) -> int:
         return 2
     refused = [v for v in verdicts if v.findings or v.secrets]
     for verdict in refused:
-        sys.stdout.write(render(verdict))
+        sys.stdout.write(redacted(render(verdict)))
     asks = [ask for verdict in verdicts for ask in verdict.asks]
     # CI sets this from the maintainer's label; it never excuses a refusal.
     approved = os.environ.get("AQA_FLOOR_CHANGE_APPROVED") == "true"
@@ -693,7 +773,7 @@ def diff_cli(base: str, project: Path) -> int:
             else "needs the maintainer's approval (in CI, the floor-change-approved label)"
         )
         print(f"policy_guard --diff {base}: {heading}:")
-        print("\n".join(f"- {ask}" for ask in asks))
+        print(redacted("\n".join(f"- {ask}" for ask in asks)))
     return 1 if refused or (asks and not approved) else 0
 
 
@@ -742,13 +822,15 @@ def scan_cli(project: Path) -> int:
 
 def command_line(mode: str, args: list[str]) -> int:
     """--scan and --diff: run by hand or in CI, so the hooks' off switch doesn't apply."""
-    project = project_dir(str(Path.cwd()))
     if mode == "--scan":
-        return scan_cli(Path(args[0]).resolve() if args else project)
+        return scan_cli(
+            Path(args[0]).resolve() if args else project_dir(str(Path.cwd()))
+        )
     if not args:
         sys.stderr.write("usage: policy_guard.py --diff <base>\n")
         return 2
-    return diff_cli(args[0], project)
+    # From the working directory, as CI runs it: git finds the repository.
+    return diff_cli(args[0], Path.cwd())
 
 
 def main(argv: list[str]) -> int:
