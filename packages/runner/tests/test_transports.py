@@ -151,7 +151,9 @@ def test_the_browser_resolves_no_name_itself(launched: str) -> None:
     # Any name the browser looked up itself would leave in a DNS query: DNS
     # prefetch, a STUN server's name. Every name is the egress proxy's to
     # resolve. A context that names its proxy by a name, here localhost,
-    # shows the lookup failing; the proxy's own address is spared.
+    # shows the lookup failing. The session's own proxy, at the address
+    # `EgressProxy` listens on, must stay reachable: the rule's exclusion has
+    # to name that address, and this test fails if the two drift apart.
     with serving() as origin:
         start = f"http://127.0.0.1:{origin.port}"
 
