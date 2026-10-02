@@ -4,10 +4,14 @@ that establish each expectation. Read strictly, like a spec: unknown fields
 are errors and nothing is coerced.
 
 `CompiledScript.model_validate_json` checks a script's text, but a file is
-read through the loader (#46), which first refuses repeated keys:
-`model_validate_json` keeps the last, so `"side_effect": true, …,
-"side_effect": false` would read as false. The loader checks the text, then
-validates the same text in JSON mode, where `compiled_at` may be a string."""
+read through `aqa_core.project.load_compiled`, which first refuses repeated
+keys: `model_validate_json` keeps the last, so `"side_effect": true, …,
+"side_effect": false` would read as false. The loader checks the text,
+validates the same text in JSON mode, where `compiled_at` may be a string,
+then checks the parts against each other.
+
+A text check's `matches` searches page text with no time limit; a run
+evaluates checks through `aqa_runner.text_search`, which bounds each search."""
 
 import re
 import threading

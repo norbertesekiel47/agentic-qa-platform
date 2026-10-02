@@ -2,16 +2,28 @@
 is involved (DATA_MODEL §6, §9; ADR-0030). Every problem is reported at once,
 each naming the file, the key and what is wrong."""
 
+import json
 import re
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
 from pydantic import BaseModel, ValidationError
 
 from aqa_core import strict_yaml
 from aqa_core.browser import BrowserSettings
+from aqa_core.compiled import (
+    Click,
+    CompiledScript,
+    Fill,
+    FillSecret,
+    NotVisible,
+    ProbeEqualsBaseline,
+    Select,
+    TextInTarget,
+    VisibleUnoccluded,
+)
 from aqa_core.config import ProjectConfig, RoleField
 from aqa_core.model_roles import RoleError, resolve_roles
 from aqa_core.price_map import vendored
@@ -82,7 +94,10 @@ def _problems(error: ValidationError, path: Path) -> Iterator[str]:
                 problem = "must be a list"
             case _:
                 problem = detail["msg"]
-        yield f"{path}: {_key(detail['loc'])}: {problem}"
+        # A problem with the whole file, such as JSON pydantic can't parse,
+        # has no key.
+        key = _key(detail["loc"])
+        yield f"{path}: {key}: {problem}" if key else f"{path}: {problem}"
 
 
 def _validate[M: BaseModel](
@@ -226,6 +241,224 @@ def load_project(spec_root: Path) -> Project:
     return Project(spec_root, config, specs)
 
 
+class _JsonObject(dict[str, object]):
+    """A JSON object as `json.loads` builds it, keeping its last value for a
+    key, and the keys the text wrote more than once, in order."""
+
+    repeated: tuple[str, ...] = ()
+
+    @classmethod
+    def of(cls, members: list[tuple[str, object]]) -> Self:
+        found = cls(members)
+        seen: set[str] = set()
+        repeated: dict[str, None] = {}
+        for key, _ in members:
+            if key in seen:
+                repeated[key] = None
+            seen.add(key)
+        found.repeated = tuple(repeated)
+        return found
+
+
+# Where a JSON value is: its parent's place and its own key or index, or None
+# at the top. Linked, so walking deeper copies nothing.
+type _Place = tuple[_Place, int | str] | None
+
+# The most objects and arrays the walk below reads nested in one another:
+# more than any compiled script needs, and than pydantic reads (about 200), so
+# a deeper file is refused before walking it costs more.
+DEEPEST_JSON = 256
+
+
+def _spelled(place: _Place) -> tuple[int | str, ...]:
+    keys: list[int | str] = []
+    while place is not None:
+        place, key = place
+        keys.append(key)
+    return tuple(reversed(keys))
+
+
+def _repeated_keys(text: str, path: Path) -> list[tuple[int | str, ...]]:
+    """Where `text`, which must be JSON, writes a key more than once, in the
+    order the text does. A reader keeps the last value, so a repeat could hide
+    a lowered `side_effect` (ADR-0025's 2026-10-02 amendment)."""
+    too_deep = SpecError([f"{path}: nested more than {DEEPEST_JSON} levels deep"])
+    try:
+        parsed = json.loads(text, object_pairs_hook=_JsonObject.of)
+    except json.JSONDecodeError as error:
+        raise SpecError(
+            [f"{path}: line {error.lineno}: not JSON: {error.msg}"]
+        ) from None
+    except ValueError as error:
+        # Well-formed JSON with a value json won't convert: an integer longer
+        # than Python reads (sys.int_info.default_max_str_digits).
+        raise SpecError([f"{path}: not JSON: {error}"]) from None
+    except RecursionError:
+        raise too_deep from None
+    found: list[tuple[int | str, ...]] = []
+    # Walked with a stack, not recursion, which deep JSON would exhaust.
+    # Children go on reversed, so they come off in the text's order.
+    stack: list[tuple[object, int, _Place]] = [(parsed, 0, None)]
+    while stack:
+        value, depth, place = stack.pop()
+        if isinstance(value, _JsonObject):
+            if value.repeated:
+                where = _spelled(place)
+                found.extend((*where, key) for key in value.repeated)
+            children: list[tuple[int | str, object]] = list(value.items())
+        elif isinstance(value, list):
+            children = list(enumerate(value))
+        else:
+            continue
+        if depth == DEEPEST_JSON:  # the top value is level 1
+            raise too_deep
+        stack.extend(
+            (child, depth + 1, (place, key)) for key, child in reversed(children)
+        )
+    return found
+
+
+def _defined_twice(where: str, field: str, values: Sequence[object]) -> Iterator[str]:
+    """A problem for each of `values`, the `field` of each entry in `where`,
+    that an earlier entry already defines."""
+    first: dict[object, int] = {}
+    for index, value in enumerate(values):
+        earlier = first.setdefault(value, index)
+        if earlier != index:
+            yield (
+                f"{where}[{index}].{field}: {value!r} is already the {field} of "
+                f"{where}[{earlier}]"
+            )
+
+
+def _step_names(script: CompiledScript, config: ProjectConfig) -> Iterator[str]:
+    """Names the steps use that nothing defines: a target, a secret the
+    project config doesn't declare, or a required condition."""
+    conditions = {condition.id for condition in script.coverage.requires}
+    for index, step in enumerate(script.steps):
+        where = f"steps[{index}]"
+        match step:
+            case (
+                Click(target=target)
+                | Fill(target=target)
+                | FillSecret(target=target)
+                | Select(target=target)
+            ) if target not in script.targets:
+                yield f"{where}.target: {target!r} names no target in targets"
+        if isinstance(step, FillSecret) and step.secret not in config.secrets:
+            yield (
+                f"{where}.secret: secret {step.secret} is not declared in the "
+                "project config's secrets"
+            )
+        for position, condition in enumerate(step.satisfies):
+            if condition not in conditions:
+                yield (
+                    f"{where}.satisfies[{position}]: {condition!r} names no "
+                    "condition in coverage.requires"
+                )
+
+
+def _assertion_names(script: CompiledScript) -> Iterator[str]:
+    """Names the assertions use that nothing defines: a target, a probe or an
+    expectation."""
+    expectations = {each.expect_index for each in script.coverage.expectations}
+    for index, assertion in enumerate(script.assertions):
+        where = f"assertions[{index}]"
+        match assertion:
+            case (
+                TextInTarget(target=target)
+                | NotVisible(target=target)
+                | VisibleUnoccluded(target=target)
+            ) if target not in script.targets:
+                yield f"{where}.target: {target!r} names no target in targets"
+            case ProbeEqualsBaseline(probe=probe) if (
+                probe not in script.probe_baselines
+            ):
+                yield f"{where}.probe: {probe!r} names no probe in probe_baselines"
+        if assertion.expect_index not in expectations:
+            yield (
+                f"{where}.expect_index: {assertion.expect_index} names no "
+                "expectation in coverage.expectations"
+            )
+
+
+def _unscoped_negative_checks(script: CompiledScript) -> Iterator[str]:
+    """A locator with no scope on a not_visible check's target. Unscoped, a
+    negative check finds its element absent on any page without a match,
+    such as a wrong page or an app's 404, so it would pass vacuously: a
+    broken script, not drift (#46, #52)."""
+    for index, assertion in enumerate(script.assertions):
+        if not isinstance(assertion, NotVisible):
+            continue
+        target = script.targets.get(assertion.target)
+        for position, locator in enumerate(target.locators if target else ()):
+            if locator.scope is None:
+                yield (
+                    f"targets.{assertion.target}.locators[{position}]: has no "
+                    f"scope, but assertions[{index}] ({assertion.id}) checks that "
+                    "this target is not visible: without a scope, its absence "
+                    "passes on any page that lacks a match, such as a wrong page "
+                    "or a 404"
+                )
+
+
+def _name_problems(script: CompiledScript, config: ProjectConfig) -> Iterator[str]:
+    """How the parts of `script`, which the format accepts, fail to name each
+    other (DATA_MODEL §7, "Checked by the loader"), each `<key>: <problem>`:
+    names defined twice, then names used that nothing defines."""
+    coverage = script.coverage
+    yield from _defined_twice("assertions", "id", [a.id for a in script.assertions])
+    yield from _defined_twice(
+        "coverage.expectations",
+        "expect_index",
+        [each.expect_index for each in coverage.expectations],
+    )
+    yield from _defined_twice(
+        "coverage.requires", "id", [c.id for c in coverage.requires]
+    )
+    yield from _defined_twice("steps", "seq", [step.seq for step in script.steps])
+    yield from _step_names(script, config)
+    yield from _assertion_names(script)
+    ids = {assertion.id for assertion in script.assertions}
+    for index, expectation in enumerate(coverage.expectations):
+        for position, name in enumerate(expectation.assertions):
+            if name not in ids:
+                yield (
+                    f"coverage.expectations[{index}].assertions[{position}]: "
+                    f"{name!r} names no assertion in assertions"
+                )
+    seqs = {step.seq for step in script.steps}
+    for name, baseline in script.probe_baselines.items():
+        if baseline.capture_before_seq not in seqs:
+            yield (
+                f"probe_baselines.{name}.capture_before_seq: "
+                f"{baseline.capture_before_seq} names no step's seq"
+            )
+    yield from _unscoped_negative_checks(script)
+
+
+def load_compiled(path: Path, config: ProjectConfig) -> CompiledScript:
+    """The compiled script at `path`, read strictly (DATA_MODEL §7, "Reading a
+    compiled script"): JSON that repeats no key, then the same text validated
+    in JSON mode, where `compiled_at` may be a string, then its parts checked
+    against each other and the secrets `config` declares. Every problem is
+    reported at once, as a SpecError."""
+    text = _read_text(path)
+    problems = [
+        f"{path}: {_key(where)}: the key appears more than once, and a reader "
+        "keeps only its last value, so write it once"
+        for where in _repeated_keys(text, path)
+    ]
+    try:
+        script = CompiledScript.model_validate_json(text)
+    except ValidationError as error:
+        raise SpecError([*problems, *_problems(error, path)]) from None
+    problems.extend(f"{path}: {problem}" for problem in _name_problems(script, config))
+    if problems:
+        raise SpecError(problems)
+    return script
+
+
 def effective_browser(spec: Spec, config: ProjectConfig) -> BrowserSettings:
     """The pinned settings, overridden by the project's, then by the spec's
     (ADR-0025)."""
@@ -256,12 +489,19 @@ def allowed_origins(spec: Spec, start: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys((start, *spec.frontmatter.allowed_origins)))
 
 
+def path_on_origin(start: str, path: str) -> str:
+    """`path`, a start_url or a compiled navigate's path, on `start`, the run's
+    start origin as start_origin gives it: joined as text, never
+    percent-decoded or resolved (ADR-0026's start URL amendment; DATA_MODEL
+    §9)."""
+    return start + path
+
+
 def start_url(spec: Spec, start: str) -> str:
     """Where the run's first navigation goes: `start`, the run's start origin
-    as start_origin gives it, followed by the spec's start_url as written.
-    Joined as text, never percent-decoded or resolved (ADR-0026's start URL
-    amendment)."""
-    return start + spec.frontmatter.preconditions.start_url
+    as start_origin gives it, followed by the spec's start_url as written
+    (`path_on_origin`)."""
+    return path_on_origin(start, spec.frontmatter.preconditions.start_url)
 
 
 @dataclass(frozen=True)
