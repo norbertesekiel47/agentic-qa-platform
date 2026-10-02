@@ -186,6 +186,13 @@ def page(sites: Sites, path: str, query: dict[str, list[str]]) -> str | None:
                 <iframe src="{sites.cdn}/doc"
                     style="position: absolute; inset: 0; width: 100%; height: 100%"></iframe>
             </a>""",
+        # A field in a frame of the start origin, beside a frame from the
+        # subresource host that takes the focus whenever it loses it.
+        "/stale": f"""<iframe srcdoc="<label>Inner <input></label>"></iframe>
+            <iframe src="{sites.cdn}/stealing"></iframe>""",
+        # A field, and a frame of the start origin: no other origin's frame.
+        "/own": """<label>Top <input></label>
+            <iframe srcdoc="<label>Inner <input></label>"></iframe>""",
         # Fields of each kind fill takes, and a button, which takes none.
         "/fields": """<label>Notes <textarea>old</textarea></label>
             <div role="textbox" aria-label="Story" contenteditable>old</div>

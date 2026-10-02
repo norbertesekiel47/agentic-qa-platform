@@ -83,13 +83,14 @@ class PolicyEventError(Exception):
 
 class DocumentChangedError(Exception):
     """A frame of the page navigated or was removed while the session took a
-    snapshot, so content from a document it never checked could be in it:
-    the snapshot is discarded, and the caller takes another."""
+    snapshot or looked a target up, so what it saw could come from a
+    document it never checked: that is discarded, and the caller looks
+    again."""
 
     def __init__(self) -> None:
         super().__init__(
-            "the page changed while the snapshot was taken, so it was "
-            "discarded: take a new snapshot"
+            "the page changed while the session looked at it, so what it saw was "
+            "discarded: take a new snapshot, or look the target up again"
         )
 
 

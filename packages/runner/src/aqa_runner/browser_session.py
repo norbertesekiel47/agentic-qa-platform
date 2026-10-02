@@ -348,14 +348,24 @@ class BrowserSession:
             )
         async with self._turn:
             await self._require_allowed_page()
-            frame, focused = await self._focus()
-            await self._require_allowed(frame, "frame")
-            if focused is not None:
+            focus = await self._focus()
+            if focus is None:
+                # Where the key goes can't be told: refused if it could be a
+                # frame off the allowed origins.
+                foreign = await self._foreign_frame(self.page.main_frame)
+                if foreign is not None:
+                    raise self._refuse(PolicyEvent("frame", *foreign))
+            else:
+                frame, focused = focus
                 try:
-                    if not await focused.evaluate(NOTHING_FOCUSED):
+                    await self._require_allowed(frame, "frame")
+                    if focused is not None and not await focused.evaluate(
+                        NOTHING_FOCUSED
+                    ):
                         await self._require_no_foreign_frame(focused, frame)
                 finally:
-                    await focused.dispose()
+                    if focused is not None:
+                        await focused.dispose()
             # https://playwright.dev/python/docs/api/class-keyboard#keyboard-press
             await self.page.keyboard.press(key)
 
@@ -372,13 +382,20 @@ class BrowserSession:
     async def resolve(self, target: Target, use: Use) -> Resolved | Absent | Unresolved:
         """`target`'s element for `use`, as `aqa_runner.locators.resolve`
         finds it on the page: an observation, so the page is checked before
-        and after, which also covers a page that navigated meanwhile (and
-        took the element's document with it). The caller owns a resolved
-        element's handle."""
+        and after. If any frame navigated or was removed meanwhile, what the
+        lookup saw may be another document's, even when the page is back on
+        an allowed origin: it is discarded, a resolved element let go, and
+        `DocumentChangedError` raised, as `snapshot` does. The caller owns a
+        resolved element's handle."""
         async with self._turn:
+            changes = self._frame_changes
             await self._require_allowed_page()
             found = await resolve_target(self.page, target, use)
             await self._require_allowed_page()
+            if self._frame_changes != changes:
+                if isinstance(found, Resolved):
+                    await found.element.dispose()
+                raise DocumentChangedError
             return found
 
     async def url(self) -> str:
@@ -472,17 +489,19 @@ class BrowserSession:
                 return foreign
         return None
 
-    async def _focus(self) -> tuple[Frame, ElementHandle | None]:
+    async def _focus(self) -> tuple[Frame, ElementHandle | None] | None:
         """Where a key would go, asking only documents on the run's allowed
         origins, from the page down: the frame, and its focused element when
-        that is no frame's element.
+        that is no frame's element; None when that can't be told.
 
         It descends into the allowed child frame whose document has the
         focus (`document.hasFocus()`). Where none has, the focus is in the
         frame itself, unless its focused element is a frame's: then in that
         frame, which isn't allowed, and so isn't asked. Chromium can leave a
         document's `activeElement` on a frame that lost the focus to a
-        sibling, so `activeElement` alone can't lead the way down."""
+        sibling, so `activeElement` alone can't lead the way down, and when
+        it names an allowed frame without the focus, the focus is somewhere
+        no allowed document says."""
         frame = self.page.main_frame
         while (child := await self._focused_child(frame)) is not None:
             frame = child
@@ -495,6 +514,8 @@ class BrowserSession:
         if child is None:
             return frame, element
         await element.dispose()
+        if await frame_origin(child) in self._policy.allowed_origins:
+            return None
         return child, None
 
     async def _focused_child(self, frame: Frame) -> Frame | None:
