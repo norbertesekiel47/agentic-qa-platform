@@ -259,6 +259,25 @@ Building the compiler's locator generation (#52) settled choices that "Locator g
   - One element costs at most 400 tries, each a resolution or a count. Tries that run out keep the locators already found.
   - A page whose scripts busy-loop can still stall one call. Only a bound on the whole explore run's time closes that (ADR-0024, `minutes`).
   - Resolution's `is_enabled` waits on an element moved into another document, as `get_attribute` did. That is the executor's path (#46), outside the generator.
+- **A target used at several points is split, never thinned.**
+  - *Options:*
+    1. keep one target, and drop the locators that miss at a later use;
+    2. a later use joins the current target only if every one of its locators holds there, and otherwise starts a target generated there;
+    3. as the second, but a use may join any earlier target of the meaning.
+  - *Chosen:* the second.
+    - The first keeps a target whole by weakening it: a locator that missed at one use would be gone at every use, and "Locator grammar" requires each one at every use.
+    - The third would save a target when a state flips back, but which target a use gets would depend on the whole history. The second compares a use with the target before it, and nothing else.
+  - *Holds* means two things. The locator is a kind the use allows: an assertion's target has no label or placeholder, and a text check's has no name. And, alone, it resolves for the use to the element used, or, at a negative check, finds its scope with nothing visible in it. So the favorite toggle splits: the click finds it by a name that favoriting changes, and the check after reloading reads its text.
+  - `TargetUses` holds one meaning and whether any of its checks reads text (`checks_text`, from the coverage plan's checks, #41), so every use gets the same rule. Its errors name the meaning, which `generate_for_action` and `generate_for_assertion` are never given.
+  - A class that flips with state now splits a target. A Bootstrap `btn-outline-primary` locator holds at the first click and misses at the second, so the second click starts a target (the known limit below).
+- **A negative check's target is generated where the element was seen.**
+  - The element is gone at the check, so the caller shows it to `TargetUses` while it is on screen (`see_for_negative_check`), and the target is made at the check (`add_negative_check`).
+  - It uses an assertion's kinds, and every locator is scoped, as the loader requires (above, "a negative check's target must be scoped").
+  - *Which scope:*
+    - *Options:* the nearest scope that is unique where the element was seen; a list of landmarks; or the nearest that is unique where it was seen and also holds at the check.
+    - *Chosen:* the third. On the pilot, `ul.nav` is the nearest unique ancestor of the header's links on the login page. The home page's feed tabs are a `ul.nav` too, so under the first option login's "no Sign in link" check had no scope. A list of landmarks would be per app.
+    - So each locator is kept under every scope that finds the element where it was seen, nearest first. At the check, each kind keeps the first whose scope is on the page with nothing visible in it: on the pilot, `ul.navbar-nav`.
+  - A check whose scope is gone, as on an error page, or whose element is still shown, gets no target, so compiling fails by name. So does a check of an element never seen.
 - **Known limits, for the callers (#53, #46):**
-  - A class that flips with state, such as Bootstrap's `btn-outline-primary` and `btn-primary`, can't be told from a stable one. A target used before and after such a flip is checked at both uses (#52's third pull request).
+  - A class that flips with state, such as Bootstrap's `btn-outline-primary` and `btn-primary`, can't be told from a stable one. A target used before and after such a flip is checked at both uses, so the flip splits it (above).
   - A page can copy a filled secret into a name, a test ID or a placeholder, and a locator built on it would carry the secret. Before a script is written, its caller must drop, never redact, any locator that reveals a secret value.
