@@ -428,6 +428,9 @@ CI_LOCKFILES = ci_lockfiles()
 
 def test_ci_audits_the_checks_image_lock() -> None:
     assert {"uv.lock", CHECKS_LOCK} <= set(CI_LOCKFILES)
+
+
+def test_every_lockfile_ci_audits_exists() -> None:
     assert all((REPO / lockfile).is_file() for lockfile in CI_LOCKFILES)
 
 
