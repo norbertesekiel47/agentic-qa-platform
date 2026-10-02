@@ -121,11 +121,28 @@ def compare_macos(browser: MacProcess, renderers: Sequence[MacProcess]) -> list[
     return problems
 
 
+@dataclass(frozen=True)
+class SandboxObservations:
+    """What the sandbox check read on this host: the browser process and each
+    renderer it compared with it. Its verdict comes from these same reads."""
+
+    browser: LinuxProcess | MacProcess
+    renderers: Sequence[LinuxProcess | MacProcess]
+
+
 class SandboxUnavailableError(RuntimeError):
     """Chromium can't run with its sandbox on this host: an infrastructure
-    error, never a run outcome (API.md §7, ADR-0026)."""
+    error, never a run outcome (API.md §7, ADR-0026). `observed` is what a
+    sandbox check that refused the browser read; `None` when the check read
+    nothing: the sandbox couldn't start, or the OS has no sandbox check."""
 
     exit_code = 10
+
+    def __init__(
+        self, message: str, *, observed: SandboxObservations | None = None
+    ) -> None:
+        super().__init__(message)
+        self.observed = observed
 
 
 # The environment variables a launch gives the browser, in Playwright's type.
@@ -143,6 +160,16 @@ async def launch(chromium: Chromium) -> Browser:
     it only once the sandbox check has proved the sandbox. Nothing skips the
     check: `launch` takes no option and reads no setting or environment
     variable (ADR-0026)."""
+    browser, _ = await launch_with_observations(chromium)
+    return browser
+
+
+async def launch_with_observations(
+    chromium: Chromium,
+) -> tuple[Browser, SandboxObservations]:
+    """`launch`, which also returns what the sandbox check observed. Like
+    `launch`, it takes no option and reads no setting or environment
+    variable."""
     try:
         # Playwright's default environment for the browser is the runner's
         # own, provider keys and cloud credentials included
@@ -160,13 +187,16 @@ async def launch(chromium: Chromium) -> Browser:
         ) from error
     async with AsyncExitStack() as on_failure:
         on_failure.push_async_callback(browser.close)
-        if problems := await check_sandbox(browser):
+        observed, problems = await _observe(browser)
+        # A check that read nothing has proved nothing.
+        if problems or observed is None:
             raise SandboxUnavailableError(
                 "Chromium started without a sandbox the sandbox check can prove: "
-                f"{'; '.join(problems)}. {HOST_FIXES.get(sys.platform, OTHER_FIX)}"
+                f"{'; '.join(problems)}. {HOST_FIXES.get(sys.platform, OTHER_FIX)}",
+                observed=observed,
             )
         on_failure.pop_all()
-    return browser
+    return browser, observed
 
 
 async def check_sandbox(browser: Browser) -> list[str]:
@@ -174,6 +204,12 @@ async def check_sandbox(browser: Browser) -> list[str]:
     they are. The browser must have been launched on this host, not connected
     to. A renderer exists only once a page does, so the check opens a blank
     page in a context of its own and closes it before returning."""
+    _, problems = await _observe(browser)
+    return problems
+
+
+async def _observe(browser: Browser) -> tuple[SandboxObservations | None, list[str]]:
+    """`check_sandbox`, which also returns what the check observed."""
     context = await browser.new_context()
     try:
         await context.new_page()
@@ -202,20 +238,23 @@ async def _process_ids(browser: Browser) -> tuple[int, list[int]]:
     return browser_pid, [pid for kind, pid in processes if kind == "renderer"]
 
 
-def check_processes(browser_pid: int, renderer_pids: list[int]) -> list[str]:
-    """Why the renderer processes can't be shown to be sandboxed, compared
-    with the browser process; empty when they are. The PIDs are this host's,
-    so the browser must have been launched here, not connected to. A process
-    that has exited stops the check with an `OSError`."""
+def check_processes(
+    browser_pid: int, renderer_pids: list[int]
+) -> tuple[SandboxObservations | None, list[str]]:
+    """What the check read of the browser and renderer processes, and why the
+    renderers can't be shown to be sandboxed, compared with the browser;
+    empty when they are. Each process is read once, and the reasons come from
+    exactly those reads. On an OS with no sandbox check nothing is read. The
+    PIDs are this host's, so the browser must have been launched here, not
+    connected to. A process that has exited stops the check with an
+    `OSError`."""
     if sys.platform == "linux":
-        return compare_linux(
-            _read_linux(browser_pid), [_read_linux(pid) for pid in renderer_pids]
-        )
+        linux = _read_linux(browser_pid), [_read_linux(pid) for pid in renderer_pids]
+        return SandboxObservations(*linux), compare_linux(*linux)
     if sys.platform == "darwin":
-        return compare_macos(
-            _read_macos(browser_pid), [_read_macos(pid) for pid in renderer_pids]
-        )
-    return [f"no sandbox check exists for {sys.platform}"]
+        macos = _read_macos(browser_pid), [_read_macos(pid) for pid in renderer_pids]
+        return SandboxObservations(*macos), compare_macos(*macos)
+    return None, [f"no sandbox check exists for {sys.platform}"]
 
 
 def _read_linux(pid: int) -> LinuxProcess:
