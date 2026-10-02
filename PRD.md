@@ -40,7 +40,7 @@ A multi-tenant SaaS, CLI, GitHub Action, and GitHub App that turns structured na
 
 ### 4.1 Specs
 - FR-1 Specs are Markdown files with YAML frontmatter under `qa/**/*.spec.md` (format in [DATA_MODEL §6](DATA_MODEL.md#6-spec-file-format)).
-- FR-2 Fields: `goal` (required), `preconditions` (test account refs, start URL as a path, optional `reset` hook that runs before every attempt, optional read-only probes), optional `steps` hints, `expect` (≥1; each may declare `visual: deterministic|model`), `invariants`, optional `allowed_origins`, and optional `browser` settings. A project config next to the specs declares model roles, browser defaults, subresource and expected-blocked hosts, and test-secret bindings (DATA_MODEL §9).
+- FR-2 Fields: `goal` (required), `preconditions` (test account refs, `start_url` as a path, optional `reset` hook that runs before every attempt, optional read-only probes), optional `steps` hints, `expect` (≥1; each may declare `visual: deterministic|model`), `invariants`, optional `allowed_origins`, and optional `browser` settings. A project config next to the specs declares model roles, browser defaults, subresource and expected-blocked hosts, and test-secret bindings (DATA_MODEL §9).
 - FR-3 Default invariants: no uncaught JS exceptions, no console errors, no HTTP 5xx, no broken images. Each can be disabled per spec.
 - FR-4 Test credentials are referenced by name (`secret: TEST_PASSWORD`), never inlined.
 
