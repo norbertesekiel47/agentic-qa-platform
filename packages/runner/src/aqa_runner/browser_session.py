@@ -43,11 +43,12 @@ SERVICE_WORKERS_REFUSED = """(() => {
     const refuse = () => Promise.reject(
         new DOMException("Service workers are blocked", "SecurityError")
     );
-    for (const target of [ServiceWorkerContainer.prototype, navigator.serviceWorker]) {
-        Object.defineProperty(target, "register", {
-            value: refuse, writable: false, configurable: false,
-        });
-    }
+    const lock = (target) => Object.defineProperty(target, "register", {
+        value: refuse, writable: false, configurable: false,
+    });
+    // The prototype first: reading navigator.serviceWorker can throw.
+    lock(ServiceWorkerContainer.prototype);
+    lock(navigator.serviceWorker);
 })();"""
 
 # One line of Playwright's AI snapshot: `- ` and a key, then `:` and a value or
