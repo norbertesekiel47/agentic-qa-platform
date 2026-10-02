@@ -151,7 +151,8 @@ class EgressPolicy:
 
     def may_be_private(self, host: str, port: int) -> bool:
         """Whether `host` and `port` may resolve to a loopback or private
-        address: the start origin's and the declared private origins'."""
+        address: the private origins' (`egress_policy` puts the run's start
+        origin first among them)."""
         return (host, port) in map(authority, self.private_origins)
 
 
