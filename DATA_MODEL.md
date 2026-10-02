@@ -175,7 +175,7 @@ Free-form notes for humans. The agent never reads the body; anything that affect
 
 **Parsing (M1).** Specs are read before a browser or a model is involved, and every problem is reported at once, each naming the file, the key and the problem. An invalid project config doesn't hide the specs' problems.
 - *YAML:* the file is UTF-8 (a byte order mark is skipped), and the frontmatter is YAML 1.2's core schema (ADR-0030). Aliases and tags that change a value's type are errors, `yes` and `no` are strings, and a date is a string.
-- *Paths:* a spec or the project config that is a directory is a spec error naming the path (`<path>: a directory, not a file`); a project load skips a directory named `*.spec.md`, which isn't a spec. Other read errors, such as a permission error, are infrastructure errors.
+- *Paths:* a spec or the project config that is a directory is a spec error naming the path (`<path>: a directory, not a file`). A project load skips a path named `*.spec.md` that isn't a file. Any other read error, such as a permission error, isn't a spec error: it propagates as the system's own error, for the caller to report as an infrastructure error (API.md §7).
 - *Keys:* unknown and duplicate keys are errors, and so is a value of another type, such as a quoted `"3"` for a number.
 - *Required:* `id`, `goal`, `preconditions.start_url` and at least one `expect` item. `invariants` defaults to `inherit: true`; `disable` names distinct invariants from the table above, and an `inherit: false` with `disable` is an error.
 - *`id`* must equal the file name without `.spec.md`. Spec IDs must be unique across the project, subdirectories of the spec root included; a duplicate is a spec error before anything is written.
