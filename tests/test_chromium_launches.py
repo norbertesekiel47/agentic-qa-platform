@@ -85,9 +85,17 @@ def test_packages_launch_chromium_only_through_the_sandbox_check() -> None:
 # The gate leaves the sandbox module alone, so nothing there may start Chromium
 # except launch's own call to Playwright, which the sandbox check follows.
 def test_launch_is_the_sandbox_modules_only_chromium_start() -> None:
-    starts = chromium_starts((REPO / SANDBOX).read_text())
+    module = ast.parse((REPO / SANDBOX).read_text())
+    [launch] = [
+        node
+        for node in module.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "launch"
+    ]
 
-    assert [ast.unparse(start) for start in starts] == ["chromium.launch"]
+    in_module = [ast.unparse(start) for start in chromium_starts(ast.unparse(module))]
+    in_launch = [ast.unparse(start) for start in chromium_starts(ast.unparse(launch))]
+
+    assert in_module == in_launch == ["chromium.launch"]
 
 
 # The files the gate leaves alone, each with a start it must still see there:
