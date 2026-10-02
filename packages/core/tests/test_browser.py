@@ -1,4 +1,4 @@
-"""Browser settings are validated before a browser starts (ADR-0025, #39)."""
+"""Browser settings are validated before a browser starts (ADR-0025, #39, #90)."""
 
 import sys
 import zoneinfo
@@ -13,23 +13,17 @@ from pydantic import ValidationError
 
 # A name the host lists and tzdata doesn't, as Ubuntu lists `localtime`.
 HOST_ONLY = "Host/Only"
-TIME_ZONE_PROBES = [
-    "UTC",
-    "Asia/Kolkata",
-    "Asia/Calcutta",  # an alias Ubuntu leaves out and macOS has
-    "America/Buenos_Aires",
-    "US/Pacific",
-    "utc",
-    "localtime",
-    HOST_ONLY,
-    "Mars/Phobos",
-]
-ACCEPTED_PROBES = {
-    "UTC",
-    "Asia/Kolkata",
-    "Asia/Calcutta",
-    "America/Buenos_Aires",
-    "US/Pacific",
+# Each probe, and whether the check accepts it: the answer on every host.
+TIME_ZONE_PROBES = {
+    "UTC": True,
+    "Asia/Kolkata": True,
+    "Asia/Calcutta": True,  # an alias Ubuntu leaves out and macOS has
+    "America/Buenos_Aires": True,
+    "US/Pacific": True,
+    "utc": False,
+    "localtime": False,
+    HOST_ONLY: False,
+    "Mars/Phobos": False,
 }
 
 
@@ -152,7 +146,7 @@ def test_the_answer_is_the_same_whatever_the_host_lists(
         file.parent.mkdir(exist_ok=True)
         file.write_bytes(b"TZif" + bytes(40))  # zoneinfo lists a file by this magic
 
-    assert {name for name in TIME_ZONE_PROBES if is_time_zone(name)} == ACCEPTED_PROBES
+    assert {name: is_time_zone(name) for name in TIME_ZONE_PROBES} == TIME_ZONE_PROBES
 
 
 def test_a_missing_tzdata_package_is_an_error_not_a_fallback_to_the_host(
@@ -166,6 +160,8 @@ def test_a_missing_tzdata_package_is_an_error_not_a_fallback_to_the_host(
 
 
 def test_every_name_in_the_tzdata_package_is_a_time_zone() -> None:
+    # The package's own file is the reference here. The probes above carry the
+    # literals, and the next two tests the cases where the source is wrong.
     names = (
         resources.files("tzdata")
         .joinpath("zones")
@@ -173,6 +169,6 @@ def test_every_name_in_the_tzdata_package_is_a_time_zone() -> None:
         .splitlines()
     )
 
-    # The issue measured 598 names; the floor only keeps the loop from passing empty.
+    # #90 measured 598 names; the floor only keeps the loop from passing empty.
     assert len(names) > 500
     assert [name for name in names if not is_time_zone(name)] == []
