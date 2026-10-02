@@ -352,3 +352,36 @@ The Decision's egress tests are "observed at the packet level" (Other transports
 - **macOS.** Nothing captures without root there (BPF devices are root's), so a scenario runs in the child as it is and `flows` is None. There the first control checks only that its scenario runs, the second that its session gathers WebRTC candidates, the leak the capture must see on Linux, and the third that the transfer completes; the parsing and the failure checks run everywhere. The hostile pages check destinations there (canaries, the origin, the gate's records), and packets only on Linux, in `sys.platform` branches with no skip markers. CI is the gate.
 - *Rejected:* `tcpdump` under `sudo` in CI, which needs root, a workflow change and a tool, and can't run on macOS; Playwright's Docker image with a capture inside, a pinned image and a seccomp profile to maintain, and slow; Chromium's NetLog, which is the browser's own account of its traffic, not packets.
 - *Residual:* packets name addresses and ports, not processes. They prove that nothing reached a disallowed host. They can't tell a browser that connected straight to an allowed origin from the egress proxy's own upstream connection to it: both are loopback to the origin's port, and the routes make a packet's source its destination. The hostile pages need a control of their own for that half of "bypasses the proxy", such as matching every connection the origin accepts to the proxy's.
+
+## Amendment (2026-10-02): document origins, actions and navigation (#44)
+
+The second change of #44 gives the browser session the surface that #46's executor and #53's tools act and observe through. It completes the amendment on document origins above, and supersedes its "until then nothing in the session acts".
+
+- **The surface,** agreed with #46. Each method is async, takes the session's lock, and checks before it does anything. A refusal records a policy event and raises `PolicyEventError`.
+  - `navigate(url)` and `reload()`.
+  - `click(element)`, `fill(element, value)`, `select(element, option)` and `press(key)`, which return None. #46 adds settling on top. An element comes from `locate(ref)` (the navigator's) or `resolve(target, use)` (the executor's), so both reach the same checks. `select` takes the option whose value or label is `option` (Playwright's `select_option` with a string).
+  - `resolve(target, use)`, which wraps `aqa_runner.locators.resolve` and keeps its overloads.
+  - `url()`, a method because it takes the lock and checks the page. `snapshot()` and `locate(ref)` stay the navigator's.
+- **`navigate(url)`**
+  - It refuses, before anything is requested, a URL that isn't an absolute http(s) URL on an allowed origin. This is a policy event of the new kind `navigation` (`aqa_runner.document_origins.navigable_origin`).
+  - It also refuses a URL with whitespace, a control character or a backslash anywhere. WHATWG URL parsing strips the first two and reads a backslash after an http(s) scheme as a slash, so the browser would read such a URL differently from Python's parser.
+  - It never requires the current page to be allowed, so it is the way back after a policy event.
+  - It checks the page it lands on, after any redirects, as every page is checked. A redirect to a subresource host passes the proxy and is refused here, as a `document` event.
+  - A network failure raises Playwright's `Error` as it is. The egress gate's records tell an egress block (a redirect to a disallowed host is refused at the hop) from an infrastructure failure.
+  - #46 joins a compiled path to the start origin first (the start URL amendment).
+- **`reload()`** checks the page, reloads, and checks the page it lands on.
+- **`resolve(target, use)`** checks the page before and after the lookup: every result, an absence included, is an observation, and the second check covers a page that navigated meanwhile. A failed second check always follows a navigation, which took the element's document with it, so there is nothing to dispose of.
+- **Actions** check the page and then the element's frame. An element in no frame is on none, so it is a `frame` event with an empty URL.
+  - They also refuse an element that contains, at any depth, a frame on no allowed origin, open shadow roots included. The event is of kind `frame` and names that frame.
+  - Why: Playwright's hit check accepts the target or any descendant, and every point over a frame hits the frame's element. So a click on the page's root, on a region around a subresource host's frame, or on an allowed frame with one nested inside lands in that frame. The tests show an unchecked click on such a region reaching the frame.
+  - An element with another origin's frame drawn over it, but not inside it, is refused by Playwright's own hit check.
+- **`press(key)`** checks the frame where the key would go, asking only documents on allowed origins.
+  - From the page down, it descends into the allowed child frame whose document has the focus (`document.hasFocus()`). Where none has, the key goes to the frame itself, unless that frame's focused element is a frame's element: then to that frame, which is on no allowed origin and is refused.
+  - *Why not `activeElement` alone:* Chromium can leave a document's `activeElement` on a frame that lost the focus to a sibling (LAB_NOTES, 2026-10-02). That reading wrongly refused typing into the app's own frame once a subresource host's frame had had the focus.
+  - *Rejected:* asking each frame, the subresource host's included, whether it has the focus. That frame's own scripts answer.
+- **Residual risk.**
+  - The containment and focus checks run in allowed documents' own scripts' world, as the reach check does. The app's own scripts control that world, and so does a subresource host's script it loads.
+  - A closed shadow root isn't searched. Only the app can make one in its own document.
+  - The app's own scripts could insert or navigate a frame between the check and the action.
+  - When Chromium leaves `activeElement` on a frame from another origin, `press` refuses keys meant for the frame itself. That fails closed.
+  - Playwright's default action timeout (30 s) holds the session's lock while it waits. #46 sets its own.

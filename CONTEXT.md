@@ -212,7 +212,7 @@ _Avoid_: network error
 A request the runner sends itself, not the browser: the reset hook's or a probe's. It goes to an allowed origin only, under the run's DNS pins and IP policy, carries no cookies and never follows a redirect.
 
 **Policy event**:
-A document from an origin the run doesn't allow, which the browser session found where it was about to observe or act, or in a popup: on a subresource host, on Chromium's error page after an egress block, or anywhere else. The session observes and acts on nothing there and records the event; only navigating back to an allowed origin, or restarting, moves on. A frame from another origin inside an allowed page is left out of observations without one.
+A document from an origin the run doesn't allow, which the browser session found where it was about to observe or act, or in a popup, or a URL off the allowed origins that `navigate` refused before anything was requested. A document can be on a subresource host, on Chromium's error page after an egress block, or anywhere else. The session observes and acts on nothing there and records the event; only navigating back to an allowed origin, or restarting, moves on. A frame from another origin inside an allowed page is left out of observations without one.
 _Avoid_: egress block (that is a request the proxy refused)
 
 **Test secret**:
