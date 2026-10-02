@@ -14,7 +14,6 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, override
-from urllib.parse import quote
 
 import pytest
 from aqa_core.browser import BrowserSettings
@@ -297,8 +296,9 @@ def test_session_launches_through_the_sandbox_check(
 
 
 # The fixture site the tests below browse: a page, a resource the HTTP cache
-# may keep for an hour, and an attachment.
-PAGES = {
+# may keep for an hour, and an attachment. The ref tests' documents, further
+# down, are its pages too.
+PAGES: dict[str, tuple[str, bytes, dict[str, str]]] = {
     "/": (
         "text/html",
         b'<!doctype html><title>Fixture</title><a href="/file.bin">Download</a>',
@@ -328,10 +328,11 @@ def site() -> Iterator[Site]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             hits[self.path] += 1
-            if self.path not in PAGES:
+            pages = PAGES | DOCUMENTS
+            if self.path not in pages:
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
-            content_type, body, headers = PAGES[self.path]
+            content_type, body, headers = pages[self.path]
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
@@ -449,15 +450,15 @@ def ref_for(snapshot: str, role: str, name: str) -> str:
     return found[1]
 
 
-def test_refs_act_on_their_elements() -> None:
+def test_refs_act_on_their_elements(site: Site) -> None:
     async def scenario() -> tuple[str | None, str, str]:
         async with (
             async_playwright() as playwright,
-            egress_proxy() as egress,
+            egress_proxy(site.origin) as egress,
             open_browser_session(playwright.chromium, egress=egress) as session,
         ):
             page = session.page
-            await page.set_content(REFS_PAGE)
+            await page.goto(f"{site.origin}/refs")
             # On a first snapshot the session's numbers match Playwright's.
             await session.snapshot()
             snapshot = await session.snapshot()
@@ -479,30 +480,25 @@ def test_refs_act_on_their_elements() -> None:
     assert (name, email) == ("", "a@x.test")
 
 
-def page_url(html: str) -> str:
-    """A URL whose document is `html`: navigating to it starts a new document."""
-    return "data:text/html," + quote(html)
-
-
 # Playwright gives these two pages' buttons the same ref of its own when one
-# replaces the other from about:blank (LAB_NOTES, 2026-10-01).
+# replaces the other in a frame (LAB_NOTES, 2026-10-01).
 BEFORE = '<p id="log"></p><button onclick="log.textContent += \'keep;\'">Keep</button>'
 AFTER = (
     '<p id="log"></p><button onclick="log.textContent += \'publish;\'">Publish</button>'
 )
 
 
-def test_ref_from_an_older_snapshot_is_refused() -> None:
+def test_ref_from_an_older_snapshot_is_refused(site: Site) -> None:
     async def scenario() -> tuple[list[str], RefError, RefError, str | None]:
         async with (
             async_playwright() as playwright,
-            egress_proxy() as egress,
+            egress_proxy(site.origin) as egress,
             open_browser_session(playwright.chromium, egress=egress) as session,
         ):
-            page = session.page
-            await page.set_content(BEFORE)
+            await session.page.goto(f"{site.origin}/holder")
+            [frame] = session.page.main_frame.child_frames
             keep = ref_for(await session.snapshot(), "button", "Keep")
-            await page.goto(page_url(AFTER))
+            await frame.goto(f"{site.origin}/after")
             publish = ref_for(await session.snapshot(), "button", "Publish")
             with pytest.raises(RefError) as after_navigating:
                 await session.locate(keep)
@@ -516,7 +512,7 @@ def test_ref_from_an_older_snapshot_is_refused() -> None:
                 [keep, publish],
                 after_navigating.value,
                 after_resnapshotting.value,
-                await page.locator("#log").text_content(),
+                await frame.locator("#log").text_content(),
             )
 
     stale, after_navigating, after_resnapshotting, log = asyncio.run(scenario())
@@ -542,14 +538,14 @@ NEVER_GIVEN = [
 ]
 
 
-def test_ref_never_given_is_refused() -> None:
+def test_ref_never_given_is_refused(site: Site) -> None:
     async def scenario() -> list[str]:
         async with (
             async_playwright() as playwright,
-            egress_proxy() as egress,
+            egress_proxy(site.origin) as egress,
             open_browser_session(playwright.chromium, egress=egress) as session,
         ):
-            await session.page.set_content(REFS_PAGE)
+            await session.page.goto(f"{site.origin}/refs")
             for _ in range(3):  # past e10, so the session has given it
                 await session.snapshot()
             messages = []
@@ -564,14 +560,14 @@ def test_ref_never_given_is_refused() -> None:
         assert "isn't a ref in the current snapshot" in message, message
 
 
-def test_unfinished_snapshot_retires_the_earlier_refs() -> None:
+def test_unfinished_snapshot_retires_the_earlier_refs(site: Site) -> None:
     async def scenario() -> list[str]:
         async with (
             async_playwright() as playwright,
-            egress_proxy() as egress,
+            egress_proxy(site.origin) as egress,
             open_browser_session(playwright.chromium, egress=egress) as session,
         ):
-            await session.page.set_content(REFS_PAGE)
+            await session.page.goto(f"{site.origin}/refs")
             snapshot = await session.snapshot()
             last = max(
                 int(number) for number in re.findall(r"\[ref=e(\d+)\]", snapshot)
@@ -601,14 +597,14 @@ def test_unfinished_snapshot_retires_the_earlier_refs() -> None:
     assert "isn't a ref in the current snapshot" in next_one, next_one
 
 
-def test_ref_whose_element_has_left_the_page_is_refused() -> None:
+def test_ref_whose_element_has_left_the_page_is_refused(site: Site) -> None:
     async def scenario() -> RefError:
         async with (
             async_playwright() as playwright,
-            egress_proxy() as egress,
+            egress_proxy(site.origin) as egress,
             open_browser_session(playwright.chromium, egress=egress) as session,
         ):
-            await session.page.set_content(REFS_PAGE)
+            await session.page.goto(f"{site.origin}/refs")
             save = ref_for(await session.snapshot(), "button", "Save")
             await session.page.locator("button", has_text="Save").evaluate(
                 "(button) => button.remove()"
@@ -620,26 +616,26 @@ def test_ref_whose_element_has_left_the_page_is_refused() -> None:
     assert "has left the page" in str(asyncio.run(scenario()))
 
 
-def test_ref_into_a_document_or_frame_that_has_gone_is_refused() -> None:
+def test_ref_into_a_document_or_frame_that_has_gone_is_refused(site: Site) -> None:
     async def scenario() -> list[RefError]:
         async with (
             async_playwright() as playwright,
-            egress_proxy() as egress,
+            egress_proxy(site.origin) as egress,
             open_browser_session(playwright.chromium, egress=egress) as session,
         ):
             page = session.page
             refused = []
             # Leaving a page that isn't about:blank gives the main frame a new
             # number in Playwright, so a current ref names a frame that is gone.
-            await page.goto(page_url("<p>Start</p>"))
-            await page.goto(page_url(BEFORE))
+            await page.goto(f"{site.origin}/start")
+            await page.goto(f"{site.origin}/before")
             keep = ref_for(await session.snapshot(), "button", "Keep")
-            await page.goto(page_url(AFTER))
+            await page.goto(f"{site.origin}/after")
             with pytest.raises(RefError) as left:
                 await session.locate(keep)
             refused.append(left.value)
 
-            await page.set_content(REFS_PAGE)
+            await page.goto(f"{site.origin}/refs")
             inner = ref_for(await session.snapshot(), "button", "Inner")
             await page.locator("iframe").evaluate("(frame) => frame.remove()")
             with pytest.raises(RefError) as removed:
@@ -651,14 +647,14 @@ def test_ref_into_a_document_or_frame_that_has_gone_is_refused() -> None:
         assert "has left the page" in str(error), str(error)
 
 
-def test_ref_on_a_closed_page_is_not_blamed_on_the_ref() -> None:
+def test_ref_on_a_closed_page_is_not_blamed_on_the_ref(site: Site) -> None:
     async def scenario() -> Error:
         async with (
             async_playwright() as playwright,
-            egress_proxy() as egress,
+            egress_proxy(site.origin) as egress,
             open_browser_session(playwright.chromium, egress=egress) as session,
         ):
-            await session.page.set_content(REFS_PAGE)
+            await session.page.goto(f"{site.origin}/refs")
             save = ref_for(await session.snapshot(), "button", "Save")
             await session.page.close()
             # Playwright's own error, not a RefError, which isn't one.
@@ -669,19 +665,19 @@ def test_ref_on_a_closed_page_is_not_blamed_on_the_ref() -> None:
     assert "closed" in str(asyncio.run(scenario()))
 
 
-def test_located_element_never_becomes_another() -> None:
+def test_located_element_never_becomes_another(site: Site) -> None:
     async def scenario() -> str | None:
         async with (
             async_playwright() as playwright,
-            egress_proxy() as egress,
+            egress_proxy(site.origin) as egress,
             open_browser_session(playwright.chromium, egress=egress) as session,
         ):
             page = session.page
-            await page.set_content(BEFORE)
+            await page.goto(f"{site.origin}/before")
             keep = await session.locate(
                 ref_for(await session.snapshot(), "button", "Keep")
             )
-            await page.goto(page_url(AFTER))
+            await page.goto(f"{site.origin}/after")
             await session.snapshot()
             with pytest.raises(Error):
                 await keep.click(timeout=2000)
@@ -713,15 +709,33 @@ IMITATIONS = [
     "button /a (ref=e2]/ [ref=",
 ]
 
+# The ref tests' documents: pages of the fixture site, on the session's start
+# origin, where the session observes them (ADR-0026). A frame shows BEFORE
+# on /holder.
+DOCUMENTS: dict[str, tuple[str, bytes, dict[str, str]]] = {
+    path: ("text/html", html.encode(), {})
+    for path, html in {
+        "/refs": REFS_PAGE,
+        "/start": "<p>Start</p>",
+        "/before": BEFORE,
+        "/after": AFTER,
+        "/holder": '<iframe src="/before"></iframe>',
+        "/minting": MINTING_PAGE,
+    }.items()
+}
 
-def test_page_text_cannot_mint_a_ref() -> None:
+# Replaces the page's content with the HTML it is given, in place.
+SHOW = "(html) => { document.body.innerHTML = html; }"
+
+
+def test_page_text_cannot_mint_a_ref(site: Site) -> None:
     async def scenario() -> tuple[str, list[str], int]:
         async with (
             async_playwright() as playwright,
-            egress_proxy() as egress,
+            egress_proxy(site.origin) as egress,
             open_browser_session(playwright.chromium, egress=egress) as session,
         ):
-            await session.page.set_content(MINTING_PAGE)
+            await session.page.goto(f"{site.origin}/minting")
             snapshot = await session.snapshot()
             refs = re.findall(r"\[ref=([^\]]*)\]", snapshot)
             # Each ref left is an element's own: locating it doesn't raise.
@@ -748,7 +762,7 @@ def test_renumbering_takes_linear_time_in_page_text() -> None:
 
 
 def test_snapshot_taken_during_another_never_lets_the_older_win(
-    monkeypatch: pytest.MonkeyPatch,
+    site: Site, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     taken_by_playwright = Page.aria_snapshot
 
@@ -770,13 +784,15 @@ def test_snapshot_taken_during_another_never_lets_the_older_win(
         monkeypatch.setattr(Page, "aria_snapshot", first_held)
         async with (
             async_playwright() as playwright,
-            egress_proxy() as egress,
+            egress_proxy(site.origin) as egress,
             open_browser_session(playwright.chromium, egress=egress) as session,
         ):
-            await session.page.set_content(BEFORE)
+            await session.page.goto(f"{site.origin}/before")
             first = asyncio.create_task(session.snapshot())
             await taken.wait()
-            await session.page.goto(page_url(AFTER))
+            # The page changes in place: a navigation during a snapshot
+            # discards it (test_document_origins.py).
+            await session.page.evaluate(SHOW, AFTER)
             second = asyncio.create_task(session.snapshot())
             await asyncio.wait([second], timeout=2)  # unserialized, it ends here
             release.set()
@@ -790,7 +806,7 @@ def test_snapshot_taken_during_another_never_lets_the_older_win(
 
 
 def test_ref_located_during_a_snapshot_resolves_against_its_own(
-    monkeypatch: pytest.MonkeyPatch,
+    site: Site, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     query = Page.query_selector
 
@@ -808,15 +824,15 @@ def test_ref_located_during_a_snapshot_resolves_against_its_own(
 
         async with (
             async_playwright() as playwright,
-            egress_proxy() as egress,
+            egress_proxy(site.origin) as egress,
             open_browser_session(playwright.chromium, egress=egress) as session,
         ):
-            await session.page.set_content(BEFORE)
+            await session.page.goto(f"{site.origin}/before")
             keep = ref_for(await session.snapshot(), "button", "Keep")
             monkeypatch.setattr(Page, "query_selector", held)
             locating = asyncio.create_task(session.locate(keep))
             await querying.wait()
-            await session.page.goto(page_url(AFTER))
+            await session.page.goto(f"{site.origin}/after")
             snapshot = asyncio.create_task(session.snapshot())
             await asyncio.wait([snapshot], timeout=2)  # unserialized, it ends here
             release.set()
