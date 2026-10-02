@@ -249,6 +249,8 @@ class _JsonObject(dict[str, object]):
 
     @classmethod
     def of(cls, members: list[tuple[str, object]]) -> Self:
+        """`json.loads`'s `object_pairs_hook`: the object from its members,
+        as the text wrote them."""
         found = cls(members)
         seen: set[str] = set()
         repeated: dict[str, None] = {}
@@ -267,10 +269,11 @@ type _Place = tuple[_Place, int | str] | None
 # The most objects and arrays the walk below reads nested in one another:
 # more than any compiled script needs, and than pydantic reads (about 200), so
 # a deeper file is refused before walking it costs more.
-DEEPEST_JSON = 256
+_DEEPEST_JSON = 256
 
 
 def _spelled(place: _Place) -> tuple[int | str, ...]:
+    """The keys and indexes that lead from the top to `place`."""
     keys: list[int | str] = []
     while place is not None:
         place, key = place
@@ -282,7 +285,7 @@ def _repeated_keys(text: str, path: Path) -> list[tuple[int | str, ...]]:
     """Where `text`, which must be JSON, writes a key more than once, in the
     order the text does. A reader keeps the last value, so a repeat could hide
     a lowered `side_effect` (ADR-0025's 2026-10-02 amendment)."""
-    too_deep = SpecError([f"{path}: nested more than {DEEPEST_JSON} levels deep"])
+    too_deep = SpecError([f"{path}: nested more than {_DEEPEST_JSON} levels deep"])
     try:
         parsed = json.loads(text, object_pairs_hook=_JsonObject.of)
     except json.JSONDecodeError as error:
@@ -310,7 +313,7 @@ def _repeated_keys(text: str, path: Path) -> list[tuple[int | str, ...]]:
             children = list(enumerate(value))
         else:
             continue
-        if depth == DEEPEST_JSON:  # the top value is level 1
+        if depth == _DEEPEST_JSON:  # the top value is level 1
             raise too_deep
         stack.extend(
             (child, depth + 1, (place, key)) for key, child in reversed(children)

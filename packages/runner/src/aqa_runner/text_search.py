@@ -31,8 +31,10 @@ if kind == "text":
     found = has_text(haystack, needle)
 elif kind == "pattern":
     found = has_pattern(haystack, needle)
-else:
+elif kind == "url":
     found = re.search(needle, haystack) is not None
+else:
+    sys.exit(f"no search of kind {kind!r}")
 sys.stdout.write("1" if found else "0")
 """
 
@@ -63,7 +65,7 @@ async def _search(kind: _Kind, needle: str, haystack: str) -> bool:
     )
     try:
         async with asyncio.timeout(SEARCH_SECONDS):
-            found, problem = await child.communicate(payload)
+            stdout, stderr = await child.communicate(payload)
     except TimeoutError:
         raise SearchTimeoutError(
             f"the search didn't finish within {SEARCH_SECONDS} s"
@@ -76,10 +78,10 @@ async def _search(kind: _Kind, needle: str, haystack: str) -> bool:
             with contextlib.suppress(ProcessLookupError):
                 child.kill()
             await child.wait()
-    if child.returncode != 0 or found not in (b"0", b"1"):
-        last = problem.decode(errors="replace").strip().rsplit("\n", 1)[-1]
+    if child.returncode != 0 or stdout not in (b"0", b"1"):
+        last = stderr.decode(errors="replace").strip().rsplit("\n", 1)[-1]
         raise RuntimeError(f"the search process failed ({child.returncode}): {last}")
-    return found == b"1"
+    return stdout == b"1"
 
 
 async def text_matches(check: TextVisible | TextInTarget, rendered: str) -> bool:
