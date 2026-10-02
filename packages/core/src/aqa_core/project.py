@@ -119,7 +119,7 @@ def load_spec(path: Path, config: ProjectConfig) -> Spec:
     test secrets it references. Its secret references must name secrets
     `config` declares, and its id must be its file name without `.spec.md`."""
     frontmatter, hashed = _read_spec(path, frozenset(config.secrets))
-    return _spec(path, frontmatter, hashed, config)
+    return _spec_with_bindings(path, frontmatter, hashed, config)
 
 
 def _read_spec(
@@ -140,7 +140,7 @@ def _read_spec(
     return _validate(SpecFrontmatter, data, path, context), spec_hash(data)
 
 
-def _spec(
+def _spec_with_bindings(
     path: Path, frontmatter: SpecFrontmatter, hashed: str, config: ProjectConfig
 ) -> Spec:
     """The spec, with the bindings in `config` of the secrets `frontmatter`
@@ -173,14 +173,14 @@ def load_project(spec_root: Path) -> Project:
         problems.extend(error.problems)
     # Unknown when the config is invalid, so references aren't checked then.
     declared = None if config is None else frozenset(config.secrets)
-    read: dict[str, tuple[Path, SpecFrontmatter, str]] = {}
+    read_specs: dict[str, tuple[Path, SpecFrontmatter, str]] = {}
     for path in sorted(p for p in spec_root.rglob("*.spec.md") if p.is_file()):
         try:
             frontmatter, hashed = _read_spec(path, declared)
         except SpecError as error:
             problems.extend(error.problems)
             continue
-        first, _, _ = read.setdefault(frontmatter.id, (path, frontmatter, hashed))
+        first, _, _ = read_specs.setdefault(frontmatter.id, (path, frontmatter, hashed))
         if first != path:
             problems.append(
                 f"{path}: id: '{frontmatter.id}' is already the id of {first}: "
@@ -189,7 +189,7 @@ def load_project(spec_root: Path) -> Project:
     if config is None or problems:
         raise SpecError(problems)
     # Built only now: an invalid config has no bindings to give them.
-    specs = {spec_id: _spec(*entry, config) for spec_id, entry in read.items()}
+    specs = {i: _spec_with_bindings(*entry, config) for i, entry in read_specs.items()}
     return Project(spec_root, config, specs)
 
 

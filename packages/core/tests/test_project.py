@@ -1,6 +1,6 @@
 """A project: its config and specs loaded together, and the values a run
 derives from them before its browser starts (DATA_MODEL §6, §7, §9;
-ADR-0025; ADR-0026; #39)."""
+ADR-0025; ADR-0026; #39; #88)."""
 
 import dataclasses
 import json
@@ -51,11 +51,22 @@ expect:
 """
 
 BOUND = "secrets: { TEST_PASSWORD: { origins: [start], field: password } }\n"
+# BOUND's binding, as a spec that references TEST_PASSWORD carries it.
+PASSWORD_AT_START = SecretBinding(origins=("start",), field="password")
 
 
 def write_spec(path: Path, extra: str = "") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(SPEC.format(id=path.name.removesuffix(".spec.md"), extra=extra))
+    return path
+
+
+def write_spec_without_secrets(path: Path) -> Path:
+    """A spec like write_spec's, whose account has an email and no secret."""
+    write_spec(path)
+    path.write_text(
+        path.read_text().replace(", password: { secret: TEST_PASSWORD }", "")
+    )
     return path
 
 
@@ -443,8 +454,6 @@ def test_only_the_secrets_the_spec_references_get_destinations(tmp_path: Path) -
 
 # Secret bindings on the loaded spec (#88).
 
-PASSWORD_AT_START = SecretBinding(origins=("start",), field="password")
-
 
 def test_a_loaded_spec_carries_the_bindings_of_exactly_the_secrets_it_references(
     tmp_path: Path,
@@ -461,10 +470,7 @@ def test_a_loaded_spec_carries_the_bindings_of_exactly_the_secrets_it_references
 
 def test_a_spec_that_references_no_secret_carries_no_bindings(tmp_path: Path) -> None:
     root = write_project(tmp_path / "qa", BOUND)
-    path = write_spec(root / "login.spec.md")
-    path.write_text(
-        path.read_text().replace(", password: { secret: TEST_PASSWORD }", "")
-    )
+    path = write_spec_without_secrets(root / "login.spec.md")
 
     spec = load_spec(path, load_config(root / "config.yaml"))
 
@@ -530,18 +536,14 @@ def test_a_spec_cannot_hold_bindings_other_than_those_of_its_references(
     root = write_project(tmp_path / "qa", BOUND)
     config = load_config(root / "config.yaml")
     login = load_spec(write_spec(root / "login.spec.md"), config)
-    browse = write_spec(root / "browse.spec.md")
-    browse.write_text(
-        browse.read_text().replace(", password: { secret: TEST_PASSWORD }", "")
-    )
-
+    browse = load_spec(write_spec_without_secrets(root / "browse.spec.md"), config)
     problem = (
         f"{root / f'{name}.spec.md'}: bindings for secrets {bound} but references to "
         f"{referenced}: a spec carries the bindings of exactly the secrets it references"
     )
 
     with pytest.raises(ValueError, match=f"^{re.escape(problem)}$"):
-        build(login, load_spec(browse, config))
+        build(login, browse)
 
 
 def test_a_spec_keeps_its_own_copy_of_its_bindings(tmp_path: Path) -> None:

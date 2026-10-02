@@ -222,7 +222,7 @@ The egress proxy lands in three changes. First the egress gate (`aqa_runner.egre
   - *Our own asyncio proxy, framed with h11.* *Rejected:* mitmproxy, which intercepts TLS, as we never do; proxy.py, which resolves names itself, so nothing could pin them; and a sidecar binary.
   - *Runner-side requests* go to allowed origins only, through the gate's `connect`, with no cookie jar, and never follow a redirect.
 
-## Amendment (2026-10-02): secret bindings on the loaded spec (#88)
+## Amendment (2026-10-01): secret bindings on the loaded spec (#88)
 
 `aqa_core.project.secret_destinations` took a spec and a project config, and looked up each secret the spec references in that config. That was right only for the config the spec was loaded with: handed another, it raised a raw `KeyError` instead of a `SpecError` (#39's final review).
 
