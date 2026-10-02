@@ -10,8 +10,8 @@
 # The label approves the head it was applied to: on a new push (synchronize)
 # the job ignores it, so approval-class findings fail again until the
 # maintainer removes and re-adds the label. Adding or removing a label starts a
-# new run, because re-running a job keeps the original event's data. This
-# workflow is separate from ci.yml so that a label change re-runs only this job.
+# run of its own, which reads the labels as they are then. This workflow is
+# separate from ci.yml so that a label change runs only this job.
 #
 # Runner, supply-chain and token notes: ci.yml's header (ADR-0019, ADR-0029).
 
