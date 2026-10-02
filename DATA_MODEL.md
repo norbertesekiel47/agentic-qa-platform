@@ -262,6 +262,12 @@ Free-form notes for humans. The agent never reads the body; anything that affect
   - *Kinds:* `role` + `name` (the name normalized, then matched exactly), `label`, `placeholder`, `testid`, and `css`. A `css` locator uses a stable id, or stable classes, attributes and custom-element tags: never positional, never generated class names.
   - *Scope:* any locator may carry a `scope` (another locator), and it must be unique inside it.
   - *Order:* action targets list `role` + `name` first.
+  - *Generation* (`aqa_runner.locator_generation`, ADR-0025's "generating locators"): from the element a use put the target to, with the role and name its ref's line in the snapshot gives. An action target gets one locator of each kind that finds it, in the order role and name, label, placeholder, test ID, stable id (`#id`), structure.
+    - *Names:* only a control's name locates it (button, link, textbox, checkbox, radio, switch, tab, combobox, searchbox, spinbutton, slider, option, menu items, tree items). A container's name is its text.
+    - *Stable:* an id, class, tag or attribute value is one plain CSS identifier (a letter, then letters, digits, `-` or `_`), not generated (`css-`, `sc-`, `jsx-`, `emotion-`, `svelte-` or `ng-` first, or a part of five or more characters mixing letters and digits) and not a state class such as `active`. Attributes are `name` and `type` only.
+    - *Structure:* the element's custom-element tag, a stable attribute, a stable class, or its tag, alone or under its nearest custom-element ancestor (`app-favorite-button button.btn`).
+    - *Scope:* when a locator isn't unique on the page, the nearest ancestor that makes it unique, by its stable id, custom-element tag or tag and one stable class, never `html` or `body`. One level.
+    - *Kept:* a locator only if, alone, it resolves for the use to the element used, on the live page. With none, generating fails by name.
   - *Assertion targets are never located by what their claim says.*
   - *Validation:* every locator must resolve to the element the agent used, at every use, both at compile time and on the confirmation replay. A target that can't do that at every use is split into separate targets.
 - **Resolution per use.** Locators are tried in order, and what counts as a match depends on the use:
