@@ -93,7 +93,8 @@ ignore = [
 # T20: scripts whose interface is stdout. In package code T20 stays on, because
 # a print bypasses structlog's redaction. S104, S105: the secret detector names
 # what it looks for, a local host list and the guidance texts for secrets.
-".claude/hooks/policy_guard.py" = ["T20", "S104", "S105"]
+".claude/hooks/policy_guard.py" = ["T20"]
+".claude/hooks/policy_rules.py" = ["S104", "S105"]
 "bench/harness/**" = ["T20"]
 # `password_arg` names a Docker build argument, and fetch() reads the local
 # benchmark app over plain http.
