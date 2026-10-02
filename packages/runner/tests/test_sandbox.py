@@ -433,3 +433,24 @@ def test_launch_refusal_carries_what_the_check_observed() -> None:
     # Without its sandbox, a renderer is observed just as the browser is.
     for renderer in observed.renderers:
         assert replace(renderer, pid=observed.browser.pid) == observed.browser
+
+
+# Where the sandbox can't start, no browser runs, so the check reads nothing.
+def test_a_sandbox_that_cannot_start_observes_nothing() -> None:
+    with pytest.raises(SandboxUnavailableError) as refused:
+        asyncio.run(launch(FailingChromium(NO_USABLE_SANDBOX)))
+
+    assert refused.value.observed is None
+
+
+def test_an_os_with_no_sandbox_check_observes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    try:
+        observed, problems = check_processes(os.getpid(), [os.getpid()])
+    finally:
+        monkeypatch.undo()
+
+    assert observed is None
+    assert problems == ["no sandbox check exists for win32"]
