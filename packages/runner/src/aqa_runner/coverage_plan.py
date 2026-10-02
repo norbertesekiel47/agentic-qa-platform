@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 
 from aqa_core.coverage_plan import CoveragePlan, misfits
-from aqa_core.spec import Spec
+from aqa_core.spec import UNHASHED_KEYS, Spec
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from aqa_runner.model_router import ModelRouter, Routed
@@ -79,13 +79,14 @@ reloading the order page". Leave it empty when there are none.
 
 def plan_request(spec: Spec) -> list[BaseMessage]:
     """The plan's request: the instructions, then the spec's frontmatter as
-    validated, without `tags`, as JSON. That is what `spec_hash` covers, so
+    validated, without `tags` (`UNHASHED_KEYS`), as JSON. That is what
+    `spec_hash` covers, so
     the request changes exactly when a compiled script would go stale. Only
     what the spec sets is written, so a field the spec format gains later
     leaves existing requests, and their cassettes, as they were. The path,
     the Markdown body, the start origin and the environment never enter it."""
     frontmatter = spec.frontmatter.model_dump(
-        mode="json", exclude_unset=True, exclude={"tags"}
+        mode="json", exclude_unset=True, exclude=set(UNHASHED_KEYS)
     )
     return [
         SystemMessage(content=INSTRUCTIONS),

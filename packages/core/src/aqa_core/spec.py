@@ -5,7 +5,7 @@ import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Literal, Self, TypedDict, cast
+from typing import Annotated, Final, Literal, Self, TypedDict, cast
 
 from pydantic import (
     Field,
@@ -224,9 +224,14 @@ def canonical_hash(value: object) -> str:
     return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 
+# The frontmatter keys spec_hash leaves out, because they never change what a
+# run does (DATA_MODEL §7). The coverage plan's request leaves out the same.
+UNHASHED_KEYS: Final = frozenset({"tags"})
+
+
 def spec_hash(frontmatter: Mapping[str, object]) -> str:
-    """The canonical hash of the frontmatter as parsed, without `tags`. The
-    body never counts (DATA_MODEL §7)."""
+    """The canonical hash of the frontmatter as parsed, without
+    `UNHASHED_KEYS`. The body never counts (DATA_MODEL §7)."""
     return canonical_hash(
-        {key: value for key, value in frontmatter.items() if key != "tags"}
+        {key: value for key, value in frontmatter.items() if key not in UNHASHED_KEYS}
     )
