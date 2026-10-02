@@ -150,7 +150,7 @@ Connections live ≤ 2 hours (API Gateway limit); clients reconnect with `since_
 
 ```
 aqa init                          # scaffold qa/config.yaml + example spec
-aqa explore <spec> --url <url>    # coverage plan → exploration → confirmation replay → qa/.compiled/<spec id>.json (ADR-0024)
+aqa explore <spec> [--url <url>]  # coverage plan → exploration → confirmation replay → qa/.compiled/<spec id>.json (ADR-0024)
             [--plan-only]         #   write the coverage plan to the run record and stop (no browser); required until #53
             [--force]             #   overwrite an up-to-date compiled script
             [--confirm-repeat]    #   allow one confirmation that repeats side effects when the spec has no reset hook

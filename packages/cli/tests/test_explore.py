@@ -20,6 +20,7 @@ from aqa_cli.main import app
 from aqa_core.coverage_plan import CoveragePlan, plan_hash
 from aqa_core.model_costs import Usage
 from aqa_runner.chat_client import Reply
+from aqa_runner.model_router import ModelCallError
 from langchain_core.messages import AIMessage
 from langsmith.utils import tracing_is_enabled
 from playwright._impl._browser_type import BrowserType
@@ -529,6 +530,29 @@ def test_a_fallback_that_gives_no_response_exits_11_and_keeps_the_refusal(
     assert result.exit_code == 11, result.output
     record = record_of(tmp_path / "qa")
     assert [call["status"] for call in record["calls"]] == ["refusal"]
+
+
+def test_a_fallback_that_fails_otherwise_is_not_called_no_response(
+    tmp_path: Path, run: Run
+) -> None:
+    # Only a provider's failure is "no response" (exit 11); anything else is a
+    # fault of ours, raised as it is, with the billed refusal still recorded.
+    config = CONFIG + "roles: { navigator: { fallback: claude-opus-5-5 } }\n"
+    spec = project(tmp_path / "qa", config=config)
+
+    result, _ = run(
+        [str(spec), "--plan-only"],
+        **{
+            SONNET: FakeClient(reply(refused=True)),
+            "claude-opus-5-5": FakeClient(ValueError("a fault of ours")),
+        },
+    )
+
+    assert isinstance(result.exception, ModelCallError)
+    assert result.exit_code not in {0, 3, 5, 11}
+    assert [call["status"] for call in record_of(tmp_path / "qa")["calls"]] == [
+        "refusal"
+    ]
 
 
 def test_explore_switches_ambient_tracing_off_before_its_model_call(

@@ -9,10 +9,10 @@ writes the plan into the run record, with every response's cost record."""
 import asyncio
 import os
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated, Final, Literal, NoReturn
 
 import anthropic
 import typer
@@ -29,11 +29,14 @@ from aqa_runner.coverage_plan import Planned, make_plan
 from aqa_runner.model_router import ModelCallError, ModelRouter
 from aqa_runner.run_record import RunRecord
 
-# Exit codes (API.md §7).
-PLANNED = 0
-GAVE_UP = 3
-SPEC_ERROR = 5
-NO_RESPONSE = 11
+# How a plan-only run ends (ADR-0024's outcomes), and its exit code (API.md §7).
+Outcome = Literal["planned", "gave_up", "spec_error", "no_response"]
+EXIT_CODES: Final[Mapping[Outcome, int]] = {
+    "planned": 0,
+    "gave_up": 3,
+    "spec_error": 5,
+    "no_response": 11,
+}
 
 # Characters that would move the cursor, recolour the terminal or reorder text
 # when printed: C0 and C1 controls, line and paragraph separators, and bidi
@@ -46,12 +49,15 @@ def _visible(text: str) -> str:
     return _INVISIBLE.sub(lambda char: char[0].encode("unicode_escape").decode(), text)
 
 
-def _stop(code: int, headline: str, reasons: Sequence[str] = ()) -> NoReturn:
-    """Print `headline` and each reason to stderr, and exit with `code`."""
-    typer.echo(_visible(headline), err=True)
+def _stop(
+    outcome: Outcome, subject: str, why: str, reasons: Sequence[str] = ()
+) -> NoReturn:
+    """Print the outcome, what it concerns, why, and each reason to stderr,
+    and exit with the outcome's code."""
+    typer.echo(_visible(f"{outcome} {subject}: {why}"), err=True)
     for reason in reasons:
         typer.echo(f"  {_visible(reason)}", err=True)
-    raise typer.Exit(code)
+    raise typer.Exit(EXIT_CODES[outcome])
 
 
 def _spec_root(path: Path) -> Path:
@@ -90,7 +96,7 @@ def _resolve(path: Path, url: str | None) -> tuple[Path, Spec, ModelRouter]:
 def _write_record(
     root: Path,
     spec: Spec,
-    outcome: str,
+    outcome: Outcome,
     calls: Sequence[CostRecord],
     plan: CoveragePlan | None = None,
 ) -> Path:
@@ -114,9 +120,9 @@ def _write_record(
     return record.path
 
 
-def _judge(planned: Planned, spec: Spec) -> tuple[str, int, str, tuple[str, ...]]:
-    """The outcome of a plan call that got a response: its name, its exit
-    code, a headline and the reasons."""
+def _judge(planned: Planned, spec: Spec) -> tuple[Outcome, str, tuple[str, ...]]:
+    """The outcome of a plan call that got a response, why, and the
+    reasons."""
     if planned.plan is None:
         if planned.routed.outcome == "refusal":
             why = "the model refused to write the plan"
@@ -126,26 +132,18 @@ def _judge(planned: Planned, spec: Spec) -> tuple[str, int, str, tuple[str, ...]
             why = f"the model's plan was cut off at the {MAX_OUTPUT_TOKENS}-token bound"
         else:
             why = "the model's plan didn't parse as a coverage plan"
-        return "gave_up", GAVE_UP, why, ()
+        return "gave_up", why, ()
     if planned.misfits:
-        return (
-            "gave_up",
-            GAVE_UP,
-            "the model's plan doesn't fit the spec",
-            planned.misfits,
-        )
+        return "gave_up", "the model's plan doesn't fit the spec", planned.misfits
     if lines := uncovered(planned.plan, spec.frontmatter):
-        return (
-            "spec_error",
-            SPEC_ERROR,
-            "an expectation has no establishing check",
-            lines,
-        )
-    return "planned", PLANNED, "", ()
+        return "spec_error", "an expectation has no establishing check", lines
+    return "planned", "", ()
 
 
 def explore(
-    spec: Annotated[Path, typer.Argument(help="The spec file to explore.")],
+    spec_path: Annotated[
+        Path, typer.Argument(metavar="SPEC", help="The spec file to explore.")
+    ],
     url: Annotated[
         str | None,
         typer.Option(
@@ -165,32 +163,29 @@ def explore(
             "required until exploring is built (#53)", param_hint="'--plan-only'"
         )
     try:
-        root, found, router = _resolve(spec, url)
+        root, spec, router = _resolve(spec_path, url)
     except SpecError as error:
-        _stop(SPEC_ERROR, "spec_error: nothing was planned", error.problems)
-    spec_id = found.frontmatter.id
+        _stop("spec_error", str(spec_path), "nothing was planned", error.problems)
+    spec_id = spec.frontmatter.id
     try:
-        planned = asyncio.run(make_plan(router, found))
+        planned = asyncio.run(make_plan(router, spec))
     except ModelCallError as error:
         # The refusal before the failed fallback was billed: keep its record.
-        path = _write_record(root, found, "no_response", error.records)
-        _stop(
-            NO_RESPONSE,
-            f"no_response {spec_id}: the fallback model gave no response: {error.__cause__}",
-            (f"run record: {path}",),
-        )
+        path = _write_record(root, spec, "no_response", error.records)
+        if not isinstance(error.__cause__, anthropic.APIError):
+            raise  # not the provider's failure, so not "no response"
+        why = f"the fallback model gave no response: {error.__cause__}"
+        _stop("no_response", spec_id, why, (f"run record: {path}",))
     except anthropic.APIError as error:
-        # langchain-anthropic's errors are the SDK's, subclassed; nothing was
+        # langchain-anthropic raises the SDK's errors, subclassed. Nothing was
         # billed, so there is nothing to record.
-        _stop(
-            NO_RESPONSE, f"no_response {spec_id}: the model gave no response: {error}"
-        )
-    outcome, code, why, reasons = _judge(planned, found)
-    path = _write_record(root, found, outcome, planned.routed.calls, planned.plan)
+        _stop("no_response", spec_id, f"the model gave no response: {error}")
+    outcome, why, reasons = _judge(planned, spec)
+    path = _write_record(root, spec, outcome, planned.routed.calls, planned.plan)
     plan = planned.plan
-    # A plan always comes with PLANNED; the second test only tells mypy so.
-    if code != PLANNED or plan is None:
-        _stop(code, f"{outcome} {spec_id}: {why}", (*reasons, f"run record: {path}"))
+    # A plan always comes with "planned"; the second test only tells mypy so.
+    if outcome != "planned" or plan is None:
+        _stop(outcome, spec_id, why, (*reasons, f"run record: {path}"))
     cost = sum((call.cost_usd for call in planned.routed.calls), Decimal(0))
     typer.echo(
         f"planned {spec_id}: plan {plan_hash(plan)}, "

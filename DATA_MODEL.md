@@ -1,6 +1,6 @@
 # Data Model — Agentic QA Platform
 
-Last updated: 2026-10-02 (`ws://` to a subresource host on port 443, corrected, #43; the coverage plan's format and hash, #41; loading a compiled script and bounding its text searches, #46; model roles and cost records, #40; M1 design decisions, ADR-0024–0026). PostgreSQL 16+ on RDS. Internal IDs are UUIDv7 (time-ordered). External identifiers (Clerk org/user IDs, GitHub IDs) are stored as their native strings/integers and mapped to internal IDs. All timestamps `timestamptz` UTC.
+Last updated: 2026-10-02 (the coverage plan's format and hash, and local run records under the spec root, #41; `ws://` to a subresource host on port 443, corrected, #43; loading a compiled script and bounding its text searches, #46; model roles and cost records, #40; M1 design decisions, ADR-0024–0026). PostgreSQL 16+ on RDS. Internal IDs are UUIDv7 (time-ordered). External identifiers (Clerk org/user IDs, GitHub IDs) are stored as their native strings/integers and mapped to internal IDs. All timestamps `timestamptz` UTC.
 
 ## 1. Entity overview
 
@@ -393,7 +393,7 @@ Unknown keys and duplicate keys are errors. **Split freeze:** `bench/manifest.v1
 
 ## 9. Project config
 
-`qa/config.yaml` is committed next to the specs. The directory that holds it is the **spec root**: compiled scripts live in its `.compiled/` (§7). The file must exist, but every key is optional, so an empty file is valid. It is read as specs are (§6, ADR-0030): unknown and duplicate keys are errors, and every problem is reported at once.
+`qa/config.yaml` is committed next to the specs. The directory that holds it is the **spec root**: compiled scripts live in its `.compiled/` (§7), and local run records in its `.aqa/runs/`, which git ignores (ARCHITECTURE §3.3). The file must exist, but every key is optional, so an empty file is valid. It is read as specs are (§6, ADR-0030): unknown and duplicate keys are errors, and every problem is reported at once.
 
 ```yaml
 base_url: "http://127.0.0.1:4100"   # the start origin when `aqa explore --url` is omitted; `--url` wins
