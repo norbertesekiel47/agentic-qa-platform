@@ -278,7 +278,7 @@ def test_allowed_origins_are_the_start_origin_then_the_specs(tmp_path: Path) -> 
     )
 
 
-# The start URL (ADR-0026's 2026-10-01 amendment).
+# The start URL (ADR-0026's start URL amendment).
 
 
 def spec_starting_at(tmp_path: Path, path: str) -> Spec:
@@ -296,20 +296,20 @@ def spec_starting_at(tmp_path: Path, path: str) -> Spec:
     [
         ("/", "http://127.0.0.1:4100/"),
         ("/login", "http://127.0.0.1:4100/login"),
-        # Decoded first, these would be //evil.test, another origin.
+        # Never percent-decoded, in the path or the query, in either case.
         ("/%2f%2fevil.test", "http://127.0.0.1:4100/%2f%2fevil.test"),
         ("/%2F%2fevil.test", "http://127.0.0.1:4100/%2F%2fevil.test"),
         (
             "/login?next=%2F%2Fevil.test",
             "http://127.0.0.1:4100/login?next=%2F%2Fevil.test",
         ),
-        # A %2e inside a segment is not a dot segment; %25 is not decoded either.
-        ("/a%2eb", "http://127.0.0.1:4100/a%2eb"),
+        ("/a%2eb", "http://127.0.0.1:4100/a%2eb"),  # %2e inside a segment
         ("/%41%25", "http://127.0.0.1:4100/%41%25"),
+        # Never resolved.
         ("/..;/x", "http://127.0.0.1:4100/..;/x"),
         ("/login?next=//evil.test", "http://127.0.0.1:4100/login?next=//evil.test"),
         ("/login#//evil.test", "http://127.0.0.1:4100/login#//evil.test"),
-        # An empty query or fragment is kept, as written.
+        # An empty query or fragment is kept.
         ("/login?", "http://127.0.0.1:4100/login?"),
         ("/login#", "http://127.0.0.1:4100/login#"),
     ],
