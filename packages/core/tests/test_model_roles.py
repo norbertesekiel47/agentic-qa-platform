@@ -78,8 +78,8 @@ def lacks(key: str, name: str, what: str, role: str) -> str:
 def foreign(key: str, name: str, actual: str, wanted: str = "anthropic") -> str:
     """The problem for a map model that belongs to another provider."""
     return (
-        f"{key}: '{name}' belongs to provider '{actual}' in the pinned price map, "
-        f"not '{wanted}'"
+        f"{key}: '{name}' is listed under provider '{actual}' in the pinned price "
+        f"map, not '{wanted}'"
     )
 
 
@@ -552,7 +552,7 @@ def test_a_declared_model_carries_the_pinned_maps_version(tmp_path: Path) -> Non
     assert resolved.model.price_map_version == vendored().version
 
 
-def test_a_map_model_that_names_no_provider_is_trusted_to_suit_the_role() -> None:
+def test_a_map_model_that_names_no_provider_is_rejected() -> None:
     nameless = ModelInfo(
         capabilities=frozenset(CAPABILITIES),
         input_usd_per_mtok=Decimal(1),
@@ -561,6 +561,12 @@ def test_a_map_model_that_names_no_provider_is_trusted_to_suit_the_role() -> Non
         source="map",
     )
     price_map = small_map(extra={"nameless": nameless})
-    config = ProjectConfig.model_validate({"roles": {"healer": {"model": "nameless"}}})
 
-    assert resolve_roles(config, price_map)["healer"].model.name == "nameless"
+    problems = role_problems("roles: { healer: { model: nameless } }", price_map)
+
+    assert problems == {
+        "roles.healer.model": (
+            "'nameless' is listed under no provider in the pinned price map, "
+            "not 'anthropic'"
+        )
+    }

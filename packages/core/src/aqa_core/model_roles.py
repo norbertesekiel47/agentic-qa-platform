@@ -99,10 +99,11 @@ def _routed_or_problem(
             f"({price_map.version[:7]}): declare it under models with its "
             "capabilities and prices"
         )
-    elif info.provider is not None and info.provider != provider:
+    elif info.provider != provider:
+        owner = f"provider '{info.provider}'" if info.provider else "no provider"
         return (
-            f"'{name}' belongs to provider '{info.provider}' in the pinned price "
-            f"map, not '{provider}'"
+            f"'{name}' is listed under {owner} in the pinned price map, not "
+            f"'{provider}'"
         )
     elif info.tiered:
         return (

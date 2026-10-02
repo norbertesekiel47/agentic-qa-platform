@@ -463,8 +463,10 @@ def test_a_provider_that_is_not_text_is_rejected_by_name(
         # A cache lifetime, not a token threshold.
         ("cache_creation_input_token_cost_above_1hr", False),
         ("input_cost_per_token_batches", False),
-        # Not a token threshold.
-        ("input_cost_per_token_above_1hr", False),
+        # Any price key that says "above" is a tier, so a new spelling fails closed.
+        ("input_cost_per_token_above_272k_tokens_priority", True),
+        ("output_cost_per_token_above_1m_tokens", True),
+        ("input_cost_per_token_above_1hr", True),
     ],
 )
 def test_a_model_with_token_threshold_prices_is_marked_tiered(

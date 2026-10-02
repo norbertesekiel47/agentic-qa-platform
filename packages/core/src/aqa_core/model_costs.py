@@ -1,6 +1,6 @@
 """A model call's cost record (DATA_MODEL §2, `llm_calls`)."""
 
-from decimal import Context, Decimal, Inexact, localcontext
+from decimal import MAX_PREC, Context, Decimal, localcontext
 from typing import Annotated, Literal, Self
 
 from pydantic import Field, model_validator
@@ -12,9 +12,9 @@ from aqa_core.schema import StrictModel
 
 _Count = Annotated[int, Field(ge=0)]
 _Money = Annotated[Decimal, Field(ge=0)]
-# Cost is exact: 100 digits hold any real call's tokens times its rates, and a
-# call that would need more raises rather than rounds.
-_EXACT = Context(prec=100, traps=[Inexact])
+# Cost is exact: the widest precision the decimal module has holds any token
+# count times any rate a config can declare (a float, so under 700 digits wide).
+_EXACT = Context(prec=MAX_PREC)
 
 Mode = Literal["explore", "heal", "verified"]
 Status = Literal["ok", "refusal", "invalid"]
