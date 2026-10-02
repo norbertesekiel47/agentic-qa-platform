@@ -14,13 +14,14 @@ from aqa_runner import browser_session
 from aqa_runner.browser_session import held_keys
 from aqa_runner.document_origins import (
     REFUSED_BY_KIND,
+    DocumentChangedError,
     PolicyEvent,
     PolicyEventError,
     PolicyEventKind,
     navigable_origin,
 )
 from aqa_runner.egress import Refusal
-from aqa_runner.locators import Resolved, Use, resolve
+from aqa_runner.locators import Absent, Resolved, Unresolved, Use, resolve
 from playwright.async_api import Error, Page
 
 from packages.runner.tests.document_fixtures import (
@@ -623,3 +624,121 @@ def test_press_refuses_a_key_held_down_that_isnt_a_modifier(
             return await session.page.get_by_label("Name").input_value()
 
     assert asyncio.run(scenario()) == "old"
+
+
+def test_press_refuses_when_another_origins_frame_took_the_focus_back(
+    sites: Sites,
+) -> None:
+    async def scenario() -> tuple[PolicyEventError, str]:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/stale")
+            [card] = [
+                f for f in session.page.frames if f.url == f"{sites.cdn}/stealing"
+            ]
+            inner = await session.locate(
+                ref_for(await session.snapshot(), "textbox", "Inner")
+            )
+            await session.click(inner)
+            await card.wait_for_function("document.hasFocus()")
+            with pytest.raises(PolicyEventError) as refused:
+                await session.press("a")
+            return refused.value, await card.locator("#card").input_value()
+
+    refused, typed = asyncio.run(scenario())
+
+    assert refused.event == PolicyEvent("frame", f"{sites.cdn}/stealing", sites.cdn)
+    assert typed == ""
+
+
+def test_press_refuses_when_the_page_names_a_frame_that_lacks_the_focus(
+    sites: Sites,
+) -> None:
+    async def scenario() -> tuple[PolicyEventError, str]:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/stale")
+            [card] = [
+                f for f in session.page.frames if f.url == f"{sites.cdn}/stealing"
+            ]
+            await card.wait_for_function("document.hasFocus()")
+            # A fault, as Chromium's stale activeElement: the page names its
+            # own frame as focused while another origin's frame has the focus.
+            await session.page.evaluate(
+                """() => Object.defineProperty(document, "activeElement", {
+                    get: () => document.querySelector("iframe"),
+                })"""
+            )
+            with pytest.raises(PolicyEventError) as refused:
+                await session.press("a")
+            return refused.value, await card.locator("#card").input_value()
+
+    refused, typed = asyncio.run(scenario())
+
+    assert refused.event == PolicyEvent("frame", f"{sites.cdn}/stealing", sites.cdn)
+    assert typed == ""
+
+
+def test_press_goes_ahead_when_no_frame_is_off_the_allowed_origins(
+    sites: Sites,
+) -> None:
+    async def scenario() -> str:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/own")
+            top = await session.locate(
+                ref_for(await session.snapshot(), "textbox", "Top")
+            )
+            await session.click(top)
+            # The same fault, on a page with no other origin's frame.
+            await session.page.evaluate(
+                """() => Object.defineProperty(document, "activeElement", {
+                    get: () => document.querySelector("iframe"),
+                })"""
+            )
+            await session.press("a")
+            return await session.page.get_by_label("Top").input_value()
+
+    assert asyncio.run(scenario()) == "a"
+
+
+def test_resolve_discards_what_it_saw_when_the_page_changed_meanwhile(
+    sites: Sites, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gone = Target(
+        semantic="a button no page here has", locators=(ByRole(role="checkbox"),)
+    )
+    other = Target(semantic="the other button", locators=(ByRole(role="button"),))
+
+    async def scenario() -> None:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/kept")
+            seen: list[Resolved | Absent | Unresolved] = []
+
+            # The lookup runs on the subresource host's page, which then goes
+            # back to the start origin before the second check.
+            async def away_and_back(page: Page, target: Target, use: Use) -> Any:
+                await page.goto(f"{sites.cdn}/doc")
+                found = await resolve(page, target, use)
+                await page.goto(f"{sites.app}/kept")
+                return found
+
+            monkeypatch.setattr(browser_session, "resolve_target", away_and_back)
+            with pytest.raises(DocumentChangedError):
+                await session.resolve(gone, "negative_check")
+
+            # A same-document change: the element found is still there, and
+            # the session lets it go.
+            async def then_pushes(page: Page, target: Target, use: Use) -> Any:
+                found = await resolve(page, target, use)
+                seen.append(found)
+                await page.evaluate("history.pushState(null, '', '/kept#moved')")
+                return found
+
+            monkeypatch.setattr(browser_session, "resolve_target", then_pushes)
+            with pytest.raises(DocumentChangedError):
+                await session.resolve(other, "action")
+            [found] = seen
+            assert isinstance(found, Resolved)
+            # Still in its document, but disposed of: it can't be used.
+            with pytest.raises(Error):
+                await found.element.inner_text()
+
+    asyncio.run(scenario())
