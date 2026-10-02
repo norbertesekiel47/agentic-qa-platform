@@ -6,7 +6,9 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
+from functools import cache
 from pathlib import Path
+from types import MappingProxyType
 from typing import Annotated, Final, Literal
 
 from pydantic import Field, ValidationError
@@ -37,12 +39,26 @@ class Pin(StrictModel):
     sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
 
+Capability = Literal["tools", "structured_output", "vision"]
+
+
+@dataclass(frozen=True)
+class ModelInfo:
+    """What a model can do and what it costs, in US dollars per million tokens."""
+
+    capabilities: frozenset[Capability]
+    input_usd_per_mtok: Decimal
+    output_usd_per_mtok: Decimal
+    cached_input_usd_per_mtok: Decimal
+    source: Literal["map", "config"]
+
+
 @dataclass(frozen=True)
 class PriceMap:
     """The map, as pinned: `version` is the upstream commit it was copied from."""
 
     version: str
-    models: Mapping[str, Mapping[str, object]]
+    models: Mapping[str, ModelInfo]
 
 
 def _read(path: Path) -> bytes:
@@ -57,24 +73,91 @@ def _problem(detail: ErrorDetails) -> str:
     return f"{key}: {detail['msg']}" if key else detail["msg"]
 
 
-def parse_models(data: bytes, source: str) -> dict[str, dict[str, object]]:
-    """The models in `data`, a price map read from `source`: a JSON object of
-    objects, without its `sample_spec` entry. Prices are exact decimals."""
+_PRICES = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "cache_read_input_token_cost",
+)
+_FLAGS: Mapping[str, Capability] = {
+    "supports_function_calling": "tools",
+    "supports_response_schema": "structured_output",
+    "supports_vision": "vision",
+}
+
+
+def _rate(
+    source: str, name: str, entry: Mapping[str, object], field: str
+) -> Decimal | None:
+    """`entry`'s `field`, a price per token, as dollars per million tokens; None
+    if the entry has no such field. LiteLLM writes a price as a float such as
+    2e-06 (or 0), read here as an exact decimal."""
+    if field not in entry:
+        return None
+    value = entry[field]
+    number = (
+        Decimal(value)
+        if isinstance(value, int | Decimal) and not isinstance(value, bool)
+        else None
+    )
+    if number is None or not number.is_finite() or number < 0:
+        raise PriceMapError(
+            f"{source}: '{name}': {field} must be a finite number, 0 or more"
+        )
+    # Exact, and written out ("0", never "0E+6").
+    return Decimal(format(number.scaleb(6), "f"))
+
+
+def _capabilities(
+    source: str, name: str, entry: Mapping[str, object]
+) -> frozenset[Capability]:
+    capabilities: set[Capability] = set()
+    for flag, capability in _FLAGS.items():
+        if flag not in entry:
+            continue
+        if not isinstance(entry[flag], bool):
+            raise PriceMapError(f"{source}: '{name}': {flag} must be true or false")
+        if entry[flag]:
+            capabilities.add(capability)
+    return frozenset(capabilities)
+
+
+def _model(source: str, name: str, entry: Mapping[str, object]) -> ModelInfo | None:
+    """The model `entry` describes, or None if it has no token prices: an
+    image, audio or embedding model is not one we can charge per token."""
+    capabilities = _capabilities(source, name, entry)
+    input_rate, output_rate, cache_rate = (
+        _rate(source, name, entry, field) for field in _PRICES
+    )
+    if input_rate is None or output_rate is None:
+        return None
+    return ModelInfo(
+        capabilities,
+        input_rate,
+        output_rate,
+        input_rate if cache_rate is None else cache_rate,
+        "map",
+    )
+
+
+def parse_models(data: bytes, source: str) -> dict[str, ModelInfo]:
+    """The priced models in `data`, a price map read from `source`: a JSON
+    object of objects, without its `sample_spec` entry. A price or capability
+    flag that is not what LiteLLM documents is an error, never skipped."""
     try:
-        # LiteLLM writes prices as floats such as 2e-06.
         entries = json.loads(data, parse_float=Decimal)
     except ValueError as error:
         raise PriceMapError(f"{source} is not JSON: {error}") from None
     if not isinstance(entries, dict):
         raise PriceMapError(f"{source} is not a JSON object")
-    models: dict[str, dict[str, object]] = {}
+    models: dict[str, ModelInfo] = {}
     for name, entry in entries.items():
         # sample_spec documents the file's keys; it is not a model.
         if name == "sample_spec":
             continue
         if not isinstance(entry, dict):
             raise PriceMapError(f"{source}: '{name}' is not an object")
-        models[name] = entry
+        if (model := _model(source, name, entry)) is not None:
+            models[name] = model
     return models
 
 
@@ -97,4 +180,11 @@ def load_price_map(directory: Path = VENDORED) -> PriceMap:
             "the pinned commit again, and the same command with a newer ref, or "
             "none for upstream's main, pins another"
         )
-    return PriceMap(version=pin.commit, models=parse_models(data, str(map_path)))
+    models = parse_models(data, str(map_path))
+    return PriceMap(version=pin.commit, models=MappingProxyType(models))
+
+
+@cache
+def vendored() -> PriceMap:
+    """The vendored map, loaded and checked once."""
+    return load_price_map()
