@@ -73,6 +73,11 @@ def _problem(detail: ErrorDetails) -> str:
     return f"{key}: {detail['msg']}" if key else detail["msg"]
 
 
+def plain(number: Decimal) -> Decimal:
+    """`number` written without an exponent or trailing zeros: 2, 0.11, 1000."""
+    return Decimal(format(number.normalize(), "f"))
+
+
 _PRICES = (
     "input_cost_per_token",
     "output_cost_per_token",
@@ -103,8 +108,7 @@ def _rate(
         raise PriceMapError(
             f"{source}: '{name}': {field} must be a finite number, 0 or more"
         )
-    # Exact, and written out ("0", never "0E+6").
-    return Decimal(format(number.scaleb(6), "f"))
+    return plain(number.scaleb(6))
 
 
 def _capabilities(
