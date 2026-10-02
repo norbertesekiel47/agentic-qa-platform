@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from pydantic import AfterValidator, Field, PlainValidator, StrictInt, StrictStr
 
 from aqa_core.browser import BrowserOverrides
+from aqa_core.price_map import Capability
 from aqa_core.schema import (
     AtLeastOne,
     DistinctListOf,
@@ -22,13 +23,17 @@ _PositiveCount = Annotated[StrictInt, Field(gt=0)]
 _Price = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
 
+# The levels ChatAnthropic accepts for a model's effort.
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
+
+
 class ModelRole(StrictModel):
     """Overrides for one model role's defaults (TECH_STACK §3). Only their
     shape is checked here."""
 
     provider: NonEmpty | None = None
     model: NonEmpty | None = None
-    effort: NonEmpty | None = None
+    effort: Effort | None = None
     fallback: NonEmpty | None = None
 
 
@@ -39,9 +44,7 @@ class ModelOverride(StrictModel):
     """A model missing from the pinned price map: what it can do and what it
     costs (ADR-0007 amendment)."""
 
-    capabilities: Annotated[
-        DistinctListOf[Literal["tools", "structured_output", "vision"]], AtLeastOne
-    ]
+    capabilities: Annotated[DistinctListOf[Capability], AtLeastOne]
     input_usd_per_mtok: _Price
     output_usd_per_mtok: _Price
 

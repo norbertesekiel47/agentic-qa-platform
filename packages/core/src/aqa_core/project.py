@@ -13,6 +13,8 @@ from pydantic import BaseModel, ValidationError
 from aqa_core import strict_yaml
 from aqa_core.browser import BrowserSettings
 from aqa_core.config import ProjectConfig, RoleField
+from aqa_core.model_roles import RoleError, resolve_roles
+from aqa_core.price_map import vendored
 from aqa_core.schema import parse_origin
 from aqa_core.spec import (
     Spec,
@@ -107,7 +109,14 @@ def load_config(path: Path) -> ProjectConfig:
         data = {}
     if not isinstance(data, dict):
         raise SpecError([f"{path}: the project config must be a mapping of keys"])
-    return _validate(ProjectConfig, data, path)
+    config = _validate(ProjectConfig, data, path)
+    try:
+        resolve_roles(config, vendored())
+    except RoleError as error:
+        raise SpecError(
+            [f"{path}: {key}: {problem}" for key, problem in error.problems]
+        ) from None
+    return config
 
 
 # A spec file opens with its frontmatter, between two lines of three dashes.
