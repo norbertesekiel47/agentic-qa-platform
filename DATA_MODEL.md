@@ -321,11 +321,11 @@ A compiled script is read as strictly as a spec (§6): an unknown field is an er
 
   A `text` is written normalized, as a `name` is. A `pattern` must compile as a Python regex.
 - **Also enforced:** `coverage.expectations` and `assertions` are not empty, and neither is an expectation's `assertions`. An expectation's `assertions` and a step's `satisfies` name each ID once. `compiled_by.mode` is `explore`, and `compiled_by.models` is keyed by model role (navigator, verifier, healer, vision_fallback).
-- **Checked by the loader, not the format** (`aqa_core.project.load_compiled`, #46). Every problem is reported at once, each naming the file and the key, as a spec error (exit 5, API.md §7):
+- **Checked by the loader, not the format** (`aqa_core.project.load_compiled`, #46). Every problem is reported at once, each naming the file and the key, as a spec error (exit 5, API.md §7). A file that can't be read, a missing one included, isn't a spec error: as for a spec (§6), the read error propagates for the caller to handle.
   - that the JSON repeats no key, wherever it is: a reader keeps a key's last value, so a repeat could hide a lowered `side_effect`. Objects and arrays nest at most 256 deep;
   - that every name a part of the script uses exists, and is unique where it is defined: targets, assertion IDs, the expectations `expect_index` names, conditions, probes and step numbers (`capture_before_seq` names a step's `seq`);
   - that each secret a `fill_secret` step names is declared in the project config (§9);
-  - that every locator of a `not_visible` check's target has a `scope`. Unscoped, the target is absent from any page without a match, such as a wrong page or an app's 404, so the check would pass whatever the page (#52).
+  - that every locator of a `not_visible` check's target has a `scope`. Unscoped, the target is absent from any page without a match, such as a wrong page or an app's 404, so the check would pass whatever the page (#52). A scope every page has, such as `html` or `body`, protects nothing either, so the generator picks one particular to the page; the loader can't tell the two apart.
 
 ### Replay outcomes
 - **Binding unresolved:** no locator gives the match its use needs (see *Resolution per use*) within the wait budget → drift → heal path.
