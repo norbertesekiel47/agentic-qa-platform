@@ -79,6 +79,17 @@ def test_a_runner_request_to_an_allowed_origin_gets_its_response() -> None:
     assert egress.refusals == []
 
 
+def test_a_runner_request_reads_a_body_that_arrives_in_parts() -> None:
+    with serving() as origin:
+        egress, _ = app_run(origin.port)
+        # 1 MB, the second half a moment after the first.
+        url = f"http://{APP}:{origin.port}/slow"
+
+        response = asyncio.run(runner_request(egress, "GET", url))
+
+    assert response.body == b"x" * 2**20
+
+
 @pytest.mark.parametrize(
     ("method", "framing"), [("GET", set()), ("POST", {b"content-length"})]
 )
@@ -318,7 +329,7 @@ def test_a_runner_request_that_fails_upstream_is_an_infrastructure_error(
     assert egress.refusals == []
 
 
-def test_a_runner_request_its_caller_times_out_lets_the_upstream_go() -> None:
+def test_a_runner_request_closes_its_connection_when_its_caller_times_out() -> None:
     # A runner-side request has no deadline of its own: its caller sets one.
     async def scenario() -> None:
         async with raw_upstream() as silent:
@@ -339,12 +350,15 @@ def test_a_runner_request_its_caller_times_out_lets_the_upstream_go() -> None:
         f"ftp://{APP}/reset",
         f"http://user@{APP}/reset",
         f"http://{APP}:99999/reset",
+        # Targets no request line can carry.
+        f"http://{APP}/a b",
+        f"http://{APP}/caf\u00e9",
     ],
 )
 def test_a_runner_request_needs_an_absolute_http_url(url: str) -> None:
     egress, resolver = app_run(80)
 
-    with pytest.raises(ValueError, match="not an origin"):
+    with pytest.raises(ValueError, match=r"not an origin|not a request target"):
         asyncio.run(runner_request(egress, "POST", url))
 
     assert resolver.lookups == Counter()
