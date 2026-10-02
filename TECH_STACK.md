@@ -132,4 +132,4 @@ The 2026-09-29 rule excludes Lambda functions, though. If Lambda MicroVMs win, c
 - Lockfiles committed (`uv.lock`, `pnpm-lock.yaml`); Dependabot/Renovate weekly.
 - Majors are upgraded in dedicated PRs with the full test + benchmark smoke gate.
 - OpenTelemetry GenAI semantic conventions are still marked *Development*; pin the convention version and note it in traces.
-- The vendored price map is refreshed only by its script, in a reviewed pull request that records the new upstream commit and sha256. Cost records cite the version they used.
+- The vendored price map is refreshed only by its script, in a reviewed pull request that records the new upstream commit and sha256. Cost records cite the version they used. The script is `uv run python -m aqa_core.price_map_refresh [ref]` (default `main`): it needs network access, rewrites `packages/core/src/aqa_core/price_map_data/`, and loading the map afterwards checks the new pair (ADR-0007 amendment, 2026-10-01).

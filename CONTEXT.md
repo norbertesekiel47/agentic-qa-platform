@@ -208,6 +208,10 @@ _Avoid_: API key (that is the project credential for the CLI outside GitHub Acti
 **Model role**:
 The job a model does in a run: navigator, verifier, healer or vision fallback. Each role declares the capabilities its model must have.
 
+**Price map**:
+The vendored copy of LiteLLM's model price and capability file, pinned to an upstream commit and its sha256. It is checked whenever it loads and refreshed only by its script, in a reviewed pull request.
+_Avoid_: the `litellm` package, which we never install
+
 ### Benchmark
 
 **Case**:
