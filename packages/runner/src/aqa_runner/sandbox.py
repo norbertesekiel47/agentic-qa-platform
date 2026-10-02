@@ -150,6 +150,33 @@ class SandboxUnavailableError(RuntimeError):
 # The environment variables a launch gives the browser, in Playwright's type.
 type Environment = dict[str, str | float | bool]
 
+# The Chromium features every launch turns off. Chromium honours only the last
+# --disable-features switch, and Playwright passes its own first, so this
+# repeats Playwright 1.63's list (chromiumSwitches.ts), then adds ours.
+# `test_transports.py` fails when Playwright's list changes.
+DISABLED_FEATURES = (
+    "AvoidUnnecessaryBeforeUnloadCheckSync",
+    "DestroyProfileOnBrowserClose",
+    "DialMediaRouteProvider",
+    "GlobalMediaControls",
+    "HttpsUpgrades",
+    "LensOverlay",
+    "MediaRouter",
+    "PaintHolding",
+    "ThirdPartyStoragePartitioning",
+    "BlockOriginHeaderModificationOnRedirect",
+    "Translate",
+    "AutoDeElevate",
+    "OptimizationHints",
+    "msForceBrowserSignIn",
+    "msEdgeUpdateLaunchServicesPreferredVersion",
+    # WebRTC's mDNS responder, which a page starts by making a peer
+    # connection: it binds UDP 5353 and joins the mDNS group on every
+    # interface, sending a join past any proxy, even when WebRTC sends no UDP
+    # of its own (ADR-0026 amendment on WebRTC's mDNS responder, 2026-10-02).
+    "WebRtcHideLocalIpsWithMdns",
+)
+
 # The switches every launch gives Chromium, which close the browser's ways out
 # other than a proxy (ADR-0026 amendment, 2026-10-02; SECURITY.md §7).
 # Playwright appends them to its own
@@ -174,6 +201,7 @@ TRANSPORT_SWITCHES = (
     # address literals too, so it spares the one the egress proxy listens on
     # (`EgressProxy`).
     "--host-resolver-rules=MAP * ^NOTFOUND, EXCLUDE 127.0.0.1",
+    f"--disable-features={','.join(DISABLED_FEATURES)}",
 )
 
 # The proxy of every browser context that names none of its own, such as one
