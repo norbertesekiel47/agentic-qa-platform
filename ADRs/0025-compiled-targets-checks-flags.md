@@ -230,6 +230,16 @@ Building the compiler's locator generation (#52) settled choices that "Locator g
   - *Chosen:* the nearest, one level deep.
     - On the pilot it is the banner (`div.banner`) for everything the article page renders twice.
     - `html` and `body` never count, because every page has them.
+- **A target whose text is checked is found by no name.**
+  - *Options:*
+    - compare the name with the coverage plan's prose claim;
+    - drop a name the assertion's own check would accept;
+    - give a text check's target no name at all.
+  - *Chosen:* the third.
+    - The prose has no fixed form, so whether it "mentions" a name is guesswork.
+    - The second was built first and fell to #52's reviews. A name and the rendered text can share words without either accepting the other: `aria-label="Save"` on a button that reads "Save changes", text styled upper case for a case-sensitive pattern, or a count hidden from the name. A change to the text then changes the name too, and a locator by that name misses the element exactly when the check should fail, as under conduit-bug-003, where the button keeps "Favorite Article". That turns the failure into drift.
+  - An assertion that checks no text, such as `visible_unoccluded` on the header's links, keeps a control's name.
+  - With nothing else to tell the element apart, a text check's target gets no locator, and compiling fails by name.
 - **Every locator is resolved before it is kept.**
   - The element's facts (tag, id, classes, attributes, labels and ancestors) are read in the page's own world, so they are the page's word. They are checked strictly, with bounded sizes.
   - Each candidate is resolved alone, for the use, on the live page, and kept only if it finds that element.
