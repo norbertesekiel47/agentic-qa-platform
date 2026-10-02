@@ -43,14 +43,28 @@ def sites(monkeypatch: pytest.MonkeyPatch) -> Iterator[Sites]:
         yield served
 
 
-def test_each_kind_of_policy_event_says_what_it_refused() -> None:
+@pytest.mark.parametrize(
+    ("kind", "says"),
+    [
+        ("document", "the page is"),
+        ("frame", "the element's frame is"),
+        ("popup", "a popup is"),
+        ("navigation", "the URL to navigate to is"),
+    ],
+)
+def test_each_kind_of_policy_event_says_what_it_refused(
+    kind: PolicyEventKind, says: str
+) -> None:
     assert set(REFUSED_BY_KIND) == set(get_args(PolicyEventKind.__value__))
-    url, origin = "javascript:void(0)", None
-    message = str(PolicyEventError(PolicyEvent("navigation", url, origin)))
-    assert message.startswith(
-        "the URL to navigate to is on no origin a run could allow:"
+    url = "http://cdn.example.test/doc?token=abc"
+    on_one = str(PolicyEventError(PolicyEvent(kind, url, "http://cdn.example.test")))
+    on_none = str(PolicyEventError(PolicyEvent(kind, url, None)))
+    assert on_one.startswith(
+        f"{says} on http://cdn.example.test, which isn't one of the run's allowed origins:"
     )
-    assert url not in message
+    assert on_none.startswith(f"{says} on no origin a run could allow:")
+    # The message names the origin only: the URL's path and query are the page's.
+    assert "token" not in on_one + on_none
 
 
 @pytest.mark.parametrize(
@@ -74,6 +88,8 @@ def test_each_kind_of_policy_event_says_what_it_refused() -> None:
         ("http://app.example.test:8080\\evil.example.test/", None),
         ("http://app.exa\tmple.test:8080/", None),
         ("http://app.example.test:8080/\nx", None),
+        ("http://app.example.test:8080/\x7f", None),
+        ("http://app.example.test:8080/\x00", None),
         (" http://app.example.test:8080/", None),
         ("http://[::1/", None),
     ],
@@ -742,3 +758,82 @@ def test_resolve_discards_what_it_saw_when_the_page_changed_meanwhile(
                 await found.element.inner_text()
 
     asyncio.run(scenario())
+
+
+def test_actions_refuse_an_element_in_a_frame_off_the_allowed_origins(
+    sites: Sites,
+) -> None:
+    async def scenario() -> PolicyEventError:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/flip")
+            [cdn] = [f for f in session.page.frames if f.url == f"{sites.cdn}/doc"]
+            # An element held in the subresource host's frame, as one could
+            # be once its frame had moved there from an allowed origin.
+            planted = await cdn.query_selector("button")
+            assert planted is not None
+            with pytest.raises(PolicyEventError) as refused:
+                await session.click(planted)
+            return refused.value
+
+    refused = asyncio.run(scenario())
+
+    assert refused.event == PolicyEvent("frame", f"{sites.cdn}/doc", sites.cdn)
+    assert not sites.saw(CDN, "/clicked", within=0.5)
+
+
+def test_press_never_asks_another_origins_frame_where_the_focus_is(
+    sites: Sites,
+) -> None:
+    # The subresource host's frame says it has the focus: asked, it would
+    # lead the walk into itself, and the key meant for the start origin's
+    # field would be refused.
+    async def scenario() -> str:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/liar")
+            inner = await session.locate(
+                ref_for(await session.snapshot(), "textbox", "Inner")
+            )
+            await session.click(inner)
+            await session.press("a")
+            field = session.page.frame_locator("iframe >> nth=1").get_by_label("Inner")
+            return await field.input_value()
+
+    assert asyncio.run(scenario()) == "a"
+
+
+def test_press_takes_the_root_with_the_focus_for_nothing_focused(sites: Sites) -> None:
+    async def scenario() -> None:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/wrapped")
+            await session.page.evaluate(
+                "() => { document.documentElement.tabIndex = -1; document.documentElement.focus(); }"
+            )
+            await session.press("Shift")
+
+    asyncio.run(scenario())
+
+
+def test_resolve_looks_nothing_up_on_a_page_off_the_allowed_origins(
+    sites: Sites, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    looked: list[str] = []
+
+    async def spy(page: Page, target: Target, use: Use) -> Any:
+        looked.append(page.url)
+        return await resolve(page, target, use)
+
+    monkeypatch.setattr(browser_session, "resolve_target", spy)
+    other = Target(semantic="a button", locators=(ByRole(role="button"),))
+
+    async def scenario() -> None:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/click?to={to(f'{sites.cdn}/doc')}")
+            go = await session.locate(ref_for(await session.snapshot(), "link", "Go"))
+            await session.click(go)
+            await session.page.wait_for_url(f"{sites.cdn}/doc")
+            with pytest.raises(PolicyEventError):
+                await session.resolve(other, "assertion")
+
+    asyncio.run(scenario())
+
+    assert looked == []
