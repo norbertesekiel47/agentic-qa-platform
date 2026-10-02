@@ -420,6 +420,7 @@ def test_the_proxy_listens_on_loopback_only() -> None:
         b"GET http:///no-host HTTP/1.1",
         b"GET http://user@127.0.0.1:9/ HTTP/1.1",
         b"GET http://[::1/ HTTP/1.1",
+        b"GET http://[v1.app.example.test]/ HTTP/1.1",
         b"CONNECT nonsense HTTP/1.1",
         b"CONNECT 127.0.0.1:0x9 HTTP/1.1",
     ],
@@ -590,8 +591,15 @@ async def proxy_client(
             ),
             b"hello",
         ),
+        (
+            (
+                b"HTTP/1.1 200 OK\r\nConnection: transfer-encoding\r\nContent-Length: 2\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n"
+            ),
+            b"hello",
+        ),
     ],
-    ids=["chunked", "close-delimited", "informational first"],
+    ids=["chunked", "close-delimited", "informational first", "framing named"],
 )
 def test_a_response_is_framed_for_the_browser(reply: bytes, body: bytes) -> None:
     async def scenario() -> bytes:
@@ -714,6 +722,24 @@ def test_a_tunnel_reaches_a_subresource_host_on_443_only(
 
     assert asyncio.run(scenario()).startswith(b"HTTP/1.1 403 ")
     assert [(r.host, r.kind) for r in egress.refusals] == [("cdn.example.test", kind)]
+
+
+def test_closing_the_proxy_never_waits_on_a_browser() -> None:
+    # Whatever step a new connection's handler has reached when the proxy
+    # closes, closing returns, while the browser still holds its socket.
+    async def scenario() -> None:
+        async with raw_upstream() as upstream:
+            start = f"http://127.0.0.1:{upstream.port}"
+            for steps in range(8):
+                proxy = await EgressProxy(gate(allowed=(start,))).__aenter__()
+                _, writer = await proxy_client(proxy)
+                writer.write(get(f"{start}/charge", close=True))
+                for _ in range(steps):
+                    await asyncio.sleep(0)
+                await asyncio.wait_for(proxy.__aexit__(None, None, None), 2)
+                writer.close()
+
+    asyncio.run(scenario())
 
 
 def test_closing_the_proxy_ends_a_request_still_connecting(
