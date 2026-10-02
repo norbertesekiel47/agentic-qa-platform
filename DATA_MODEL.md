@@ -363,7 +363,7 @@ budgets:                      # per explore run (ADR-0024)
 
 **Start URL.** A run's first navigation goes to the start origin followed by the spec's `start_url` as written: joined as text, never resolved and never percent-decoded, so `/%2f%2fevil.test` stays a path on the start origin (ADR-0026's start URL amendment). `aqa_core.project.start_url` builds it, and the executor's first navigation (#46), explore's and the confirmation replay's (#53) call it rather than building it. A compiled `navigate` path (§7) is joined to the start origin by the same rule: its single leading `/`, then the path as written, never decoded. One that breaks §6's segment rule can read as a path starting `//`, as `/..//evil.test` does.
 
-**Egress hosts.** `subresource_hosts` and `expected_blocked` list bare host names or IP addresses (an IPv6 address in brackets), with no scheme, port or wildcard. `private_origins` lists origins.
+**Egress hosts.** `subresource_hosts` and `expected_blocked` list bare host names or IP addresses (an IPv6 address in brackets), with no scheme, port or wildcard. A subresource host is reached only on its scheme's default port: 80 for http, 443 for https and wss (ADR-0026 amendment, 2026-10-01). `private_origins` lists origins.
 
 **Model overrides.** A model missing from the pinned price map must be declared under `models`, with its capabilities and prices; otherwise config validation rejects it. Its cost records carry `price_source: config` and the rates they applied (`applied_prices`, §2), so a later change to this file doesn't change what past costs meant.
 

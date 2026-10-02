@@ -198,6 +198,9 @@ The short-lived credential a runner uses for one run under one lease. Only a hos
 **Verified domain**:
 A hostname the organization has proven it controls. Hosted runs may navigate to and act on verified domains only.
 
+**Egress proxy**:
+The run's only way out: an in-runner forward proxy that passes only allowed origins and subresource hosts, resolves each name itself and pins its first answer that passes the IP policy for the whole run, and refuses link-local and metadata addresses, and non-public ones outside the start origin and declared private origins.
+
 **Egress block**:
 A request from the run's browser to a host that is neither an allowed origin nor a subresource host, which the run refuses. Unless the host is expected-blocked, an egress block keeps the run from passing without making it a finding.
 _Avoid_: network error
