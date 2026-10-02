@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import override
 
@@ -22,7 +23,13 @@ from aqa_runner.sandbox import (
     launch,
     launch_with_observations,
 )
-from playwright.async_api import Browser, BrowserType, Error, async_playwright
+from playwright.async_api import (
+    Browser,
+    BrowserType,
+    Error,
+    ProxySettings,
+    async_playwright,
+)
 
 # /proc facts recorded from Playwright 1.63's headless shell on Linux 6.12:
 # a sandboxed renderer lives in its own user, pid and net namespaces and adds
@@ -174,14 +181,32 @@ class RecordingChromium:
         self.requested: list[bool] = []
         self.launched: list[Browser] = []
 
-    async def launch(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
+    async def launch(
+        self,
+        *,
+        chromium_sandbox: bool,
+        env: Environment,
+        args: Sequence[str],
+        proxy: ProxySettings,
+    ) -> Browser:
         self.requested.append(chromium_sandbox)
-        browser = await self.start(chromium_sandbox=chromium_sandbox, env=env)
+        browser = await self.start(
+            chromium_sandbox=chromium_sandbox, env=env, args=args, proxy=proxy
+        )
         self.launched.append(browser)
         return browser
 
-    async def start(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
-        return await self.chromium.launch(chromium_sandbox=chromium_sandbox, env=env)
+    async def start(
+        self,
+        *,
+        chromium_sandbox: bool,
+        env: Environment,
+        args: Sequence[str],
+        proxy: ProxySettings,
+    ) -> Browser:
+        return await self.chromium.launch(
+            chromium_sandbox=chromium_sandbox, env=env, args=args, proxy=proxy
+        )
 
 
 class UnsandboxedChromium(RecordingChromium):
@@ -189,10 +214,19 @@ class UnsandboxedChromium(RecordingChromium):
     sandbox ends up off, `launch` must refuse the browser."""
 
     @override
-    async def start(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
+    async def start(
+        self,
+        *,
+        chromium_sandbox: bool,
+        env: Environment,
+        args: Sequence[str],
+        proxy: ProxySettings,
+    ) -> Browser:
         return await self.chromium.launch(
             chromium_sandbox=False,  # ADR-0026: a negative control for launch
             env=env,
+            args=args,
+            proxy=proxy,
         )
 
 
@@ -312,7 +346,15 @@ class FailingChromium:
         self.requested: list[bool] = []
         self.environments: list[Environment] = []
 
-    async def launch(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
+    async def launch(
+        self,
+        *,
+        chromium_sandbox: bool,
+        env: Environment,
+        args: Sequence[str],
+        proxy: ProxySettings,
+    ) -> Browser:
+        del args, proxy  # a launch that fails before any browser runs uses neither
         self.requested.append(chromium_sandbox)
         self.environments.append(env)
         raise Error(self.message)

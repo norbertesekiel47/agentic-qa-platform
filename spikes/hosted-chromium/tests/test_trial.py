@@ -10,6 +10,7 @@ import os
 import shutil
 import sys
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -27,7 +28,13 @@ from aqa_runner.sandbox import (
     SandboxObservations,
     SandboxUnavailableError,
 )
-from playwright.async_api import Browser, BrowserType, Error, async_playwright
+from playwright.async_api import (
+    Browser,
+    BrowserType,
+    Error,
+    ProxySettings,
+    async_playwright,
+)
 
 BOOT_ID = "8c0e4c6a-6a3c-4a8e-9d0c-3f1b7e2a5d10"
 REFUSED = "fake: this host can't create user namespaces"
@@ -81,7 +88,15 @@ class FailingChromium:
         self.requested: list[bool] = []
         self.environments: list[Environment] = []
 
-    async def launch(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
+    async def launch(
+        self,
+        *,
+        chromium_sandbox: bool,
+        env: Environment,
+        args: Sequence[str],
+        proxy: ProxySettings,
+    ) -> Browser:
+        del args, proxy  # a launch that fails before any browser runs uses neither
         self.requested.append(chromium_sandbox)
         self.environments.append(env)
         raise self.error
@@ -100,10 +115,19 @@ class DelayedChromium:
         self.delay = delay
         self.requested: list[bool] = []
 
-    async def launch(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
+    async def launch(
+        self,
+        *,
+        chromium_sandbox: bool,
+        env: Environment,
+        args: Sequence[str],
+        proxy: ProxySettings,
+    ) -> Browser:
         self.requested.append(chromium_sandbox)
         await asyncio.sleep(self.delay)
-        return await self.chromium.launch(chromium_sandbox=chromium_sandbox, env=env)
+        return await self.chromium.launch(
+            chromium_sandbox=chromium_sandbox, env=env, args=args, proxy=proxy
+        )
 
 
 def test_trial_reports_a_sandboxed_browser(tmp_path: Path, runs: Path) -> None:
@@ -376,11 +400,20 @@ class SwellingChromium(FailingChromium):
         super().__init__(SandboxUnavailableError(REFUSED))
         self.proc = proc
 
-    async def launch(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
+    async def launch(
+        self,
+        *,
+        chromium_sandbox: bool,
+        env: Environment,
+        args: Sequence[str],
+        proxy: ProxySettings,
+    ) -> Browser:
         set_process(self.proc, os.getpid(), 1, 999_999)
         await asyncio.sleep(4 * SAMPLE_SECONDS)
         set_process(self.proc, os.getpid(), 1, 512)
-        return await super().launch(chromium_sandbox=chromium_sandbox, env=env)
+        return await super().launch(
+            chromium_sandbox=chromium_sandbox, env=env, args=args, proxy=proxy
+        )
 
 
 def test_the_launch_is_timed_without_sampling_memory(proc: Path, runs: Path) -> None:
@@ -398,9 +431,18 @@ class LingeringChromium(FailingChromium):
         self.proc = proc
         self.lingering: list[asyncio.Task[None]] = []
 
-    async def launch(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
+    async def launch(
+        self,
+        *,
+        chromium_sandbox: bool,
+        env: Environment,
+        args: Sequence[str],
+        proxy: ProxySettings,
+    ) -> Browser:
         self.lingering.append(asyncio.create_task(self.linger()))
-        return await super().launch(chromium_sandbox=chromium_sandbox, env=env)
+        return await super().launch(
+            chromium_sandbox=chromium_sandbox, env=env, args=args, proxy=proxy
+        )
 
     async def linger(self) -> None:
         await asyncio.sleep(SAMPLE_SECONDS)
