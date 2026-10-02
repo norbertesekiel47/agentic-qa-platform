@@ -1,30 +1,31 @@
 """A compiled script (DATA_MODEL §7, ADR-0025): what each element means and
 how to find it (targets), the steps that reach the goal, and the assertions
 that establish each expectation. Read strictly, like a spec: unknown fields
-are errors and nothing is coerced. A file is read with
-`CompiledScript.model_validate_json`."""
+are errors and nothing is coerced.
+
+`CompiledScript.model_validate_json` checks a script's text, but a file is
+read through the loader (#46), which first refuses repeated keys:
+`model_validate_json` keeps the last, so `"side_effect": true, …,
+"side_effect": false` would read as false. The loader checks the text, then
+validates the same text in JSON mode, where `compiled_at` may be a string."""
 
 import re
+from collections.abc import Container
 from typing import Annotated, Literal, Self
 
 from pydantic import (
     AfterValidator,
     AwareDatetime,
+    Discriminator,
     Field,
     StrictBool,
     StrictInt,
     StrictStr,
+    Tag,
     model_validator,
 )
 
-from aqa_core.browser import (
-    BrowserSettings,
-    ColorScheme,
-    Locale,
-    ScaleFactor,
-    TimeZone,
-    Viewport,
-)
+from aqa_core.browser import BrowserSettings
 from aqa_core.config import ModelRoleName
 from aqa_core.schema import (
     AtLeastOne,
@@ -152,7 +153,10 @@ _Normalized = Annotated[NonEmpty, AfterValidator(_normalized)]
 def _regex(pattern: str) -> str:
     try:
         re.compile(pattern)
-    except re.error as error:
+    # Beyond re.error, re.compile raises OverflowError for a huge repeat count
+    # (a{4294967296}) and RecursionError for deep nesting; pydantic would let
+    # either escape as a raw exception instead of a validation error.
+    except (re.error, OverflowError, RecursionError) as error:
         raise ValueError(f"{pattern!r} is not a Python regex: {error}") from None
     return pattern
 
@@ -161,36 +165,87 @@ def _regex(pattern: str) -> str:
 # such as (?i) (ADR-0025).
 _Regex = Annotated[NonEmpty, AfterValidator(_regex)]
 
+
+class _Locator(StrictModel):
+    """What every kind of locator has: an optional `scope`, itself a
+    locator, inside which the match must be unique."""
+
+    scope: Locator | None = None
+
+    def __str__(self) -> str:
+        # As the script writes it, so a message names it readably.
+        return self.model_dump_json(exclude_none=True)
+
+
+class ByRole(_Locator):
+    """A role, and optionally the accessible name, compared normalized."""
+
+    role: AriaRole
+    name: _Normalized | None = None
+
+
+class ByLabel(_Locator):
+    label: NonEmpty
+
+
+class ByPlaceholder(_Locator):
+    placeholder: NonEmpty
+
+
+class ByTestId(_Locator):
+    testid: NonEmpty
+
+
+def _one_selector(css: str) -> str:
+    # Playwright chains selectors at >>
+    # (https://playwright.dev/python/docs/other-locators#chaining-selectors),
+    # even after css=: on 1.63, css= chained into xpath= and into an engine
+    # that enters frames. CSS itself never uses >>.
+    if ">>" in css:
+        raise ValueError(
+            f"{css!r} isn't one CSS selector: Playwright reads >> as a chain "
+            "into another selector engine"
+        )
+    return css
+
+
+class ByCss(_Locator):
+    css: Annotated[NonEmpty, AfterValidator(_one_selector)]
+
+
 _KINDS = ("role", "label", "placeholder", "testid", "css")
 
 
-class Locator(StrictModel):
-    """One way of finding a target: a role and an optional accessible name,
-    a label, a placeholder, a test ID or a CSS selector, optionally inside a
-    `scope`, which is itself a locator."""
+def _kind(value: object) -> str | None:
+    """The one kind a locator names: the key in a JSON object, or the kind
+    field of a locator built in Python. None for no kind or several."""
+    keys: Container[object]
+    if isinstance(value, dict):
+        keys = value
+    elif isinstance(value, _Locator):
+        keys = type(value).model_fields
+    else:
+        return None
+    named = [kind for kind in _KINDS if kind in keys]
+    return named[0] if len(named) == 1 else None
 
-    role: AriaRole | None = None
-    name: _Normalized | None = None
-    label: NonEmpty | None = None
-    placeholder: NonEmpty | None = None
-    testid: NonEmpty | None = None
-    css: NonEmpty | None = None
-    scope: Locator | None = None
 
-    @model_validator(mode="after")
-    def _one_kind(self) -> Self:
-        if self.name is not None and self.role is None:
-            raise ValueError("a name goes with a role: write role and name together")
-        kinds = [kind for kind in _KINDS if getattr(self, kind) is not None]
-        if not kinds:
-            raise ValueError(
-                "names no kind: write one of role, label, placeholder, testid or css"
-            )
-        if len(kinds) > 1:
-            raise ValueError(
-                f"names {len(kinds)} kinds: {', '.join(kinds)}; a locator has one"
-            )
-        return self
+# One way of finding a target. A JSON object names exactly one kind, which
+# picks the class, so `name` exists only beside `role`.
+type Locator = Annotated[
+    Annotated[ByRole, Tag("role")]
+    | Annotated[ByLabel, Tag("label")]
+    | Annotated[ByPlaceholder, Tag("placeholder")]
+    | Annotated[ByTestId, Tag("testid")]
+    | Annotated[ByCss, Tag("css")],
+    Discriminator(
+        _kind,
+        custom_error_type="locator_kind",
+        custom_error_message=(
+            "a locator names exactly one kind: role, label, placeholder, testid or css"
+        ),
+    ),
+]
 
 
 class Target(StrictModel):
@@ -309,13 +364,20 @@ class UrlMatches(_Assertion):
     pattern: _Regex
 
 
-class NetworkCheck(_Assertion):
-    """A request the browser itself made, or didn't."""
+class _NetworkCheck(_Assertion):
+    """A request in the browser's own traffic, by method, URL and status."""
 
-    check: Literal["network_none", "network_seen"]
     method: Literal["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
     url_pattern: NonEmpty
     status_class: Literal["1xx", "2xx", "3xx", "4xx", "5xx"]
+
+
+class NetworkNone(_NetworkCheck):
+    check: Literal["network_none"]
+
+
+class NetworkSeen(_NetworkCheck):
+    check: Literal["network_seen"]
 
 
 class ProbeEqualsBaseline(_Assertion):
@@ -326,8 +388,8 @@ class ProbeEqualsBaseline(_Assertion):
 class VisibleUnoccluded(_Assertion):
     check: Literal["visible_unoccluded"]
     target: NonEmpty
-    # Width and height, in CSS pixels. Not strict on the outside, so a JSON
-    # list becomes the tuple; each side stays strict.
+    # Width and height, in CSS pixels. JSON mode reads an array as the
+    # tuple; not strict on the outside, so Python mode reads a list too.
     min_size_px: Annotated[tuple[_Positive, _Positive], Field(strict=False)]
     in_viewport: StrictBool
 
@@ -337,7 +399,8 @@ Assertion = Annotated[
     | TextInTarget
     | NotVisible
     | UrlMatches
-    | NetworkCheck
+    | NetworkNone
+    | NetworkSeen
     | ProbeEqualsBaseline
     | VisibleUnoccluded,
     Field(discriminator="check"),
@@ -377,16 +440,21 @@ class ProbeBaseline(StrictModel):
     json_path: NonEmpty
 
 
-class _RecordedSettings(BrowserSettings):
-    """The settings a script was explored under, which its replays use
-    (ADR-0025). Every one is written, so a missing one can't quietly become
-    the pinned default."""
-
-    timezone: TimeZone
-    locale: Locale
-    viewport: Viewport
-    device_scale_factor: ScaleFactor
-    color_scheme: ColorScheme
+def _every_setting(settings: BrowserSettings) -> BrowserSettings:
+    # Replay uses the settings the script was explored under (ADR-0025), so a
+    # missing one must not quietly become the pinned default. Read from the
+    # model, so a setting added later is required here too.
+    missing = [
+        name
+        for name in BrowserSettings.model_fields
+        if name not in settings.model_fields_set
+    ]
+    if missing:
+        raise ValueError(
+            f"records no {', '.join(missing)}: a compiled script records every "
+            "browser setting it was explored under"
+        )
+    return settings
 
 
 class CompiledBy(StrictModel):
@@ -412,7 +480,7 @@ class CompiledScript(StrictModel):
     compiled_at: AwareDatetime
     compiled_by: CompiledBy
     confirmed: StrictBool
-    browser: _RecordedSettings
+    browser: Annotated[BrowserSettings, AfterValidator(_every_setting)]
     coverage: Coverage
     targets: dict[NonEmpty, Target]
     probe_baselines: dict[NonEmpty, ProbeBaseline]
