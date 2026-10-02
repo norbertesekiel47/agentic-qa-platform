@@ -82,6 +82,9 @@ def test_every_key_is_optional(tmp_path: Path) -> None:
         ("https://shop.example.test:443", "https://shop.example.test"),
         ("http://[0:0::1]:4100", "http://[::1]:4100"),
         ("http://127.0.0.1:4100", "http://127.0.0.1:4100"),
+        # Only the scheme's own default port is dropped.
+        ("http://shop.example.test:443", "http://shop.example.test:443"),
+        ("https://shop.example.test:80", "https://shop.example.test:80"),
     ],
 )
 def test_base_url_is_stored_as_a_normalized_origin(
@@ -97,6 +100,7 @@ def test_base_url_is_stored_as_a_normalized_origin(
         ("HTTPS://Shop.Example.Test/", ("shop.example.test", 443)),
         ("http://[0:0::1]:4100", ("[::1]", 4100)),
         ("https://127.0.0.1:8443", ("127.0.0.1", 8443)),
+        ("http://shop.example.test:443", ("shop.example.test", 443)),
     ],
 )
 def test_an_origins_authority_is_its_host_and_port(
