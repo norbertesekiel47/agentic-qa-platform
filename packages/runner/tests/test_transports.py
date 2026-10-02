@@ -296,5 +296,7 @@ def test_the_last_disabled_features_are_playwrights_and_webrtcs_mdns() -> None:
         if argument.startswith("--disable-features=")
     ]
     assert len(switches) == 2, command
-    playwrights, launchs = switches
-    assert launchs == f"{playwrights},WebRtcHideLocalIpsWithMdns"
+    playwrights, last = switches
+    # When this fails after a Playwright upgrade, update both
+    # `aqa_runner.sandbox.DISABLED_FEATURES` and `EXPECTED_SWITCHES`.
+    assert last == f"{playwrights},WebRtcHideLocalIpsWithMdns"
