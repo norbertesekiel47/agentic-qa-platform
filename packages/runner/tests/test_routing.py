@@ -87,6 +87,14 @@ RECORDED = {
     "file:///etc/hosts": BlockedAttempt(
         resource_type="websocket", scheme="file", host="", port=None
     ),
+    # A host no origin writes, or one the proxy carries nothing for, is
+    # recorded as none: a page could choose any text there.
+    "ftp://evil.example.test/": BlockedAttempt(
+        resource_type="websocket", scheme="ftp", host="", port=None
+    ),
+    f"http://{'a' * 60}.{'b' * 60}.{'c' * 60}.{'d' * 60}.{'e' * 60}/": BlockedAttempt(
+        resource_type="websocket", scheme="http", host="", port=80
+    ),
 }
 
 
@@ -295,6 +303,20 @@ def test_a_repeated_attempt_leaves_room_for_the_next() -> None:
 
     assert blocked.counts == {looping: 1500, after: 1}
     assert blocked.total == 1501
+    assert not blocked.overflowed
+
+
+def test_attempts_past_the_bound_are_flagged_as_unnamed() -> None:
+    # A page can choose a thousand distinct attempts (one host, many ports);
+    # an attempt after that is counted but not named, which the record says.
+    blocked = BlockedAttempts()
+    for port in range(1, 1001):
+        blocked.add(BlockedAttempt("fetch", "https", EVIL, port))
+    filled = blocked.overflowed
+
+    blocked.add(BlockedAttempt("fetch", "https", "undeclared.example.test", 443))
+
+    assert (filled, blocked.overflowed) == (False, True)
 
 
 def test_a_redirect_hop_routing_never_sees_is_refused_by_the_proxy() -> None:

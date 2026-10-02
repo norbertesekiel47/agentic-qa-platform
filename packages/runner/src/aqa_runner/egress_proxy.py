@@ -65,7 +65,8 @@ class BlockedAttempt:
     or user part, which a page can fill with what it exfiltrates; the host is
     kept, though a page can choose it too, so redaction must cover it before
     anything is saved (#49). `port` is None when the URL names none a scheme
-    gives."""
+    gives. `host` is empty when the URL's host is none an origin could
+    write."""
 
     resource_type: str
     scheme: str
@@ -90,6 +91,13 @@ class BlockedAttempts:
             self.counts[attempt] += 1
         elif len(self.counts) < KEPT_ATTEMPTS:
             self.counts[attempt] = 1
+
+    @property
+    def overflowed(self) -> bool:
+        """Whether some attempts came after the record was full, so it names
+        not every refused host: a page chose a thousand distinct attempts
+        first. #47 counts that as an egress block."""
+        return self.total > sum(self.counts.values())
 
 
 class EgressProxy:
