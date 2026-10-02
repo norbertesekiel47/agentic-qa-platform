@@ -5,6 +5,7 @@ How a launch is judged sandboxed belongs to `aqa_runner.sandbox` and its tests;
 the trial reports what `launch` decides."""
 
 import asyncio
+import json
 import os
 import shutil
 import sys
@@ -19,7 +20,13 @@ from aqa_hosted_chromium_spike.trial import (
     peak_memory,
     run_trial,
 )
-from aqa_runner.sandbox import Environment, SandboxUnavailableError
+from aqa_runner.sandbox import (
+    Environment,
+    LinuxProcess,
+    MacProcess,
+    SandboxObservations,
+    SandboxUnavailableError,
+)
 from playwright.async_api import Browser, BrowserType, Error, async_playwright
 
 BOOT_ID = "8c0e4c6a-6a3c-4a8e-9d0c-3f1b7e2a5d10"
@@ -124,6 +131,38 @@ def test_trial_reports_a_sandboxed_browser(tmp_path: Path, runs: Path) -> None:
     assert report["boot_id"] == BOOT_ID
 
 
+# What the sandbox check observed, as the JSON every candidate prints shows it:
+# the browser process and each renderer, sandboxed by Chromium.
+def test_trial_reports_what_the_sandbox_check_observed(proc: Path, runs: Path) -> None:
+    async def scenario() -> Report:
+        async with async_playwright() as playwright:
+            return await run_trial(playwright.chromium, proc, runs)
+
+    report = json.loads(json.dumps(asyncio.run(scenario())))
+
+    assert report["sandbox"] == {"on": True}
+    observed = report["sandbox_observed"]
+    assert set(observed) == {"browser", "renderers"}, observed
+    browser, renderers = observed["browser"], observed["renderers"]
+    assert renderers, "the report shows no renderer"
+    assert browser["pid"] not in [renderer["pid"] for renderer in renderers]
+    if sys.platform == "linux":
+        # Each renderer has user, pid and net namespaces of its own, and more
+        # seccomp filters than the browser.
+        for process in [browser, *renderers]:
+            assert set(process) == {"pid", "namespaces", "seccomp_filters"}
+            assert set(process["namespaces"]) == {"user", "pid", "net"}
+        for renderer in renderers:
+            for name in ("user", "pid", "net"):
+                assert renderer["namespaces"][name] != browser["namespaces"][name]
+            assert renderer["seccomp_filters"] > browser["seccomp_filters"]
+    else:
+        # sandbox_check answers no for the browser and yes for each renderer.
+        assert browser == {"pid": browser["pid"], "sandboxed": False}
+        for renderer in renderers:
+            assert renderer == {"pid": renderer["pid"], "sandboxed": True}
+
+
 # On an OS with no sandbox check, launch refuses even a sandboxed browser: the
 # report follows the check, not the browser. The sandbox stays on (ADR-0026).
 def test_trial_reports_what_the_sandbox_check_decides(
@@ -143,6 +182,8 @@ def test_trial_reports_what_the_sandbox_check_decides(
     assert report["sandbox"]["on"] is False
     assert "no sandbox check exists for win32" in report["sandbox"]["error"]
     assert report["ready_seconds"] is None
+    # With no sandbox check, nothing was read.
+    assert report["sandbox_observed"] is None
 
 
 def test_trial_reports_a_sandbox_the_runner_refuses(proc: Path, runs: Path) -> None:
@@ -153,9 +194,31 @@ def test_trial_reports_a_sandbox_the_runner_refuses(proc: Path, runs: Path) -> N
     assert chromium.requested == [True], "the trial didn't ask for the sandbox"
     assert chromium.environments == [{}], "the trial's browser got an environment"
     assert report["sandbox"] == {"on": False, "error": REFUSED}
+    assert report["sandbox_observed"] is None
     assert report["ready_seconds"] is None
     assert report["ready_at"] is None
     assert report["peak_memory_bytes"] == 512 * 1024
+
+
+# Where Chromium's sandbox can't start, its zygote logs this and the browser
+# never runs, so the sandbox check has no process to read.
+NO_USABLE_SANDBOX = (
+    "BrowserType.launch: Target page, context or browser has been closed\n"
+    "  - [pid=19][err] [0930/154953.535932:FATAL:zygote_host_impl_linux.cc(129)] "
+    "No usable sandbox!\n"
+)
+
+
+def test_a_sandbox_that_cannot_start_shows_no_observations(
+    proc: Path, runs: Path
+) -> None:
+    chromium = FailingChromium(Error(NO_USABLE_SANDBOX))
+
+    report = asyncio.run(run_trial(chromium, proc, runs))
+
+    assert report["sandbox"]["on"] is False
+    assert "Chromium's sandbox can't start" in report["sandbox"]["error"]
+    assert report["sandbox_observed"] is None
 
 
 @pytest.mark.parametrize(
@@ -173,6 +236,66 @@ def test_other_launch_errors_stop_the_trial(
         asyncio.run(run_trial(FailingChromium(error), proc, runs))
 
     assert stopped.value is error
+
+
+# What a sandbox check that refused the browser observed, and how the report
+# shows it, through the JSON every candidate prints: on Linux each process's
+# namespace links and seccomp filter count, on macOS sandbox_check's answer.
+NOT_SANDBOXED = "fake: renderer 77 shares the browser's pid namespace"
+LINUX_OBSERVED = SandboxObservations(
+    browser=LinuxProcess(
+        pid=19,
+        namespaces={"user": "user:[1]", "pid": "pid:[2]", "net": "net:[3]"},
+        seccomp_filters=0,
+    ),
+    renderers=[
+        LinuxProcess(
+            pid=77,
+            namespaces={"user": "user:[4]", "pid": "pid:[2]", "net": "net:[5]"},
+            seccomp_filters=1,
+        )
+    ],
+)
+LINUX_SHOWN = {
+    "browser": {
+        "pid": 19,
+        "namespaces": {"user": "user:[1]", "pid": "pid:[2]", "net": "net:[3]"},
+        "seccomp_filters": 0,
+    },
+    "renderers": [
+        {
+            "pid": 77,
+            "namespaces": {"user": "user:[4]", "pid": "pid:[2]", "net": "net:[5]"},
+            "seccomp_filters": 1,
+        }
+    ],
+}
+MACOS_OBSERVED = SandboxObservations(
+    browser=MacProcess(pid=4663, sandboxed=False),
+    renderers=[MacProcess(pid=4686, sandboxed=False)],
+)
+MACOS_SHOWN = {
+    "browser": {"pid": 4663, "sandboxed": False},
+    "renderers": [{"pid": 4686, "sandboxed": False}],
+}
+
+
+@pytest.mark.parametrize(
+    ("observed", "shown"),
+    [(LINUX_OBSERVED, LINUX_SHOWN), (MACOS_OBSERVED, MACOS_SHOWN)],
+    ids=["linux", "macos"],
+)
+def test_trial_reports_what_a_refused_check_observed(
+    proc: Path, runs: Path, observed: SandboxObservations, shown: dict[str, object]
+) -> None:
+    chromium = FailingChromium(
+        SandboxUnavailableError(NOT_SANDBOXED, observed=observed)
+    )
+
+    report = json.loads(json.dumps(asyncio.run(run_trial(chromium, proc, runs))))
+
+    assert report["sandbox"] == {"on": False, "error": NOT_SANDBOXED}
+    assert report["sandbox_observed"] == shown
 
 
 # The run marker is the fresh-VM evidence a second trial can compare: an
