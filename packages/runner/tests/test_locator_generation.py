@@ -29,7 +29,7 @@ from aqa_runner.locator_generation import (
 from playwright.async_api import ElementHandle, Error, Page, async_playwright
 
 from packages.runner.tests.egress_fixtures import egress_proxy
-from packages.runner.tests.pilot_pages import RENDERINGS, in_session, show
+from packages.runner.tests.pilot_pages import RENDERINGS, in_session, put, show
 
 
 def ref_of(snapshot: str, role: str, name: str | None = None, nth: int = 0) -> str:
@@ -115,7 +115,7 @@ def test_an_action_targets_locators_come_in_the_grammars_order() -> None:
     # is shown on a fixture form, and on the pilot's login form.
     async def scenario(session: BrowserSession) -> list[tuple[Locator, ...]]:
         found = []
-        await session.page.set_content(FORM)
+        await put(session, FORM)
         snapshot = await session.snapshot()
         used = await seen_element(
             session, snapshot, ref_of(snapshot, "textbox", "Email")
@@ -177,7 +177,7 @@ def test_generated_and_state_tokens_are_never_used() -> None:
     # the stable classes are used, and "Go" can't be told from "Save" by
     # anything stable but its name.
     async def scenario(session: BrowserSession) -> list[tuple[Locator, ...]]:
-        await session.page.set_content(TOKENS)
+        await put(session, TOKENS)
         snapshot = await session.snapshot()
         found = []
         for name in ("Pay", "Go"):
@@ -199,7 +199,7 @@ def test_an_element_only_position_tells_apart_has_no_locator() -> None:
     html = "<ul><li><button>Edit</button></li><li><button>Edit</button></li></ul>"
 
     async def scenario(session: BrowserSession) -> None:
-        await session.page.set_content(html)
+        await put(session, html)
         snapshot = await session.snapshot()
         used = await seen_element(
             session, snapshot, ref_of(snapshot, "button", "Edit", 1)
@@ -220,7 +220,7 @@ def test_a_scope_is_the_nearest_ancestor_unique_on_the_page() -> None:
     # div.line is nearer but on the page twice, so it can't pick out a place;
     # the section's stable id can.
     async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
-        await session.page.set_content(SECTIONS)
+        await put(session, SECTIONS)
         snapshot = await session.snapshot()
         used = await seen_element(
             session, snapshot, ref_of(snapshot, "button", "Remove")
@@ -246,7 +246,7 @@ def test_a_locator_that_finds_another_element_is_dropped() -> None:
     <button id="decoy">Other</button><button class="mine">Mine</button>"""
 
     async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
-        await session.page.set_content(html)
+        await put(session, html)
         snapshot = await session.snapshot()
         used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Mine"))
         return await generate_for_action(session.page, used)
@@ -264,7 +264,7 @@ def test_the_snapshot_gives_each_refs_role_and_name() -> None:
     <a href="#">Next</a><div style="display: block">Plain</div>"""
 
     async def scenario(session: BrowserSession) -> dict[str, tuple[str, str | None]]:
-        await session.page.set_content(html)
+        await put(session, html)
         return snapshot_elements(await session.snapshot())
 
     assert list(in_session(scenario).values()) == [
@@ -288,9 +288,7 @@ def test_the_banner_date_has_a_ref_only_when_styled() -> None:
             if styled:
                 await show(session, "article")
             else:
-                await session.page.set_content(
-                    (RENDERINGS / "article.html").read_text()
-                )
+                await put(session, (RENDERINGS / "article.html").read_text())
             refs.append(date.search(await session.snapshot()) is not None)
         return refs
 
@@ -328,7 +326,7 @@ def test_a_page_that_garbles_the_elements_facts_gets_no_locator(
     html = f"<script>{script}</script><button class='go'>Go</button>"
 
     async def scenario(session: BrowserSession) -> None:
-        await session.page.set_content(html)
+        await put(session, html)
         snapshot = await session.snapshot()
         used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Go"))
         await generate_for_action(session.page, used)
@@ -357,7 +355,7 @@ def test_a_page_closed_during_generating_still_raises(
 
     async def scenario(session: BrowserSession) -> None:
         closing.append(session.page)
-        await session.page.set_content("<button class='go'>Go</button>")
+        await put(session, "<button class='go'>Go</button>")
         snapshot = await session.snapshot()
         used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Go"))
         monkeypatch.setattr(ElementHandle, method, closes_the_page)
@@ -393,7 +391,7 @@ def test_the_page_cannot_fake_which_element_a_locator_found() -> None:
     <button id="decoy">Other</button><button class="mine">Mine</button>"""
 
     async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
-        await session.page.set_content(html)
+        await put(session, html)
         snapshot = await session.snapshot()
         used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Mine"))
         return await generate_for_action(session.page, used)
@@ -432,7 +430,7 @@ def test_a_page_that_tampers_with_the_trial_gets_no_locator_for_another_element(
     # world, from no DOM state, so the lie about the test ID only costs that
     # candidate (#52's security review).
     async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
-        await session.page.set_content(TAMPERING)
+        await put(session, TAMPERING)
         snapshot = await session.snapshot()
         used = await seen_element(
             session, snapshot, ref_of(snapshot, "button", "Cancel")
@@ -467,7 +465,7 @@ def test_an_element_moved_into_another_document_gets_no_locator(when: str) -> No
     )
 
     async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
-        await session.page.set_content(html)
+        await put(session, html)
         snapshot = await session.snapshot()
         used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Go"))
         if when == "before":
@@ -485,7 +483,7 @@ def test_generating_without_the_identity_engine_says_so() -> None:
             egress_proxy() as egress,
             open_browser_session(playwright.chromium, egress=egress) as session,
         ):
-            await session.page.set_content("<button>Go</button>")
+            await put(session, "<button>Go</button>")
             snapshot = await session.snapshot()
             used = await seen_element(
                 session, snapshot, ref_of(snapshot, "button", "Go")
@@ -521,7 +519,7 @@ def test_what_counts_as_a_stable_class(css: str, used: bool) -> None:
     html = f"<button class='{css}'>Go</button><button>Stop</button>"
 
     async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
-        await session.page.set_content(html)
+        await put(session, html)
         snapshot = await session.snapshot()
         seen = await seen_element(session, snapshot, ref_of(snapshot, "button", "Go"))
         return await generate_for_action(session.page, seen)
@@ -551,7 +549,7 @@ def test_a_scope_is_never_a_bare_standard_tag(
     html: str, expected: Locator | None
 ) -> None:
     async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
-        await session.page.set_content(html)
+        await put(session, html)
         snapshot = await session.snapshot()
         used = await seen_element(
             session, snapshot, ref_with_text(snapshot, "paragraph", "One")
@@ -581,7 +579,7 @@ def test_a_scope_is_never_a_bare_standard_tag(
 )
 def test_structure_takes_the_most_particular_form(html: str, expected: Locator) -> None:
     async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
-        await session.page.set_content(html)
+        await put(session, html)
         first = await session.page.query_selector("body > *")
         assert first is not None
         return await generate_for_action(session.page, Seen(first))
@@ -599,7 +597,7 @@ def test_only_the_nearest_ancestors_are_tried_as_scopes(
     html = f"<section class='a'>{nest}</section><section class='b'>{nest}</section>"
 
     async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
-        await session.page.set_content(html)
+        await put(session, html)
         snapshot = await session.snapshot()
         used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Go"))
         return await generate_for_action(session.page, used)
@@ -627,7 +625,7 @@ def test_the_work_one_element_costs_is_bounded() -> None:
     html = opening + f"<b class='{inner}'>x</b><b class='{inner}'>x</b>" + "</div>" * 16
 
     async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
-        await session.page.set_content(html)
+        await put(session, html)
         element = await session.page.query_selector("b")
         assert element is not None
         return await generate_for_action(session.page, Seen(element))
@@ -651,7 +649,7 @@ def test_a_name_no_locator_can_carry_is_no_name(label: str) -> None:
     async def scenario(
         session: BrowserSession,
     ) -> tuple[str | None, tuple[Locator, ...]]:
-        await session.page.set_content(html)
+        await put(session, html)
         snapshot = await session.snapshot()
         ref = ref_of(snapshot, "button", nth=0)
         used = await seen_element(session, snapshot, ref)
@@ -676,7 +674,7 @@ def test_a_page_that_navigates_mid_trial_gets_no_locator() -> None:
     </script>"""
 
     async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
-        await session.page.set_content(html)
+        await put(session, html)
         snapshot = await session.snapshot()
         used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Go"))
         return await generate_for_action(session.page, used)
@@ -702,7 +700,7 @@ def test_tries_running_out_keep_the_locators_found() -> None:
     )
 
     async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
-        await session.page.set_content(html)
+        await put(session, html)
         snapshot = await session.snapshot()
         used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Go"))
         return await generate_for_action(session.page, used)
