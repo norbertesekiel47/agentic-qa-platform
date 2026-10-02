@@ -80,10 +80,8 @@ _SHELL_NAME = rf"[^/{_BREAK}]{{0,255}}"
 # A name starts where no word, "." or "-" character runs into it, so not inside
 # `x.ruff.toml`; or after what the shell takes off the front of a word: an
 # attached short option (`-o.claude/settings.json`) or a variable, which may be
-# empty (`$D.ruff.toml`).
-_NAME_START = (
-    rf"(?:(?<![\w.-])|(?<![^{_BREAK}=])-[A-Za-z]{{1,8}}|\$[A-Za-z_]\w{{0,63}})"
-)
+# empty (`$D.ruff.toml`, `$1.ruff.toml`).
+_NAME_START = r"(?:(?<![\w.-])(?:-[A-Za-z]+)?|\$\w+)"
 _NOT_A_BACKUP = r"(?![\w.-]{0,255}\.bak(?![\w.-]))"
 # A bare `test` that starts a word is the shell's test command, not a directory.
 _NOT_TEST_COMMAND = rf"(?:(?<=/)|(?!test(?:[{_BREAK}]|$)))"
@@ -117,16 +115,20 @@ def shell_pattern(*kinds: NameShapes) -> re.Pattern[str]:
     return re.compile("|".join(files + dirs))
 
 
-_WORD = re.compile(rf"[^{_BREAK}]+")
+# A shell word, quotes and substitutions included, and the quoting the shell
+# drops from it.
+_WORD = re.compile(r"[^\s;&|<>]+")
+_QUOTING = re.compile(r"\$?['\"]|\\")
 
 
 def resolved_paths(command: str) -> str:
-    """`command` with the `.` and `..` steps in each word taken, as the shell
-    takes them: `.claude/hooks-old/../hooks` names `.claude/hooks`."""
+    """`command` with each word's quotes dropped and its `.` and `..` steps
+    taken, as the shell takes them: `'.claude/hooks-old'/../hooks` names
+    `.claude/hooks`, and `te''st_a.py` names `test_a.py`."""
 
     def resolve(word: re.Match[str]) -> str:
         parts: list[str] = []
-        for part in re.split("/+", word[0]):
+        for part in re.split("/+", _QUOTING.sub("", word[0])):
             if part == "." and parts:
                 continue
             if part == ".." and parts and parts[-1] not in {"", ".", ".."}:
