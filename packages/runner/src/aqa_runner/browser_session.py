@@ -113,7 +113,7 @@ class BrowserSession:
             # Retired before the call: Playwright may store this snapshot, and
             # resolve refs against it, even if the call never returns.
             self._current = {}
-            self._require_allowed_page()
+            await self._require_allowed_page()
             changes = self._frame_changes
             taken = await self.page.aria_snapshot(mode="ai")
             try:
@@ -142,7 +142,7 @@ class BrowserSession:
         reaches a selector. The element's frame must be on one of the run's
         allowed origins too, or it is a policy event."""
         async with self._turn:
-            self._require_allowed_page()
+            await self._require_allowed_page()
             playwright_ref = self._current.get(ref)
             if playwright_ref is None:
                 given = SESSION_REF.fullmatch(ref)
@@ -170,7 +170,7 @@ class BrowserSession:
             frame = await found.owner_frame()
             if frame is None:  # an element of a document that is in no frame
                 raise gone
-            self._require_allowed(frame, "frame")
+            await self._require_allowed(frame, "frame")
         return found
 
     async def _frames_left_out(self, snapshot: str) -> set[str]:
@@ -181,10 +181,17 @@ class BrowserSession:
         left_out = set()
         for ref in iframe_refs(snapshot):
             iframe = await self.page.query_selector(f"aria-ref={ref}")
-            frame = None if iframe is None else await iframe.content_frame()
-            if iframe is not None:
+            if iframe is None:  # the iframe has left the page
+                left_out.add(ref)
+                continue
+            try:
+                frame = await iframe.content_frame()
+            finally:
                 await iframe.dispose()
-            if frame is None or frame_origin(frame) not in self._policy.allowed_origins:
+            if (
+                frame is None
+                or await frame_origin(frame) not in self._policy.allowed_origins
+            ):
                 left_out.add(ref)
         return left_out
 
@@ -195,23 +202,24 @@ class BrowserSession:
         """Record a page that another page opened, and close it: the session
         observes and acts on its own page only. Playwright reports the popup
         once it has navigated to its first URL, and its opener even when the
-        page asked for none. A blank popup is on its opener's origin."""
+        page asked for none. A blank popup is on no origin the session can
+        know: Playwright names the page that opened it, not the frame, which
+        may be a subresource host's."""
         url = popup.url
         opener = await popup.opener()
         self.popups.add(Popup(url, None if opener is None else opener.url))
-        inherited = None if opener is None else frame_origin(opener.main_frame)
-        origin = document_origin(url, inherited)
+        origin = document_origin(url, None)
         if origin not in self._policy.allowed_origins:
             self.policy_events.add(PolicyEvent("popup", url, origin))
         await popup.close()
 
-    def _require_allowed_page(self) -> None:
-        self._require_allowed(self.page.main_frame, "document")
+    async def _require_allowed_page(self) -> None:
+        await self._require_allowed(self.page.main_frame, "document")
 
-    def _require_allowed(self, frame: Frame, kind: PolicyEventKind) -> None:
+    async def _require_allowed(self, frame: Frame, kind: PolicyEventKind) -> None:
         """Record and raise a policy event of `kind` unless `frame` is on one
         of the run's allowed origins."""
-        origin = frame_origin(frame)
+        origin = await frame_origin(frame)
         if origin not in self._policy.allowed_origins:
             event = PolicyEvent(kind, frame.url, origin)
             self.policy_events.add(event)
