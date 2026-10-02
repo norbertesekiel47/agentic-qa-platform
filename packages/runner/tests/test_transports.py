@@ -298,5 +298,8 @@ def test_the_last_disabled_features_are_playwrights_and_webrtcs_mdns() -> None:
     assert len(switches) == 2, command
     playwrights, last = switches
     # When this fails after a Playwright upgrade, update both
-    # `aqa_runner.sandbox.DISABLED_FEATURES` and `EXPECTED_SWITCHES`.
-    assert last == f"{playwrights},WebRtcHideLocalIpsWithMdns"
+    # `aqa_runner.sandbox.DISABLED_FEATURES` and `EXPECTED_SWITCHES`. A
+    # feature list has no order.
+    assert sorted(last.split(",")) == sorted(
+        [*playwrights.split(","), "WebRtcHideLocalIpsWithMdns"]
+    )
