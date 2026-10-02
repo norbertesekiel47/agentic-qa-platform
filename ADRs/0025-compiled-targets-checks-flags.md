@@ -180,7 +180,7 @@ Building resolution (#45) settled three choices that "Resolution per use" left o
 
 ## Amendment (2026-10-02): generating locators (#52)
 
-Building the compiler's locator generation (#52) settled choices that "Locator grammar" and "Resolution per use" left open. DATA_MODEL §7 holds the rules; this records why.
+Building the compiler's locator generation (#52) settled choices that "Locator grammar" and "Resolution per use" left open. DATA_MODEL §7 holds the rules, and the loader's rule for negative checks joins it with the loader (#46); this records why.
 
 - **The five pilot pages.** "The five real pilot pages" in Consequences are the pages the five pilot specs visit, on the clean Conduit app, whose cases are all on the dev split (TESTING §5):
   - the login page, signed out, with its form filled in;
@@ -188,8 +188,6 @@ Building the compiler's locator generation (#52) settled choices that "Locator g
   - an article page as a signed-in reader, before and after favoriting it and reloading;
   - an article page as a signed-out visitor;
   - the editor, filled in.
-
-  The tests use saved renderings of them. These are kept with the runner's tests, not in the vendored app (ADR-0021).
 - **A css value refuses Playwright's own pseudo-classes.**
   - *Options:*
     - leave them to the compiler, which doesn't write them;

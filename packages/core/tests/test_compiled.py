@@ -723,7 +723,7 @@ def test_a_css_value_leaves_no_quote_open(css: str) -> None:
 # One use of each of Playwright 1.63's own CSS pseudo-classes, which its css
 # engine evaluates itself rather than the browser
 # (https://playwright.dev/python/docs/other-locators#css-locator).
-PLAYWRIGHTS_OWN = {
+PSEUDO_CLASS_USES = {
     "has-text": 'button:has-text("Pay")',
     "text": 'button:text("Pay")',
     "text-is": 'button:text-is("Pay")',
@@ -740,7 +740,7 @@ PLAYWRIGHTS_OWN = {
 
 
 @pytest.mark.parametrize(
-    ("name", "css"), PLAYWRIGHTS_OWN.items(), ids=PLAYWRIGHTS_OWN.keys()
+    ("name", "css"), PSEUDO_CLASS_USES.items(), ids=PSEUDO_CLASS_USES.keys()
 )
 def test_a_css_value_refuses_playwrights_own_pseudo_classes(
     name: str, css: str
