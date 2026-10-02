@@ -322,6 +322,16 @@ def test_the_start_url_is_the_start_origin_then_start_url_as_written(
     assert start_url(spec, "http://127.0.0.1:4100") == url
 
 
+def test_the_start_url_is_on_the_runs_start_origin_never_the_specs(
+    tmp_path: Path,
+) -> None:
+    _, spec = load_one(
+        tmp_path, BOUND, extra="allowed_origins: ['https://pay.example.test']\n"
+    )
+
+    assert start_url(spec, "http://127.0.0.1:4100") == "http://127.0.0.1:4100/login"
+
+
 # Secret destinations (ADR-0026).
 
 

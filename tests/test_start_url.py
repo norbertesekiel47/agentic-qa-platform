@@ -1,17 +1,19 @@
-"""A run's start URL as Chromium reads it (ADR-0026's start URL amendment): its
-origin is the start origin and its path doesn't start with //, for the
-start_urls named below and for every one the spec's frontmatter accepts of up
-to 4 characters after the / from ALPHABET. The core's start_url, checked in the
-runner's browser."""
+"""A run's start URL as Chromium reads it (ADR-0026's start URL amendment): on
+the start origin, with a path that doesn't start with //, for the start_urls
+named below and for every one the spec parser accepts of up to 4 characters
+after the / from ALPHABET. The core's start_url, checked in the runner's
+browser."""
 
 import asyncio
+import dataclasses
 import itertools
 import json
 from pathlib import Path
 from urllib.parse import unquote
 
-from aqa_core.project import start_url
-from aqa_core.spec import Spec, SpecContext, SpecFrontmatter, spec_hash
+from aqa_core.config import ProjectConfig
+from aqa_core.project import load_spec, start_url
+from aqa_core.spec import Preconditions, Spec
 from aqa_runner.browser_session import open_browser_session
 from playwright.async_api import async_playwright
 from pydantic import ValidationError
@@ -24,7 +26,7 @@ START_ORIGINS = [
     "http://[2001:db8::1]:8080",
 ]
 
-# Accepted start_urls that stay on the start origin only when joined as text.
+# The start_urls ADR-0026's start URL amendment names.
 NAMED_START_URLS = [
     "/",
     "/%2f%2fevil.test",
@@ -34,40 +36,55 @@ NAMED_START_URLS = [
 ]
 
 # What URL parsing gives a meaning to: separators, dots, % with the hex digits
-# of %2e, %2f and %5c in either case, a letter and a non-ASCII letter.
-ALPHABET = "/.%2eEfF5cC;?#@:aé"
+# of %2e, %2f and %5c in either case, a letter and a non-ASCII letter, and the
+# backslash and whitespace the spec parser refuses.
+ALPHABET = "/.%2eEfF5cC;?#@:aé\\\t\n "
 
-# The [start origin, start URL] pairs, as one JSON text, whose URL Chromium
-# reads on another origin or with a path starting //, which a parser resolving
-# that path again reads as a host; each with the origin and path read.
-OFF_ORIGIN = """text => JSON.parse(text)
+# The [start origin, URL] pairs, as JSON text, whose URL Chromium reads on
+# another origin or with a path starting //, which a parser resolving that
+# path again reads as a host; each with the origin and path read.
+UNSAFE = """text => JSON.parse(text)
     .map(([start, url]) => [start, url, new URL(url)])
     .filter(([start, , read]) => read.origin !== start || read.pathname.startsWith("//"))
     .map(([start, url, read]) => [start, url, read.origin, read.pathname])"""
 
+# What the check must flag, as it flags it: a start_url that lost its leading
+# /, a path of exactly two slashes, and /%2f%2fevil.test decoded first.
+SHOP = "https://shop.example.test"
+CONTROLS = [
+    [SHOP, f"{SHOP}@evil.test", "https://evil.test", "/"],
+    [SHOP, f"{SHOP}//evil.test", SHOP, "//evil.test"],
+    [SHOP, SHOP + unquote("/%2f%2fevil.test"), SHOP, "///evil.test"],
+]
 
-def accepted_spec(path: str) -> Spec | None:
-    """A spec whose start_url is `path`, or None when its frontmatter is
-    refused. Validated as load_spec validates it, without a file for each."""
-    data = {
-        "id": "login",
-        "goal": "A reader signs in.",
-        "preconditions": {"start_url": path},
-        "expect": ["The home page is shown"],
-    }
-    context = SpecContext(file_id="login", declared_secrets=frozenset())
+SPEC = """\
+---
+id: login
+goal: A reader signs in.
+preconditions: { start_url: /login }
+expect: [The home page is shown]
+---
+"""
+
+
+def with_start_url(spec: Spec, path: str) -> Spec | None:
+    """`spec` with `path` as its start_url, or None when the spec parser
+    refuses that start_url."""
     try:
-        frontmatter = SpecFrontmatter.model_validate(data, context=context)
+        preconditions = Preconditions.model_validate({"start_url": path})
     except ValidationError:
         return None
-    return Spec(Path("login.spec.md"), frontmatter, spec_hash(data))
+    frontmatter = spec.frontmatter.model_copy(update={"preconditions": preconditions})
+    return dataclasses.replace(spec, frontmatter=frontmatter)
 
 
-def test_chromium_reads_every_start_url_on_the_start_origin() -> None:
-    named = {path: accepted_spec(path) for path in NAMED_START_URLS}
+def test_chromium_reads_every_start_url_on_the_start_origin(tmp_path: Path) -> None:
+    (tmp_path / "login.spec.md").write_text(SPEC)
+    template = load_spec(tmp_path / "login.spec.md", ProjectConfig())
+    named = {path: with_start_url(template, path) for path in NAMED_START_URLS}
     assert [path for path, spec in named.items() if spec is None] == []
     swept = (
-        accepted_spec("/" + "".join(chars))
+        with_start_url(template, "/" + "".join(chars))
         for length in range(5)
         for chars in itertools.product(ALPHABET, repeat=length)
     )
@@ -75,25 +92,16 @@ def test_chromium_reads_every_start_url_on_the_start_origin() -> None:
     pairs = [
         [start, start_url(spec, start)] for start in START_ORIGINS for spec in specs
     ]
-    # The control: decoded first, /%2f%2fevil.test is ///evil.test.
-    decoded = [[start, start + unquote("/%2f%2fevil.test")] for start in START_ORIGINS]
 
-    async def scenario() -> tuple[object, object]:
+    async def scenario() -> object:
         async with (
             async_playwright() as playwright,
             open_browser_session(playwright.chromium) as session,
         ):
             # JSON text, since Playwright serializes a list argument item by
             # item: about 6 s for these pairs, against 1 s.
-            return (
-                await session.page.evaluate(OFF_ORIGIN, json.dumps(pairs)),
-                await session.page.evaluate(OFF_ORIGIN, json.dumps(decoded)),
-            )
+            controls = [row[:2] for row in CONTROLS]
+            return await session.page.evaluate(UNSAFE, json.dumps(pairs + controls))
 
-    off_origin, control = asyncio.run(scenario())
-
-    assert off_origin == []
-    assert control == [
-        [start, f"{start}///evil.test", start, "///evil.test"]
-        for start in START_ORIGINS
-    ]
+    # Only the controls, which come last.
+    assert asyncio.run(scenario()) == CONTROLS
