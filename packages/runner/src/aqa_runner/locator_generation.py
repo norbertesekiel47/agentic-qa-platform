@@ -4,10 +4,11 @@ ADR-0025's 2026-10-02 amendment, "generating locators").
 
 The caller says what the element is for and what each use is; this module
 finds the locators. Every locator it returns was resolved alone, on the live
-page, to the element the use put to it. That is judged through Playwright's
-utility world, which the page's scripts can't reach, so a page can make the
-generator build fewer or odder locators, but never one that finds another
-element."""
+page, to the element the use put to it. That is judged in Playwright's
+utility world, which the page's scripts can't reach, by a selector engine
+whoever opens the browser session registers first (`register_identity_engine`),
+so a page can make the generator build fewer or odder locators, but never one
+that finds another element."""
 
 import json
 import re
@@ -28,7 +29,7 @@ from aqa_core.compiled import (
     Target,
 )
 from aqa_core.text import normalize
-from playwright.async_api import ElementHandle, Error, Page
+from playwright.async_api import ElementHandle, Error, Page, Playwright
 from pydantic import Field, StringConstraints, TypeAdapter, ValidationError
 
 from aqa_runner.browser_session import ELEMENT_REF, LINE, BrowserSession
@@ -93,15 +94,31 @@ _STATE_CLASSES = frozenset(
 )
 
 # What one element may cost, whatever the page gives: the nearest ancestors
-# and the first stable classes of each node that are tried, and the page
-# round trips in all.
+# and the first stable classes of each node that are tried, and the tries in
+# all, each a resolution or a count.
 _ANCESTORS_TRIED = 16
 _CLASSES_TRIED = 16
-_ROUND_TRIPS = 400
+_TRIES = 400
 
-# The attribute the used element carries, with a random value, while its
-# candidates are resolved.
-_MARK = "data-aqa-generating"
+# A selector engine that holds the used element and says whether another is
+# the same one. Registered as a content script, it runs in Playwright's
+# utility world, an isolated world the page's scripts can't reach, and it
+# reads no DOM state the page could move: `hold:<token>` keeps the element it
+# is queried on, `is:<token>` finds that element only if it is the one kept,
+# and `drop:<token>` forgets it.
+# https://playwright.dev/python/docs/extensibility#custom-selector-engines
+_IDENTITY = "aqa-identity"
+_IDENTITY_ENGINE = """(() => {
+    const held = new Map();
+    const queryAll = (root, body) => {
+        const cut = body.indexOf(":");
+        const [verb, token] = [body.slice(0, cut), body.slice(cut + 1)];
+        if (verb === "hold") held.set(token, root);
+        if (verb === "drop") held.delete(token);
+        return verb === "is" && held.get(token) === root ? [root] : [];
+    };
+    return { query: (root, body) => queryAll(root, body)[0] || null, queryAll };
+})()"""
 
 # What a use puts a target to (aqa_runner.locators.Use).
 type GeneratedUse = Literal["action"]
@@ -137,8 +154,9 @@ _FACTS = f"""(element) => {{
 
 # The facts' shape, checked strictly, with bounded sizes: they come from the
 # page's own world.
+_TEXT_LENGTH = 1024
 _Token = Annotated[str, StringConstraints(strict=True, max_length=256)]
-_Text = Annotated[str, StringConstraints(strict=True, max_length=1024)]
+_Text = Annotated[str, StringConstraints(strict=True, max_length=_TEXT_LENGTH)]
 
 
 class _Node(TypedDict):
@@ -177,7 +195,8 @@ class LocatorError(LookupError):
 
 def _name_as_written(name: str | None) -> str | None:
     """A snapshot name, decoded from JSON, or None for one that holds a lone
-    surrogate, which no locator can carry."""
+    surrogate, which no locator can carry. (Playwright 1.63's snapshot leaves
+    out a name of thousands of characters itself.)"""
     if name is None:
         return None
     decoded: str = json.loads(name)
@@ -290,33 +309,36 @@ async def _unless_the_page_breaks(page: Page, check: Awaitable[bool]) -> bool:
         return False
 
 
-async def _carries_only(page: Page, element: ElementHandle, mark: str) -> bool:
-    """Whether `element` carries `mark` and nothing else on the page does,
-    read through Playwright's utility world, where the page's scripts can't
-    reach: `get_attribute` and a css count."""
-    if await element.get_attribute(_MARK) != mark:
+class _OutOfTriesError(Exception):
+    """The trial spent its tries."""
+
+
+async def _is_held(element: ElementHandle, token: str) -> bool:
+    """Whether `element` is the one the identity engine holds for `token`:
+    one query, in the utility world, that reads no DOM state."""
+    same = await element.query_selector(f"{_IDENTITY}=is:{token}")
+    if same is None:
         return False
-    return await page.locator(f"css=[{_MARK}='{mark}']").count() == 1
+    await same.dispose()
+    return True
 
 
 @dataclass
 class _Trial:
-    """Resolving candidates for one use of the element, within a budget of
-    page round trips. The element carries `mark` meanwhile."""
+    """Resolving candidates for one use of the element, which the identity
+    engine holds as `token`, within a budget of tries."""
 
     page: Page
     use: GeneratedUse
-    mark: str
-    round_trips: int = _ROUND_TRIPS
-    # How many elements on the page each scope finds, counted once.
+    token: str
+    tries: int = _TRIES
+    # Whether each scope finds one element on the page, counted once.
     counted: dict[str, bool] = field(default_factory=dict)
 
     def _spend(self) -> None:
-        if self.round_trips == 0:
-            raise LocatorError(
-                f"no locator found the element within {_ROUND_TRIPS} tries"
-            )
-        self.round_trips -= 1
+        if self.tries == 0:
+            raise _OutOfTriesError
+        self.tries -= 1
 
     async def _found(self, locator: Locator) -> bool:
         target = Target(semantic=_CANDIDATE_MEANING, locators=(locator,))
@@ -324,13 +346,13 @@ class _Trial:
         if not isinstance(found, Resolved):
             return False
         try:
-            return await _carries_only(self.page, found.element, self.mark)
+            return await _is_held(found.element, self.token)
         finally:
             await found.element.dispose()
 
     async def finds(self, locator: Locator) -> bool:
-        """Whether `locator`, alone, resolves for the use to the marked
-        element."""
+        """Whether `locator`, alone, resolves for the use to the element
+        used."""
         self._spend()
         return await _unless_the_page_breaks(self.page, self._found(locator))
 
@@ -381,29 +403,36 @@ async def _facts(page: Page, element: ElementHandle) -> _Element:
         raise LocatorError("the page described the element as no element is") from None
 
 
-async def _set_mark(element: ElementHandle, mark: str) -> bool:
-    # The mark is hex, so it is written into the function rather than passed
-    # beside the element: the page's own world spreads arguments with an
-    # iterator the page can rewrite.
-    await element.evaluate(f"(element) => element.setAttribute('{_MARK}', '{mark}')")
-    return True
+async def register_identity_engine(playwright: Playwright) -> None:
+    """Give `playwright` the selector engine the generator compares elements
+    with. Call it once per Playwright instance, before the browser session
+    opens: an engine reaches only the contexts created after it."""
+    await playwright.selectors.register(
+        _IDENTITY, script=_IDENTITY_ENGINE, content_script=True
+    )
 
 
-async def _marked(page: Page, element: ElementHandle) -> str:
-    """Mark the element, in the page's own world, with a fresh random value,
-    and return the value once Playwright's utility world reads it on the
-    element and on nothing else."""
-    mark = secrets.token_hex(16)
-    set_mark = await _unless_the_page_breaks(page, _set_mark(element, mark))
-    if not set_mark or not await _unless_the_page_breaks(
-        page, _carries_only(page, element, mark)
-    ):
-        raise LocatorError("the page kept the mark off the element, or copied it")
-    return mark
+async def _held(page: Page, element: ElementHandle) -> str:
+    """Have the identity engine hold `element`, and return its token."""
+    token = secrets.token_hex(16)
+    try:
+        await element.query_selector(f"{_IDENTITY}=hold:{token}")
+    except Error as error:
+        if page.is_closed():
+            raise
+        if f'Unknown engine "{_IDENTITY}"' in str(error):
+            raise RuntimeError(
+                "the identity engine isn't registered: call "
+                "register_identity_engine before the browser session opens"
+            ) from None
+        # Playwright's general error type, otherwise: here the element left
+        # the page or its document, which is the page's doing.
+        raise LocatorError("the element left the page before it was held") from None
+    return token
 
 
-async def _remove_mark(element: ElementHandle) -> bool:
-    await element.evaluate(f"(element) => element.removeAttribute('{_MARK}')")
+async def _dropped(element: ElementHandle, token: str) -> bool:
+    await element.query_selector(f"{_IDENTITY}=drop:{token}")
     return True
 
 
@@ -434,25 +463,42 @@ async def _generate(
     """The first candidate of each kind that finds the element for `use`,
     in order. Raises `LocatorError` when none does."""
     element = await _facts(page, used.element)
-    mark = await _marked(page, used.element)
+    token = await _held(page, used.element)
+    trial = _Trial(page, use, token)
     found: list[Locator] = []
     try:
-        trial = _Trial(page, use, mark)
-        scopes = _scopes(element)
-        for kind in kinds_of(element):
-            for candidate in kind:
-                working = await trial.scoped_as_needed(candidate, scopes)
-                if working is not None:
-                    found.append(working)
-                    break
+        await _first_of_each_kind(trial, kinds_of(element), _scopes(element), found)
+    except _OutOfTriesError:
+        # Out of tries, the kinds found so far stand; with none, the budget
+        # is the reason.
+        if not found:
+            raise LocatorError(
+                f"no locator found the element within {_TRIES} tries"
+            ) from None
     finally:
-        # A page that keeps the mark keeps an attribute on the element it
-        # already gave; the locators were judged before.
-        await _unless_the_page_breaks(page, _remove_mark(used.element))
+        # The engine forgets the element; a page that broke it keeps only an
+        # entry in a world it can't reach.
+        await _unless_the_page_breaks(page, _dropped(used.element, token))
     if not found:
         what = f"the {element['tag']} element" if _stable(element["tag"]) else "it"
         raise LocatorError(f"no locator of the grammar finds {what} alone for an {use}")
     return tuple(found)
+
+
+async def _first_of_each_kind(
+    trial: _Trial,
+    kinds: list[list[Locator]],
+    scopes: list[str],
+    found: list[Locator],
+) -> None:
+    """Append to `found` the first candidate of each kind that finds the
+    element, scoped as needed."""
+    for kind in kinds:
+        for candidate in kind:
+            working = await trial.scoped_as_needed(candidate, scopes)
+            if working is not None:
+                found.append(working)
+                break
 
 
 async def generate_for_action(page: Page, used: Seen) -> tuple[Locator, ...]:

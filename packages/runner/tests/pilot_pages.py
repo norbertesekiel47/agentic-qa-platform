@@ -22,6 +22,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from aqa_runner.browser_session import BrowserSession, open_browser_session
+from aqa_runner.locator_generation import register_identity_engine
 from playwright.async_api import async_playwright
 
 from packages.runner.tests.egress_fixtures import egress_proxy
@@ -50,14 +51,16 @@ async def show(session: BrowserSession, page: str) -> None:
 
 
 def in_session[T](scenario: Callable[[BrowserSession], Awaitable[T]]) -> T:
-    """`scenario`'s result in a fresh browser session."""
+    """`scenario`'s result in a fresh browser session, which the locator
+    generator can work in."""
 
     async def run() -> T:
-        async with (
-            async_playwright() as playwright,
-            egress_proxy() as egress,
-            open_browser_session(playwright.chromium, egress=egress) as session,
-        ):
-            return await scenario(session)
+        async with async_playwright() as playwright:
+            await register_identity_engine(playwright)
+            async with (
+                egress_proxy() as egress,
+                open_browser_session(playwright.chromium, egress=egress) as session,
+            ):
+                return await scenario(session)
 
     return asyncio.run(run())
