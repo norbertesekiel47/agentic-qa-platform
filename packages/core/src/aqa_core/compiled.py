@@ -13,7 +13,7 @@ import re
 import threading
 import warnings
 from collections.abc import Container
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Self, cast
 
 from pydantic import (
     AfterValidator,
@@ -39,7 +39,7 @@ from aqa_core.schema import (
     StartPath,
     StrictModel,
 )
-from aqa_core.text import normalize
+from aqa_core.text import has_pattern, has_text, normalize
 
 # The roles Playwright 1.63's get_by_role accepts, which are WAI-ARIA's, as
 # its signature lists them
@@ -364,6 +364,15 @@ class _TextCheck(_Assertion):
         if (self.text is None) == (self.pattern is None):
             raise ValueError("a text check takes text or pattern, exactly one")
         return self
+
+    def matches(self, rendered: str) -> bool:
+        """Whether an element's rendered text meets this check: the literal
+        as whole words, ignoring case, or the pattern found anywhere, both
+        against the normalized text (DATA_MODEL §7)."""
+        if self.text is not None:
+            return has_text(rendered, self.text)
+        # _text_or_pattern guarantees a pattern when there is no text.
+        return has_pattern(rendered, cast(str, self.pattern))
 
 
 class TextVisible(_TextCheck):
