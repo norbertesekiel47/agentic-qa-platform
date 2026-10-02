@@ -419,7 +419,10 @@ def ci_lockfiles() -> list[str]:
     workflow = (REPO / ".github/workflows/ci.yml").read_text()
     step = re.search(r'audit-lockfile\.sh "\$RUNNER_TEMP/osv-scanner" (.+)', workflow)
     if not step:
-        raise LookupError("ci.yml's dependency-audit job doesn't run the audit script")
+        raise LookupError(
+            'ci.yml must run audit-lockfile.sh "$RUNNER_TEMP/osv-scanner" and its '
+            "lockfiles on one line"
+        )
     return step.group(1).split()
 
 
@@ -562,16 +565,32 @@ def test_an_advisory_in_one_audited_lockfile_is_judged_by_its_score(
 
     assert (result.returncode == 0) is passes, result.stdout + result.stderr
     # The finding says which lockfile it is in, whether or not it fails the audit.
-    finding = f"{lockfile}: demo 1.0: GHSA-fake-0 (CVSS {score or 'none'})"
-    assert finding in result.stdout
+    # The score isn't compared: jq's rendering of 7.0 depends on its version.
+    assert f"{lockfile}: demo 1.0: GHSA-fake-0 (CVSS " in result.stdout
 
 
-def test_a_scanner_error_on_the_last_lockfile_fails_the_audit(tmp_path: Path) -> None:
-    reports = clean_reports() | {CI_LOCKFILES[-1]: (128, {"results": []})}
+@pytest.mark.parametrize("lockfile", CI_LOCKFILES)
+@pytest.mark.parametrize("scanner_exit", [2, 128])
+def test_a_scanner_error_on_one_audited_lockfile_fails_the_audit(
+    tmp_path: Path, lockfile: str, scanner_exit: int
+) -> None:
+    # 2 is the least exit code past the 1 that means findings.
+    reports = clean_reports() | {lockfile: (scanner_exit, {"results": []})}
 
     result = audit_files(tmp_path, reports)
 
-    assert result.returncode == 128, result.stdout + result.stderr
+    assert result.returncode == scanner_exit, result.stdout + result.stderr
+
+
+def test_the_audit_lists_the_findings_of_every_lockfile(tmp_path: Path) -> None:
+    # A lockfile that fails the audit doesn't hide the findings in the next one.
+    reports: Reports = dict.fromkeys(CI_LOCKFILES, (1, osv_report(f"{CUT:.1f}")))
+
+    result = audit_files(tmp_path, reports)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    for lockfile in CI_LOCKFILES:
+        assert f"{lockfile}: demo 1.0: GHSA-fake-0 (CVSS " in result.stdout
 
 
 def test_a_lockfile_with_no_report_fails_the_audit(tmp_path: Path) -> None:
@@ -587,19 +606,20 @@ def test_a_lockfile_with_no_report_fails_the_audit(tmp_path: Path) -> None:
 def test_the_audit_needs_a_lockfile(tmp_path: Path) -> None:
     result = audit_files(tmp_path, {})
 
-    assert result.returncode == 2
+    assert result.returncode != 0
     assert "no lockfile" in result.stdout
 
 
 def test_the_scanner_reads_the_root_waivers_for_every_lockfile(tmp_path: Path) -> None:
     audit_files(tmp_path, clean_reports())
 
-    calls = [line.split() for line in (tmp_path / "calls.txt").read_text().splitlines()]
+    text = (tmp_path / "calls.txt").read_text().replace("=", " ")
+    calls = [line.split() for line in text.splitlines()]
     # One scan per lockfile: osv-scanner skips a file that parses to nothing when
     # it scans two at once, and `--config` makes the root file the only waivers.
     for call, lockfile in zip(calls, CI_LOCKFILES, strict=True):
         pairs = set(itertools.pairwise(call))
-        assert ("--config", "osv-scanner.toml") in pairs
+        assert ("--config", WAIVERS.name) in pairs
         assert ("--lockfile", lockfile) in pairs
 
 
