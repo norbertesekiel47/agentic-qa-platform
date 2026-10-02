@@ -218,8 +218,8 @@ def sites(monkeypatch: pytest.MonkeyPatch) -> Iterator[Sites]:
     # dial of port 80 goes to the fixture's port instead.
     open_connection = asyncio.open_connection
 
-    async def to_fixture(host: str, port: int) -> Connection:
-        return await open_connection(host, served.port if port == 80 else port)
+    async def to_fixture(host: str, port: int, **tls: Any) -> Connection:
+        return await open_connection(host, served.port if port == 80 else port, **tls)
 
     monkeypatch.setattr(asyncio, "open_connection", to_fixture)
     thread = threading.Thread(target=server.serve_forever)
