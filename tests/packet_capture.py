@@ -34,6 +34,7 @@ import sys
 import threading
 import time
 from collections.abc import Awaitable, Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
@@ -178,33 +179,29 @@ class Capture:
 def capturing(source: Source) -> Iterator[list[bytes]]:
     """Read every frame `source` gets into the list it yields, on a thread of
     its own, until the block ends and `SETTLE_SECONDS` more have passed, then
-    drain what is left. Raises what the reader raised, and raises if the
+    drain what is left. Raises whatever the reader raised, and raises if the
     kernel dropped a packet: an incomplete capture is never evidence."""
     frames: list[bytes] = []
-    failures: list[OSError] = []
     done = threading.Event()
 
     def read() -> None:
-        try:
-            while not done.is_set():
-                source.wait(WAIT_MILLISECONDS)
-                frames.extend(source.take())
+        while not done.is_set():
+            source.wait(WAIT_MILLISECONDS)
             frames.extend(source.take())
-        # The capture's own failure, re-raised below: a reader that stopped
-        # early must not pass for a quiet one.
-        except OSError as error:
-            failures.append(error)
+        frames.extend(source.take())
 
-    reader = threading.Thread(target=read)
-    reader.start()
-    try:
-        yield frames
-    finally:
-        time.sleep(SETTLE_SECONDS)
-        done.set()
-        reader.join()
-    if failures:
-        raise RuntimeError("the packet capture stopped early") from failures[0]
+    # A future hands the reader's exception, whatever it is, to this thread.
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        reading = pool.submit(read)
+        try:
+            yield frames
+        finally:
+            time.sleep(SETTLE_SECONDS)
+            done.set()
+        try:
+            reading.result()
+        except OSError as error:
+            raise RuntimeError("the packet capture stopped early") from error
     dropped, seen = source.dropped()
     if dropped:
         raise RuntimeError(f"the packet capture dropped {dropped} of {seen} packets")

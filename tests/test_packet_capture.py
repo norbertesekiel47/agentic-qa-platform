@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.capture_network import host_sources
 from tests.packet_capture import capturing, observe
 from tests.packet_flows import Flow
 
@@ -78,7 +79,7 @@ class Script:
     reports drops as told."""
 
     def __init__(
-        self, frames: list[bytes], *, failure: OSError | None = None, drops: int = 0
+        self, frames: list[bytes], *, failure: Exception | None = None, drops: int = 0
     ) -> None:
         self.frames = frames
         self.failure = failure
@@ -112,6 +113,14 @@ def test_a_capture_whose_reader_failed_is_no_evidence() -> None:
         pass
 
 
+def test_a_capture_whose_reader_raised_anything_raises_it() -> None:
+    with (
+        pytest.raises(ValueError, match="unreadable"),
+        capturing(Script([], failure=ValueError("unreadable"))),
+    ):
+        pass
+
+
 def test_a_capture_that_dropped_a_packet_is_no_evidence() -> None:
     with (
         pytest.raises(RuntimeError, match="dropped 1 of 10"),
@@ -135,3 +144,22 @@ def test_the_capture_misses_no_packet_under_load() -> None:
     host = observation.result["host"]
     expected = {(host, port) for port in observation.result["ports"]}
     assert expected <= destinations(observation.flows, "udp")
+
+
+# The hosts line the capture reads to refuse a lookup it can't keep inside.
+NSSWITCH = {
+    "ubuntu": (
+        "passwd: files systemd\nhosts: files mdns4_minimal [NOTFOUND=return] dns\n",
+        ["files", "mdns4_minimal", "dns"],
+    ),
+    "resolve": (
+        "hosts:   files resolve [!UNAVAIL=return] dns myhostname # comment\n",
+        ["files", "resolve", "dns", "myhostname"],
+    ),
+    "none": ("passwd: files\n", []),
+}
+
+
+@pytest.mark.parametrize(("text", "sources"), NSSWITCH.values(), ids=list(NSSWITCH))
+def test_the_host_sources_are_read_from_nsswitch(text: str, sources: list[str]) -> None:
+    assert host_sources(text) == sources
