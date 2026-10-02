@@ -352,6 +352,15 @@ class TestChangeTests(DiffTestCase):
     def test_a_changed_bar_test_in_a_subdirectory_needs_approval(self) -> None:
         self.assert_a_flipped_outcome_needs_approval("tests/isolation/test_runs.py")
 
+    def test_a_bar_test_changed_only_in_non_utf8_bytes_needs_approval(self) -> None:
+        # Both bytes decode to U+FFFD; the file still changed.
+        rel = "tests/test_bar.py"
+        self.on_main({rel: b"# coding: latin-1\nSTRICT = '\xe9' == '\xe9'\n"})
+        (self.project / rel).write_bytes(
+            b"# coding: latin-1\nSTRICT = '\xe9' == '\xe8'\n"
+        )
+        self.assertIn("proves the bar", self.assert_needs_approval(rel))
+
     def test_a_changed_binary_under_tests_needs_approval(self) -> None:
         # Its content isn't read, so a changed fixture is taken as rewritten.
         self.on_main({"tests/fixtures/page.png": b"\x89PNG\none\n"})
@@ -379,19 +388,16 @@ class GateTests(DiffTestCase):
     def test_a_gate_config_change_needs_approval(self) -> None:
         self.on_main({"pyproject.toml": PYPROJECT})
         ban = 'constraint-dependencies = ["litellm<0"]'
-        changes = {  # what: (old text, new text, the diff line reported)
-            "a lowered threshold": (
-                "fail_under = 94",
-                "fail_under = 80",
-                "+fail_under = 80",
-            ),
-            "the litellm ban dropped": (ban, "", f"-{ban}"),
-            "a git source": (MEMBER, f"{MEMBER}\n{GIT_SOURCE}", f"+{GIT_SOURCE}"),
+        changes = {  # what: (old text, new text)
+            "a lowered threshold": ("fail_under = 94", "fail_under = 80"),
+            "the litellm ban dropped": (ban, ""),
+            "a git source": (MEMBER, f"{MEMBER}\n{GIT_SOURCE}"),
         }
-        for what, (old, new, shown) in changes.items():
+        for what, (old, new) in changes.items():
             with self.subTest(what=what):
                 self.put("pyproject.toml", PYPROJECT.replace(old, new))
-                self.assertIn(shown, self.assert_needs_approval("pyproject.toml"))
+                output = self.assert_needs_approval("pyproject.toml")
+                self.assertIn("pyproject.toml changes quality-gate settings", output)
 
     def test_other_pyproject_changes_need_no_approval(self) -> None:
         self.on_main({"pyproject.toml": PYPROJECT})
@@ -402,7 +408,8 @@ class GateTests(DiffTestCase):
     def test_a_constraints_md_change_needs_approval(self) -> None:
         self.on_main({"CONSTRAINTS.md": CONSTRAINTS_MD})
         self.put("CONSTRAINTS.md", CONSTRAINTS_MD.replace("≥ 94%", "≥ 90%"))
-        self.assertIn("≥ 90%", self.assert_needs_approval("CONSTRAINTS.md"))
+        output = self.assert_needs_approval("CONSTRAINTS.md")
+        self.assertIn("CONSTRAINTS.md changes quality-gate settings", output)
 
     def test_pytest_config_files_need_approval(self) -> None:
         # pytest 9 reads these ahead of pyproject.toml's [tool.pytest].
@@ -411,6 +418,22 @@ class GateTests(DiffTestCase):
                 self.put(rel, "[pytest]\naddopts = --cov-fail-under=0\n")
                 self.assert_needs_approval(rel)
                 (self.project / rel).unlink()
+
+    def test_a_gate_config_file_that_appears_or_goes_needs_approval(self) -> None:
+        # The tools read an empty one ahead of pyproject.toml's settings.
+        for rel in ("pytest.toml", ".coveragerc", "packages/core/ruff.toml"):
+            with self.subTest(rel=rel):
+                self.put(rel, "")
+                self.assert_needs_approval(rel)
+                (self.project / rel).unlink()
+        self.on_main({".coveragerc": ""})
+        self.git("rm", "-q", ".coveragerc")
+        self.assert_needs_approval(".coveragerc")
+
+    def test_a_gate_file_it_does_not_read_needs_approval(self) -> None:
+        (self.project / ".github/scripts").mkdir(parents=True)
+        (self.project / ".github/scripts/audit.tgz").write_bytes(b"\x1f\x8b\x08\x00")
+        self.assert_needs_approval(".github/scripts/audit.tgz")
 
     def test_an_edit_to_the_guard_or_its_settings_needs_approval(self) -> None:
         # The guard's own tests prove the bar too; they ask as part of the guard.
@@ -466,13 +489,33 @@ class OutputTests(DiffTestCase):
         self.put(self.WORKFLOW, WORKFLOW_YML)
         self.assertNotIn(self.TOKEN, self.assert_needs_approval(self.WORKFLOW))
 
-    def test_a_gate_file_with_a_non_utf8_byte_shows_only_its_change(self) -> None:
-        script = ".github/scripts/audit.sh"
-        self.on_main({script: b"# caf\xe9\njq -e 'all(.score < 7)'\n"})
-        (self.project / script).write_bytes(b"# caf\xe9\njq -e 'all(.score < 11)'\n")
-        output = self.assert_needs_approval(script)
-        self.assertIn("+jq -e 'all(.score < 11)'", output)
-        self.assertNotIn("caf", output)
+    def test_an_unchanged_non_utf8_gate_line_is_not_a_change(self) -> None:
+        # Both sides decode alike, so only the new comment differs.
+        workflow = b"name: ci\non: pull_request\njobs:\n  a:\n    steps:\n      - run: echo caf\xe9\n"
+        self.on_main({self.WORKFLOW: workflow})
+        (self.project / self.WORKFLOW).write_bytes(workflow + b"# A comment.\n")
+        self.assert_clean()
+
+    def test_a_gate_change_lists_the_file_not_its_lines(self) -> None:
+        # A credential can span lines (a key's body), so none is printed.
+        begin = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"
+        body = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2g"
+        key = (
+            f"        env:\n          KEY: |\n            {begin}\n            {body}\n"
+        )
+        self.on_main({self.WORKFLOW: WORKFLOW_YML})
+        self.put(self.WORKFLOW, WORKFLOW_YML + key)
+        result = self.diff(**APPROVED)
+        self.assertIn(self.WORKFLOW, result.stdout)
+        self.assertNotIn(body, result.stdout + result.stderr)
+
+    def test_a_refused_line_is_shortened_after_its_credential_is_cut(self) -> None:
+        # A key that the 120-character cut would split no longer matches.
+        key = "AI" + "za" + "Kp4T" * 8 + "Q7wR"
+        line = "x = f()  # type: ignore  # ".ljust(98, "k") + " " + key
+        self.put("packages/core/a.py", line + "\n")
+        output = self.assert_refused("packages/core/a.py")
+        self.assertNotIn(key[4:20], output)
 
 
 class LinkTests(DiffTestCase):

@@ -46,7 +46,8 @@ Escalated to the user
    command that may delete, move or rewrite a test file. ``--diff`` adds a
    deleted test file (a moved one reads as deleted), any change to an
    existing file that proves the bar (``BAR_TESTS``), where a flipped
-   expectation keeps every assertion, and a symbolic link.
+   expectation keeps every assertion, a gate config file that comes or goes
+   (the tools read even an empty one), and a symbolic link.
 6. Edits to this guard or the settings that load it (``.claude/hooks/``,
    ``.claude/settings*.json``), including shell writes that name them and
    installers that rewrite them without naming them (``fallow hooks install``,
@@ -71,8 +72,9 @@ lockfiles, binaries and files with a generated-code header. It lists files
 with ``git ls-files`` once the project is a repo, and until then walks the
 tree honouring the plain (glob-free) entries of the root ``.gitignore``.
 ``--diff`` reads each file as git stores it (a link is the name it points to)
-and skips the content of lockfiles and binaries. It cuts every credential it
-recognises short in what it prints, so a CI log never holds one.
+and skips the content of lockfiles and binaries. It prints each finding's file
+and reason, never a gate config's changed lines, and cuts every credential it
+recognises short, so a CI log holds none.
 
 Known gaps, stated rather than hidden
 -------------------------------------
@@ -241,7 +243,7 @@ def added_findings(
         if new[rule] > old[rule]:
             example = next(
                 (
-                    shorten(line)
+                    shorten(redacted(line))
                     for _, hit, line in new_hits
                     if hit is rule and line not in old_lines
                 ),
@@ -284,6 +286,14 @@ def credential_hits(text: str) -> list[tuple[int, str]]:
             where = line_of(text, match.start())
             hits.append((where, f"database URL with an inline password (host {host})"))
     return hits
+
+
+def redacted(text: str) -> str:
+    """`text` with each known-format credential and inline database password cut
+    short, as credential_hits() shows them, so a CI log never holds one."""
+    for _, pattern in SECRET_FORMATS:
+        text = pattern.sub(lambda match: match[0][:4] + "…", text)
+    return DSN.sub(lambda match: match[0].replace(match["value"], "…"), text)
 
 
 def find_secrets(command: str) -> list[str]:
@@ -676,7 +686,7 @@ def changed_files(root: Path, since: str) -> list[Change]:
     return list(changes.values())
 
 
-def texts(root: Path, since: str, change: Change) -> tuple[str, str] | None:
+def texts(root: Path, since: str, change: Change) -> tuple[bytes, bytes] | None:
     """The file at `since` and in the working tree, as git stores it: a link is
     the name it points to, never the file behind it. None for a binary or a
     lockfile, whose content no rule reads."""
@@ -694,13 +704,15 @@ def texts(root: Path, since: str, change: Change) -> tuple[str, str] | None:
         # A read error ends the run (exit 2): judged as emptied, the file
         # would go unchecked.
         after = path.read_bytes()
-    return blob.decode(errors="replace"), after.decode(errors="replace")
+    return blob, after
 
 
-def diff_asks(change: Change, judged: list[str], *, rewritten: bool) -> list[str]:
+def diff_asks(
+    change: Change, judged: list[str], *, read: bool, rewritten: bool
+) -> list[str]:
     """What --diff asks about beyond an edit's judgment (`judged`), which never
-    sees a whole file go or a link. `rewritten`: its content changed, or wasn't
-    read."""
+    sees a whole file come or go, or a link. `read`: its content was read;
+    `rewritten`: its bytes changed, or weren't read."""
     rel = change.rel
     if is_exempt(rel):
         return []
@@ -717,6 +729,11 @@ def diff_asks(change: Change, judged: list[str], *, rewritten: bool) -> list[str
             f"{rel}: this change deletes a test file. Approve only if its "
             "checks are obsolete, not inconvenient."
         )
+    elif GATE_WHOLE_FILE.search(rel) and (change.added or change.deleted or not read):
+        asks.append(
+            f"{rel} is a quality-gate config file that this change adds, deletes or "
+            "--diff can't read: the tools read it, even empty."
+        )
     elif not change.added and rewritten and BAR_TESTS.search(rel):
         asks.append(
             f"{rel} proves the bar: a change there can weaken an expectation "
@@ -731,20 +748,22 @@ def diff_verdicts(cwd: Path, base: str) -> list[Verdict]:
     verdicts = []
     for change in changed_files(root, since):
         read = texts(root, since, change)
-        before, after = read or ("", "")
-        verdict = judge_change(change.rel, before, after, root)
-        rewritten = read is None or before != after
-        verdict.asks.extend(diff_asks(change, verdict.asks, rewritten=rewritten))
+        before, after = read or (b"", b"")
+        verdict = judge_change(
+            change.rel,
+            before.decode(errors="replace"),
+            after.decode(errors="replace"),
+            root,
+        )
+        asks = diff_asks(
+            change,
+            verdict.asks,
+            read=read is not None,
+            rewritten=read is None or before != after,
+        )
+        verdict.asks.extend(asks)
         verdicts.append(verdict)
     return verdicts
-
-
-def redacted(text: str) -> str:
-    """`text` with each known-format credential and inline database password cut
-    short, as credential_hits() shows them, so a CI log never holds one."""
-    for _, pattern in SECRET_FORMATS:
-        text = pattern.sub(lambda match: match[0][:4] + "…", text)
-    return DSN.sub(lambda match: match[0].replace(match["value"], "…"), text)
 
 
 def diff_cli(base: str, cwd: Path) -> int:
@@ -773,7 +792,9 @@ def diff_cli(base: str, cwd: Path) -> int:
             else "needs the maintainer's approval (in CI, the floor-change-approved label)"
         )
         print(f"policy_guard --diff {base}: {heading}:")
-        print(redacted("\n".join(f"- {ask}" for ask in asks)))
+        # The first line names the file; the lines that changed are on the pull
+        # request, and a credential among them could span several.
+        print(redacted("\n".join(f"- {ask.splitlines()[0]}" for ask in asks)))
     return 1 if refused or (asks and not approved) else 0
 
 
