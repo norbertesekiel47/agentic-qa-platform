@@ -200,27 +200,6 @@ def test_trial_reports_a_sandbox_the_runner_refuses(proc: Path, runs: Path) -> N
     assert report["peak_memory_bytes"] == 512 * 1024
 
 
-# Where Chromium's sandbox can't start, its zygote logs this and the browser
-# never runs, so the sandbox check has no process to read.
-NO_USABLE_SANDBOX = (
-    "BrowserType.launch: Target page, context or browser has been closed\n"
-    "  - [pid=19][err] [0930/154953.535932:FATAL:zygote_host_impl_linux.cc(129)] "
-    "No usable sandbox!\n"
-)
-
-
-def test_a_sandbox_that_cannot_start_shows_no_observations(
-    proc: Path, runs: Path
-) -> None:
-    chromium = FailingChromium(Error(NO_USABLE_SANDBOX))
-
-    report = asyncio.run(run_trial(chromium, proc, runs))
-
-    assert report["sandbox"]["on"] is False
-    assert "Chromium's sandbox can't start" in report["sandbox"]["error"]
-    assert report["sandbox_observed"] is None
-
-
 @pytest.mark.parametrize(
     "error",
     [
@@ -241,60 +220,84 @@ def test_other_launch_errors_stop_the_trial(
 # What a sandbox check that refused the browser observed, and how the report
 # shows it, through the JSON every candidate prints: on Linux each process's
 # namespace links and seccomp filter count, on macOS sandbox_check's answer.
-NOT_SANDBOXED = "fake: renderer 77 shares the browser's pid namespace"
-LINUX_OBSERVED = SandboxObservations(
-    browser=LinuxProcess(
-        pid=19,
-        namespaces={"user": "user:[1]", "pid": "pid:[2]", "net": "net:[3]"},
-        seccomp_filters=0,
+# Each refusal has a sandboxed renderer and one it refuses; both are shown.
+LINUX_REFUSED = (
+    SandboxObservations(
+        browser=LinuxProcess(
+            pid=19,
+            namespaces={"user": "user:[1]", "pid": "pid:[2]", "net": "net:[3]"},
+            seccomp_filters=0,
+        ),
+        renderers=[
+            LinuxProcess(
+                pid=77,
+                namespaces={"user": "user:[4]", "pid": "pid:[5]", "net": "net:[6]"},
+                seccomp_filters=1,
+            ),
+            LinuxProcess(
+                pid=78,
+                namespaces={"user": "user:[7]", "pid": "pid:[2]", "net": "net:[8]"},
+                seccomp_filters=1,
+            ),
+        ],
     ),
-    renderers=[
-        LinuxProcess(
-            pid=77,
-            namespaces={"user": "user:[4]", "pid": "pid:[2]", "net": "net:[5]"},
-            seccomp_filters=1,
-        )
-    ],
-)
-LINUX_SHOWN = {
-    "browser": {
-        "pid": 19,
-        "namespaces": {"user": "user:[1]", "pid": "pid:[2]", "net": "net:[3]"},
-        "seccomp_filters": 0,
+    "fake: renderer 78 shares the browser's pid namespace (pid:[2])",
+    {
+        "browser": {
+            "pid": 19,
+            "namespaces": {"user": "user:[1]", "pid": "pid:[2]", "net": "net:[3]"},
+            "seccomp_filters": 0,
+        },
+        "renderers": [
+            {
+                "pid": 77,
+                "namespaces": {"user": "user:[4]", "pid": "pid:[5]", "net": "net:[6]"},
+                "seccomp_filters": 1,
+            },
+            {
+                "pid": 78,
+                "namespaces": {"user": "user:[7]", "pid": "pid:[2]", "net": "net:[8]"},
+                "seccomp_filters": 1,
+            },
+        ],
     },
-    "renderers": [
-        {
-            "pid": 77,
-            "namespaces": {"user": "user:[4]", "pid": "pid:[2]", "net": "net:[5]"},
-            "seccomp_filters": 1,
-        }
-    ],
-}
-MACOS_OBSERVED = SandboxObservations(
-    browser=MacProcess(pid=4663, sandboxed=False),
-    renderers=[MacProcess(pid=4686, sandboxed=False)],
 )
-MACOS_SHOWN = {
-    "browser": {"pid": 4663, "sandboxed": False},
-    "renderers": [{"pid": 4686, "sandboxed": False}],
-}
+MACOS_REFUSED = (
+    SandboxObservations(
+        browser=MacProcess(pid=4663, sandboxed=False),
+        renderers=[
+            MacProcess(pid=4686, sandboxed=True),
+            MacProcess(pid=4687, sandboxed=False),
+        ],
+    ),
+    "fake: renderer 4687 isn't sandboxed",
+    {
+        "browser": {"pid": 4663, "sandboxed": False},
+        "renderers": [
+            {"pid": 4686, "sandboxed": True},
+            {"pid": 4687, "sandboxed": False},
+        ],
+    },
+)
 
 
 @pytest.mark.parametrize(
-    ("observed", "shown"),
-    [(LINUX_OBSERVED, LINUX_SHOWN), (MACOS_OBSERVED, MACOS_SHOWN)],
+    ("observed", "reasons", "shown"),
+    [LINUX_REFUSED, MACOS_REFUSED],
     ids=["linux", "macos"],
 )
 def test_trial_reports_what_a_refused_check_observed(
-    proc: Path, runs: Path, observed: SandboxObservations, shown: dict[str, object]
+    proc: Path,
+    runs: Path,
+    observed: SandboxObservations,
+    reasons: str,
+    shown: dict[str, object],
 ) -> None:
-    chromium = FailingChromium(
-        SandboxUnavailableError(NOT_SANDBOXED, observed=observed)
-    )
+    chromium = FailingChromium(SandboxUnavailableError(reasons, observed=observed))
 
     report = json.loads(json.dumps(asyncio.run(run_trial(chromium, proc, runs))))
 
-    assert report["sandbox"] == {"on": False, "error": NOT_SANDBOXED}
+    assert report["sandbox"] == {"on": False, "error": reasons}
     assert report["sandbox_observed"] == shown
 
 

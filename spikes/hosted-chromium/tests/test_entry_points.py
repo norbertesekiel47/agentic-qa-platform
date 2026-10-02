@@ -104,7 +104,20 @@ REPORT = Report(
     boot_id="b1",
     earlier_runs=[],
     sandbox=Sandbox(on=True),
-    sandbox_observed=None,
+    sandbox_observed={
+        "browser": {
+            "pid": 19,
+            "namespaces": {"user": "user:[1]", "pid": "pid:[2]", "net": "net:[3]"},
+            "seccomp_filters": 0,
+        },
+        "renderers": [
+            {
+                "pid": 77,
+                "namespaces": {"user": "user:[4]", "pid": "pid:[5]", "net": "net:[6]"},
+                "seccomp_filters": 1,
+            }
+        ],
+    },
     ready_seconds=0.5,
     ready_at=1790000000.5,
     peak_memory_bytes=1,
