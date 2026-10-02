@@ -81,10 +81,12 @@ recognises short, so a CI log holds none.
 Each kind of watched file (rules 4-6) is defined once, by the shapes of its
 names (``NameShapes`` in ``policy_rules.py``), and its edit check and its shell
 check are built from that definition. A name may run on past its shape
-(``pyproject.toml5``, ``test_a.pyc``), but not as a ``.bak`` backup, and a
+(``pyproject.toml5``, ``test_a.pyc``) unless it ends as a ``.bak`` backup, and a
 directory is named exactly (not ``.claude/hooks-old``). In a shell command a
-name also ends at whitespace, a quote or an operator, its segments may sit
-behind several slashes, and a directory stands for every file under it.
+name also ends at whitespace, a quote or an operator, may follow an attached
+short option or a variable (``-o.claude/...``, ``$D.ruff.toml``), its segments
+may sit behind several slashes or ``.`` and ``..`` steps, and a directory stands
+for every file under it.
 
 Known gaps, stated rather than hidden
 -------------------------------------
@@ -96,11 +98,12 @@ Known gaps, stated rather than hidden
   1-3; rules 4-6 have no backstop for a write through an opaque script. A
   watched file goes unseen when a ``find -delete`` or a script deletes it, a
   glob stands in its fixed part (``pyproj*.toml``), a ``cd`` comes before its
-  bare name, or its name holds a space; so does a bare ``test`` directory that
-  starts a word (the shell's ``test`` command), and quoted text in a command
-  that commits. A mutating command that names a test path asks, even a
-  formatter run or test output sent to ``tee``, and a shell write is judged as
-  source (write a test fake's stub with Write).
+  bare name, parameter expansion or quotes build it (``${f%.bak}``,
+  ``te''st_a.py``), or its name holds a space; so does a bare ``test``
+  directory that starts a word (the shell's ``test`` command), and quoted text
+  in a command that commits. A mutating command that names a test path asks,
+  even a formatter run or test output sent to ``tee``, and a shell write is
+  judged as source (write a test fake's stub with Write).
 * This is a guardrail, not a security boundary. Other agents (Codex, Cursor)
   do not run Claude Code hooks. CI's ``--diff`` sees their changes, but runs
   the pull request's own copy of this guard and of its workflow, so a pull
@@ -186,6 +189,7 @@ from policy_rules import (
     Rule,
     binary_or_lockfile,
     is_exempt,
+    resolved_paths,
 )
 
 # --- helpers ------------------------------------------------------------------------
@@ -326,6 +330,9 @@ def gate_lines(rel: str, text: str) -> list[str] | None:
     selected: list[str]
     if GATE_WHOLE_FILE.search(rel):
         selected = lines
+    elif WORKFLOW.search(rel):
+        # Ahead of the names a workflow's own name can run on from.
+        selected = [line for line in lines if not WORKFLOW_FREE_LINE.match(line)]
     elif GATE_SECTION_FILE.search(rel):
         selected, inside = [], False
         for line in lines:
@@ -336,8 +343,6 @@ def gate_lines(rel: str, text: str) -> list[str] | None:
                 selected.append(line)
     elif PACKAGE_MANIFEST.search(rel):
         selected = [line for line in lines if PACKAGE_GATE_SCRIPT.match(line)]
-    elif WORKFLOW.search(rel):
-        selected = [line for line in lines if not WORKFLOW_FREE_LINE.match(line)]
     else:
         return None
     return [line.rstrip() for line in selected if line.strip()]
@@ -464,7 +469,9 @@ def check_bash(command: str, project: Path) -> Verdict:
         for finding in added_findings("", command, project, tests=False)
         if writes or (launches and finding[1] == SANDBOX)
     )
-    if mutates and PROTECTED_IN_SHELL.search(command):
+    # A path can reach a watched file through . and .. steps.
+    named = f"{command}\n{resolved_paths(command)}" if mutates else ""
+    if mutates and PROTECTED_IN_SHELL.search(named):
         verdict.asks.append(
             "this shell command may modify the policy guard or the settings that "
             "load it (.claude/hooks, .claude/settings*.json)."
@@ -474,12 +481,12 @@ def check_bash(command: str, project: Path) -> Verdict:
             "this installer rewrites .claude/settings.json and AGENTS.md; the fallow "
             "gate is installed by hand (see AGENTS.md), so review with --dry-run first."
         )
-    if mutates and GATE_FILE_IN_SHELL.search(command):
+    if mutates and GATE_FILE_IN_SHELL.search(named):
         verdict.asks.append(
             "this shell command may modify a quality-gate config, which the "
             "per-edit diff check cannot see through a shell write."
         )
-    if mutates and TEST_PATH_IN_SHELL.search(command):
+    if mutates and TEST_PATH_IN_SHELL.search(named):
         verdict.asks.append(
             "this shell command may delete, move or rewrite a test file, which the "
             "per-edit assertion check cannot see."
