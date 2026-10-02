@@ -1,6 +1,6 @@
 # Architecture — Agentic QA Platform
 
-Last updated: 2026-10-02 (the local run record under the spec root, #41; the browser session, #36; the sandbox check, #35; M1 design decisions, ADR-0024–0026). Decisions referenced as ADR-NNNN live in [`ADRs/`](ADRs/).
+Last updated: 2026-10-02 (the browser session's document-origin checks, #44; the local run record under the spec root, #41; the browser session, #36; the sandbox check, #35; M1 design decisions, ADR-0024–0026). Decisions referenced as ADR-NNNN live in [`ADRs/`](ADRs/).
 
 ## 1. System context
 
@@ -113,7 +113,7 @@ A checkpoint preserves graph state, not the browser. Resuming therefore requires
 
 | Tool | Purpose |
 |---|---|
-| `navigate(url)`, `reload()` | Only URLs on the run's allowed origins (re-validated after redirects) |
+| `navigate(url)`, `reload()` | Only absolute http(s) URLs on the run's allowed origins, refused before anything is requested; the page each lands on, after redirects, is checked (ADR-0026) |
 | `click(ref)`, `fill(ref, text)`, `select(ref, option)`, `press(key)` | Act on accessibility-tree element refs |
 | `fill_secret(ref, name)` | Inject a named secret at the browser layer, only into a field and origin the secret is bound to (project config, DATA_MODEL §9) |
 | `screenshot(region?)` | Visual observation for verification (hybrid perception, M2; M1's navigator reads the accessibility tree only) |
@@ -124,7 +124,7 @@ A checkpoint preserves graph state, not the browser. Resuming therefore requires
 
 Page content is **untrusted data**:
 - Observations enter the model context inside delimited blocks, after secret-value redaction.
-- Before every observation and action, the tools check that the top-level page and the target's frame are on allowed origins (ADR-0026).
+- Before every observation and action, the browser session checks that the top-level page and the target's frame are on allowed origins. An action also refuses an element that contains another origin's frame, `press` checks the frame that has the focus, and frames from other origins are left out of snapshots (ADR-0026). The executor (#46) and the navigator's tools (#53) act and observe only through the session.
 - Browser-wide egress is enforced independently of the agent's tools (see [SECURITY §4, §7](SECURITY.md#4-prompt-injection)).
 
 ## 4. Key flows
