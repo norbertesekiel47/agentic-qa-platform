@@ -3,9 +3,13 @@ navigator role, whose request holds the static instructions and the spec's
 own text, and nothing from a page, a run or the machine."""
 
 import json
+from dataclasses import dataclass
 
+from aqa_core.coverage_plan import CoveragePlan, misfits
 from aqa_core.spec import Spec
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+
+from aqa_runner.model_router import ModelRouter, Routed
 
 # The plan's system prompt. Static: a change to it changes every plan request,
 # so the plan's cassettes are re-recorded or edited with it (TESTING §4).
@@ -91,3 +95,29 @@ def plan_request(spec: Spec) -> list[BaseMessage]:
             )
         ),
     ]
+
+
+@dataclass(frozen=True)
+class Planned:
+    """What one plan call gave: the plan the model wrote, if it parsed; why it
+    doesn't fit its spec, if it doesn't; and the routed call, with a cost
+    record for every response that arrived."""
+
+    plan: CoveragePlan | None
+    misfits: tuple[str, ...]
+    routed: Routed
+
+
+async def make_plan(router: ModelRouter, spec: Spec) -> Planned:
+    """Ask the navigator role's model for `spec`'s coverage plan: one call in
+    explore mode, with the plan as its response format and no tools, so no
+    tool choice at all (ADR-0007 amendment). A refusal falls back as the
+    router does; a call that gets no response raises as the router does."""
+    routed = await router.call(
+        "navigator", "explore", plan_request(spec), schema=CoveragePlan
+    )
+    # The router parses against the schema it was given, so a parsed answer
+    # is a CoveragePlan.
+    plan = routed.parsed if isinstance(routed.parsed, CoveragePlan) else None
+    found = () if plan is None else misfits(plan, spec.frontmatter)
+    return Planned(plan, found, routed)
