@@ -5,6 +5,7 @@ for the Anthropic adapter (TESTING §4)."""
 import hashlib
 import json
 import os
+import shutil
 import socketserver
 import threading
 import time
@@ -108,6 +109,28 @@ def reset_tracing() -> Iterator[None]:
     clear_env_cache()
 
 
+# Every spelling of "tracing on" that LangChain and LangSmith read.
+TRACING_VARIABLES = (
+    "LANGSMITH_TRACING",
+    "LANGSMITH_TRACING_V2",
+    "LANGCHAIN_TRACING_V2",
+    "LANGCHAIN_TRACING",
+    "LANGCHAIN_HANDLER",
+)
+
+
+@pytest.fixture
+def quiet_tracing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drops the tracing switches a test run inherits, and LangSmith's cached
+    read of them, so that a test using the adapter without a router (and a
+    re-recording above all, which holds the live API's answers) sends nothing to
+    the developer's LangSmith. A test that wants tracing sets its own switch
+    afterwards."""
+    for name in TRACING_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+    clear_env_cache()
+
+
 @pytest.fixture
 def langsmith_endpoint(serve: Callable[..., Endpoint]) -> Endpoint:
     """A stand-in for LangSmith's API."""
@@ -203,6 +226,16 @@ def _in_record_mode(path: Path, *, replay_only: bool) -> bool:
     return not (path.exists() and path.read_text().startswith(BY_DESIGN))
 
 
+def _api_address(uri: str) -> str:
+    """The API's own address for a request that went through `uri`, so that a
+    recording made through a proxy, a stand-in or a gateway still replays: the
+    host, any gateway prefix before `/v1/`, the query and any userinfo are
+    dropped."""
+    path = urlsplit(uri).path
+    start = max(path.rfind("/v1/"), 0)
+    return f"https://{ANTHROPIC_HOST}{path[start:]}"
+
+
 def _vcr(directory: Path, *, recording_now: bool) -> VCR:
     """VCR set up as TESTING §4 describes: matched by prompt hash, nothing that
     identifies the caller written down."""
@@ -212,13 +245,7 @@ def _vcr(directory: Path, *, recording_now: bool) -> VCR:
             request.headers
         )
         if recording_now:
-            # Through a proxy or a stand-in, the cassette still replays against
-            # the API's own address.
-            request.uri = (
-                urlsplit(request.uri)
-                ._replace(scheme="https", netloc=ANTHROPIC_HOST)
-                .geturl()
-            )
+            request.uri = _api_address(request.uri)
         return request
 
     def before_record_response(response: dict[str, Any]) -> dict[str, Any]:
@@ -246,16 +273,19 @@ def _vcr(directory: Path, *, recording_now: bool) -> VCR:
 
 @pytest.fixture
 def cassette(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: pytest.FixtureRequest
 ) -> Callable[..., AbstractContextManager[Recording]]:
     """`with cassette("name") as recording:` replays `cassettes/name.yaml`
     against the Anthropic API's host, matching each request by its prompt hash,
     and fails if a request has no match or a recorded interaction is never
     played. With AQA_RECORD_CASSETTES=1 and ANTHROPIC_API_KEY set it records the
     real API's answers instead, into a scratch file that replaces the cassette
-    only when the test passes. `replay_only` keeps a test that isn't about the
-    API's answers (tracing, the fixture's own failures) from ever recording;
-    `library` is the directory the cassette lives in."""
+    when the `with` block ends without an error (an assertion after the block
+    still leaves the new file, so read `git diff` on the cassettes before
+    committing them). `replay_only` keeps a test that isn't about the API's
+    answers (tracing, the fixture's own failures) from ever recording; `library`
+    is the directory the cassette lives in."""
+    request.getfixturevalue("quiet_tracing")
 
     @contextmanager
     def use(
@@ -297,7 +327,7 @@ def cassette(
             written = directory / path.name
             if not written.exists():
                 raise AssertionError(f"{name}: the test made no request to record")
-            written.replace(path)
+            shutil.move(written, path)
         elif not played.all_played:
             raise AssertionError(
                 f"cassettes/{name}.yaml has a recorded response that was never "

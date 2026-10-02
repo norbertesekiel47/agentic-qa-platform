@@ -210,8 +210,19 @@ def test_a_call_with_tools_and_a_schema_is_refused(sonnet: RoutedModel) -> None:
     [
         AIMessage(content="no usage here"),
         AIMessage(content="no usage_metadata", response_metadata={"usage": {}}),
+        # What langchain-anthropic makes of a `usage` without its counts: zeros.
+        AIMessage(
+            content="an empty usage",
+            usage_metadata={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+            response_metadata={"usage": {}},
+        ),
+        AIMessage(
+            content="half a usage",
+            usage_metadata={"input_tokens": 0, "output_tokens": 5, "total_tokens": 5},
+            response_metadata={"usage": {"output_tokens": 5}},
+        ),
     ],
-    ids=["nothing", "response_metadata_only"],
+    ids=["nothing", "response_metadata_only", "empty_usage", "half_a_usage"],
 )
 def test_a_response_with_no_usage_is_refused_because_it_cannot_be_priced(
     sonnet: RoutedModel, answer: AIMessage
@@ -335,6 +346,10 @@ def test_cassettes_carry_no_credentials_and_say_what_they_are() -> None:
     for path in cassettes:
         text = path.read_text()
         assert not re.search(r"x-api-key|authorization|sk-ant-", text, re.IGNORECASE)
+        for interaction in yaml.safe_load(text)["interactions"]:
+            assert (
+                interaction["request"]["uri"] == "https://api.anthropic.com/v1/messages"
+            )
         # Either hand-written and labelled so, or recorded from the API, whose
         # answers carry a request-id.
         assert text.startswith("# HAND-WRITTEN RESPONSES") or "request-id" in text, (
