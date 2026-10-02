@@ -5,7 +5,7 @@ fallback when a model refuses."""
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Self
+from typing import Self, get_args
 
 from aqa_core.config import Effort, ModelRoleName, ProjectConfig
 from aqa_core.model_costs import CostRecord, Mode, Status, cost_record
@@ -29,6 +29,17 @@ class Routed:
     parsed: BaseModel | None
     outcome: Status
     calls: tuple[CostRecord, ...]
+
+
+class ModelCallError(Exception):
+    """A call failed after earlier responses were billed: a fallback that raised
+    after a refusal. `records` holds what was billed, and `__cause__` the
+    failure. A call whose first attempt gets no response raises the failure
+    itself, with nothing billed."""
+
+    def __init__(self, records: Sequence[CostRecord]) -> None:
+        super().__init__(f"the call failed after {len(records)} billed response(s)")
+        self.records = tuple(records)
 
 
 def _status(reply: Reply, schema: type[BaseModel] | None) -> Status:
@@ -78,7 +89,14 @@ class ModelRouter:
         """Call `role`'s model. A refusal is recorded and, if the role has a
         fallback model, answered by calling it. A response that doesn't parse
         against `schema` is recorded as `invalid` and returned, not retried. A
-        call that gets no response raises and records nothing."""
+        call whose first attempt gets no response raises that failure and
+        records nothing; a fallback that fails after a billed refusal raises
+        `ModelCallError`, which carries the refusal's record."""
+        if mode not in get_args(Mode):
+            # Strict replay makes zero model calls (AGENTS.md §6).
+            raise ValueError(
+                f"'{mode}' is not a call mode: strict replay makes no model calls"
+            )
         resolved = self._roles[role]
         models = [resolved.model]
         if resolved.fallback is not None:
@@ -86,9 +104,15 @@ class ModelRouter:
         records: list[CostRecord] = []
         for model in models:
             started = time.perf_counter()
-            reply = await self._client(model, resolved.effort).call(
-                messages, tools, schema
-            )
+            try:
+                reply = await self._client(model, resolved.effort).call(
+                    messages, tools, schema
+                )
+            except Exception as error:
+                # Narrowest honest handler: it adds what was billed and re-raises.
+                if records:
+                    raise ModelCallError(records) from error
+                raise
             status = _status(reply, schema)
             records.append(
                 cost_record(

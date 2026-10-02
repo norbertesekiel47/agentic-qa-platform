@@ -7,7 +7,7 @@ from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import pytest
 from aqa_core.config import Effort, ModelRoleName
@@ -16,9 +16,9 @@ from aqa_core.model_roles import RoutedModel
 from aqa_core.project import load_config
 from aqa_runner.anthropic_client import build_client
 from aqa_runner.chat_client import ChatClient, Reply
-from aqa_runner.model_router import ModelRouter, Routed
+from aqa_runner.model_router import ModelCallError, ModelRouter, Routed
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool, tool
 from langchain_core.tracers.langchain import wait_for_all_tracers
 from langsmith.utils import tracing_is_enabled
 from pydantic import BaseModel
@@ -90,10 +90,13 @@ def call(
     *,
     role: ModelRoleName = "navigator",
     mode: Mode = "explore",
+    tools: Sequence[BaseTool] = (),
     schema: type[BaseModel] | None = None,
 ) -> Routed:
     return asyncio.run(
-        model_router.call(role, mode, [HumanMessage(content="go")], schema=schema)
+        model_router.call(
+            role, mode, [HumanMessage(content="go")], tools=tools, schema=schema
+        )
     )
 
 
@@ -298,16 +301,6 @@ def test_a_roles_effort_reaches_its_client_and_its_fallbacks(tmp_path: Path) -> 
     ]
 
 
-def test_every_role_routes_to_the_model_its_config_names(tmp_path: Path) -> None:
-    sonnet = FakeClient(reply(), reply(), reply(), reply())
-    model_router = router(tmp_path, "", Factory(**{"claude-sonnet-5-5": sonnet}))
-
-    roles: list[ModelRoleName] = ["navigator", "verifier", "healer", "vision_fallback"]
-    results = [call(model_router, role=role) for role in roles]
-
-    assert [r.calls[0].role for r in results] == roles
-
-
 def test_constructing_a_router_switches_ambient_tracing_off(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -434,3 +427,92 @@ def test_the_same_call_without_a_router_does_export(
     wait_for_all_tracers()
 
     assert langsmith_endpoint.exported(within=5)
+
+
+def test_a_fallback_that_gets_no_response_loses_no_billed_record(
+    tmp_path: Path,
+) -> None:
+    # The refusal was billed; the failure after it must not erase it.
+    factory = Factory(
+        **{
+            "claude-sonnet-5-5": FakeClient(reply(refused=True)),
+            "claude-opus-5-5": FakeClient(ConnectionError("the network is down")),
+        }
+    )
+
+    with pytest.raises(ModelCallError) as raised:
+        call(router(tmp_path, FALLBACK, factory), role="healer", mode="heal")
+
+    (record,) = raised.value.records
+    assert (record.model, record.status, record.mode) == (
+        "claude-sonnet-5-5",
+        "refusal",
+        "heal",
+    )
+    assert isinstance(raised.value.__cause__, ConnectionError)
+
+
+def test_a_strict_call_is_refused_before_any_client_is_built(tmp_path: Path) -> None:
+    # Strict replay makes zero model calls (AGENTS.md §6): `strict` is no call
+    # mode, and asking anyway builds nothing and bills nothing.
+    factory = Factory(**{"claude-sonnet-5-5": FakeClient(reply())})
+    model_router = router(tmp_path, "", factory)
+
+    with pytest.raises(ValueError, match="'strict' is not a call mode"):
+        call(model_router, mode=cast(Mode, "strict"))
+
+    assert factory.built == []
+
+
+def test_tools_reach_the_client(tmp_path: Path) -> None:
+    @tool
+    def click(ref: str) -> str:
+        """Click the element with this ref."""
+        return ref
+
+    sonnet = FakeClient(reply())
+    model_router = router(tmp_path, "", Factory(**{"claude-sonnet-5-5": sonnet}))
+
+    call(model_router, tools=[click])
+
+    assert sonnet.calls[0][1] == [click]
+
+
+def test_each_attempt_is_timed_on_its_own(tmp_path: Path) -> None:
+    factory = Factory(
+        **{
+            "claude-sonnet-5-5": FakeClient(reply(refused=True), delay=0.05),
+            "claude-opus-5-5": FakeClient(reply()),
+        }
+    )
+
+    result = call(router(tmp_path, FALLBACK, factory), role="healer")
+
+    refused, answered = result.calls
+    assert refused.latency_ms >= 40
+    assert answered.latency_ms < refused.latency_ms
+
+
+def test_a_role_with_its_own_model_is_routed_to_it_and_the_others_are_not(
+    tmp_path: Path,
+) -> None:
+    sonnet = FakeClient(reply(), reply(), reply())
+    opus = FakeClient(reply())
+    config = "roles: { verifier: { model: claude-opus-5-5 } }\n"
+    model_router = router(
+        tmp_path,
+        config,
+        Factory(**{"claude-sonnet-5-5": sonnet, "claude-opus-5-5": opus}),
+    )
+
+    models = {
+        role: call(model_router, role=role).calls[0].model
+        for role in ("navigator", "verifier", "healer", "vision_fallback")
+    }
+
+    assert models == {
+        "navigator": "claude-sonnet-5-5",
+        "verifier": "claude-opus-5-5",
+        "healer": "claude-sonnet-5-5",
+        "vision_fallback": "claude-sonnet-5-5",
+    }
