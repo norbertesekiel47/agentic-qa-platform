@@ -47,7 +47,7 @@ The three `packages/` exist: uv workspace members with `src` layouts, imported a
 
 ## 4. Commands
 
-Run every command from the repository root. You need uv, which installs the Python in `.python-version`, and jq, which the dependency audit and its tests use. TESTING.md §8 lists the gates and the CI job that runs each; CONSTRAINTS.md holds their thresholds.
+Run every command from the repository root. You need uv, which installs the Python in `.python-version`; jq, which the dependency audit and its tests use; and openssl, which a runner test uses to make a TLS certificate. TESTING.md §8 lists the gates and the CI job that runs each; CONSTRAINTS.md holds their thresholds.
 
 ```bash
 uv sync --locked                     # install the workspace from uv.lock, as CI does
