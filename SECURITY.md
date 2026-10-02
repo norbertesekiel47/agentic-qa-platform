@@ -1,6 +1,6 @@
 # Security — Agentic QA Platform
 
-Last updated: 2026-10-01 (the browser session's empty environment, #36; the sandbox check, #35; M1 design decisions, ADR-0026). Threat model and controls for a multi-tenant SaaS that runs browser agents against customer web apps. Guarantees are stated as narrowly as they are actually enforced.
+Last updated: 2026-10-01 (the egress proxy's policy and DNS pins, #42; the browser session's empty environment, #36; the sandbox check, #35; M1 design decisions, ADR-0026). Threat model and controls for a multi-tenant SaaS that runs browser agents against customer web apps. Guarantees are stated as narrowly as they are actually enforced.
 
 ## 1. Assets
 
@@ -94,10 +94,10 @@ The agent reads arbitrary page content. A malicious or compromised page may say 
 - **Domain verification** before a hosted run targets a hostname: DNS TXT `_agentic-qa.<domain>` = token, or `https://<domain>/.well-known/agentic-qa.txt` = token. Verifying an apex covers subdomains. Re-checked every 7 days; failure pauses hosted runs for that domain. Extra `allowed_origins` in a spec must also be verified.
 - **Browser-wide egress enforcement (independent of the agent's tools) — the mechanism:**
   1. **Local egress proxy (primary, connection-level).** Chromium is launched with `--proxy-server` pointing to an in-runner forward proxy, with proxy bypass disabled. The proxy is the only path out.
-     - *Allowlist:* it allows the run's allowed origins plus the subresource hosts from the project config (DATA_MODEL §9), checked on every HTTP request and every `CONNECT` (HTTPS and WebSocket upgrades). For hosted runs, which subresource hosts are allowed is decided at M6 (#29).
-     - *DNS:* it resolves DNS itself, and each hostname's first validated answer is pinned for the whole run. It **connects to the IP it validated**, never resolving again, which defeats DNS rebinding.
+     - *Allowlist:* it allows the run's allowed origins plus the subresource hosts from the project config (DATA_MODEL §9), checked on every HTTP request and every `CONNECT` (HTTPS and WebSocket upgrades). It matches by host and port: an allowed origin on its own port, a subresource host on its scheme's default port (80 for a plain request, 443 for a tunnel). For hosted runs, which subresource hosts are allowed is decided at M6 (#29).
+     - *DNS:* it resolves DNS itself, and each hostname's first validated answer, one whose every address passes the IP policy, is pinned for the whole run. It **connects to the IP it validated**, never resolving again, which defeats DNS rebinding.
      - *Redirects:* each redirect hop is a new request through the proxy, so redirects are enforced by construction.
-     - *Addresses by location (ADR-0026):* link-local and cloud-metadata addresses are always refused, and IP forms are normalized (IPv4, IPv6, IPv4-mapped IPv6).
+     - *Addresses by location (ADR-0026):* link-local, unspecified and cloud-metadata addresses (`fd00:ec2::254`, `100.100.100.200`, `168.63.129.16`) are always refused. An IPv6 form that embeds an IPv4 address (IPv4-mapped, IPv4-compatible, NAT64, 6to4) is judged as that address (ADR-0026 amendment, 2026-10-01).
        - *Hosted runs* reach public addresses only.
        - *Local and CI runs* may reach loopback and private addresses only for the invocation's target origin (`--url`) and for private origins the project config declares. Every other host must resolve to a public address.
      - *Runner-side requests:* the same rules cover the runner's own probe and reset requests. They go to allowed origins only and carry none of the browser's cookies.
