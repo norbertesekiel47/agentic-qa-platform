@@ -402,6 +402,16 @@ def test_a_missing_config_is_a_spec_error(tmp_path: Path) -> None:
     )
 
 
+def test_a_config_that_is_a_directory_is_a_spec_error(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.mkdir()
+
+    with pytest.raises(SpecError) as raised:
+        load_config(path)
+
+    assert raised.value.problems == (f"{path}: a directory, not a file",)
+
+
 def test_yaml_that_changes_no_value_is_accepted(tmp_path: Path) -> None:
     # ADR-0030: an anchor with no alias, and a tag naming the type a value
     # already has; `no` stays Norwegian's language tag.

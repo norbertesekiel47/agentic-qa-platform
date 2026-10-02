@@ -41,6 +41,8 @@ def _read_text(path: Path) -> str:
         return path.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError:
         raise SpecError([f"{path}: not UTF-8 text"]) from None
+    except IsADirectoryError:
+        raise SpecError([f"{path}: a directory, not a file"]) from None
 
 
 def _read_yaml(text: str, path: Path, first_line: int) -> object:
