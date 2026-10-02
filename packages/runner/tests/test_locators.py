@@ -362,7 +362,10 @@ def custom_css_names() -> list[str]:
         r"customCSSNames = /\* @__PURE__ \*/ new Set\((\[[^\]]*\])\)",
         bundle.read_text(),
     )
-    assert found is not None, "Playwright's driver no longer lists customCSSNames"
+    assert found is not None, (
+        "Playwright's driver no longer writes customCSSNames as this test reads "
+        "it: update the pattern, then check the list"
+    )
     names: list[str] = json.loads(found[1])
     return names
 
@@ -408,6 +411,7 @@ CSS_PAGE = """<form>
         "button:not(.pay)",
         "li:nth-child(2)",
         ":scope > body",
+        "button /* :visible",
     ],
 )
 def test_a_css_value_the_format_accepts_means_what_css_means(css: str) -> None:
@@ -745,3 +749,40 @@ def test_a_page_that_changes_between_count_and_lookup_is_ambiguous(
         )
 
     assert on_page(scenario) == Unresolved(("ambiguous",))
+
+
+def test_what_javascript_trims_is_refused_at_either_end_of_a_css_value() -> None:
+    # Playwright trims a selector part before its CSS tokenizer reads it
+    # (ADR-0025, "generating locators"). The control: trimmed, a no-break
+    # space after :visible leaves Playwright's own pseudo-class, which the
+    # browser can't parse.
+    async def scenario(page: Page) -> tuple[list[str], int, bool]:
+        trimmed: list[str] = await page.evaluate(
+            """() => {
+                const found = [];
+                for (let code = 0; code <= 0x10ffff; code++) {
+                    if (code >= 0xd800 && code <= 0xdfff) continue;
+                    const char = String.fromCodePoint(code);
+                    if ((char + "a" + char).trim() === "a") found.push(char);
+                }
+                return found;
+            }"""
+        )
+        css = "button.pay:visible\u00a0"
+        native: bool = await page.evaluate(
+            """(css) => {
+                try { document.querySelectorAll(css); return true; }
+                catch { return false; }
+            }""",
+            css,
+        )
+        return trimmed, await page.locator(f"css={css}").count(), native
+
+    trimmed, playwrights, browsers = on_page(scenario, CSS_PAGE)
+
+    assert (playwrights, browsers) == (1, False)
+    assert "\u00a0" in trimmed
+    for char in trimmed:
+        for css in (f"button{char}", f"{char}button"):
+            with pytest.raises(ValidationError, match="write it trimmed"):
+                target({"css": css})

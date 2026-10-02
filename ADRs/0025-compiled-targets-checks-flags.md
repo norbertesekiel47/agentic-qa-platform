@@ -182,7 +182,7 @@ Building resolution (#45) settled three choices that "Resolution per use" left o
 
 Building the compiler's locator generation (#52) settled choices that "Locator grammar" and "Resolution per use" left open. DATA_MODEL §7 holds the rules, and the loader's rule for negative checks joins it with the loader (#46); this records why.
 
-- **The five pilot pages.** "The five real pilot pages" in Consequences are the pages the five pilot specs visit, on the clean Conduit app, whose cases are all on the dev split (TESTING §5):
+- **The five pilot pages.** "The five real pilot pages" in Consequences are the pages the five pilot specs visit, on the clean Conduit app, whose cases are all on the dev split (TESTING §5). One of the five is seen in two states:
   - the login page, signed out, with its form filled in;
   - the home page, signed in;
   - an article page as a signed-in reader, before and after favoriting it and reloading;
@@ -194,9 +194,10 @@ Building the compiler's locator generation (#52) settled choices that "Locator g
     - refuse the names as written;
     - refuse them as Playwright reads them.
   - *Chosen:* the third.
-    - Playwright 1.63 reads a `css=` value with its own CSS tokenizer, which decodes escapes and drops comments. Its parser then lowercases a pseudo-class name before checking it against its list. So `:HAS-TEXT(`, `:has\2d text(` and `:/**/visible` all reach its own engines, and the browser can parse none of them (LAB_NOTES, 2026-10-02).
+    - Playwright 1.63 trims a `css=` value with JavaScript's `trim()`, then reads it with its own CSS tokenizer, which decodes escapes and drops comments. Its parser then lowercases a pseudo-class name before checking it against its list. So `:HAS-TEXT(`, `:has\2d text(` and `:/**/visible` all reach its own engines, and the browser can parse none of them (LAB_NOTES, 2026-10-02).
     - Under the first option, a person's edit or a heal could locate by text, position or layout, which the grammar forbids. The second misses those spellings.
     - The format reads a value as that tokenizer does, so a name inside a quoted attribute value, a comment or an escaped colon is no pseudo-class.
+    - A value is written trimmed. CSS reads a no-break space and 18 other characters `trim()` removes as part of a name, so a trailing one hid `:visible` from the format's reading but not from Playwright's (found by #52's security review). *Options:* model the trim, or refuse what it would remove. *Chosen:* refuse, from an explicit list, because Python's own whitespace differs from JavaScript's, and an invisible trailing character in a reviewed edit is worth refusing anyway. A test computes the list from Chromium's `trim()`.
   - The list is Playwright's `customCSSNames` less the five standard names it also parses: `not`, `is`, `where`, `has` and `scope`.
     - One test reads the installed driver's list and checks it against the names the browser itself can't parse. A Playwright upgrade that adds a name fails until the format refuses it too.
     - Another test checks that each tricky value the format accepts matches as many elements under Playwright as under the browser's own `querySelectorAll`.
