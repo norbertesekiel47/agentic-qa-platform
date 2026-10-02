@@ -34,7 +34,7 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | [0026](0026-local-ci-browser-boundary.md) | The browser boundary for local and CI runs: sandbox, egress and test secrets | Accepted (amended 2026-09-30, 2026-10-01) |
 | [0027](0027-python-workspace.md) | The Python workspace: layout, pins and tool settings | Accepted (amended 2026-09-29, 2026-10-01) |
 | [0028](0028-quality-bar.md) | The quality bar: coverage, complexity, the Ruff rule set and the floor guard | Accepted (amended 2026-09-29) |
-| [0029](0029-ci-on-the-uv-workspace.md) | CI on the uv workspace: jobs, installs, the mypy split and the dependency audit | Accepted |
+| [0029](0029-ci-on-the-uv-workspace.md) | CI on the uv workspace: jobs, installs, the mypy split and the dependency audit | Accepted (amended 2026-10-01) |
 | [0030](0030-spec-yaml-parsing.md) | Reading specs and the project config: PyYAML narrowed to YAML 1.2's core schema | Accepted |
 
 ## Template
