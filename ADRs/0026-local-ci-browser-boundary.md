@@ -265,7 +265,7 @@ The egress proxy is set on the session's own context (the #42 amendment), so the
   - Code that names a proxy for its own context gets that proxy: the launch-level proxy catches a context that forgets one, not one that chooses another. So does code that passes Playwright's `client_certificates` to a context: Playwright then gives the context a SOCKS proxy of its own in its driver, which connects from Node through the context's own proxy if it names one, and otherwise straight to the host (or through the runner's `HTTPS_PROXY`), past the launch proxy and the resolver rule. No code does either today; review catches it, as for the spellings `tests/test_chromium_launches.py` can't see.
   - The resolver rule binds Chromium only. A stray context's `context.request` goes out from Playwright's driver to the launch proxy, so Node's resolver looks up `launch-proxy.invalid`, which fails: a query leaves, nothing else does. Chromium's secure-DNS probes (`MappedHostResolver::CreateDohProbeRequest`) skip the rule; the headless shell configures no secure DNS, which the packet-level suite will show, and full Chromium, which may default to automatic secure DNS, is unproven here too.
   - Proving that nothing leaves at the packet level, QUIC and DNS included, is the hostile-page suite's (#43's later change). On macOS these tests observe what reaches the canaries and the origin, not packets.
-- **Still to come in #43:** the hostile-page suite observed at the packet level. Routing, blocked service workers and popups are the next amendment's.
+- **Still to come in #43:** the hostile-page suite observed at the packet level. Routing, blocked service workers and popups have an amendment of their own below.
 
 ## Amendment (2026-10-02): document origins (#44)
 
