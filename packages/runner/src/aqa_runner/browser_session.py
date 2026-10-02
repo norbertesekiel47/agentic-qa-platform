@@ -19,9 +19,11 @@ from aqa_runner.document_origins import (
     DocumentChangedError,
     PolicyEvent,
     PolicyEventError,
+    PolicyEventKind,
     Popup,
     Records,
     document_origin,
+    frame_origin,
 )
 from aqa_runner.egress import EgressPolicy
 from aqa_runner.egress_proxy import EgressProxy
@@ -85,9 +87,11 @@ class BrowserSession:
         self._turn = asyncio.Lock()
         self.policy_events: Records[PolicyEvent] = Records()
         # Every navigation of any of the page's frames, same-document ones
-        # included (https://playwright.dev/python/docs/api/class-page#page-event-frame-navigated).
-        self._navigations = 0
-        page.on("framenavigated", self._count_navigation)
+        # included, and every frame removed from it
+        # (https://playwright.dev/python/docs/api/class-page#page-event-frame-navigated).
+        self._frame_changes = 0
+        page.on("framenavigated", self._count_frame_change)
+        page.on("framedetached", self._count_frame_change)
         self.popups: Records[Popup] = Records()
         # Every page opened in the context from now on, popups of popups
         # included (https://playwright.dev/python/docs/api/class-browsercontext#browser-context-event-page).
@@ -101,20 +105,29 @@ class BrowserSession:
         A frame on an origin the run doesn't allow shows only its iframe's
         line, with no ref (`LEFT_OUT`).
 
-        If any frame navigates between the page's check and the last frame's,
-        the snapshot could hold a document no check saw, so it is discarded
-        and `DocumentChangedError` raised: the caller takes another."""
+        If any frame navigates or is removed between the page's check and the
+        last frame's, the snapshot could hold a document no check saw, so it
+        is discarded and `DocumentChangedError` raised: the caller takes
+        another. With no change, the page is the document its check saw."""
         async with self._turn:
             # Retired before the call: Playwright may store this snapshot, and
             # resolve refs against it, even if the call never returns.
             self._current = {}
             self._require_allowed_page()
-            navigations = self._navigations
+            changes = self._frame_changes
             taken = await self.page.aria_snapshot(mode="ai")
-            left_out = await self._frames_left_out(taken)
+            try:
+                left_out = await self._frames_left_out(taken)
+            except Error as error:
+                # Playwright's general error type: here, an iframe whose frame
+                # was removed with its parent's ("Invalid frame in aria-ref
+                # selector"). Any other is raised as it is.
+                if self._frame_changes == changes:
+                    raise
+                raise DocumentChangedError from error
             # Playwright reports a navigation before the result of anything
             # that ran in the new document, so a snapshot of it shows here.
-            if self._navigations != navigations:
+            if self._frame_changes != changes:
                 raise DocumentChangedError
             text, self._current = renumber(
                 taken, first=self._refs_given + 1, left_out=left_out
@@ -126,7 +139,8 @@ class BrowserSession:
         """The element `ref` names in the current snapshot, held: it never
         becomes another element, and acting on it fails once it has left the
         page. Any other ref raises `RefError`, so no string but a current ref
-        reaches a selector."""
+        reaches a selector. The element's frame must be on one of the run's
+        allowed origins too, or it is a policy event."""
         async with self._turn:
             self._require_allowed_page()
             playwright_ref = self._current.get(ref)
@@ -151,8 +165,12 @@ class BrowserSession:
                 # gone ("Invalid frame in aria-ref selector"), as the main
                 # frame's does when it leaves a page that isn't about:blank.
                 raise gone from error
-        if found is None:
-            raise gone
+            if found is None:
+                raise gone
+            frame = await found.owner_frame()
+            if frame is None:  # an element of a document that is in no frame
+                raise gone
+            self._require_allowed(frame, "frame")
         return found
 
     async def _frames_left_out(self, snapshot: str) -> set[str]:
@@ -166,12 +184,12 @@ class BrowserSession:
             frame = None if iframe is None else await iframe.content_frame()
             if iframe is not None:
                 await iframe.dispose()
-            if frame is None or origin_of(frame) not in self._policy.allowed_origins:
+            if frame is None or frame_origin(frame) not in self._policy.allowed_origins:
                 left_out.add(ref)
         return left_out
 
-    def _count_navigation(self, _: Frame) -> None:
-        self._navigations += 1
+    def _count_frame_change(self, _: Frame) -> None:
+        self._frame_changes += 1
 
     async def _close_popup(self, popup: Page) -> None:
         """Record a page that another page opened, and close it: the session
@@ -181,30 +199,23 @@ class BrowserSession:
         url = popup.url
         opener = await popup.opener()
         self.popups.add(Popup(url, None if opener is None else opener.url))
-        inherited = None if opener is None else origin_of(opener.main_frame)
+        inherited = None if opener is None else frame_origin(opener.main_frame)
         origin = document_origin(url, inherited)
         if origin not in self._policy.allowed_origins:
             self.policy_events.add(PolicyEvent("popup", url, origin))
         await popup.close()
 
     def _require_allowed_page(self) -> None:
-        """Record and raise a policy event unless the session's page is on one
+        self._require_allowed(self.page.main_frame, "document")
+
+    def _require_allowed(self, frame: Frame, kind: PolicyEventKind) -> None:
+        """Record and raise a policy event of `kind` unless `frame` is on one
         of the run's allowed origins."""
-        url = self.page.url
-        origin = origin_of(self.page.main_frame)
+        origin = frame_origin(frame)
         if origin not in self._policy.allowed_origins:
-            event = PolicyEvent("document", url, origin)
+            event = PolicyEvent(kind, frame.url, origin)
             self.policy_events.add(event)
             raise PolicyEventError(event)
-
-
-def origin_of(frame: Frame) -> str | None:
-    """The origin of `frame`'s document, from the URL Chromium reports for it
-    (https://playwright.dev/python/docs/api/class-frame#frame-url), which the
-    page's scripts can't forge. about:blank and about:srcdoc inherit their
-    parent frame's."""
-    parent = frame.parent_frame
-    return document_origin(frame.url, None if parent is None else origin_of(parent))
 
 
 def renumber(

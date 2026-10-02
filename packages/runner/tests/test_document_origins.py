@@ -17,7 +17,12 @@ from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit
 
 import pytest
-from aqa_runner.browser_session import LEFT_OUT, BrowserSession, open_browser_session
+from aqa_runner.browser_session import (
+    LEFT_OUT,
+    BrowserSession,
+    RefError,
+    open_browser_session,
+)
 from aqa_runner.document_origins import (
     DocumentChangedError,
     PolicyEvent,
@@ -28,7 +33,7 @@ from aqa_runner.document_origins import (
 )
 from aqa_runner.egress import Connection
 from aqa_runner.egress_proxy import EgressProxy
-from playwright.async_api import Page, async_playwright
+from playwright.async_api import ElementHandle, Page, async_playwright
 
 from packages.runner.tests.egress_fixtures import LOOPBACK, gate
 
@@ -140,6 +145,7 @@ def page(sites: Sites, path: str, query: dict[str, list[str]]) -> str | None:
         "/nest": f'<button>Nested</button><iframe src="{sites.cdn}/doc"></iframe>',
         "/kept": "<button>Other</button>",
         "/flip": f'<iframe src="{sites.cdn}/doc"></iframe>',
+        "/deep": '<iframe src="/nest"></iframe>',
     }.get(path)
 
 
@@ -407,26 +413,85 @@ def test_a_popup_off_the_allowed_origins_is_a_policy_event(
     assert 'button "Go"' in snapshot, snapshot
 
 
-def test_a_frame_removed_during_a_snapshot_is_left_out(
+def test_locate_refuses_an_element_in_a_frame_off_the_allowed_origins(
+    sites: Sites, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    query = Page.query_selector
+
+    async def scenario() -> tuple[PolicyEventError, list[PolicyEvent]]:
+        async with browsing(sites) as session:
+            await session.page.goto(f"{sites.app}/frames")
+            top = ref_for(await session.snapshot(), "button", "Top")
+            [cdn, *_] = [f for f in session.page.frames if f.url == f"{sites.cdn}/doc"]
+
+            # A fault: Playwright resolves the session's current ref to an
+            # element in the subresource host's frame.
+            async def into_the_frame(*_: object, **__: object) -> ElementHandle | None:
+                return await cdn.query_selector("button")
+
+            monkeypatch.setattr(Page, "query_selector", into_the_frame)
+            with pytest.raises(PolicyEventError) as refused:
+                await session.locate(top)
+            monkeypatch.setattr(Page, "query_selector", query)
+            return refused.value, session.policy_events.kept
+
+    refused, recorded = asyncio.run(scenario())
+
+    event = PolicyEvent("frame", f"{sites.cdn}/doc", sites.cdn)
+    assert refused.event == event
+    assert recorded == [event]
+
+
+def test_locate_refuses_an_element_of_no_frame(
+    sites: Sites, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> RefError:
+        async with browsing(sites) as session:
+            await session.page.goto(f"{sites.app}/frames")
+            top = ref_for(await session.snapshot(), "button", "Top")
+            orphan = await session.page.evaluate_handle(
+                "document.implementation.createHTMLDocument('').createElement('button')"
+            )
+
+            # A fault: Playwright resolves the ref to an element of a document
+            # that no frame shows.
+            async def to_no_frame(*_: object, **__: object) -> ElementHandle | None:
+                return orphan.as_element()
+
+            monkeypatch.setattr(Page, "query_selector", to_no_frame)
+            with pytest.raises(RefError) as refused:
+                await session.locate(top)
+            return refused.value
+
+    assert "has left the page" in str(asyncio.run(scenario()))
+
+
+def test_a_frame_removed_during_a_snapshot_discards_it(
     sites: Sites, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     taken_by_playwright = Page.aria_snapshot
+    calls = 0
 
-    # Removing a frame is no navigation, so nothing discards the snapshot: its
-    # iframe no longer has a frame, which the session reads as no origin.
+    # The first time, the page removes its frame, and the subresource host's
+    # frame inside it, once Playwright has taken the snapshot.
     async def frame_removed_after(page: Page, **options: Any) -> str:
+        nonlocal calls
+        calls += 1
         text = await taken_by_playwright(page, **options)
-        await page.locator("iframe").evaluate("(frame) => frame.remove()")
+        if calls == 1:
+            await page.locator("body > iframe").evaluate("(frame) => frame.remove()")
         return text
 
     monkeypatch.setattr(Page, "aria_snapshot", frame_removed_after)
 
     async def scenario() -> str:
         async with browsing(sites) as session:
-            await session.page.goto(f"{sites.app}/flip")
+            await session.page.goto(f"{sites.app}/deep")
+            with pytest.raises(DocumentChangedError):
+                await session.snapshot()
             return await session.snapshot()
 
-    snapshot = asyncio.run(scenario())
+    again = asyncio.run(scenario())
 
-    assert "Planted" not in snapshot, snapshot
-    assert snapshot.count(LEFT_OUT) == 1, snapshot
+    assert "Planted" not in again, again
+    assert "Nested" not in again, again
