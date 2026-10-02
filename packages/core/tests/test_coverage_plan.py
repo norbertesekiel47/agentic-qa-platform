@@ -127,8 +127,10 @@ def test_a_text_check_takes_text_or_pattern_exactly_one(
 def test_only_m1s_nine_check_types_can_be_planned(check: str) -> None:
     # pixel_diff, contrast_min and model_verify arrive in M2: an expectation
     # that needs one is planned as unsupported instead.
-    with pytest.raises(ValidationError, match="check"):
+    with pytest.raises(ValidationError) as error:
         planned(check, text="Pay")
+
+    assert [detail["loc"] for detail in error.value.errors()] == [("check",)]
 
 
 @pytest.mark.parametrize(
@@ -302,6 +304,15 @@ def test_plan_hash_changes_with_a_required_condition() -> None:
     reload = {"id": "c1", "condition": "checked after reloading the article page"}
 
     assert plan_hash(plan(requires=[reload])) != plan_hash(plan())
+
+
+def test_a_plan_cannot_change_once_made() -> None:
+    # The plan is frozen for the explore run (ADR-0024): what was hashed is
+    # what the run uses.
+    made = plan()
+
+    with pytest.raises(ValidationError, match="frozen"):
+        made.expectations[0].checks[0].target_meaning = "the pay button"
 
 
 def test_a_plan_read_back_from_its_json_has_the_same_hash() -> None:
