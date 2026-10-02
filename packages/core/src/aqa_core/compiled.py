@@ -297,7 +297,9 @@ def _pseudo_classes(css: str) -> Iterator[str]:
     https://www.w3.org/TR/css-syntax-3/#tokenization) drops comments, reads
     strings whole and decodes escapes, and its parser lowercases the name
     after a colon. A backslash outside a string escapes a colon or a quote
-    too, so neither is read as one."""
+    too, so neither is read as one. That is a later reading than
+    `_left_open`'s: Playwright's splitter, before it, counts quotes even in
+    comments and takes a backtick for one, which CSS doesn't."""
     css = re.sub(r"\r\n?|\f", "\n", css)
     index = 0
     while index < len(css):
@@ -312,6 +314,16 @@ def _pseudo_classes(css: str) -> Iterator[str]:
             yield name.lower()
         else:
             index += 1
+
+
+# What JavaScript's String.prototype.trim() removes, white space and line
+# terminators (https://tc39.es/ecma262/#sec-string.prototype.trim).
+# Playwright's splitter trims each selector part before its CSS tokenizer
+# reads it, and CSS reads the non-ASCII ones as part of a name.
+_JS_TRIMMED = (
+    "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006"
+    "\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+)
 
 
 def _one_selector(css: str) -> str:
@@ -331,6 +343,13 @@ def _one_selector(css: str) -> str:
         raise ValueError(
             f"{css!r} leaves a quote or escape open, so Playwright would read "
             "what follows it as part of it: close every quote, even in a comment"
+        )
+    if css.strip(_JS_TRIMMED) != css:
+        # Trimmed, `button:visible` followed by a no-break space would read
+        # as :visible to Playwright and as :visible\xa0 to the scan below.
+        raise ValueError(
+            f"{css!r} starts or ends with white space, which Playwright trims "
+            "before CSS reads the rest: write it trimmed"
         )
     for name in _pseudo_classes(css):
         if name in PLAYWRIGHT_PSEUDO_CLASSES:

@@ -12,6 +12,7 @@ import pytest
 from aqa_core import strict_yaml
 from aqa_core.browser import BrowserSettings
 from aqa_core.compiled import (
+    PLAYWRIGHT_PSEUDO_CLASSES,
     ByCss,
     ByRole,
     CompiledScript,
@@ -757,6 +758,10 @@ def test_a_css_value_refuses_playwrights_own_pseudo_classes(
     assert f"Playwright's own pseudo-class :{name}" in message
 
 
+def test_every_refused_name_has_a_use_above() -> None:
+    assert PSEUDO_CLASS_USES.keys() == PLAYWRIGHT_PSEUDO_CLASSES
+
+
 @pytest.mark.parametrize(
     ("css", "name"),
     [
@@ -769,6 +774,9 @@ def test_a_css_value_refuses_playwrights_own_pseudo_classes(
         ('button:has\\2d text("Pay")', "has-text"),
         ('button:\\000068as-text("Pay")', "has-text"),
         ('button:has\\2d\r\ntext("Pay")', "has-text"),
+        # A form feed and a lone carriage return are newlines to CSS.
+        ('button:has\\2d\ftext("Pay")', "has-text"),
+        ('button:has\\2d\rtext("Pay")', "has-text"),
         ("button:v\\isible", "visible"),
         ('button:/* a comment */has-text("Pay")', "has-text"),
         ("button:/**//**/visible", "visible"),
@@ -779,6 +787,11 @@ def test_a_css_value_refuses_playwrights_own_pseudo_classes(
         # by CSS's reading.
         ("/* ' */ button:visible /* ' */", "visible"),
         ('[title="x\n:visible"]', "visible"),
+        # An escaped quote doesn't end a string.
+        ("a[title='it\\'s']:visible", "visible"),
+        ('a[title="a\\"b"]:visible', "visible"),
+        # A backslash before a newline escapes nothing, so the name ends there.
+        ('button:has-text\\\n("Pay")', "has-text"),
     ],
 )
 def test_playwrights_own_pseudo_classes_are_refused_however_they_are_written(
@@ -814,6 +827,13 @@ def test_playwrights_own_pseudo_classes_are_refused_however_they_are_written(
         ".a\\:visible",
         ".text.visible",
         "input[name=text]",
+        # A comment left open runs to the end, and an escape past U+10FFFF
+        # reads as U+FFFD.
+        "button /* :visible",
+        ".a\\110000",
+        # Names that only start like Playwright's.
+        "button:nearby",
+        "button:visible\u00e9",
     ],
 )
 def test_css_that_uses_none_of_playwrights_own_pseudo_classes_is_accepted(
@@ -822,7 +842,36 @@ def test_css_that_uses_none_of_playwrights_own_pseudo_classes_is_accepted(
     script = example()
     script["targets"]["pay_button"]["locators"][1] = {"css": css}
 
-    assert CompiledScript.model_validate_json(json.dumps(script))
+    read = CompiledScript.model_validate_json(json.dumps(script))
+
+    assert read.targets["pay_button"].locators[1] == ByCss(css=css)
+
+
+# What JavaScript's String.prototype.trim() removes: its white space and
+# line terminators (https://tc39.es/ecma262/#sec-string.prototype.trim).
+# test_locators.py checks the list against Chromium's own trim().
+JS_TRIMMED = (
+    "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006"
+    "\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+)
+
+
+@pytest.mark.parametrize("char", JS_TRIMMED, ids=lambda char: f"U+{ord(char):04X}")
+@pytest.mark.parametrize(
+    "css", ["button:visible{}", "{}button.pay"], ids=["at the end", "at the start"]
+)
+def test_a_css_value_is_written_trimmed(css: str, char: str) -> None:
+    # Playwright trims a selector part before its CSS tokenizer reads it, so
+    # a trailing no-break space would hide :visible from the format, and CSS
+    # reads the non-ASCII ones as part of a name (ADR-0025, "generating
+    # locators").
+    script = example()
+    script["targets"]["pay_button"]["locators"][1] = {"css": css.format(char)}
+
+    [(location, _, message)] = errors(script)
+
+    assert location == ("targets", "pay_button", "locators", 1, "css", "css")
+    assert "write it trimmed" in message
 
 
 @pytest.mark.parametrize(
