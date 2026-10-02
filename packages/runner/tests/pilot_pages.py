@@ -23,7 +23,7 @@ from pathlib import Path
 
 from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.locator_generation import register_identity_engine
-from playwright.async_api import async_playwright
+from playwright.async_api import Route, async_playwright
 
 from packages.runner.tests.egress_fixtures import egress_proxy
 
@@ -43,9 +43,30 @@ _STYLESHEETS = (
 )
 
 
+# egress_proxy()'s start origin, which no request reaches: pages are given
+# to the browser from there, so the session's origin checks allow them.
+ORIGIN = "http://127.0.0.1:9"
+
+
+async def put(session: BrowserSession, html: str) -> None:
+    """Load `html` as the page at the start origin. Anything else the page
+    asks the origin for, such as an image, is refused, so nothing waits on
+    the network."""
+
+    async def serve(route: Route) -> None:
+        if route.request.is_navigation_request():
+            await route.fulfill(body=html, content_type="text/html")
+        else:
+            await route.abort()
+
+    await session.page.unroute(f"{ORIGIN}/**")
+    await session.page.route(f"{ORIGIN}/**", serve)
+    await session.page.goto(f"{ORIGIN}/")
+
+
 async def show(session: BrowserSession, page: str) -> None:
     """Load the pilot page `page` into the session, styled as the app is."""
-    await session.page.set_content((RENDERINGS / f"{page}.html").read_text())
+    await put(session, (RENDERINGS / f"{page}.html").read_text())
     for stylesheet in _STYLESHEETS:
         await session.page.add_style_tag(path=stylesheet)
 
