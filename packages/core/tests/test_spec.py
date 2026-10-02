@@ -457,6 +457,13 @@ def test_a_spec_that_is_not_utf8_is_a_spec_error(tmp_path: Path) -> None:
     assert problems_for(path) == (f"{path}: not UTF-8 text",)
 
 
+def test_a_spec_that_is_a_directory_is_a_spec_error(tmp_path: Path) -> None:
+    path = tmp_path / "login.spec.md"
+    path.mkdir()
+
+    assert problems_for(path) == (f"{path}: a directory, not a file",)
+
+
 def test_a_spec_saved_with_a_byte_order_mark_loads(tmp_path: Path) -> None:
     path = tmp_path / "login.spec.md"
     path.write_text("\ufeff---\n" + LOGIN + "---\n", encoding="utf-8")

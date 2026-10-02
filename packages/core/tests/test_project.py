@@ -3,6 +3,7 @@ derives from them before its browser starts (DATA_MODEL §6, §7, §9;
 ADR-0025; ADR-0026; #39; #88)."""
 
 import dataclasses
+import errno
 import json
 import os
 import re
@@ -11,6 +12,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 from aqa_core.browser import BrowserSettings
@@ -192,6 +194,42 @@ def test_a_file_that_cannot_be_read_does_not_hide_the_others(tmp_path: Path) -> 
         f"{latin}: not UTF-8 text",
         f"{login}: owner: unknown key",
     }
+
+
+def test_a_config_that_is_a_directory_does_not_hide_the_specs_problems(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "qa"
+    (root / "config.yaml").mkdir(parents=True)
+    login = write_spec(root / "login.spec.md", extra="owner: qa\n")
+
+    with pytest.raises(SpecError) as raised:
+        load_project(root)
+
+    assert set(raised.value.problems) == {
+        f"{root / 'config.yaml'}: a directory, not a file",
+        f"{login}: owner: unknown key",
+    }
+
+
+def test_a_permission_error_is_not_a_spec_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Only a directory is reported as a spec error: any other read error is an
+    # infrastructure error (#91). Not chmod 000, which reads fine as root.
+    root = write_project(tmp_path / "qa", BOUND)
+    login = write_spec(root / "login.spec.md")
+    config = load_config(root / "config.yaml")
+
+    def refuse(path: Path, *_args: object, **_kwargs: object) -> NoReturn:
+        raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(path))
+
+    monkeypatch.setattr(Path, "read_text", refuse)
+
+    with pytest.raises(PermissionError):
+        load_config(root / "config.yaml")
+    with pytest.raises(PermissionError):
+        load_spec(login, config)
 
 
 def test_a_project_without_a_config_is_an_error(tmp_path: Path) -> None:
