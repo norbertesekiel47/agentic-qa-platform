@@ -38,33 +38,48 @@ SUBRESOURCE_PORTS: dict[Requester, int] = {
 # the IP policy refused an address the host resolves to.
 type RefusalKind = Literal["host", "address"]
 
-# Seconds to wait for one address to accept a connection before trying the
-# next in the answer, so an address that drops packets can't stall the rest
-# for the OS's own timeout (over a minute).
+# Seconds to wait for a name to resolve, and for one address to accept a
+# connection before the next in the answer is tried, so a stalled resolver or
+# an address that drops packets ends in an infrastructure event instead of
+# the OS's own timeout (over a minute), or none.
+RESOLVE_TIMEOUT = 10
 CONNECT_TIMEOUT = 10
 
-# Cloud metadata services that the link-local rule doesn't already refuse
-# (169.254.169.254 and ECS's 169.254.170.2 are link-local): AWS's over IPv6,
-# Alibaba Cloud's and Azure's WireServer. Networks, so an address with an IPv6
-# scope still matches.
-METADATA = (
-    ip_network("fd00:ec2::254/128"),
-    ip_network("100.100.100.200/32"),
-    ip_network("168.63.129.16/32"),
+# Networks refused whatever the project declares, beyond link-local addresses
+# (which cover 169.254.169.254 and ECS's 169.254.170.2): cloud metadata and
+# credential services, and NAT64's local-use prefix, whose embedded IPv4
+# address can't be read back. Networks, so an address with an IPv6 scope
+# still matches.
+ALWAYS_REFUSED = (
+    ip_network("fd00:ec2::/32"),  # AWS: instance metadata, EKS Pod Identity
+    ip_network("fd20:ce::254/128"),  # GCP, on IPv6-only VMs
+    ip_network("fd00:c1::a9fe:a9fe/128"),  # OCI
+    ip_network("100.100.100.200/32"),  # Alibaba Cloud
+    ip_network("168.63.129.16/32"),  # Azure's WireServer, a public address
+    ip_network("64:ff9b:1::/48"),  # local-use NAT64 (RFC 8215)
 )
 
 # IPv6 forms whose last 32 bits are an IPv4 address that the address reaches:
-# NAT64's well-known prefix (RFC 6052) and the deprecated IPv4-compatible form
-# (RFC 4291). IPv4-mapped and 6to4 forms have properties of their own.
-NAT64 = IPv6Network("64:ff9b::/96")
-IPV4_COMPATIBLE = IPv6Network("::/96")
+# NAT64's well-known prefix (RFC 6052), IPv4-translated addresses (RFC 2765)
+# and the deprecated IPv4-compatible form (RFC 4291). IPv4-mapped and 6to4
+# forms have properties of their own.
+EMBEDDING_IPV4 = (
+    IPv6Network("64:ff9b::/96"),
+    IPv6Network("::ffff:0:0:0/96"),
+    IPv6Network("::/96"),
+)
+
+# The only IPv6 space IANA allocates for public unicast. Python's `is_global`
+# also calls site-local fec0::/10 and multicast global.
+GLOBAL_UNICAST = IPv6Network("2000::/3")
 
 
 def _unwrapped(address: IPAddress) -> IPAddress:
     """The address the IP policy judges: the IPv4 address that an IPv6 form
-    wraps, or `address` itself. Python calls `::7f00:1` and
-    `64:ff9b::a9fe:a9fe` global, though they reach 127.0.0.1 and
-    169.254.169.254."""
+    wraps, or `address` itself. Python calls `::7f00:1`, `::ffff:0:7f00:1`
+    and `64:ff9b::a9fe:a9fe` global, though they reach 127.0.0.1 and
+    169.254.169.254. `::` and `::1` unwrap to 0.0.0.0 and 0.0.0.1, which the
+    policy judges as it judges them: unspecified, and not public."""
     if isinstance(address, IPv4Address):
         return address
     # https://docs.python.org/3.14/library/ipaddress.html#ipaddress.IPv6Address.ipv4_mapped
@@ -73,27 +88,34 @@ def _unwrapped(address: IPAddress) -> IPAddress:
     # https://docs.python.org/3.14/library/ipaddress.html#ipaddress.IPv6Address.sixtofour
     if address.sixtofour is not None:
         return address.sixtofour
-    # `::` and `::1` are IPv6's own unspecified and loopback addresses.
-    if address in NAT64 or (address in IPV4_COMPATIBLE and int(address) > 1):
+    if any(address in network for network in EMBEDDING_IPV4):
         return IPv4Address(int(address) & 0xFFFF_FFFF)
     return address
 
 
+def _is_public(address: IPAddress) -> bool:
+    """Whether `address` is public unicast: global by IANA's special-purpose
+    registries and, for IPv6, inside the space allocated for it."""
+    # https://docs.python.org/3.14/library/ipaddress.html#ipaddress.IPv4Address.is_global
+    if isinstance(address, IPv6Address) and address not in GLOBAL_UNICAST:
+        return False
+    return address.is_global
+
+
 def address_refusal(address: IPAddress, *, private_allowed: bool) -> str | None:
-    """Why the IP policy refuses `address`, or None when it passes. Link-local,
-    unspecified and cloud metadata addresses are always refused. Any other
-    address that isn't public passes only when `private_allowed`: for the
-    start origin and the project's declared private origins, in local and CI
-    runs."""
+    """Why the IP policy refuses `address`, or None when it passes.
+    Link-local, unspecified and `ALWAYS_REFUSED` addresses are always refused.
+    Any other address that isn't public passes only when `private_allowed`:
+    for the start origin and the project's declared private origins, in local
+    and CI runs."""
     unwrapped = _unwrapped(address)
     if (
         unwrapped.is_link_local
         or unwrapped.is_unspecified
-        or any(unwrapped in network for network in METADATA)
+        or any(unwrapped in network for network in ALWAYS_REFUSED)
     ):
         return f"{address} is a link-local, unspecified or cloud metadata address"
-    # https://docs.python.org/3.14/library/ipaddress.html#ipaddress.IPv4Address.is_global
-    if not unwrapped.is_global and not private_allowed:
+    if not _is_public(unwrapped) and not private_allowed:
         return (
             f"{address} is not a public address: only the start origin and the "
             "project's declared private origins may resolve to one"
@@ -245,9 +267,12 @@ class EgressGate:
 
     async def _lookup(self, host: str, port: int) -> tuple[IPAddress, ...]:
         try:
-            answer = tuple(await self._resolve(host))
-        except OSError as error:  # socket.gaierror: the name doesn't resolve
-            raise self._fail(host, port, f"{host} doesn't resolve: {error}") from error
+            answer = tuple(await asyncio.wait_for(self._resolve(host), RESOLVE_TIMEOUT))
+        # socket.gaierror, or TimeoutError (an OSError since 3.11): the name
+        # doesn't resolve, or not in time.
+        except OSError as error:
+            cause = str(error) or type(error).__name__
+            raise self._fail(host, port, f"{host} doesn't resolve: {cause}") from error
         if not answer:
             raise self._fail(host, port, f"{host} resolves to no address")
         return answer
