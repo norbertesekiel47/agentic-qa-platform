@@ -139,6 +139,7 @@ name = "aqa-runner"
 version = "0.1.0"
 source = { editable = "packages/runner" }
 dependencies = [
+    { name = "anthropic" },
     { name = "aqa-core" },
     { name = "h11" },
     { name = "langchain-anthropic" },
@@ -152,6 +153,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anthropic", specifier = "==1.9.0" },
     { name = "aqa-core", editable = "packages/core" },
     { name = "h11", specifier = "==0.16.0" },
     { name = "langchain-anthropic", specifier = "==1.7.4" },
