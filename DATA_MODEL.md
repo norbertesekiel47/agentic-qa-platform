@@ -189,7 +189,7 @@ Free-form notes for humans. The agent never reads the body; anything that affect
 {
   "schema_version": 1,
   "spec_id": "checkout-expired-card",
-  "spec_hash": "sha256:1bb957ced832db8d37da408b82b72090b14f556b010b728234016c7eef004d5f",
+  "spec_hash": "sha256:bcb054dbf5a73870f5ddfb8fd99045b028ce9bec953a4f60de8cdd7c964f4db6",
   "compiled_at": "2026-10-12T14:03:22Z",
   "compiled_by": { "mode": "explore", "models": { "navigator": "claude-sonnet-5-5" }, "price_map": "<upstream commit>" },
   "confirmed": true,
@@ -276,7 +276,8 @@ Free-form notes for humans. The agent never reads the body; anything that affect
 
 ### Reading a compiled script (schema version 1)
 A compiled script is read as strictly as a spec (§6): an unknown field is an error, and no value changes type, so `true` is not `1` and `"1"` is not a number (`aqa_core.compiled`).
-- **Required:** every field the example shows, except those this list makes optional. `schema_version` is the integer 1. `spec_hash` and `plan_hash` are `sha256:` and 64 lowercase hex digits. `compiled_at` has a time zone.
+- **Required:** every field the example shows, `browser`'s five settings included, except those this list makes optional. `schema_version` is the integer 1. `spec_hash` and `plan_hash` are `sha256:` and 64 lowercase hex digits. `compiled_at` has a time zone.
+  - The example's `spec_hash` is the hash of §6's example. Its `plan_hash` is illustrative: explore defines the plan's canonical form (#53).
 - **Locators:**
   - each names exactly one kind: `role`, `label`, `placeholder`, `testid` or `css`;
   - `name` goes only with `role`, and is optional there;
@@ -288,7 +289,7 @@ A compiled script is read as strictly as a spec (§6): an unknown field is an er
 
   | Action | Fields |
   |---|---|
-  | `navigate` | `url`: a path on the start origin, held to `start_url`'s rules (§6). The executor joins it to the start origin |
+  | `navigate` | `url`: a path on the start origin, held to `start_url`'s rules (§6). The executor joins it to the start origin. Schema version 1 records no navigate to another allowed origin |
   | `reload` | none |
   | `click` | `target` |
   | `fill` | `target`, `value` (may be empty) |
@@ -304,7 +305,7 @@ A compiled script is read as strictly as a spec (§6): an unknown field is an er
   | `text_in_target` | `target`, and `text` or `pattern`, exactly one |
   | `not_visible` | `target` |
   | `url_matches` | `pattern` |
-  | `network_none`, `network_seen` | `method`, `url_pattern`, `status_class` (`1xx` to `5xx`) |
+  | `network_none`, `network_seen` | `method` (`GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE` or `OPTIONS`), `url_pattern`, `status_class` (`1xx` to `5xx`) |
   | `probe_equals_baseline` | `probe` |
   | `visible_unoccluded` | `target`, `min_size_px` (width and height, each 1 or more), `in_viewport` |
 
