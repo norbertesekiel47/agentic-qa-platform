@@ -25,8 +25,13 @@ class RunRecord:
         """A new run's record: `base/.aqa/runs/<run_id>`, where `run_id` is a
         UUIDv7 (time-ordered, DATA_MODEL's internal IDs). `base/.aqa/` ignores
         itself: its `.gitignore` is `*`, written if it is missing and never
-        overwritten."""
+        overwritten. A `.aqa` or `.aqa/runs` that is a link is refused: a
+        repository can commit one pointing anywhere, and a record stays in its
+        spec root."""
         records = base / ".aqa"
+        for place in (records, records / "runs"):
+            if place.is_symlink():
+                raise ValueError(f"{place}: a link, and a run record stays in {base}")
         records.mkdir(exist_ok=True)
         # Another run may write it first; either way the user's own file stays.
         with suppress(FileExistsError), (records / ".gitignore").open("x") as ignore:
@@ -39,9 +44,10 @@ class RunRecord:
     def write(self, name: str, document: object) -> Path:
         """Write `document` to the record as the JSON file `name`, once: a
         record keeps what a run wrote, so a second write of a name is a
-        FileExistsError."""
+        FileExistsError. The JSON is made before the file is opened, so a
+        document that can't be written leaves no file behind."""
+        text = json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False)
         written = self.path / name
         with written.open("x", encoding="utf-8") as file:
-            json.dump(document, file, indent=2, sort_keys=True, ensure_ascii=False)
-            file.write("\n")
+            file.write(text + "\n")
         return written
