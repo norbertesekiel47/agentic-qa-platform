@@ -14,9 +14,12 @@ from pydantic import Field, ValidationError
 from aqa_core.schema import StrictModel
 
 UPSTREAM: Final = "BerriAI/litellm"
-MAP_FILE = "model_prices_and_context_window.json"
-PIN_FILE = "pin.json"
-VENDORED = Path(__file__).resolve().parent / "price_map_data"
+MAP_FILE: Final = "model_prices_and_context_window.json"
+PIN_FILE: Final = "pin.json"
+VENDORED: Final = Path(__file__).resolve().parent / "price_map_data"
+# A full commit ID. Pydantic's `pattern` is a search, not a full match, so a
+# pattern built from this one is anchored (LAB_NOTES, 2026-10-01).
+COMMIT: Final = r"[0-9a-f]{40}"
 
 
 class PriceMapError(Exception):
@@ -28,8 +31,8 @@ class Pin(StrictModel):
     of the copy."""
 
     upstream: Literal["BerriAI/litellm"]
-    commit: Annotated[str, Field(pattern=r"[0-9a-f]{40}")]
-    sha256: Annotated[str, Field(pattern=r"[0-9a-f]{64}")]
+    commit: Annotated[str, Field(pattern=f"^{COMMIT}$")]
+    sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
 
 @dataclass(frozen=True)
@@ -43,7 +46,7 @@ class PriceMap:
 def load_price_map(directory: Path = VENDORED) -> PriceMap:
     """The map in `directory`, once its sha256 matches the pin beside it."""
     try:
-        pin = Pin.model_validate_json((directory / PIN_FILE).read_text())
+        pin = Pin.model_validate_json((directory / PIN_FILE).read_bytes())
     except ValidationError as error:
         problems = "; ".join(
             f"{'.'.join(map(str, detail['loc']))}: {detail['msg']}"

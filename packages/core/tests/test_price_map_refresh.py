@@ -19,8 +19,13 @@ class FakeGitHub:
     """Answers the two requests a refresh makes, and remembers every one."""
 
     def __init__(
-        self, *, commit_answer: bytes | None = None, download: bytes = MAP
+        self,
+        *,
+        ref: str = "main",
+        commit_answer: bytes | None = None,
+        download: bytes = MAP,
     ) -> None:
+        self.ref = ref
         self.commit_answer = (
             json.dumps({"sha": COMMIT}).encode()
             if commit_answer is None
@@ -31,7 +36,10 @@ class FakeGitHub:
 
     def __call__(self, host: str, path: str) -> bytes:
         self.requests.append((host, path))
-        if host == "api.github.com" and path == "/repos/BerriAI/litellm/commits/main":
+        if (
+            host == "api.github.com"
+            and path == f"/repos/BerriAI/litellm/commits/{self.ref}"
+        ):
             return self.commit_answer
         if (
             host == "raw.githubusercontent.com"
@@ -57,7 +65,21 @@ def test_refresh_pins_the_resolved_commit_and_the_downloaded_sha256(
     assert load_price_map(tmp_path).version == COMMIT
 
 
-@pytest.mark.parametrize("ref", ["", "main?per_page=1", "a b", "../x", "feature/x"])
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "",
+        "main?per_page=1",
+        "a b",
+        "../x",
+        "feature/x",
+        ".",
+        "..",
+        "-x",
+        "a..b",
+        "main.",
+    ],
+)
 def test_a_ref_that_is_not_a_plain_name_is_refused_before_any_request(
     tmp_path: Path, ref: str
 ) -> None:
@@ -72,8 +94,24 @@ def test_a_ref_that_is_not_a_plain_name_is_refused_before_any_request(
 
 @pytest.mark.parametrize(
     "answer",
-    [b"{}", b'{"sha": "main"}', b'{"sha": 7}', b"[]", b"not json"],
-    ids=["no-sha", "sha-not-a-commit", "sha-not-text", "not-an-object", "not-json"],
+    [
+        b"{}",
+        b'{"sha": "main"}',
+        b'{"sha": 7}',
+        json.dumps({"sha": COMMIT + "0"}).encode(),
+        json.dumps({"sha": "x" + COMMIT}).encode(),
+        b"[]",
+        b"not json",
+    ],
+    ids=[
+        "no-sha",
+        "sha-not-a-commit",
+        "sha-not-text",
+        "41-characters",
+        "text-before-the-sha",
+        "not-an-object",
+        "not-json",
+    ],
 )
 def test_an_answer_that_names_no_commit_is_refused(
     tmp_path: Path, answer: bytes
@@ -201,3 +239,10 @@ def test_python_dash_m_runs_the_command() -> None:
 
     assert run.returncode == 1
     assert "not a commit, branch or tag name" in run.stderr
+
+
+@pytest.mark.parametrize("ref", ["main", "v1.2.3", "release_2026-10", COMMIT])
+def test_a_commit_branch_or_tag_name_is_accepted(tmp_path: Path, ref: str) -> None:
+    pin = refresh(ref, tmp_path, fetch=FakeGitHub(ref=ref))
+
+    assert pin.commit == COMMIT

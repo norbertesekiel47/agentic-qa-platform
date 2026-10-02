@@ -13,6 +13,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from aqa_core.price_map import (
+    COMMIT,
     MAP_FILE,
     PIN_FILE,
     UPSTREAM,
@@ -25,17 +26,17 @@ from aqa_core.price_map import (
 # Fetch(host, path): the body of an HTTPS GET.
 Fetch = Callable[[str, str], bytes]
 
-# A commit, a branch or a tag without a slash: nothing in it can end the
-# request's path or start a query.
-_REF = re.compile(r"[0-9A-Za-z._-]+")
-_COMMIT = re.compile(r"[0-9a-f]{40}")
+# A commit, a branch or a tag without a slash: letters, digits, `_` and `-`,
+# with single dots between them. Nothing in it can end the request's path,
+# start a query or step up a directory.
+_REF = re.compile(r"[0-9A-Za-z][0-9A-Za-z_-]*(?:\.[0-9A-Za-z_-]+)*")
 
 
 class RefreshError(Exception):
     """The refresh was refused; nothing was written."""
 
 
-def _commit(ref: str, fetch: Fetch) -> str:
+def _resolve_commit(ref: str, fetch: Fetch) -> str:
     if not _REF.fullmatch(ref):
         raise RefreshError(f"'{ref}' is not a commit, branch or tag name")
     try:
@@ -43,7 +44,7 @@ def _commit(ref: str, fetch: Fetch) -> str:
     except ValueError:
         answer = None
     commit = answer.get("sha") if isinstance(answer, dict) else None
-    if not isinstance(commit, str) or not _COMMIT.fullmatch(commit):
+    if not isinstance(commit, str) or not re.fullmatch(COMMIT, commit):
         raise RefreshError(f"GitHub gave no commit for '{ref}'")
     return commit
 
@@ -52,7 +53,7 @@ def refresh(ref: str, directory: Path = VENDORED, *, fetch: Fetch) -> Pin:
     """Copy the map at upstream's `ref` into `directory` and pin the commit
     that `ref` names, with the copy's sha256. Both files are written only
     after the pair loads."""
-    commit = _commit(ref, fetch)
+    commit = _resolve_commit(ref, fetch)
     data = fetch("raw.githubusercontent.com", f"/{UPSTREAM}/{commit}/{MAP_FILE}")
     pin = Pin(upstream=UPSTREAM, commit=commit, sha256=hashlib.sha256(data).hexdigest())
     with tempfile.TemporaryDirectory() as scratch:
