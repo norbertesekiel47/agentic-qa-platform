@@ -5,7 +5,9 @@ DATA_MODEL §7, Locators). The rules are tested on the pilot's pages
 it has none, in real Chromium through the browser session."""
 
 import asyncio
+import json
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
 import pytest
@@ -24,12 +26,13 @@ from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.locator_generation import (
     LocatorError,
     Seen,
+    TargetUses,
     generate_for_action,
     generate_for_assertion,
     seen_element,
     snapshot_elements,
 )
-from aqa_runner.locators import Resolved, Unresolved, rendered_text, resolve
+from aqa_runner.locators import Absent, Resolved, Unresolved, rendered_text, resolve
 from aqa_runner.text_search import text_matches
 from playwright.async_api import ElementHandle, Error, Page, async_playwright
 
@@ -1017,3 +1020,455 @@ def test_every_pilot_locator_keeps_the_grammar_and_finds_its_element(page: str) 
         for locator, _ in found
         if broken_rules(locator)
     ] == []
+
+
+async def resolves_alone_to(
+    page: Page, target: Target, use: Literal["action", "assertion"], used: Seen
+) -> list[bool]:
+    """Whether each of `target`'s locators, alone, resolves for `use` to the
+    element `used`."""
+    found = []
+    for locator in target.locators:
+        alone = Target(semantic=target.semantic, locators=(locator,))
+        resolved = await resolve(page, alone, use)
+        found.append(
+            isinstance(resolved, Resolved)
+            and await is_same(page, resolved.element, used.element)
+        )
+    return found
+
+
+FAVORITE_BUTTON = "the favorite button in the article banner"
+BANNER = ByCss(css="div.banner")
+FAVORITING: list[tuple[str, str, Literal["action", "assertion"]]] = [
+    ("article", "Favorite Article (0)", "action"),
+    ("article-favorited", "Unfavorite Article (1)", "assertion"),
+]
+
+
+def test_the_favorite_toggle_is_split_between_its_click_and_its_check() -> None:
+    # favorite-article clicks the banner's favorite button, reloads, and
+    # checks the button's text. The click finds the button by a name that
+    # favoriting changes, and a text check's target has no name, so the check
+    # starts a second target. Each locator resolves alone to the element its
+    # use put it to, at that use (AC5).
+    async def scenario(
+        session: BrowserSession,
+    ) -> tuple[tuple[Target, ...], list[tuple[int, list[bool]]]]:
+        uses = TargetUses(FAVORITE_BUTTON, checks_text=True)
+        got = []
+        for page, name, use in FAVORITING:
+            await show(session, page)
+            snapshot = await session.snapshot()
+            ref = ref_of(snapshot, "button", name)
+            used = await seen_element(session, snapshot, ref)
+            index = await uses.add(session.page, used, use)
+            target = uses.targets[index]
+            got.append(
+                (index, await resolves_alone_to(session.page, target, use, used))
+            )
+        return uses.targets, got
+
+    targets, got = in_session(scenario)
+
+    structure = ByCss(css="app-favorite-button button.btn", scope=BANNER)
+    assert targets == (
+        Target(
+            semantic=FAVORITE_BUTTON,
+            locators=(
+                ByRole(role="button", name="Favorite Article (0)", scope=BANNER),
+                structure,
+            ),
+        ),
+        Target(semantic=FAVORITE_BUTTON, locators=(structure,)),
+    )
+    assert got == [(0, [True, True]), (1, [True])]
+
+
+def test_a_target_whose_locators_hold_at_every_use_stays_one() -> None:
+    # The favorites count is found by structure, which favoriting doesn't
+    # change, so its check before favoriting and its check after share one
+    # target.
+    meaning = "the favorites count in the article banner"
+
+    async def scenario(
+        session: BrowserSession,
+    ) -> tuple[tuple[Target, ...], list[tuple[int, list[bool]]]]:
+        uses = TargetUses(meaning, checks_text=True)
+        got = []
+        for page, name, _ in FAVORITING:
+            await show(session, page)
+            snapshot = await session.snapshot()
+            ref = ref_of(snapshot, "button", name)
+            button = await seen_element(session, snapshot, ref)
+            count = await narrowed(button.element, "span.counter")
+            index = await uses.add(session.page, count, "assertion")
+            target = uses.targets[index]
+            got.append(
+                (
+                    index,
+                    await resolves_alone_to(session.page, target, "assertion", count),
+                )
+            )
+        return uses.targets, got
+
+    targets, got = in_session(scenario)
+
+    assert targets == (
+        Target(semantic=meaning, locators=(ByCss(css="span.counter", scope=BANNER),)),
+    )
+    assert got == [(0, [True]), (0, [True])]
+
+
+FOLLOW = """<button class="btn btn-outline-primary">Follow anna</button>
+<button class="btn btn-secondary">Share</button>"""
+
+
+def test_a_class_that_flips_with_state_splits_the_target() -> None:
+    # Clicking the button flips its class, as Bootstrap's btn-outline-primary
+    # becomes btn-primary. The second click checks every locator, and the
+    # class no longer finds the button, so that click starts a target. The
+    # first target keeps the class: a locator is never dropped to keep a
+    # target whole.
+    async def scenario(session: BrowserSession) -> tuple[list[int], tuple[Target, ...]]:
+        uses = TargetUses("the follow button", checks_text=False)
+        await put(session, FOLLOW)
+        indexes = []
+        for _ in range(2):
+            snapshot = await session.snapshot()
+            ref = ref_of(snapshot, "button", "Follow anna")
+            used = await seen_element(session, snapshot, ref)
+            indexes.append(await uses.add(session.page, used, "action"))
+            await used.element.evaluate(
+                "(button) => button.classList.replace('btn-outline-primary', 'btn-primary')"
+            )
+        return indexes, uses.targets
+
+    indexes, targets = in_session(scenario)
+
+    by_name = ByRole(role="button", name="Follow anna")
+    assert indexes == [0, 1]
+    assert targets == (
+        Target(
+            semantic="the follow button",
+            locators=(by_name, ByCss(css="button.btn-outline-primary")),
+        ),
+        Target(
+            semantic="the follow button",
+            locators=(by_name, ByCss(css="button.btn-primary")),
+        ),
+    )
+
+
+SAVE = """<button class="save">Save</button><button>Cancel</button>"""
+EMAIL = """<input name="email" placeholder="Email"><input name="nickname">"""
+
+
+@pytest.mark.parametrize(
+    ("html", "role", "name", "checks_text", "expected"),
+    [
+        (
+            SAVE,
+            "button",
+            "Save",
+            True,
+            [
+                (ByRole(role="button", name="Save"), ByCss(css="button.save")),
+                (ByCss(css="button.save"),),
+            ],
+        ),
+        (
+            SAVE,
+            "button",
+            "Save",
+            False,
+            [(ByRole(role="button", name="Save"), ByCss(css="button.save"))],
+        ),
+        (
+            EMAIL,
+            "textbox",
+            "Email",
+            False,
+            [
+                (
+                    ByRole(role="textbox", name="Email"),
+                    ByPlaceholder(placeholder="Email"),
+                    ByCss(css="input[name=email]"),
+                ),
+                (
+                    ByRole(role="textbox", name="Email"),
+                    ByCss(css="input[name=email]"),
+                ),
+            ],
+        ),
+    ],
+    ids=["a text check after a click", "a check of no text", "a check after a fill"],
+)
+def test_a_later_use_joins_only_through_locators_its_grammar_allows(
+    html: str,
+    role: str,
+    name: str,
+    checks_text: bool,
+    expected: list[tuple[Locator, ...]],
+) -> None:
+    # The element is acted on, then checked, on the same page. Every locator
+    # still finds it, but an assertion's grammar has no label or placeholder,
+    # and a text check's target has no name (ADR-0025), so the check joins
+    # the action's target only when every locator is one it allows.
+    async def scenario(session: BrowserSession) -> tuple[Target, ...]:
+        uses = TargetUses("the form's control", checks_text=checks_text)
+        await put(session, html)
+        snapshot = await session.snapshot()
+        used = await seen_element(session, snapshot, ref_of(snapshot, role, name))
+        await uses.add(session.page, used, "action")
+        await uses.add(session.page, used, "assertion")
+        return uses.targets
+
+    assert [target.locators for target in in_session(scenario)] == expected
+
+
+HEADER_LINKS = ByCss(css="ul.navbar-nav")
+
+
+async def see_header_link(session: BrowserSession, uses: TargetUses, name: str) -> None:
+    """Show the login page, where the header has the link `name`, and have
+    `uses` see it for a later negative check."""
+    await show(session, "login")
+    snapshot = await session.snapshot()
+    seen = await seen_element(session, snapshot, ref_of(snapshot, "link", name))
+    await uses.see_for_negative_check(session.page, seen)
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("Sign in", (ByRole(role="link", name="Sign in", scope=HEADER_LINKS),)),
+        (
+            "Sign up",
+            (
+                ByRole(role="link", name="Sign up", scope=HEADER_LINKS),
+                ByCss(css="a.nav-signup", scope=HEADER_LINKS),
+            ),
+        ),
+    ],
+)
+def test_a_negative_check_target_is_always_scoped(
+    name: str, expected: tuple[Locator, ...]
+) -> None:
+    # login checks that the header has no Sign in or Sign up link once
+    # signed in. The link is seen on the login page, where it is unique
+    # without a scope, and checked on the home page. Its locators are scoped
+    # under the nearest ancestor that holds at both: ul.nav is unique on the
+    # login page, but the home page's feed tabs are a ul.nav too.
+    meaning = f"the header's {name} link"
+
+    async def scenario(
+        session: BrowserSession,
+    ) -> tuple[
+        Resolved | Absent | Unresolved,
+        int,
+        tuple[Target, ...],
+        Resolved | Absent | Unresolved,
+    ]:
+        uses = TargetUses(meaning, checks_text=False)
+        await see_header_link(session, uses, name)
+        unscoped = Target(semantic=meaning, locators=(ByRole(role="link", name=name),))
+        alone = await resolve(session.page, unscoped, "negative_check")
+        await show(session, "home")
+        index = await uses.add_negative_check(session.page)
+        return (
+            alone,
+            index,
+            uses.targets,
+            await resolve(session.page, uses.targets[index], "negative_check"),
+        )
+
+    alone, index, targets, at_the_check = in_session(scenario)
+
+    assert isinstance(alone, Resolved)
+    assert index == 0
+    assert targets == (Target(semantic=meaning, locators=expected),)
+    assert isinstance(at_the_check, Absent)
+
+
+def test_a_negative_check_target_fails_by_name_when_its_scope_is_gone() -> None:
+    # An error page has no header, so no scope the link was seen under is
+    # there to be empty: absence from it would be absence from anywhere.
+    async def scenario(session: BrowserSession) -> int:
+        uses = TargetUses("the header's Sign in link", checks_text=False)
+        await see_header_link(session, uses, "Sign in")
+        await put(session, "<main><h1>Bad gateway</h1></main>")
+        return await uses.add_negative_check(session.page)
+
+    with pytest.raises(LocatorError, match=r"^the header's Sign in link: .*scope"):
+        in_session(scenario)
+
+
+async def an_action_no_locator_finds(session: BrowserSession, uses: TargetUses) -> None:
+    await put(
+        session, "<ul><li><button>Edit</button></li><li><button>Edit</button></li></ul>"
+    )
+    snapshot = await session.snapshot()
+    used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Edit", 1))
+    await uses.add(session.page, used, "action")
+
+
+async def a_sighting_no_scope_picks_out(
+    session: BrowserSession, uses: TargetUses
+) -> None:
+    await put(session, "<button>Edit</button>")
+    snapshot = await session.snapshot()
+    seen = await seen_element(session, snapshot, ref_of(snapshot, "button", "Edit"))
+    await uses.see_for_negative_check(session.page, seen)
+
+
+async def a_negative_check_of_nothing_seen(
+    session: BrowserSession, uses: TargetUses
+) -> None:
+    await put(session, "<main><p>Saved</p></main>")
+    await uses.add_negative_check(session.page)
+
+
+@pytest.mark.parametrize(
+    ("misuse", "reason"),
+    [
+        (an_action_no_locator_finds, "finds the button element alone for an action"),
+        (
+            a_sighting_no_scope_picks_out,
+            "finds the button element under a scope for a negative check",
+        ),
+        (a_negative_check_of_nothing_seen, "wasn't seen before its negative check"),
+    ],
+    ids=["an action", "a sighting", "a negative check"],
+)
+def test_a_locator_error_from_target_uses_names_the_meaning(
+    misuse: Callable[[BrowserSession, TargetUses], Awaitable[None]], reason: str
+) -> None:
+    # The caller holds one TargetUses per meaning, so its errors say which
+    # meaning has no locator, and why (#52's reviews).
+    async def scenario(session: BrowserSession) -> None:
+        await misuse(session, TargetUses("the edit button", checks_text=False))
+
+    with pytest.raises(LocatorError, match=f"^the edit button: .*{reason}"):
+        in_session(scenario)
+
+
+# A header whose links lost the navbar-nav class.
+RESTYLED_HEADER = """<nav class="navbar"><ul class="nav">
+<li class="nav-item"><a class="nav-link" href="/">Home</a></li></ul></nav>"""
+
+
+def test_a_negative_check_joins_the_current_target_only_where_it_holds() -> None:
+    # The Sign in link's target is scoped to the header's links, which every
+    # signed-in page has without it, so the check on the editor page joins
+    # the check on the home page. A header restyled without that scope starts
+    # a target, from the scopes the link was seen under.
+    async def scenario(
+        session: BrowserSession,
+    ) -> tuple[list[int], tuple[Target, ...]]:
+        uses = TargetUses("the header's Sign in link", checks_text=False)
+        await see_header_link(session, uses, "Sign in")
+        indexes = []
+        for page in ("home", "editor", None):
+            if page is None:
+                await put(session, RESTYLED_HEADER)
+            else:
+                await show(session, page)
+            indexes.append(await uses.add_negative_check(session.page))
+        return indexes, uses.targets
+
+    indexes, targets = in_session(scenario)
+
+    assert indexes == [0, 0, 1]
+    assert [target.locators for target in targets] == [
+        (ByRole(role="link", name="Sign in", scope=HEADER_LINKS),),
+        (ByRole(role="link", name="Sign in", scope=ByCss(css="ul.nav")),),
+    ]
+
+
+SIGN_OUT = """<nav class="top"><a href="#" class="out">Sign out</a></nav>
+<main><p>Signed in</p></main>"""
+
+
+def test_a_negative_check_never_joins_a_target_with_an_unscoped_locator() -> None:
+    # Clicking the link removes it. The click's target needs no scope, so
+    # the check that it is gone starts a target from where it was seen, with
+    # every locator scoped.
+    async def scenario(session: BrowserSession) -> tuple[list[int], tuple[Target, ...]]:
+        uses = TargetUses("the sign-out link", checks_text=False)
+        await put(session, SIGN_OUT)
+        snapshot = await session.snapshot()
+        used = await seen_element(
+            session, snapshot, ref_of(snapshot, "link", "Sign out")
+        )
+        await uses.see_for_negative_check(session.page, used)
+        indexes = [await uses.add(session.page, used, "action")]
+        await used.element.evaluate("(link) => link.remove()")
+        indexes.append(await uses.add_negative_check(session.page))
+        return indexes, uses.targets
+
+    indexes, targets = in_session(scenario)
+
+    top = ByCss(css="nav.top")
+    assert indexes == [0, 1]
+    assert [target.locators for target in targets] == [
+        (ByRole(role="link", name="Sign out"), ByCss(css="a.out")),
+        (
+            ByRole(role="link", name="Sign out", scope=top),
+            ByCss(css="a.out", scope=top),
+        ),
+    ]
+
+
+def test_a_negative_check_of_an_element_still_shown_gets_no_target() -> None:
+    # Every locator the link was seen by still finds it: the check would
+    # fail, so it gets no target to fail with.
+    async def scenario(session: BrowserSession) -> int:
+        uses = TargetUses("the header's Sign in link", checks_text=False)
+        await see_header_link(session, uses, "Sign in")
+        return await uses.add_negative_check(session.page)
+
+    with pytest.raises(LocatorError, match="nothing visible in it"):
+        in_session(scenario)
+
+
+@pytest.mark.parametrize(
+    ("given", "used"),
+    [
+        ("pay", True),
+        ("pay\u00a0", False),
+        ("pay ", False),
+        ("pay\u3000", False),
+        ("pay\u00e9", False),
+    ],
+    ids=["plain", "a no-break space", "a space", "an ideographic space", "an accent"],
+)
+def test_an_id_is_used_only_when_it_is_one_plain_identifier(
+    given: str, used: bool
+) -> None:
+    # A trailing space or non-ASCII character would need CSS escaping, and
+    # Playwright trims some of them, so such an id is left out, never escaped
+    # (ADR-0025's 2026-10-02 amendment, "what counts as stable").
+    html = f"""<button class="go">Go</button><button>Stop</button><script>
+      document.querySelector(".go").id = {json.dumps(given)};
+    </script>"""
+
+    async def scenario(
+        session: BrowserSession,
+    ) -> tuple[str | None, tuple[Locator, ...]]:
+        await put(session, html)
+        snapshot = await session.snapshot()
+        seen = await seen_element(session, snapshot, ref_of(snapshot, "button", "Go"))
+        return await seen.element.get_attribute("id"), await generate_for_action(
+            session.page, seen
+        )
+
+    actual_id, locators = in_session(scenario)
+
+    by_id = [
+        each
+        for each in locators
+        if isinstance(each, ByCss) and each.css.startswith("#")
+    ]
+    assert actual_id == given
+    assert by_id == ([ByCss(css="#pay")] if used else [])
