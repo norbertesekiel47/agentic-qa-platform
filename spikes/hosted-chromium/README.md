@@ -66,7 +66,7 @@ docker run --rm --platform linux/arm64 aqa-spike-trial:fargate
 
 ## Scripts
 
-AWS CLI v2 only, in us-east-2 (Terraform arrives in M4): the account they run in is a project account, which denies Lambda, ECS, ECR, EC2 and S3 outside its own region (ADR-0030). They need a CLI that has the `aws lambda-microvms` commands, 2.35.10 or later ([CLI changelog](https://github.com/aws/aws-cli/blob/v2/CHANGELOG.rst)), credentials in the environment or a profile, and Docker, jq, curl and python3. Nothing in them holds a secret: the ECR password reaches `docker login` on stdin, and a MicroVM's auth token reaches curl in a header file.
+AWS CLI v2 only, in us-east-2 (Terraform arrives in M4): the account they run in is a project account, which denies Lambda, ECS, ECR, EC2 and S3 outside its own region (ADR-0032). They need a CLI that has the `aws lambda-microvms` commands, 2.35.10 or later ([CLI changelog](https://github.com/aws/aws-cli/blob/v2/CHANGELOG.rst)), credentials in the environment or a profile, and Docker, jq, curl and python3. Nothing in them holds a secret: the ECR password reaches `docker login` on stdin, and a MicroVM's auth token reaches curl in a header file.
 
 ```bash
 spikes/hosted-chromium/scripts/budget.sh <email>        # first: the budget alarm, $10 a month, emails at 50% and 100%
@@ -161,4 +161,4 @@ What #38 records for each candidate, with the command and the commit that produc
 
 ## Results
 
-#38 ran the trials on 2026-10-01. Their rows are in `results/2026-10-01.jsonl`, redacted for the public repository, and ADR-0030 holds every figure, with the commands that derive it from those rows.
+#38 ran the trials on 2026-10-01. Their rows are in `results/2026-10-01.jsonl`, redacted for the public repository, and ADR-0032 holds every figure, with the commands that derive it from those rows.

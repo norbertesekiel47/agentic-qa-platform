@@ -83,7 +83,7 @@ Notes:
 | Cloud | AWS (ADR-0008, ADR-0009) |
 | IaC | Terraform |
 | Container registry | Amazon ECR |
-| Runner compute | **Lambda MicroVMs, one per run (ADR-0030).** A Firecracker VM and kernel per MicroVM, restored from the runner image's snapshot, for up to 8 h. arm64 only; Lambda builds the image from our Dockerfile. ARM compute costs $0.0000276944 per vCPU-second plus $0.0000036667 per GB-second, plus snapshot storage and reads. M1's spike ruled out Fargate and Lambda functions: neither could start Chromium's sandbox, and Lambda functions reuse environments |
+| Runner compute | **Lambda MicroVMs, one per run (ADR-0032).** A Firecracker VM and kernel per MicroVM, restored from the runner image's snapshot, for up to 8 h. arm64 only; Lambda builds the image from our Dockerfile. ARM compute costs $0.0000276944 per vCPU-second plus $0.0000036667 per GB-second, plus snapshot storage and reads. M1's spike ruled out Fargate and Lambda functions: neither could start Chromium's sandbox, and Lambda functions reuse environments |
 | Browser egress | In-runner forward proxy (allowlist, validated-IP connects pinned per run, IP policy by run location, redirect, WebSocket and UDP coverage) + Playwright routing + allowed-origin checks before each observation and action (ADR-0026) |
 | API | Lambda + API Gateway HTTP API; WebSocket API for live runs |
 | Queue | SQS (standard) + dispatcher Lambda |
@@ -109,11 +109,11 @@ Portfolio-traffic estimate (us-east-1, approximate — validate in the AWS Prici
 | CloudFront + S3 (dashboard, artifacts), SQS, API Gateway, CloudWatch | $1–5 |
 | Control-plane Lambdas (API, dispatcher, realtime) | $0 within the always-free tier (1M requests + 400,000 GB-s/month) |
 | **Total (base infrastructure)** | **≈ $20–30** |
-| Hosted-runner compute | Per 60-second run at the 2 GB, 1 vCPU baseline: $0.0024 compute cold, $0.0022 warm (median, back-to-back runs), plus burst, snapshot and data-transfer costs SESSION-3 (ADR-0030). No free tier |
+| Hosted-runner compute | Per 60-second run at the 2 GB, 1 vCPU baseline: $0.0024 compute cold, $0.0022 warm (median, back-to-back runs), plus burst, snapshot and data-transfer costs SESSION-3 (ADR-0032). No free tier |
 
 Free-tier facts (verified 2026-09-27): accounts created on/after 2025-07-15 receive $100 in credits at signup plus up to $100 more for guided activities (one is setting up an AWS Budget); the Free Plan lasts 6 months or until credits run out. RDS has **no** separate free allowance for these accounts — it draws from credits. Lambda's 1M requests + 400,000 GB-seconds per month is always free. Sources: [AWS announcement](https://aws.amazon.com/about-aws/whats-new/2025/07/aws-free-tier-credits-month-free-plan/), [Lambda pricing](https://aws.amazon.com/lambda/pricing/).
 
-Hosted runners run on Lambda MicroVMs (ADR-0030), which have no free tier, so Lambda's always-free allowance covers only the control plane. From M1's spike, at the 2 GB, 1 vCPU baseline:
+Hosted runners run on Lambda MicroVMs (ADR-0032), which have no free tier, so Lambda's always-free allowance covers only the control plane. From M1's spike, at the 2 GB, 1 vCPU baseline:
 - compute for a 60-second run costs $0.0024 cold and $0.0022 warm (median of back-to-back runs), the browser's launch included, if billing starts at `startedAt` as AWS's pricing page implies;
 - burst, snapshot reads and snapshot storage add SESSION-3;
 - data transfer bills at standard AWS rates, and M6 measures a real run's.
@@ -126,7 +126,7 @@ A runner sized at 2 vCPU and 4 GB doubles the compute rate. M6 measures the real
 |---|---|---|
 | Language | TypeScript end-to-end | Less signal for Python-heavy AI postings; team fluency (ADR-0005) |
 | Agent framework | Pydantic AI, custom loop | LangGraph chosen for checkpointing/interrupts and market signal (ADR-0006) |
-| Runners | Lambda functions, Fargate, ECS on EC2 | In M1's spike, neither Lambda functions nor Fargate could start Chromium's sandbox, and Lambda functions reuse environments. ECS on EC2 with an instance per run, the unmeasured last resort, wasn't needed (ADR-0030) |
+| Runners | Lambda functions, Fargate, ECS on EC2 | In M1's spike, neither Lambda functions nor Fargate could start Chromium's sandbox, and Lambda functions reuse environments. ECS on EC2 with an instance per run, the unmeasured last resort, wasn't needed (ADR-0032) |
 | DB | Aurora Serverless v2, DynamoDB | ~15 s resume on demo; no relational model/RLS (ADR-0009) |
 | Auth | Cognito, WorkOS | No org primitives / preference for Clerk DX (ADR-0010) |
 | Tracing | Langfuse, AWS-only | LangSmith pairs with LangGraph (ADR-0014) |

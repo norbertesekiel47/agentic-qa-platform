@@ -1,6 +1,6 @@
 # Roadmap — Agentic QA Platform
 
-Last updated: 2026-10-08 (M1 saves no screenshots, ADR-0033); 2026-10-01 (hosted compute: one Lambda MicroVM per run, ADR-0030). **Core first, then SaaS** (ADR-0016): prove the agent on the benchmark before building the platform around it. Each milestone is one vertical slice, one PR series, with an explicit exit criterion. No dates — quality over speed; milestones are sequential.
+Last updated: 2026-10-08 (M1 saves no screenshots, ADR-0033); 2026-10-01 (hosted compute: one Lambda MicroVM per run, ADR-0032). **Core first, then SaaS** (ADR-0016): prove the agent on the benchmark before building the platform around it. Each milestone is one vertical slice, one PR series, with an explicit exit criterion. No dates — quality over speed; milestones are sequential.
 
 **Release checkpoints** (added after review): full v1 scope is unchanged, but two public, independently defensible releases ship along the way so the strongest hiring signal doesn't wait for the whole SaaS:
 - **Release 0.1 — "CLI + benchmark"** after M3: open-source CLI, frozen benchmark, local run viewer, measured test-split numbers.
@@ -17,7 +17,7 @@ Last updated: 2026-10-08 (M1 saves no screenshots, ADR-0033); 2026-10-01 (hosted
 ## M1 — Local explore & compile
 Design: ADR-0024 (explore runs), ADR-0025 (compiled scripts), ADR-0026 (the browser boundary for local and CI runs), and the 2026-09-29 amendments to ADR-0007 and ADR-0008.
 - **Repo scaffold:** uv workspace (`packages/core`, `packages/runner`, `packages/cli`), Ruff, mypy strict, pytest, CI gates, AGENTS.md rules live. `bench/harness` joins the workspace under pytest.
-- **Spike (decision gate), first after the scaffold.** Sandboxed Chromium on a Lambda MicroVM, a Fargate task and a Lambda function, measured against one rule: sandboxed Chromium **and** a fresh VM per run (ADR-0008 amendment). It records time to a ready browser, peak memory and cost per run, and an ADR records the outcome. Its logistics, including the maintainer's go-ahead before any AWS resource is created, are in the ADR-0008 amendment. **Decided:** one Lambda MicroVM per run, the only candidate that started the sandbox (ADR-0030).
+- **Spike (decision gate), first after the scaffold.** Sandboxed Chromium on a Lambda MicroVM, a Fargate task and a Lambda function, measured against one rule: sandboxed Chromium **and** a fresh VM per run (ADR-0008 amendment). It records time to a ready browser, peak memory and cost per run, and an ADR records the outcome. Its logistics, including the maintainer's go-ahead before any AWS resource is created, are in the ADR-0008 amendment. **Decided:** one Lambda MicroVM per run, the only candidate that started the sandbox (ADR-0032).
 - **Spec parser and project config.** Strict parsing (`seed` removed; `start_url` must be a path), and `qa/config.yaml` with roles, browser settings, subresource and expected-blocked hosts, private origins, secret bindings and budgets (DATA_MODEL §9).
 - **Browser wrapper with the full egress contract (ADR-0026):**
   - the local egress proxy: validated-IP connects pinned per run, the IP policy by location, no UDP bypass;
@@ -89,7 +89,7 @@ Design: ADR-0024 (explore runs), ADR-0025 (compiled scripts), ADR-0026 (the brow
 - **Exit:** end-to-end on a sandbox repo: PR → check run → Accept heal → re-run passes; stale proposals rejected.
 
 ## M6 — Hosted runners
-- Hosted compute: one Lambda MicroVM per run, terminated when the run ends (ADR-0030). Dispatcher with per-org concurrency, continuation leases (their scope decided in #28, now that a run may last up to 8 hours), and hosted-execution tokens (`secrets:read`). Hosted policy for subresource hosts (#29).
+- Hosted compute: one Lambda MicroVM per run, terminated when the run ends (ADR-0032). Dispatcher with per-org concurrency, continuation leases (their scope decided in #28, now that a run may last up to 8 hours), and hosted-execution tokens (`secrets:read`). Hosted policy for subresource hosts (#29).
 - Domain verification (DNS TXT + well-known) with periodic re-checks; SSRF guard with pinned resolution.
 - BYOK: KMS envelope encryption, key delivery to runners, rotation. Hosted test secrets.
 - Continuation per the replay-safe rules; storage-state restore; WebSocket live events with `run_events` catch-up on reconnect.
@@ -126,7 +126,7 @@ Design: ADR-0024 (explore runs), ADR-0025 (compiled scripts), ADR-0026 (the brow
 |---|---|---|
 | Heal classification accuracy below target | Core claim weak | M3 before SaaS; iterate on dev split; publish test-split results honestly |
 | Small test split → wide intervals | Less impressive-looking numbers | Report honestly; grow the test set in v2 |
-| Hosted runs depend on Lambda MicroVMs, generally available since 2026-06-22. In M1's spike, a cold MicroVM took 28.99 s to a ready browser and warm launches ranged from 0.98 s to 24.60 s, and the account allowed four 2 GB MicroVMs at once | Slow or capped hosted runs; the PRD's 30-second hosted replay target at risk | M6 measures the runner's ready time, tries the `/validate` prefetch, requests quota increases, then keeps or amends the target. ECS on EC2 with an instance per run is the fallback (ADR-0030) |
+| Hosted runs depend on Lambda MicroVMs, generally available since 2026-06-22. In M1's spike, a cold MicroVM took 28.99 s to a ready browser and warm launches ranged from 0.98 s to 24.60 s, and the account allowed four 2 GB MicroVMs at once | Slow or capped hosted runs; the PRD's 30-second hosted replay target at risk | M6 measures the runner's ready time, tries the `/validate` prefetch, requests quota increases, then keeps or amends the target. ECS on EC2 with an instance per run is the fallback (ADR-0032) |
 | Full benchmark authored before the compiler is proven | Wasted mutation work | M0 pilot on one app first; full benchmark at M3 |
 | Continuation limits (non-replay-safe specs) | Some long specs can't resume | Most specs fit in one invocation; `reset` hooks; clear `non_resumable` status |
 | Clerk client-only auth in a static export | Dashboard auth friction | Proven by the M7 skeleton before screens are built |

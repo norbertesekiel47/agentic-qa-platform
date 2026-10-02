@@ -1,4 +1,4 @@
-# ADR-0030: Hosted compute: one Lambda MicroVM per run
+# ADR-0032: Hosted compute: one Lambda MicroVM per run
 
 - Status: Accepted
 - Date: 2026-10-01
