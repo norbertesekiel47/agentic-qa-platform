@@ -38,9 +38,10 @@ SUBRESOURCE_PORTS: dict[Requester, int] = {
 # the IP policy refused an address the host resolves to.
 type RefusalKind = Literal["host", "address"]
 
-# Seconds to wait for a name to resolve, and for one address to accept a
-# connection before the next in the answer is tried, so a stalled resolver or
-# an address that drops packets ends in an infrastructure event instead of
+# Seconds a connection waits for its host's answer, whether it looks the name
+# up or waits for another connection's lookup of it, and for one address to
+# accept before the next in the answer is tried. A stalled resolver or an
+# address that drops packets then ends in an infrastructure event instead of
 # the OS's own timeout (over a minute), or none.
 RESOLVE_TIMEOUT = 10
 CONNECT_TIMEOUT = 10
@@ -95,11 +96,12 @@ def _unwrapped(address: IPAddress) -> IPAddress:
 
 def _is_public(address: IPAddress) -> bool:
     """Whether `address` is public unicast: global by IANA's special-purpose
-    registries and, for IPv6, inside the space allocated for it."""
+    registries, not multicast, which Python also calls global, and for IPv6
+    inside the space allocated for public unicast."""
     # https://docs.python.org/3.14/library/ipaddress.html#ipaddress.IPv4Address.is_global
     if isinstance(address, IPv6Address) and address not in GLOBAL_UNICAST:
         return False
-    return address.is_global
+    return address.is_global and not address.is_multicast
 
 
 def address_refusal(address: IPAddress, *, private_allowed: bool) -> str | None:
@@ -258,21 +260,25 @@ class EgressGate:
         literal = _ip_literal(host)
         if literal is not None:
             return self._checked(host, port, (literal,))
-        async with self._lookups[host]:
-            answer = self._pins.get(host) or await self._lookup(host, port)
-            # Checked on every connection, pinned or not: whether a private
-            # address may pass depends on the port as well as the host.
-            self._pins[host] = self._checked(host, port, answer)
+        try:
+            # One deadline for the wait behind another lookup and for this
+            # one: https://docs.python.org/3.14/library/asyncio-task.html#asyncio.timeout
+            async with asyncio.timeout(RESOLVE_TIMEOUT), self._lookups[host]:
+                answer = self._pins.get(host) or await self._lookup(host, port)
+                # Checked on every connection, pinned or not: whether a private
+                # address may pass depends on the port as well as the host.
+                self._pins[host] = self._checked(host, port, answer)
+        except TimeoutError as error:
+            raise self._fail(
+                host, port, f"{host} doesn't resolve within {RESOLVE_TIMEOUT} s"
+            ) from error
         return answer
 
     async def _lookup(self, host: str, port: int) -> tuple[IPAddress, ...]:
         try:
-            answer = tuple(await asyncio.wait_for(self._resolve(host), RESOLVE_TIMEOUT))
-        # socket.gaierror, or TimeoutError (an OSError since 3.11): the name
-        # doesn't resolve, or not in time.
-        except OSError as error:
-            cause = str(error) or type(error).__name__
-            raise self._fail(host, port, f"{host} doesn't resolve: {cause}") from error
+            answer = tuple(await self._resolve(host))
+        except OSError as error:  # socket.gaierror: the name doesn't resolve
+            raise self._fail(host, port, f"{host} doesn't resolve: {error}") from error
         if not answer:
             raise self._fail(host, port, f"{host} resolves to no address")
         return answer
