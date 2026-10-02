@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import re
 import subprocess
 import sys
 from dataclasses import replace
@@ -12,12 +13,14 @@ from aqa_runner.sandbox import (
     Environment,
     LinuxProcess,
     MacProcess,
+    SandboxObservations,
     SandboxUnavailableError,
     check_processes,
     check_sandbox,
     compare_linux,
     compare_macos,
     launch,
+    launch_with_observations,
 )
 from playwright.async_api import Browser, BrowserType, Error, async_playwright
 
@@ -358,3 +361,75 @@ def test_other_launch_errors_pass_through() -> None:
 
     with pytest.raises(Error, match="Executable doesn't exist"):
         asyncio.run(launch(FailingChromium(missing)))
+
+
+# What the sandbox check observed (#81): the reads its verdict comes from,
+# reported alongside it, so they can never vouch for a renderer it refuses.
+
+
+# A child inherits its parent's namespaces, seccomp filters and sandbox, so
+# the check refuses it as a renderer, and its observations show why.
+def test_check_reports_the_processes_it_compared() -> None:
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        observed, problems = check_processes(os.getpid(), [child.pid])
+    finally:
+        child.kill()
+        child.wait()
+
+    assert observed is not None
+    assert observed.browser.pid == os.getpid()
+    [renderer] = observed.renderers
+    assert renderer.pid == child.pid
+    assert replace(renderer, pid=os.getpid()) == observed.browser
+    assert problems, "the check passed a renderer that isn't sandboxed"
+    assert all(problem.startswith(f"renderer {child.pid} ") for problem in problems)
+
+
+def test_launch_returns_what_the_sandbox_check_observed() -> None:
+    async def scenario() -> tuple[list[bool], bool, int, SandboxObservations | None]:
+        async with async_playwright() as playwright:
+            chromium = RecordingChromium(playwright.chromium)
+            browser, observed = await launch_with_observations(chromium)
+            try:
+                return (
+                    chromium.requested,
+                    browser.is_connected(),
+                    len(browser.contexts),
+                    observed,
+                )
+            finally:
+                await browser.close()
+
+    requested, connected, contexts, observed = asyncio.run(scenario())
+
+    assert requested == [True], "launch didn't ask for the sandbox"
+    assert connected, "launch returned a browser that isn't running"
+    assert contexts == 0, "launch left the sandbox check's context open"
+    assert observed is not None, "launch didn't return what the check observed"
+    renderers = [renderer.pid for renderer in observed.renderers]
+    assert renderers, "the check observed no renderer"
+    assert observed.browser.pid not in renderers
+
+
+def test_launch_refusal_carries_what_the_check_observed() -> None:
+    async def scenario() -> SandboxUnavailableError:
+        async with async_playwright() as playwright:
+            with pytest.raises(SandboxUnavailableError) as refused:
+                await launch(UnsandboxedChromium(playwright.chromium))
+            return refused.value
+
+    error = asyncio.run(scenario())
+
+    observed = error.observed
+    assert observed is not None, "the refusal didn't carry what the check observed"
+    renderers = {renderer.pid for renderer in observed.renderers}
+    assert renderers, "the check observed no renderer"
+    assert observed.browser.pid not in renderers
+    # The refusal's reasons come from these reads: it names every renderer
+    # observed, each of them without its sandbox, and no other.
+    refused = {int(pid) for pid in re.findall(r"renderer (\d+)", str(error))}
+    assert refused == renderers, str(error)
+    # Without its sandbox, a renderer is observed just as the browser is.
+    for renderer in observed.renderers:
+        assert replace(renderer, pid=observed.browser.pid) == observed.browser
