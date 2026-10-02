@@ -474,6 +474,11 @@ class GateTests(DiffTestCase):
         self.put("renovate.json", '{"automerge": true}\n')
         self.assert_needs_approval("renovate.json")
 
+    def test_a_workflow_named_like_another_gate_file_needs_approval(self) -> None:
+        # Judged as a package manifest, it would have no gate lines to change.
+        self.put(".github/workflows/package.json.yml", WORKFLOW_YML)
+        self.assert_needs_approval(".github/workflows/package.json.yml")
+
 
 class OutputTests(DiffTestCase):
     # Assembled at runtime, so this file holds no credential-shaped literal.
@@ -549,6 +554,7 @@ class LinkTests(DiffTestCase):
         self.on_main({"packages/core/real.py": "x = f()  # type: ignore\n"})
         self.link("packages/core/alias.py", "real.py")
         output = self.assert_needs_approval("packages/core/alias.py")
+        self.assertIn("symbolic link", output)
         self.assertNotIn("BLOCKED", output)
 
 

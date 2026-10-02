@@ -50,10 +50,10 @@ class NameShapes:
 
     `files` match the end of a file's path, in any directory. A name may run on
     past its shape (`pyproject.toml5`, `test_a.pyc`), since a tool may read such
-    a variant, but not as a `.bak` backup, which none reads. `dirs` are named
-    exactly: their files count when their path below the directory matches
-    `under`. In a shell command a directory stands for every file under it,
-    since one command can move or delete it whole.
+    a variant, unless it ends as a `.bak` backup, which none reads. `dirs` are
+    named exactly: their files count when their path below the directory
+    matches `under`. In a shell command a directory stands for every file under
+    it, since one command can move or delete it whole.
     """
 
     files: tuple[str, ...] = ()
@@ -63,9 +63,11 @@ class NameShapes:
 
 def path_pattern(shapes: NameShapes) -> re.Pattern[str]:
     """The check for a project-relative path."""
-    names = [rf"(?:{'|'.join(shapes.files)})(?!\.bak$)[^/]*"] if shapes.files else []
+    names = []
+    if shapes.files:
+        names.append(rf"(?:{'|'.join(shapes.files)})[^/]*(?<!\.bak)")
     if shapes.dirs:
-        names.append(f"(?:{'|'.join(shapes.dirs)})/{shapes.under}")
+        names.append(f"(?:{'|'.join(shapes.dirs)})/(?:{shapes.under})")
     body = "|".join(names).replace("{name}", "[^/]*")
     return re.compile(f"(?:^|/)(?:{body})$")
 
@@ -75,28 +77,35 @@ def path_pattern(shapes: NameShapes) -> re.Pattern[str]:
 # to a file name's 255.
 _BREAK = r"\s'\"`;&|<>()"
 _SHELL_NAME = rf"[^/{_BREAK}]{{0,255}}"
-# A literal name starts where no word, "." or "-" character runs into it, so
-# not inside `x.ruff.toml`; anything else before it may expand to nothing.
-_NAME_START = r"(?<![\w.-])"
-# A shape that opens with {name} starts only at a segment: the part takes what
-# comes before the literal anyway, and starting after each character of a glob
-# run would scan the run again from each one (LAB_NOTES, 2026-10-02).
-_SEGMENT_START = rf"(?<![^/{_BREAK}])"
+# A name starts where no word, "." or "-" character runs into it, so not inside
+# `x.ruff.toml`; or after what the shell takes off the front of a word: an
+# attached short option (`-o.claude/settings.json`) or a variable, which may be
+# empty (`$D.ruff.toml`).
+_NAME_START = (
+    rf"(?:(?<![\w.-])|(?<![^{_BREAK}=])-[A-Za-z]{{1,8}}|\$[A-Za-z_]\w{{0,63}})"
+)
+_NOT_A_BACKUP = r"(?![\w.-]{0,255}\.bak(?![\w.-]))"
 # A bare `test` that starts a word is the shell's test command, not a directory.
 _NOT_TEST_COMMAND = rf"(?:(?<=/)|(?!test(?:[{_BREAK}]|$)))"
 
 
 def shell_pattern(*kinds: NameShapes) -> re.Pattern[str]:
     """The check for a shell command that names one of `kinds`' files, or a
-    directory that holds them, however many slashes separate its segments."""
+    directory that holds them, however many slashes separate its segments.
+    Search it in `command` and in resolved_paths(command)."""
 
     def shell(shape: str) -> str:
         return shape.replace("/", "/+").replace("{name}", _SHELL_NAME)
 
     files = [
-        (_SEGMENT_START if shape.startswith("{name}") else _NAME_START)
-        + shell(shape)
-        + r"(?!\.bak(?![\w.-]))"
+        # Whatever comes before a shape's leading {name} belongs to the name,
+        # so its literal may match anywhere (LAB_NOTES, 2026-10-02).
+        (
+            shell(shape.removeprefix("{name}"))
+            if shape.startswith("{name}")
+            else _NAME_START + shell(shape)
+        )
+        + _NOT_A_BACKUP
         for kind in kinds
         for shape in kind.files
     ]
@@ -106,6 +115,27 @@ def shell_pattern(*kinds: NameShapes) -> re.Pattern[str]:
         for d in kind.dirs
     ]
     return re.compile("|".join(files + dirs))
+
+
+_WORD = re.compile(rf"[^{_BREAK}]+")
+
+
+def resolved_paths(command: str) -> str:
+    """`command` with the `.` and `..` steps in each word taken, as the shell
+    takes them: `.claude/hooks-old/../hooks` names `.claude/hooks`."""
+
+    def resolve(word: re.Match[str]) -> str:
+        parts: list[str] = []
+        for part in re.split("/+", word[0]):
+            if part == "." and parts:
+                continue
+            if part == ".." and parts and parts[-1] not in {"", ".", ".."}:
+                parts.pop()
+                continue
+            parts.append(part)
+        return "/".join(parts)
+
+    return _WORD.sub(resolve, command)
 
 
 # Rule 6: the guard and the settings that load it.
@@ -125,7 +155,7 @@ TEST_NAMES = NameShapes(
 )
 # Rule 4: quality-gate configs, each kind judged its own way (gate_lines). An
 # entry in .gitleaksignore passes the secret scan, and Renovate reads the first
-# of its config files it finds.
+# of its config files it finds (renovate.json5, .renovaterc.json, ...).
 GATE_WHOLE_NAMES = NameShapes(
     files=(
         r"\.?ruff\.toml",
@@ -135,16 +165,16 @@ GATE_WHOLE_NAMES = NameShapes(
         r"pyrightconfig\.json",
         r"\.pre-commit-config\.ya?ml",
         r"eslint\.config\.[cm]?[jt]s",
-        r"\.eslintrc(?:\.\w+)?",
+        r"\.eslintrc",
         r"vitest\.(?:config|workspace)\.[cm]?[jt]s",
-        r"{name}tsconfig[\w.-]*\.json",  # extends can read any variant
-        r"\.fallowrc(?:\.jsonc?)?",
+        r"{name}tsconfig{name}\.json",  # extends can read any variant
+        r"\.fallowrc",
         r"\.?fallow\.toml",
         r"osv-scanner\.toml",
         r"CONSTRAINTS\.md",
         r"\.gitleaksignore",
-        r"renovate\.json[c5]?",
-        r"\.renovaterc(?:\.json[c5]?)?",
+        r"renovate\.json",
+        r"\.renovaterc",
     ),
     dirs=(r"\.github/scripts",),
 )
@@ -394,9 +424,10 @@ GATE_SECTION = re.compile(
     r"|mypy\b|tool:pytest\b|pytest\b|coverage:|flake8\b)"
 )
 WORKSPACE_MEMBER = re.compile(r"^\s*[\w-]+\s*=\s*\{\s*workspace\s*=\s*true\s*\}\s*$")
+# JSON5's keys may be bare or single-quoted (package.json5).
 PACKAGE_GATE_SCRIPT = re.compile(
-    r'^\s*"(?:lint|typecheck|type-check|tsc|test|check|coverage|ci|verify|format:check)'
-    r'(?::[\w:.-]+)?"\s*:'
+    r'^\s*["\']?(?:lint|typecheck|type-check|tsc|test|check|coverage|ci|verify|format:check)'
+    r'(?::[\w:.-]+)?["\']?\s*:'
 )
 # Any workflow line can weaken a gate; only comments and the top-level name
 # can't, unless the name holds a YAML anchor or alias a step could run.
