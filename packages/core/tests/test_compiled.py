@@ -3,6 +3,7 @@ amendment)."""
 
 import json
 import re
+import warnings
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -651,3 +652,18 @@ def test_every_method_and_status_class_validates(
 
     assert isinstance(network, NetworkNone)
     assert (network.method, network.status_class) == (method, status_class)
+
+
+def test_a_pattern_python_warns_about_is_refused_even_when_cached() -> None:
+    # re.compile returns a cached pattern without warning again, so an earlier
+    # compile elsewhere in the process must not let it through.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        re.compile("[[:alpha:]]+")
+    script = example()
+    script["assertions"][4]["pattern"] = "[[:alpha:]]+"
+
+    [(location, _, message)] = errors(script)
+
+    assert location == ("assertions", 4, "url_matches", "pattern")
+    assert message.startswith("'[[:alpha:]]+' is not a Python regex: ")
