@@ -3,6 +3,7 @@ navigator role, whose request holds the static instructions and the spec's
 own text, and nothing from a page, a run or the machine."""
 
 import json
+import re
 from dataclasses import dataclass
 from typing import cast
 
@@ -87,17 +88,29 @@ _LEFT_OUT: dict[str, bool | dict[str, bool]] = {
 }
 
 
+# A URL's query and fragment: the path says what a page or a probe is, and a
+# query can carry a token the spec writes out.
+_QUERY = re.compile(r"[?#].*", re.DOTALL)
+
+
 def plan_request(spec: Spec) -> list[BaseMessage]:
     """The plan's request: the instructions, then the spec's frontmatter as
-    validated, as JSON, without `tags`, the account or the reset hook. All of
-    it is covered by `spec_hash`, so a change to the request means a change
-    to the hash. Only what the spec sets is written, so a field the spec
+    validated, as JSON, without `tags`, the account or the reset hook, and
+    with the start URL and each probe cut at its query. All of it is covered
+    by `spec_hash`, so a change to the request means a change to the hash. Only what the spec sets is written, so a field the spec
     format gains later leaves existing requests, and their cassettes, as they
     were. The path, the Markdown body, the start origin and the environment
     never enter it."""
     frontmatter = spec.frontmatter.model_dump(
         mode="json", exclude_unset=True, exclude=_LEFT_OUT
     )
+    preconditions = frontmatter["preconditions"]
+    preconditions["start_url"] = _QUERY.sub("", preconditions["start_url"])
+    if "probes" in preconditions:
+        preconditions["probes"] = {
+            name: _QUERY.sub("", endpoint)
+            for name, endpoint in preconditions["probes"].items()
+        }
     return [
         SystemMessage(content=INSTRUCTIONS),
         HumanMessage(
