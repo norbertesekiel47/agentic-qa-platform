@@ -1,0 +1,571 @@
+"""The run's egress: which hosts it lets the browser reach, the IP policy for
+where they resolve, and DNS answers pinned for the whole run (ADR-0026 and its
+2026-10-01 amendment on the egress proxy; SECURITY.md §7). Test-first
+(TESTING.md §2)."""
+
+import asyncio
+import socket
+from collections import Counter
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from ipaddress import IPv4Address, IPv6Address, ip_address
+from pathlib import Path
+
+import pytest
+from aqa_core.project import load_config, load_spec
+from aqa_runner.egress import (
+    EgressPolicy,
+    EgressProxy,
+    EgressRefusedError,
+    EgressUpstreamError,
+    address_refusal,
+    egress_policy,
+    system_resolve,
+)
+
+
+def addresses(*written: str) -> list[IPv4Address | IPv6Address]:
+    return [ip_address(text) for text in written]
+
+
+# Addresses anyone on the internet can reach, written in each form the policy
+# reads: an IPv6 form that embeds an IPv4 address is judged as that address.
+PUBLIC = addresses(
+    "8.8.8.8",
+    "2606:4700:4700::1111",
+    "::ffff:8.8.8.8",  # IPv4-mapped
+    "64:ff9b::808:808",  # NAT64's well-known prefix
+    "2002:808:808::1",  # 6to4
+)
+
+# Loopback, private, unique-local and shared addresses: reachable only for the
+# start origin and the project's declared private origins.
+NON_PUBLIC = addresses(
+    "127.0.0.1",
+    "::1",
+    "10.0.0.1",
+    "172.16.0.1",
+    "192.168.1.1",
+    "fc00::1",
+    "100.64.0.1",
+    "::ffff:127.0.0.1",
+    "::ffff:10.0.0.1",
+    "::7f00:1",  # IPv4-compatible 127.0.0.1, which Python calls global
+    "64:ff9b::7f00:1",  # NAT64 of 127.0.0.1, which Python calls global
+    "2002:7f00:1::1",  # 6to4 of 127.0.0.1
+)
+
+# Never reachable, whatever the project declares.
+ALWAYS_REFUSED = [
+    *addresses(
+        "169.254.169.254",  # link-local: AWS, GCP and Azure instance metadata
+        "169.254.170.2",  # link-local: ECS task metadata
+        "fe80::1",
+        "fe80::1%1",  # with a scope, as getaddrinfo can answer
+        "::ffff:169.254.169.254",
+        "::a9fe:a9fe",
+        "64:ff9b::a9fe:a9fe",
+        "2002:a9fe:a9fe::1",
+        "fd00:ec2::254",  # AWS instance metadata over IPv6
+        "100.100.100.200",  # Alibaba Cloud metadata
+        "::ffff:100.100.100.200",
+        "168.63.129.16",  # Azure WireServer, a public address
+        "::ffff:168.63.129.16",
+        "::",
+        "::ffff:0.0.0.0",
+    ),
+    IPv4Address(0),  # 0.0.0.0, the unspecified address
+]
+
+
+@pytest.mark.parametrize("address", PUBLIC, ids=str)
+@pytest.mark.parametrize("private_allowed", [False, True])
+def test_public_addresses_pass(
+    address: IPv4Address | IPv6Address, *, private_allowed: bool
+) -> None:
+    assert address_refusal(address, private_allowed=private_allowed) is None
+
+
+@pytest.mark.parametrize("address", NON_PUBLIC, ids=str)
+def test_non_public_addresses_need_permission(
+    address: IPv4Address | IPv6Address,
+) -> None:
+    assert address_refusal(address, private_allowed=False) is not None
+    assert address_refusal(address, private_allowed=True) is None
+
+
+@pytest.mark.parametrize("address", ALWAYS_REFUSED, ids=str)
+@pytest.mark.parametrize("private_allowed", [False, True])
+def test_link_local_and_metadata_are_refused_everywhere(
+    address: IPv4Address | IPv6Address, *, private_allowed: bool
+) -> None:
+    assert address_refusal(address, private_allowed=private_allowed) is not None
+
+
+# Which hosts pass, by host and port (ADR-0026 amendment, 2026-10-01).
+
+POLICY = EgressPolicy(
+    allowed_origins=(
+        "http://127.0.0.1:4100",
+        "https://pay.example.test",
+        "http://[::1]:8080",
+    ),
+    subresource_hosts=("fonts.example.test", "[2001:db8::5]"),
+    private_origins=("http://127.0.0.1:4100", "http://staging.example.test:8080"),
+)
+
+
+@pytest.mark.parametrize(
+    ("host", "port"),
+    [("127.0.0.1", 4100), ("pay.example.test", 443), ("[::1]", 8080)],
+)
+@pytest.mark.parametrize("tunnel", [False, True])
+def test_allowed_origins_pass_on_their_own_port(
+    host: str, port: int, *, tunnel: bool
+) -> None:
+    # CONNECT names no scheme, so an origin passes by its host and port alone.
+    assert POLICY.allows(host, port, tunnel=tunnel)
+
+
+@pytest.mark.parametrize(
+    ("host", "port"),
+    [
+        ("127.0.0.1", 4101),
+        ("pay.example.test", 80),
+        ("[::1]", 8081),
+        ("evil.example.test", 443),
+        # A declared private origin may resolve to a private address, but only
+        # an allowed origin or a subresource host is reachable at all.
+        ("staging.example.test", 8080),
+    ],
+)
+@pytest.mark.parametrize("tunnel", [False, True])
+def test_other_hosts_and_ports_are_refused(
+    host: str, port: int, *, tunnel: bool
+) -> None:
+    assert not POLICY.allows(host, port, tunnel=tunnel)
+
+
+@pytest.mark.parametrize("host", ["fonts.example.test", "[2001:db8::5]"])
+def test_subresource_hosts_pass_only_on_their_schemes_default_port(host: str) -> None:
+    # A plain request is http's, on port 80; a tunnel carries https or wss, on
+    # port 443.
+    assert POLICY.allows(host, 80, tunnel=False)
+    assert POLICY.allows(host, 443, tunnel=True)
+    assert not POLICY.allows(host, 443, tunnel=False)
+    assert not POLICY.allows(host, 80, tunnel=True)
+    assert not POLICY.allows(host, 8443, tunnel=True)
+
+
+def test_only_the_start_and_declared_private_origins_may_be_private() -> None:
+    assert POLICY.may_be_private("127.0.0.1", 4100)
+    assert POLICY.may_be_private("staging.example.test", 8080)
+    assert not POLICY.may_be_private("staging.example.test", 80)
+    assert not POLICY.may_be_private("pay.example.test", 443)
+    assert not POLICY.may_be_private("[::1]", 8080)
+
+
+def test_egress_policy_from_spec_config_and_start(tmp_path: Path) -> None:
+    (tmp_path / "config.yaml").write_text(
+        "egress:\n"
+        "  subresource_hosts: [fonts.example.test]\n"
+        "  expected_blocked: [analytics.example.test]\n"
+        "  private_origins: ['http://staging.example.test:8080', 'http://127.0.0.1:4100']\n"
+    )
+    (tmp_path / "pay.spec.md").write_text(
+        "---\n"
+        "id: pay\n"
+        "goal: A shopper pays.\n"
+        "preconditions: { start_url: / }\n"
+        "expect: [The order is confirmed]\n"
+        "allowed_origins: ['https://pay.example.test']\n"
+        "---\n"
+    )
+    config = load_config(tmp_path / "config.yaml")
+    spec = load_spec(tmp_path / "pay.spec.md", config)
+
+    assert egress_policy(spec, config, "http://127.0.0.1:4100") == EgressPolicy(
+        allowed_origins=("http://127.0.0.1:4100", "https://pay.example.test"),
+        subresource_hosts=("fonts.example.test",),
+        private_origins=("http://127.0.0.1:4100", "http://staging.example.test:8080"),
+    )
+
+
+# Connections: the allowlist, DNS pins and the IP policy together. The local
+# DNS fixture is ScriptedResolver, injected where the system resolver would
+# answer; the servers listen on loopback and say which address was reached.
+
+
+class ScriptedResolver:
+    """Answers each name from a script the test can change mid-run, and
+    counts the lookups."""
+
+    def __init__(self, answers: dict[str, Sequence[str] | OSError]) -> None:
+        self.answers = answers
+        self.lookups: Counter[str] = Counter()
+
+    async def __call__(self, host: str) -> list[IPv4Address | IPv6Address]:
+        self.lookups[host] += 1
+        await asyncio.sleep(0)  # a concurrent lookup could start meanwhile
+        answer = self.answers[host]
+        if isinstance(answer, OSError):
+            raise answer
+        return [ip_address(text) for text in answer]
+
+
+@dataclass
+class Servers:
+    """Loopback servers on one port: one on 127.0.0.1 and, when it listens,
+    one on [::1]. Each tells a client which of them it reached."""
+
+    port: int
+    accepted: list[str]
+
+
+async def _tell(label: str, accepted: list[str], writer: asyncio.StreamWriter) -> None:
+    accepted.append(label)
+    writer.write(label.encode())
+    await writer.drain()
+    writer.close()
+    await writer.wait_closed()
+
+
+@asynccontextmanager
+async def loopback_servers(*, ipv6_listens: bool = True) -> AsyncIterator[Servers]:
+    """Servers on 127.0.0.1 and, if `ipv6_listens`, [::1], sharing one port.
+    Without the second, a connection to [::1] on that port is refused."""
+    accepted: list[str] = []
+    servers = [
+        await asyncio.start_server(
+            lambda _, writer: _tell("127.0.0.1", accepted, writer), "127.0.0.1", 0
+        )
+    ]
+    port = servers[0].sockets[0].getsockname()[1]
+    if ipv6_listens:
+        servers.append(
+            await asyncio.start_server(
+                lambda _, writer: _tell("::1", accepted, writer), "::1", port
+            )
+        )
+    try:
+        yield Servers(port, accepted)
+    finally:
+        for server in servers:
+            server.close()
+            await server.wait_closed()
+
+
+def unused_port() -> int:
+    """A port on 127.0.0.1 that nothing listens on, so connecting to it is
+    refused at once. (A bound socket that doesn't listen makes macOS time the
+    connection out instead.)"""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+async def reached(egress: EgressProxy, host: str, port: int) -> str:
+    """Which loopback server a connection to `host` and `port` reaches."""
+    reader, writer = await egress.connect(host, port, tunnel=False)
+    try:
+        return (await reader.read()).decode()
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
+
+def run_policy(
+    port: int, *, private: Sequence[str] = (), other: Sequence[str] = ()
+) -> EgressPolicy:
+    """A policy whose start origin is http://127.0.0.1:`port`, with `private`
+    origins declared private and allowed, and `other` origins allowed only."""
+    start = f"http://127.0.0.1:{port}"
+    return EgressPolicy(
+        allowed_origins=(start, *private, *other),
+        subresource_hosts=(),
+        private_origins=(start, *private),
+    )
+
+
+def test_a_host_outside_the_allowlist_is_refused_before_any_lookup() -> None:
+    async def scenario() -> tuple[EgressProxy, ScriptedResolver, EgressRefusedError]:
+        resolver = ScriptedResolver({})
+        egress = EgressProxy(run_policy(4100), resolve=resolver)
+        with pytest.raises(EgressRefusedError) as refused:
+            await egress.connect("evil.example.test", 443, tunnel=True)
+        return egress, resolver, refused.value
+
+    egress, resolver, refused = asyncio.run(scenario())
+
+    assert egress.refusals == [refused.refusal]
+    assert (refused.refusal.host, refused.refusal.port) == ("evil.example.test", 443)
+    assert refused.refusal.kind == "host"
+    assert resolver.lookups == Counter()
+    assert egress.infrastructure_events == []
+
+
+def test_start_origin_on_loopback_and_a_declared_private_origin_are_allowed() -> None:
+    async def scenario() -> tuple[list[str], EgressProxy, ScriptedResolver]:
+        async with loopback_servers() as servers:
+            private = f"http://staging.example.test:{servers.port}"
+            resolver = ScriptedResolver({"staging.example.test": ["127.0.0.1"]})
+            egress = EgressProxy(
+                run_policy(servers.port, private=[private]), resolve=resolver
+            )
+            return (
+                [
+                    await reached(egress, "127.0.0.1", servers.port),
+                    await reached(egress, "staging.example.test", servers.port),
+                ],
+                egress,
+                resolver,
+            )
+
+    reached_addresses, egress, resolver = asyncio.run(scenario())
+
+    assert reached_addresses == ["127.0.0.1", "127.0.0.1"]
+    # The start origin's host is an address: nothing is looked up for it.
+    assert resolver.lookups == Counter({"staging.example.test": 1})
+    assert egress.refusals == []
+
+
+@pytest.mark.parametrize(
+    ("origin", "answers"),
+    [
+        ("http://app.example.test:{port}", {"app.example.test": ["127.0.0.1"]}),
+        (
+            "http://intranet.example.test:{port}",
+            {"intranet.example.test": ["10.1.2.3"]},
+        ),
+        ("http://[::1]:{port}", {}),
+    ],
+)
+def test_a_private_or_loopback_address_behind_an_allowed_origin_is_refused(
+    origin: str, answers: dict[str, Sequence[str] | OSError]
+) -> None:
+    async def scenario() -> tuple[EgressProxy, EgressRefusedError, list[str]]:
+        async with loopback_servers() as servers:
+            allowed = origin.format(port=servers.port)
+            egress = EgressProxy(
+                run_policy(servers.port, other=[allowed]),
+                resolve=ScriptedResolver(answers),
+            )
+            host = allowed.removeprefix("http://").removesuffix(f":{servers.port}")
+            with pytest.raises(EgressRefusedError) as refused:
+                await egress.connect(host, servers.port, tunnel=False)
+            return egress, refused.value, servers.accepted
+
+    egress, refused, accepted = asyncio.run(scenario())
+
+    assert refused.refusal.kind == "address"
+    assert egress.refusals == [refused.refusal]
+    assert accepted == []
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [["169.254.169.254"], ["::ffff:169.254.169.254"], ["127.0.0.1", "169.254.169.254"]],
+    ids=str,
+)
+def test_a_private_origin_resolving_to_metadata_is_refused_without_connecting(
+    answer: list[str],
+) -> None:
+    async def scenario() -> tuple[EgressProxy, EgressRefusedError]:
+        private = "http://staging.example.test:8080"
+        egress = EgressProxy(
+            run_policy(4100, private=[private]),
+            resolve=ScriptedResolver({"staging.example.test": answer}),
+        )
+        with pytest.raises(EgressRefusedError) as refused:
+            # Bounded: a connection attempt to a metadata address would hang.
+            await asyncio.wait_for(
+                egress.connect("staging.example.test", 8080, tunnel=False), 5
+            )
+        return egress, refused.value
+
+    egress, refused = asyncio.run(scenario())
+
+    assert refused.refusal.kind == "address"
+    assert egress.refusals == [refused.refusal]
+    assert egress.infrastructure_events == []
+
+
+def test_a_rebound_name_still_connects_to_its_pinned_address() -> None:
+    async def scenario() -> tuple[list[str], ScriptedResolver]:
+        async with loopback_servers() as servers:
+            resolver = ScriptedResolver({"app.example.test": ["127.0.0.1"]})
+            egress = EgressProxy(
+                run_policy(
+                    servers.port, private=[f"http://app.example.test:{servers.port}"]
+                ),
+                resolve=resolver,
+            )
+            first = await reached(egress, "app.example.test", servers.port)
+            # The name rebinds to another address the policy would also pass.
+            resolver.answers["app.example.test"] = ["::1"]
+            second = await reached(egress, "app.example.test", servers.port)
+            return [first, second], resolver
+
+    reached_addresses, resolver = asyncio.run(scenario())
+
+    assert reached_addresses == ["127.0.0.1", "127.0.0.1"]
+    assert resolver.lookups == Counter({"app.example.test": 1})
+
+
+def test_a_refused_answer_is_not_pinned() -> None:
+    async def scenario() -> tuple[str, EgressProxy, ScriptedResolver]:
+        async with loopback_servers() as servers:
+            resolver = ScriptedResolver({"app.example.test": ["169.254.169.254"]})
+            egress = EgressProxy(
+                run_policy(
+                    servers.port, private=[f"http://app.example.test:{servers.port}"]
+                ),
+                resolve=resolver,
+            )
+            with pytest.raises(EgressRefusedError):
+                await egress.connect("app.example.test", servers.port, tunnel=False)
+            resolver.answers["app.example.test"] = ["127.0.0.1"]
+            return (
+                await reached(egress, "app.example.test", servers.port),
+                egress,
+                resolver,
+            )
+
+    address, egress, resolver = asyncio.run(scenario())
+
+    assert address == "127.0.0.1"
+    assert resolver.lookups == Counter({"app.example.test": 2})
+    assert len(egress.refusals) == 1
+
+
+def test_a_pinned_answer_is_judged_again_for_each_port() -> None:
+    async def scenario() -> tuple[str, EgressRefusedError, ScriptedResolver]:
+        async with loopback_servers() as servers:
+            resolver = ScriptedResolver({"app.example.test": ["127.0.0.1"]})
+            egress = EgressProxy(
+                run_policy(
+                    servers.port,
+                    private=[f"http://app.example.test:{servers.port}"],
+                    other=["http://app.example.test:9"],
+                ),
+                resolve=resolver,
+            )
+            address = await reached(egress, "app.example.test", servers.port)
+            # The same name on a port that isn't a declared private origin's.
+            with pytest.raises(EgressRefusedError) as refused:
+                await egress.connect("app.example.test", 9, tunnel=False)
+            return address, refused.value, resolver
+
+    address, refused, resolver = asyncio.run(scenario())
+
+    assert address == "127.0.0.1"
+    assert refused.refusal.kind == "address"
+    assert resolver.lookups == Counter({"app.example.test": 1})
+
+
+def test_concurrent_first_requests_resolve_a_name_once() -> None:
+    async def scenario() -> tuple[list[str], ScriptedResolver]:
+        async with loopback_servers() as servers:
+            resolver = ScriptedResolver({"app.example.test": ["127.0.0.1"]})
+            egress = EgressProxy(
+                run_policy(
+                    servers.port, private=[f"http://app.example.test:{servers.port}"]
+                ),
+                resolve=resolver,
+            )
+            first, second = await asyncio.gather(
+                reached(egress, "app.example.test", servers.port),
+                reached(egress, "app.example.test", servers.port),
+            )
+            return [first, second], resolver
+
+    reached_addresses, resolver = asyncio.run(scenario())
+
+    assert reached_addresses == ["127.0.0.1", "127.0.0.1"]
+    assert resolver.lookups == Counter({"app.example.test": 1})
+
+
+def test_addresses_are_tried_in_the_answers_order() -> None:
+    async def scenario() -> list[str]:
+        answers: dict[str, Sequence[str] | OSError] = {
+            "app.example.test": ["::1", "127.0.0.1"]
+        }
+        found = []
+        for ipv6_listens in (True, False):
+            async with loopback_servers(ipv6_listens=ipv6_listens) as servers:
+                egress = EgressProxy(
+                    run_policy(
+                        servers.port,
+                        private=[f"http://app.example.test:{servers.port}"],
+                    ),
+                    resolve=ScriptedResolver(answers),
+                )
+                found.append(await reached(egress, "app.example.test", servers.port))
+        return found
+
+    # The first address that accepts: [::1], or 127.0.0.1 once [::1] refuses.
+    assert asyncio.run(scenario()) == ["::1", "127.0.0.1"]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [socket.gaierror(socket.EAI_NONAME, "no such name"), []],
+    ids=["no such name", "no address"],
+)
+def test_an_unresolvable_name_is_an_infrastructure_event(
+    answer: Sequence[str] | OSError,
+) -> None:
+    async def scenario() -> tuple[EgressProxy, EgressUpstreamError]:
+        private = "http://app.example.test:8080"
+        egress = EgressProxy(
+            run_policy(4100, private=[private]),
+            resolve=ScriptedResolver({"app.example.test": answer}),
+        )
+        with pytest.raises(EgressUpstreamError) as failed:
+            await egress.connect("app.example.test", 8080, tunnel=False)
+        return egress, failed.value
+
+    egress, failed = asyncio.run(scenario())
+
+    assert egress.infrastructure_events == [failed.event]
+    assert (failed.event.host, failed.event.port) == ("app.example.test", 8080)
+    assert egress.refusals == []
+
+
+def test_an_unreachable_address_is_an_infrastructure_event() -> None:
+    port = unused_port()
+
+    async def scenario() -> tuple[EgressProxy, EgressUpstreamError]:
+        egress = EgressProxy(run_policy(port), resolve=ScriptedResolver({}))
+        with pytest.raises(EgressUpstreamError) as failed:
+            await egress.connect("127.0.0.1", port, tunnel=False)
+        return egress, failed.value
+
+    egress, failed = asyncio.run(scenario())
+
+    assert egress.infrastructure_events == [failed.event]
+    assert (failed.event.host, failed.event.port) == ("127.0.0.1", port)
+
+
+def test_the_system_resolver_answers_by_default() -> None:
+    async def scenario() -> tuple[list[IPv4Address | IPv6Address], str]:
+        async with loopback_servers() as servers:
+            start = f"http://localhost:{servers.port}"
+            egress = EgressProxy(
+                EgressPolicy(
+                    allowed_origins=(start,),
+                    subresource_hosts=(),
+                    private_origins=(start,),
+                )
+            )
+            return (
+                await system_resolve("localhost"),
+                await reached(egress, "localhost", servers.port),
+            )
+
+    answer, address = asyncio.run(scenario())
+
+    assert answer
+    assert all(each.is_loopback for each in answer)
+    assert address in {"127.0.0.1", "::1"}
