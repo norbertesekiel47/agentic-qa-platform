@@ -19,8 +19,11 @@ MDNS_PORT = 5353
 MDNS_GROUP = "FB0000E0"
 
 # A peer connection with a data channel and an offer, which gathers with no
-# ICE server, and stays open while the browser's sockets are read. Returns
-# each candidate it gathered.
+# ICE server, then connects to a second one, which answers, and is handed
+# remote candidates whose `.local` names the page chose: a browser that looked
+# such a name up itself would send a query naming it. Both stay open while the
+# browser's sockets are read. Returns each candidate gathered and how
+# gathering ended.
 PEER_CONNECTION = """async () => {
     const peer = new RTCPeerConnection();
     peer.createDataChannel("probe");
@@ -35,8 +38,19 @@ PEER_CONNECTION = """async () => {
             if (peer.iceGatheringState === "complete") done();
         };
     });
-    window.openPeerConnection = peer;
-    return candidates;
+    const answerer = new RTCPeerConnection();
+    await answerer.setRemoteDescription(peer.localDescription);
+    await answerer.setLocalDescription(await answerer.createAnswer());
+    await peer.setRemoteDescription(answerer.localDescription);
+    for (const candidate of [
+        "candidate:1 1 udp 2122260223 exfil-fake-secret.local 54321 typ host",
+        "candidate:2 1 tcp 1518280447 exfil-fake-secret.local 9 typ host tcptype active",
+    ]) {
+        await peer.addIceCandidate({candidate, sdpMid: "0", sdpMLineIndex: 0});
+    }
+    await new Promise((done) => setTimeout(done, 2000));
+    window.openPeerConnections = [peer, answerer];
+    return {candidates, gathering: peer.iceGatheringState};
 }"""
 
 
@@ -79,18 +93,18 @@ def interfaces_in_the_mdns_group() -> list[str]:
 
 
 async def peer_connection() -> dict[str, object]:
-    """A session's page makes a peer connection. Returns the candidates it
-    gathered, the mDNS sockets the session's Chromium holds and, on Linux,
-    the interfaces where the mDNS group was joined."""
+    """A session's page makes a peer connection. Returns what it gathered,
+    the mDNS sockets the session's Chromium holds and, on Linux, the
+    interfaces where the mDNS group was joined."""
     async with (
         async_playwright() as playwright,
         egress_proxy() as egress,
         open_browser_session(playwright.chromium, egress=egress) as session,
     ):
-        candidates = await session.page.evaluate(PEER_CONNECTION)
+        gathered = await session.page.evaluate(PEER_CONNECTION)
         pids = [pid for _, pid in await chromium_processes(session)]
         return {
-            "candidates": candidates,
+            "gathered": gathered,
             "sockets": mdns_sockets(pids),
             "joins": interfaces_in_the_mdns_group()
             if sys.platform == "linux"
