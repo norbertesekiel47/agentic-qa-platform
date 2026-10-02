@@ -23,7 +23,6 @@ from playwright.async_api import ElementHandle, Error, Frame, Page
 from packages.runner.tests.document_fixtures import (
     Sites,
     browsing,
-    ref_for,
     serving_sites,
     to,
     written,
@@ -80,6 +79,13 @@ def test_records_keep_the_first_hundred_and_count_them_all() -> None:
 def sites(monkeypatch: pytest.MonkeyPatch) -> Iterator[Sites]:
     with serving_sites(monkeypatch) as served:
         yield served
+
+
+def ref_for(snapshot: str, role: str, name: str) -> str:
+    """The ref the snapshot gives the element with `role` and `name`."""
+    found = re.search(rf'- {role} "{re.escape(name)}" \[ref=([^\]]+)\]', snapshot)
+    assert found is not None, snapshot
+    return found[1]
 
 
 # How a control reaches the target: (the page, the control's role, and the
