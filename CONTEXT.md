@@ -199,11 +199,14 @@ The short-lived credential a runner uses for one run under one lease. Only a hos
 A hostname the organization has proven it controls. Hosted runs may navigate to and act on verified domains only.
 
 **Egress proxy**:
-The run's only way out: an in-runner forward proxy that passes only allowed origins and subresource hosts, resolves each name itself and pins its first answer that passes the IP policy for the whole run, and refuses link-local and metadata addresses, and non-public ones outside the start origin and declared private origins.
+The browser's only way out: an in-runner forward proxy that passes only allowed origins and subresource hosts, resolves each name itself and pins its first answer that passes the IP policy for the whole run, and refuses link-local and metadata addresses, and non-public ones outside the start origin and declared private origins.
 
 **Egress block**:
 A request from the run's browser to a host that is neither an allowed origin nor a subresource host, which the run refuses. Unless the host is expected-blocked, an egress block keeps the run from passing without making it a finding.
 _Avoid_: network error
+
+**Runner-side request**:
+A request the runner sends itself, not the browser: the reset hook's or a probe's. It goes to an allowed origin only, under the run's DNS pins and IP policy, carries no cookies and never follows a redirect.
 
 **Test secret**:
 A named test credential, bound to allowed origins and a field, that a spec references by name. The browser fills it only into that field on those origins, and our tools never give its value to a model.

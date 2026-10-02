@@ -1,6 +1,6 @@
 # Security — Agentic QA Platform
 
-Last updated: 2026-10-02 (the launch's transport switches and fail-closed proxy, #43); 2026-10-01 (the egress proxy, #42; the browser session's empty environment, #36; the sandbox check, #35; M1 design decisions, ADR-0026). Threat model and controls for a multi-tenant SaaS that runs browser agents against customer web apps. Guarantees are stated as narrowly as they are actually enforced.
+Last updated: 2026-10-02 (runner-side requests through the egress gate, #42; the launch's transport switches and fail-closed proxy, #43); 2026-10-01 (the egress proxy, #42; the browser session's empty environment, #36; the sandbox check, #35; M1 design decisions, ADR-0026). Threat model and controls for a multi-tenant SaaS that runs browser agents against customer web apps. Guarantees are stated as narrowly as they are actually enforced.
 
 ## 1. Assets
 
@@ -100,7 +100,7 @@ The agent reads arbitrary page content. A malicious or compromised page may say 
      - *Addresses by location (ADR-0026):* link-local, unspecified and cloud-metadata addresses are always refused; the list is in ADR-0026's amendment of 2026-10-01. An IPv6 form that embeds an IPv4 address (IPv4-mapped, IPv4-translated, IPv4-compatible, NAT64, 6to4) is judged as that address, and public IPv6 means global unicast.
        - *Hosted runs* reach public addresses only.
        - *Local and CI runs* may reach loopback and private addresses only for the invocation's target origin (`--url`) and for private origins the project config declares. Every other host must resolve to a public address.
-     - *Runner-side requests:* the same rules cover the runner's own probe and reset requests. They go to allowed origins only and carry none of the browser's cookies.
+     - *Runner-side requests:* the same rules cover the runner's own probe and reset requests, which go through the run's egress gate without the proxy. They go to allowed origins only, never subresource hosts, under the same DNS pins and IP policy. They carry no cookies at all, the browser's or any a response set, never follow a redirect, and verify an HTTPS certificate against the URL's host (ADR-0026 amendment, 2026-10-01).
   2. **Playwright routing (defense in depth).** `context.route("**/*")` and `context.route_web_socket("**/*")` are installed **before any page is created**, mirroring the allowlist and logging blocked attempts as evidence. Routing sees only the first request of a redirect chain, never the redirected hops (LAB_NOTES, 2026-09-29), so it never carries enforcement alone.
   3. **Service workers blocked** (`service_workers="block"`), since they can bypass page-level routing; popups inherit the context's routes and proxy.
   - **Document origins.** The proxy can't tell a page load from a resource load over HTTPS, so the tiers are enforced where authority lies:
