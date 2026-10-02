@@ -1,10 +1,54 @@
 """Browser settings are validated before a browser starts (ADR-0025, #39)."""
 
+import sys
+import zoneinfo
+from collections.abc import Iterator
+from importlib import resources
+from pathlib import Path
 from typing import Any
 
 import pytest
 from aqa_core.browser import BrowserOverrides, BrowserSettings
 from pydantic import ValidationError
+
+# A name the host lists and tzdata doesn't, as Ubuntu lists `localtime`.
+HOST_ONLY = "Host/Only"
+TIME_ZONE_PROBES = [
+    "UTC",
+    "Asia/Kolkata",
+    "Asia/Calcutta",  # an alias Ubuntu leaves out and macOS has
+    "America/Buenos_Aires",
+    "US/Pacific",
+    "utc",
+    "localtime",
+    HOST_ONLY,
+    "Mars/Phobos",
+]
+ACCEPTED_PROBES = {
+    "UTC",
+    "Asia/Kolkata",
+    "Asia/Calcutta",
+    "America/Buenos_Aires",
+    "US/Pacific",
+}
+
+
+def is_time_zone(name: str) -> bool:
+    try:
+        BrowserSettings(timezone=name)
+    except ValidationError:
+        return False
+    return True
+
+
+@pytest.fixture
+def host_zone_directory(tmp_path: Path) -> Iterator[Path]:
+    """An empty directory that stands in for the host's zone files: zoneinfo's
+    search path for the length of the test."""
+    original = zoneinfo.TZPATH
+    zoneinfo.reset_tzpath(to=[str(tmp_path)])
+    yield tmp_path
+    zoneinfo.reset_tzpath(to=list(original))
 
 
 def test_the_pinned_defaults_are_valid() -> None:
@@ -54,6 +98,10 @@ def test_settings_read_from_yaml_are_accepted() -> None:
         # Chromium refuses these only when the page opens (LAB_NOTES).
         ("timezone", "utc", "not an IANA time zone"),
         ("timezone", "localtime", "not an IANA time zone"),
+        # A name is matched whole, as the IANA database spells it.
+        ("timezone", "", "not an IANA time zone"),
+        ("timezone", "asia/kolkata", "not an IANA time zone"),
+        ("timezone", "Asia/Kolkata\n", "not an IANA time zone"),
         # Chromium accepts every one of these without a word (LAB_NOTES).
         ("locale", "en_US", "not a BCP 47 language tag"),
         ("locale", "english", "not a BCP 47 language tag"),
@@ -86,3 +134,45 @@ def test_overrides_name_only_the_settings_they_change() -> None:
     overrides = BrowserOverrides.model_validate({"viewport": [1440, 900]})
 
     assert overrides.model_dump(exclude_none=True) == {"viewport": (1440, 900)}
+
+
+@pytest.mark.parametrize(
+    "host_files",
+    [[], ["localtime", HOST_ONLY]],
+    ids=[
+        "a host with no zone files",
+        "a host that lists localtime and a zone of its own",
+    ],
+)
+def test_the_answer_is_the_same_whatever_the_host_lists(
+    host_zone_directory: Path, host_files: list[str]
+) -> None:
+    for name in host_files:
+        file = host_zone_directory / name
+        file.parent.mkdir(exist_ok=True)
+        file.write_bytes(b"TZif" + bytes(40))  # zoneinfo lists a file by this magic
+
+    assert {name for name in TIME_ZONE_PROBES if is_time_zone(name)} == ACCEPTED_PROBES
+
+
+def test_a_missing_tzdata_package_is_an_error_not_a_fallback_to_the_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An import of None in sys.modules fails as an uninstalled package does.
+    monkeypatch.setitem(sys.modules, "tzdata", None)
+
+    with pytest.raises(ModuleNotFoundError, match="tzdata"):
+        BrowserSettings(timezone="UTC")
+
+
+def test_every_name_in_the_tzdata_package_is_a_time_zone() -> None:
+    names = (
+        resources.files("tzdata")
+        .joinpath("zones")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+
+    # The issue measured 598 names; the floor only keeps the loop from passing empty.
+    assert len(names) > 500
+    assert [name for name in names if not is_time_zone(name)] == []
