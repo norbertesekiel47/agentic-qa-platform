@@ -541,25 +541,36 @@ def test_a_scope_may_have_a_scope() -> None:
     )
 
 
-def test_a_negative_check_sees_elements_the_accessibility_tree_hides() -> None:
-    # A visible button under aria-hidden is still on screen: its role locator
-    # must find it, so not_visible fails rather than passes.
+def test_a_negative_check_counts_what_is_on_screen() -> None:
+    # A visible button under aria-hidden is still on screen, so its role
+    # locator finds it and not_visible fails. A display: none button isn't,
+    # so it is absent. A hidden button with the target's old name can't stand
+    # in for the visible, relabeled one a fallback finds (ADR-0025,
+    # "resolving a target per use").
     html = (
         '<div aria-hidden="true"><button data-is="b">Delete</button></div>'
-        '<button style="display: none" data-is="hidden">Archive</button>'
+        '<button style="display: none">Archive</button>'
+        '<button id="del" data-is="relabeled">Remove</button>'
+        '<div style="display: none"><button>Discard</button></div>'
     )
+    decoy = target({"role": "button", "name": "Discard"}, {"css": "#del"})
 
-    async def scenario(page: Page) -> list[str | None]:
-        return [
+    async def scenario(page: Page) -> tuple[Any, ...]:
+        found = await resolve(page, decoy, "negative_check")
+        return (
             await marker(
                 await resolve(
-                    page, target({"role": "button", "name": name}), "negative_check"
+                    page, target({"role": "button", "name": "Delete"}), "negative_check"
                 )
-            )
-            for name in ("Delete", "Archive")
-        ]
+            ),
+            await resolve(
+                page, target({"role": "button", "name": "Archive"}), "negative_check"
+            ),
+            found.locator_index if isinstance(found, Resolved) else found,
+            await marker(found),
+        )
 
-    assert on_page(scenario, html) == ["b", "hidden"]
+    assert on_page(scenario, html) == ("b", Absent(0), 1, "relabeled")
 
 
 def test_only_a_negative_check_is_ever_absent() -> None:
@@ -587,15 +598,26 @@ def test_only_a_negative_check_is_ever_absent() -> None:
     )
 
 
-def test_a_label_cannot_chain_into_another_engine() -> None:
-    # A scope that leaves a quote open would let the label after it chain into
-    # a frame; the format refuses it, and with closed quotes the label is only
-    # ever a label (ADR-0025, "resolving a target per use").
-    smuggled = "*/ >> internal:control=enter-frame >> css=input /*"
-    html = "<iframe srcdoc='<label>Secret <input type=password></label>'></iframe>"
+SMUGGLED = "*/ >> internal:control=enter-frame >> css=input /*"
+
+
+def test_a_scope_that_leaves_a_quote_open_is_refused() -> None:
+    # Its open quote would swallow the separator before the label, which
+    # would then chain into the frame (ADR-0025, "reading a compiled script").
     with pytest.raises(ValidationError, match="leaves a quote or escape open"):
-        target({"label": smuggled, "scope": {"css": 'iframe /* "'}})
-    closed = target({"label": smuggled, "scope": {"css": "body"}})
+        target({"label": SMUGGLED, "scope": {"css": 'iframe /* "'}})
+
+
+@pytest.mark.parametrize(
+    "scope",
+    ["body", 'iframe /* \\" */', 'iframe /* " " */', "iframe /* ` ` */"],
+    ids=["plain", "escaped quote", "closed quotes", "closed backticks"],
+)
+def test_a_label_under_a_closed_scope_is_only_a_label(scope: str) -> None:
+    # Each scope closes what it opens by Playwright's count, so the label
+    # after it is only ever a label, never a chain into the frame.
+    html = "<iframe srcdoc='<label>Secret <input type=password></label>'></iframe>"
+    closed = target({"label": SMUGGLED, "scope": {"css": scope}})
 
     async def scenario(page: Page) -> Resolved | Absent | Unresolved:
         return await resolve(page, closed, "assertion")

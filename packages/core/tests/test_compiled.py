@@ -705,7 +705,8 @@ def test_a_text_check_matches_rendered_text(
         'iframe /* "',
         "iframe /* '",
         "iframe /* `",
-        # A last backslash escapes whatever is chained after it.
+        # A last backslash takes the first character of whatever Playwright
+        # chains after the value.
         "button\\",
     ],
 )
