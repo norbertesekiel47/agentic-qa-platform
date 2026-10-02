@@ -1,6 +1,6 @@
 # Data Model — Agentic QA Platform
 
-Last updated: 2026-09-29 (M1 design decisions, ADR-0024–0026). PostgreSQL 16+ on RDS. Internal IDs are UUIDv7 (time-ordered). External identifiers (Clerk org/user IDs, GitHub IDs) are stored as their native strings/integers and mapped to internal IDs. All timestamps `timestamptz` UTC.
+Last updated: 2026-10-02 (model roles and cost records, #40; M1 design decisions, ADR-0024–0026). PostgreSQL 16+ on RDS. Internal IDs are UUIDv7 (time-ordered). External identifiers (Clerk org/user IDs, GitHub IDs) are stored as their native strings/integers and mapped to internal IDs. All timestamps `timestamptz` UTC.
 
 ## 1. Entity overview
 
@@ -67,7 +67,9 @@ webhook_events · oidc_exchanges (global, service role only)
 ### Models & cost
 | Table | Key columns |
 |---|---|
-| `llm_calls` | `id`, `org_id`, `run_id`, `role`, `mode` (`explore`\|`heal`\|`verified`), `provider`, `model`, `input_tokens`, `output_tokens`, `cached_input_tokens`, `latency_ms`, `price_map_version` (the pinned map's upstream commit), `price_source` (`map`\|`config`), `applied_prices` (jsonb: the per-million-token rates used for this call), `cost_usd`, `status` |
+| `llm_calls` | `id`, `org_id`, `run_id`, `role`, `mode` (`explore`\|`heal`\|`verified`), `provider`, `model`, `input_tokens` (every input token, the cached ones included), `output_tokens`, `cached_input_tokens`, `latency_ms`, `price_map_version` (the pinned map's upstream commit, also on a record priced from the config), `price_source` (`map`\|`config`), `applied_prices` (jsonb: the per-million-token rates used for this call: input, output and cached input), `cost_usd` (an exact decimal), `status` (`ok`\|`refusal`\|`invalid`: a `refusal` is a `stop_reason` of `refusal`, and `invalid` is a response that arrived and then failed parsing or validation. Both were billed, so both are recorded) |
+
+A call that gets no response, such as a transport error, has no usage and records nothing. `aqa_core.model_costs.CostRecord` holds every column but `id`, `org_id`, `run_id` and the row's creation time, which ingestion assigns (M4).
 
 ### Security & admin
 | Table | Key columns |
@@ -409,6 +411,12 @@ budgets:                      # per explore run (ADR-0024)
 
 **Egress hosts.** `subresource_hosts` and `expected_blocked` list bare host names or IP addresses (an IPv6 address in brackets), with no scheme, port or wildcard. A subresource host is reached only on its scheme's default port: 80 for http, 443 for https and wss, and never over `ws://` (ADR-0026 amendment, 2026-10-01). `private_origins` lists origins; declaring one lets an allowed origin or a subresource host resolve to a private address, and doesn't make it reachable.
 
-**Model overrides.** A model missing from the pinned price map must be declared under `models`, with its capabilities and prices; otherwise config validation rejects it. Its cost records carry `price_source: config` and the rates they applied (`applied_prices`, §2), so a later change to this file doesn't change what past costs meant.
+**Model roles (ADR-0007 amendment, 2026-10-02).** Each of `navigator`, `verifier`, `healer` and `vision_fallback` defaults to `claude-sonnet-5-5` on `anthropic`, and `roles` overrides a role's `provider`, `model`, `effort` and `fallback`. Config load checks every role and reports all the problems at once, each as `roles.<role>.<field>`:
+- *Needs:* the model, and the fallback, must have the capabilities the role needs (TECH_STACK §3): `navigator` tools and structured output; `verifier` structured output and vision; `healer` tools, structured output and vision; `vision_fallback` tools and vision.
+- *Priced:* the model must be in the pinned price map or declared under `models`.
+- *Provider:* only `anthropic` has an adapter in M1; another provider is an error that says so. `fallback` names a model of the same provider.
+- *Effort:* `low`, `medium`, `high`, `xhigh` or `max`.
+
+**Model overrides.** A model missing from the pinned price map must be declared under `models`, with its capabilities and prices; otherwise config validation rejects it. A `models` entry also wins over the map for a model the map has, so a negotiated rate can be stated. Either way its cost records carry `price_source: config` and the rates they applied (`applied_prices`, §2), so a later change to this file doesn't change what past costs meant. A declared model has no cache-read rate: cached input tokens cost its input rate.
 
 **Private origins** apply to local and CI runs only. Hosted runs reach public addresses only (ADR-0026).
