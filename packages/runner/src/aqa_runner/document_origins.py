@@ -49,6 +49,18 @@ class PolicyEventError(Exception):
         self.event = event
 
 
+class DocumentChangedError(Exception):
+    """A frame of the page navigated while the session took a snapshot, so
+    content from a document it never checked could be in it: the snapshot
+    is discarded, and the caller takes another."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "the page navigated while the snapshot was taken, so it was "
+            "discarded: take a new snapshot"
+        )
+
+
 @dataclass
 class Records[T]:
     """The first `RECORD_LIMIT` of something the session records, and how

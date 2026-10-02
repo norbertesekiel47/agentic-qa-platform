@@ -13,14 +13,20 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit
 
 import pytest
 from aqa_runner.browser_session import LEFT_OUT, BrowserSession, open_browser_session
-from aqa_runner.document_origins import PolicyEvent, PolicyEventError, document_origin
+from aqa_runner.document_origins import (
+    DocumentChangedError,
+    PolicyEvent,
+    PolicyEventError,
+    document_origin,
+)
 from aqa_runner.egress import Connection
 from aqa_runner.egress_proxy import EgressProxy
-from playwright.async_api import async_playwright
+from playwright.async_api import Page, async_playwright
 
 from packages.runner.tests.egress_fixtures import LOOPBACK, gate
 
@@ -120,6 +126,7 @@ def page(sites: Sites, path: str, query: dict[str, list[str]]) -> str | None:
             <iframe src="{sites.other}/kept"></iframe>""",
         "/nest": f'<button>Nested</button><iframe src="{sites.cdn}/doc"></iframe>',
         "/kept": "<button>Other</button>",
+        "/flip": f'<iframe src="{sites.cdn}/doc"></iframe>',
     }.get(path)
 
 
@@ -275,3 +282,38 @@ def test_a_cross_origin_iframes_content_is_left_out_of_the_snapshot(
     assert located == len(re.findall(r"\[ref=", snapshot))
     # A page that embeds another origin's frame reached nothing: no event.
     assert events == 0
+
+
+def test_a_frame_that_navigates_during_a_snapshot_discards_it(
+    sites: Sites, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    taken_by_playwright = Page.aria_snapshot
+    calls = 0
+
+    # Playwright takes the first snapshot while the frame shows the planted
+    # document; the frame then moves to the start origin before the session
+    # reads where it is.
+    async def frame_moves_after(page: Page, **options: Any) -> str:
+        nonlocal calls
+        calls += 1
+        text = await taken_by_playwright(page, **options)
+        if calls == 1:
+            [frame] = page.main_frame.child_frames
+            await frame.goto(f"{sites.app}/kept")
+        return text
+
+    monkeypatch.setattr(Page, "aria_snapshot", frame_moves_after)
+
+    async def scenario() -> tuple[DocumentChangedError, str]:
+        async with browsing(sites) as session:
+            await session.page.goto(f"{sites.app}/flip")
+            with pytest.raises(DocumentChangedError) as changed:
+                await session.snapshot()
+            return changed.value, await session.snapshot()
+
+    changed, again = asyncio.run(scenario())
+
+    assert "take a new snapshot" in str(changed)
+    # Observed again, the frame shows what it shows now.
+    assert ref_for(again, "button", "Other")
+    assert "Planted" not in again, again
