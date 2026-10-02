@@ -185,7 +185,7 @@ A run on our runners, started from the dashboard. It may navigate to and act on 
 The container that executes one run: the run graph plus a browser. It holds no database or cloud credentials and does all its I/O through the API.
 
 **Browser session**:
-The fresh browser that one attempt or replay of a run uses. It is launched through the sandbox check with an empty environment, the run's browser settings and a profile of its own, sends all its traffic through the run's egress proxy, and its accessibility snapshots give the element refs the agent acts on.
+The fresh browser that one attempt or replay of a run uses. It is launched through the sandbox check with an empty environment, the run's browser settings and a profile of its own, sends its pages' HTTP(S) and WebSocket requests through the run's egress proxy, and its accessibility snapshots give the element refs the agent acts on.
 _Avoid_: "session" alone where a MicroVM's session could be meant
 
 **Sandbox check**:
