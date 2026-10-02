@@ -47,7 +47,7 @@ _TEXT_OR_PATTERN = frozenset({"text", "pattern"})
 # The fields each check type needs beyond `check`. These are DATA_MODEL §7's
 # compiled fields, less what compiling adds, with a target named by its
 # meaning rather than by an ID.
-_NEEDS_FIELDS: Final[Mapping[CheckType, frozenset[str]]] = {
+_FIELDS_OF: Final[Mapping[CheckType, frozenset[str]]] = {
     "text_visible": frozenset(),
     "text_in_target": frozenset({"target_meaning"}),
     "not_visible": frozenset({"target_meaning"}),
@@ -82,16 +82,16 @@ class PlannedCheck(StrictModel):
 
     @model_validator(mode="after")
     def _its_types_fields(self) -> Self:
-        needs = _NEEDS_FIELDS[self.check]
+        required = _FIELDS_OF[self.check]
         text_check = self.check in _TEXT_CHECKS
         given = {
             name
             for name in type(self).model_fields
             if name != "check" and getattr(self, name) is not None
         }
-        takes = needs | (_TEXT_OR_PATTERN if text_check else frozenset())
+        takes = required | (_TEXT_OR_PATTERN if text_check else frozenset())
         problems = [
-            f"a {self.check} check needs {name}" for name in sorted(needs - given)
+            f"a {self.check} check needs {name}" for name in sorted(required - given)
         ]
         problems += [
             f"a {self.check} check takes no {name}" for name in sorted(given - takes)
@@ -166,7 +166,7 @@ def misfits(plan: CoveragePlan, frontmatter: SpecFrontmatter) -> tuple[str, ...]
     declared = frontmatter.preconditions.probes
     found.extend(
         f"expect[{planned.expect_index}]: probe {check.probe} is not one the spec "
-        f"declares ({', '.join(sorted(declared)) or 'none'})"
+        f"declares ({', '.join(declared) or 'none'})"
         for planned in plan.expectations
         for check in planned.checks
         if check.probe is not None and check.probe not in declared
@@ -175,7 +175,7 @@ def misfits(plan: CoveragePlan, frontmatter: SpecFrontmatter) -> tuple[str, ...]
 
 
 # What an unsupported expectation needs, as its line says it.
-_NEEDS: Final[Mapping[M2Check | None, str]] = {
+_NEED_LINES: Final[Mapping[M2Check | None, str]] = {
     None: "no M1 check can establish it",
     "pixel_diff": "it needs pixel_diff, which M2 adds",
     "contrast_min": "it needs contrast_min, which M2 adds",
@@ -185,10 +185,13 @@ _NEEDS: Final[Mapping[M2Check | None, str]] = {
 
 def uncovered(plan: CoveragePlan, frontmatter: SpecFrontmatter) -> tuple[str, ...]:
     """A line naming each expectation `plan` can't cover: its index, its text,
-    what it needs and why. Call it on a plan that fits its spec (`misfits`)."""
+    what it needs and why. A plan that doesn't fit its spec (`misfits`) is a
+    ValueError: its entries may name no expectation."""
+    if found := misfits(plan, frontmatter):
+        raise ValueError(f"the plan doesn't fit its spec: {'; '.join(found)}")
     return tuple(
         f'expect[{planned.expect_index}] "{frontmatter.expect[planned.expect_index].text}": '
-        f"{_NEEDS[planned.unsupported.needs]}: {planned.unsupported.reason}"
+        f"{_NEED_LINES[planned.unsupported.needs]}: {planned.unsupported.reason}"
         for planned in plan.expectations
         if planned.unsupported is not None
     )
