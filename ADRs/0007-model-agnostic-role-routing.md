@@ -62,3 +62,36 @@ Each role declares required capabilities (tool calling, structured output, visio
 - Nothing is written unless the download is a JSON object of objects (`parse_models`, the parse the load uses), so a bad download leaves the old pair in place.
 - *What it does not check:* that the commit is on upstream's default branch. GitHub's API resolves a commit ID from a fork of the repository under the upstream's name, so the reviewer of the pull request checks the pinned commit, as they check the diff. A failed write between the two files leaves a map that doesn't match its pin, which the next load rejects; running the refresh again repairs it.
 - *Considered and left for later:* a scheduled CI job that opens refresh pull requests. It needs a workflow and a token, and a refresh is a deliberate event today.
+
+## Amendment (2026-10-02): how roles are routed, checked and costed
+
+#40 builds the role table, the check at config load and the cost record in `aqa_core` (`model_roles.py`, `model_costs.py`), ahead of the router in `aqa_runner` that calls them. The router's own choices (the Anthropic adapter, refusals, tracing, cassettes) get their own amendment when it lands.
+
+**Roles are checked in core, when the project config loads.** `load_config` resolves every role against the pinned price map and reports each problem at once, in the `<file>: roles.<role>.<field>: <problem>` form the spec errors use, beside the specs' own problems. *Alternative:* validate in the runner after `load_project` returns, which reports spec problems and role problems in two rounds, and lets an invalid role reach every caller that only reads the config.
+
+**What each role needs** (TECH_STACK §3):
+
+| Role | Needs |
+|---|---|
+| `navigator` | tools, structured output |
+| `verifier` | structured output, vision |
+| `healer` | tools, structured output, vision |
+| `vision_fallback` | tools, vision |
+
+`vision_fallback` needs tools rather than TECH_STACK's earlier "coordinate actions" because a coordinate action is a tool call. A `fallback` model is held to the same needs and the same pricing rule as the role's own.
+
+**Capabilities and prices come from one typed view of the map.** `PriceMap.models` maps a name to a read-only `ModelInfo`: capabilities from `supports_function_calling` (tools), `supports_response_schema` (structured output) and `supports_vision`, and exact per-million-token rates. A price that isn't a finite number of 0 or more, and a flag that isn't `true` or `false`, are errors that name the model and the field, because a quietly wrong price is the one failure here that nothing else would notice.
+- *Only priced models:* an entry without both token prices (an image, audio or embedding model) is not a model we could charge per token, so it is left out and counts as missing from the map.
+- *The cached rate:* a map model's cached input tokens cost `cache_read_input_token_cost`, or its input rate if the entry has none. A model declared under `models` has no cache-read rate, so its cached input costs its input rate. *Alternative:* a `cached_input_usd_per_mtok` key in `models`. Left out: no one has asked for a negotiated cache rate, and the key can be added without breaking a config.
+- *Cache creation:* M1 sends no `cache_control`, so no call writes to the cache, and cache-creation tokens have no rate here. The first change that sends one adds the rate and the field.
+
+**A `models` entry wins over the map.** The ticket and DATA_MODEL §9 spoke only of models the map lacks. A model in both is served from the config, and its records say `price_source: config` with the rates applied, so a negotiated rate can be stated and audited. *Alternative:* reject the redundant entry, which would stop a project from correcting a price it knows the map has wrong until the next refresh.
+
+**Only `anthropic` has an adapter in M1.** Another `provider` is a config error that says so, rather than a role that fails at its first call. Each further provider arrives with its adapter and its wire-level cassettes (ADR-0007; TESTING §4). A role's `effort` is one of `low`, `medium`, `high`, `xhigh` or `max`, the levels the Anthropic adapter takes.
+
+**A cost record is exact, and no billed response goes unrecorded.**
+- *Exact:* tokens times per-million rates, as `Decimal`, so a record's `cost_usd` is the sum a person would write by hand (600 uncached input tokens at $2, 400 cached at $0.20 and 200 output at $10 cost $0.00328), and a rate such as 1.1e-07 a token is $0.11 a million rather than 0.10999999999999999.
+- *`input_tokens` includes the cached ones,* as LangChain's `usage_metadata` reports them, so a record whose cached count exceeds its input count is rejected.
+- *Status:* `ok`, `refusal` (a `stop_reason` of `refusal`) or `invalid`, a response that arrived and then failed parsing or validation. Each was billed, so each gets a record. A call with no response, such as a transport error, has no usage and records nothing. DATA_MODEL §2 now lists the three values.
+- *The map's version stays on a config-priced record:* it names the map in force when the call was made, and `price_source` says which rates applied.
+
