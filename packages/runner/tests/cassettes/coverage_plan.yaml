@@ -11,11 +11,9 @@ interactions:
       button is visible and not covered\\\",\\n      \\\"visual\\\": \\\"deterministic\\\"\\n
       \   }\\n  ],\\n  \\\"goal\\\": \\\"A returning user pays with an expired card
       and is told why it failed.\\\",\\n  \\\"id\\\": \\\"checkout\\\",\\n  \\\"preconditions\\\":
-      {\\n    \\\"account\\\": {\\n      \\\"email\\\": \\\"returning@example.test\\\",\\n
-      \     \\\"password\\\": {\\n        \\\"secret\\\": \\\"TEST_PASSWORD\\\"\\n
-      \     }\\n    },\\n    \\\"probes\\\": {\\n      \\\"orders_count\\\": \\\"GET
-      /test-api/orders/count\\\"\\n    },\\n    \\\"start_url\\\": \\\"/login\\\"\\n
-      \ },\\n  \\\"steps\\\": [\\n    \\\"Pay with the saved card\\\"\\n  ]\\n}\"}],\"model\":\"claude-sonnet-5-5\",\"output_config\":{\"format\":{\"type\":\"json_schema\",\"schema\":{\"$defs\":{\"DistinctListOf_PlannedCheck_\":{\"$ref\":\"#/$defs/ListOf_PlannedCheck_\"},\"ListOf_PlannedCheck_\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/PlannedCheck\"}},\"ListOf_PlannedExpectation_\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/PlannedExpectation\"}},\"ListOf_RequiredCondition_\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/RequiredCondition\"}},\"PlannedCheck\":{\"type\":\"object\",\"description\":\"One
+      {\\n    \\\"probes\\\": {\\n      \\\"orders_count\\\": \\\"GET /test-api/orders/count\\\"\\n
+      \   },\\n    \\\"start_url\\\": \\\"/login\\\"\\n  },\\n  \\\"steps\\\": [\\n
+      \   \\\"Pay with the saved card\\\"\\n  ]\\n}\"}],\"model\":\"claude-sonnet-5-5\",\"output_config\":{\"format\":{\"type\":\"json_schema\",\"schema\":{\"$defs\":{\"DistinctListOf_PlannedCheck_\":{\"$ref\":\"#/$defs/ListOf_PlannedCheck_\"},\"ListOf_PlannedCheck_\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/PlannedCheck\"}},\"ListOf_PlannedExpectation_\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/PlannedExpectation\"}},\"ListOf_RequiredCondition_\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/RequiredCondition\"}},\"PlannedCheck\":{\"type\":\"object\",\"description\":\"One
       check that establishes all or part of an expectation's claim. Its\\ntype decides
       which of the other fields it has (DATA_MODEL \xA77).\",\"title\":\"PlannedCheck\",\"properties\":{\"check\":{\"type\":\"string\",\"enum\":[\"text_visible\",\"text_in_target\",\"not_visible\",\"url_matches\",\"network_none\",\"network_seen\",\"probe_equals\",\"probe_equals_baseline\",\"visible_unoccluded\"],\"title\":\"Check\"},\"target_meaning\":{\"anyOf\":[{\"type\":\"string\",\"description\":\"{minLength:
       1}\"},{\"type\":\"null\"}],\"title\":\"Target Meaning\",\"description\":\"{default:
@@ -107,7 +105,7 @@ interactions:
         [{\"check\": \"visible_unoccluded\", \"target_meaning\": \"the payment step''s
         submit button\"}]}], \"requires\": []}"}], "stop_reason": "end_turn", "stop_sequence":
         null, "usage": {"cache_creation_input_tokens": 0, "cache_read_input_tokens":
-        0, "input_tokens": 2330, "output_tokens": 105}}'
+        0, "input_tokens": 2290, "output_tokens": 105}}'
     headers:
       content-type:
       - application/json

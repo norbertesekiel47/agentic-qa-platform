@@ -4,6 +4,7 @@ own text, and nothing from a page, a run or the machine."""
 
 import json
 from dataclasses import dataclass
+from typing import cast
 
 from aqa_core.coverage_plan import CoveragePlan, misfits
 from aqa_core.spec import UNHASHED_KEYS, Spec
@@ -77,16 +78,25 @@ reloading the order page". Leave it empty when there are none.
 """
 
 
+# What the request leaves out of the frontmatter: what spec_hash leaves out,
+# and the account and the reset hook, which a plan doesn't need and which may
+# hold a credential the spec writes out (AGENTS.md §6).
+_LEFT_OUT: dict[str, bool | dict[str, bool]] = {
+    **dict.fromkeys(UNHASHED_KEYS, True),
+    "preconditions": {"account": True, "reset": True},
+}
+
+
 def plan_request(spec: Spec) -> list[BaseMessage]:
     """The plan's request: the instructions, then the spec's frontmatter as
-    validated, without `tags` (`UNHASHED_KEYS`), as JSON. That is what
-    `spec_hash` covers, so
-    the request changes exactly when a compiled script would go stale. Only
-    what the spec sets is written, so a field the spec format gains later
-    leaves existing requests, and their cassettes, as they were. The path,
-    the Markdown body, the start origin and the environment never enter it."""
+    validated, as JSON, without `tags`, the account or the reset hook. All of
+    it is covered by `spec_hash`, so a change to the request means a change
+    to the hash. Only what the spec sets is written, so a field the spec
+    format gains later leaves existing requests, and their cassettes, as they
+    were. The path, the Markdown body, the start origin and the environment
+    never enter it."""
     frontmatter = spec.frontmatter.model_dump(
-        mode="json", exclude_unset=True, exclude=set(UNHASHED_KEYS)
+        mode="json", exclude_unset=True, exclude=_LEFT_OUT
     )
     return [
         SystemMessage(content=INSTRUCTIONS),
@@ -102,7 +112,8 @@ def plan_request(spec: Spec) -> list[BaseMessage]:
 class Planned:
     """What one plan call gave: the plan the model wrote, if it parsed; why it
     doesn't fit its spec, if it doesn't; and the routed call, with a cost
-    record for every response that arrived."""
+    record for every response that arrived. No plan means the model refused
+    or its answer didn't parse, and `routed.outcome` says which."""
 
     plan: CoveragePlan | None
     misfits: tuple[str, ...]
@@ -117,8 +128,7 @@ async def make_plan(router: ModelRouter, spec: Spec) -> Planned:
     routed = await router.call(
         "navigator", "explore", plan_request(spec), schema=CoveragePlan
     )
-    # The router parses against the schema it was given, so a parsed answer
-    # is a CoveragePlan.
-    plan = routed.parsed if isinstance(routed.parsed, CoveragePlan) else None
+    # The router parses against the schema it was given.
+    plan = cast(CoveragePlan | None, routed.parsed)
     found = () if plan is None else misfits(plan, spec.frontmatter)
     return Planned(plan, found, routed)

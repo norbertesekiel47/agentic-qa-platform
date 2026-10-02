@@ -7,10 +7,10 @@ import json
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import pytest
-from aqa_core.coverage_plan import CoveragePlan
+from aqa_core.coverage_plan import CheckType, CoveragePlan, M2Check
 from aqa_core.project import load_project
 from aqa_core.spec import Spec
 from aqa_runner.anthropic_client import AnthropicClient
@@ -36,7 +36,8 @@ id: checkout
 goal: A returning user pays with an expired card and is told why it failed.
 preconditions:
   start_url: /login
-  account: {{ email: returning@example.test, password: {{ secret: TEST_PASSWORD }} }}
+  account: {account}
+  reset: {{ http: "{reset}" }}
   probes:
     orders_count: "GET /test-api/orders/count"
 steps:
@@ -52,16 +53,13 @@ tags: [{tags}]
 """
 
 # The frontmatter as the request carries it, written out by hand: everything
-# but tags, each expectation as an object, nothing the spec leaves out.
+# but tags, the account and the reset hook, each expectation as an object,
+# nothing the spec leaves out.
 FRONTMATTER = {
     "id": "checkout",
     "goal": "A returning user pays with an expired card and is told why it failed.",
     "preconditions": {
         "start_url": "/login",
-        "account": {
-            "email": "returning@example.test",
-            "password": {"secret": "TEST_PASSWORD"},
-        },
         "probes": {"orders_count": "GET /test-api/orders/count"},
     },
     "steps": ["Pay with the saved card"],
@@ -75,20 +73,24 @@ FRONTMATTER = {
 }
 
 
-def checkout(
-    root: Path,
-    *,
-    base_url: str = "http://127.0.0.1:4100",
-    expectation: str = "An error message says the card has expired",
-    tags: str = "payments",
-    body: str = "Notes for people.",
-) -> Spec:
-    """The checkout spec, in a project at `root`."""
+# What each place in CONFIG and SPEC holds unless a test says otherwise.
+DEFAULTS = {
+    "base_url": "http://127.0.0.1:4100",
+    "expectation": "An error message says the card has expired",
+    "tags": "payments",
+    "body": "Notes for people.",
+    "account": "{ email: returning@example.test, password: { secret: TEST_PASSWORD } }",
+    "reset": "POST /test-api/reset?fixture=expired-card",
+}
+
+
+def checkout(root: Path, **overrides: str) -> Spec:
+    """The checkout spec, in a project at `root`, with `overrides` of
+    DEFAULTS."""
+    values = DEFAULTS | overrides
     root.mkdir(parents=True)
-    (root / "config.yaml").write_text(CONFIG.format(base_url=base_url))
-    (root / "checkout.spec.md").write_text(
-        SPEC.format(expectation=expectation, tags=tags, body=body)
-    )
+    (root / "config.yaml").write_text(CONFIG.format(**values))
+    (root / "checkout.spec.md").write_text(SPEC.format(**values))
     return load_project(root).specs["checkout"]
 
 
@@ -133,16 +135,47 @@ def test_the_plan_request_changes_when_an_expectation_changes(tmp_path: Path) ->
     assert contents(before) != contents(after)
 
 
-def test_the_plan_request_names_a_secret_and_never_holds_its_value(
+def test_the_plan_request_leaves_out_the_account_and_the_reset_hook(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    value = "fake-secret-value-in-the-environment"
-    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", value)
+    # A plan needs neither, and either may hold a credential the spec writes
+    # out: a literal password, or a token in the hook's URL (AGENTS.md §6).
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "fake-secret-in-the-environment")
+    spec = checkout(
+        tmp_path / "qa",
+        account="{ email: returning@example.test, password: fake-literal-password }",
+        reset="POST /test-api/reset?token=fake-reset-token",
+    )
 
-    sent = json.dumps([content for _, content in contents(checkout(tmp_path / "qa"))])
+    sent = json.dumps([content for _, content in contents(spec)])
 
-    assert "TEST_PASSWORD" in sent
-    assert value not in sent
+    for left_out in (
+        "fake-literal-password",
+        "fake-reset-token",
+        "returning@example.test",
+        "fake-secret-in-the-environment",
+    ):
+        assert left_out not in sent
+    # The rest of the preconditions are still there.
+    assert "GET /test-api/orders/count" in sent
+
+
+def test_the_plan_request_keeps_the_specs_own_characters(tmp_path: Path) -> None:
+    # Written as the author wrote it, not as \u escapes.
+    spec = checkout(
+        tmp_path / "qa", expectation="Le paiement a échoué, la carte a expiré"
+    )
+
+    _, human = plan_request(spec)
+
+    assert "Le paiement a échoué, la carte a expiré" in str(human.content)
+
+
+def test_the_instructions_name_every_check_type_and_every_need() -> None:
+    # The prompt states what the response format allows; a check type added
+    # to the plan model must be added here too.
+    for name in (*get_args(CheckType), *get_args(M2Check)):
+        assert name in INSTRUCTIONS, name
 
 
 # A plan for the checkout spec, as the model might write it.
