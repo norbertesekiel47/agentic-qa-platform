@@ -142,6 +142,13 @@ mypy_path = [
     "spikes/hosted-chromium/tests",
 ]
 
+# vcrpy ships no types and has no stubs, and mypy --strict refuses an untyped
+# import. Only these two modules: nothing else is excused (ADR-0007 amendment,
+# 2026-10-01; CONSTRAINTS.md, Exceptions).
+[[tool.mypy.overrides]]
+module = ["vcr", "vcr.*"]
+ignore_missing_imports = true
+
 [tool.pytest]
 # strict turns on strict_config, strict_markers, strict_xfail and
 # strict_parametrization_ids; a warning fails the test that raised it.

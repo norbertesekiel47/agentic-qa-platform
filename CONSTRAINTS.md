@@ -1,6 +1,6 @@
 # Constraints
 
-Last reviewed: 2026-10-01 (#66: CI's `floor` job runs `policy_guard.py --diff`, so the floor's approval-class rules reach pull requests).
+Last reviewed: 2026-10-01 (#40: an Exceptions row for vcrpy's missing types; #66: CI's `floor` job runs `policy_guard.py --diff`, so the floor's approval-class rules reach pull requests).
 
 This file owns the project's quality bar: the floor every change keeps and the thresholds the gates hold. The floor applies to every file policy_guard checks. The thresholds cover the Python code; fallow gates TypeScript (ADR-0018) once the dashboard exists.
 - The tool configs in `pyproject.toml` mirror it, and `tests/test_constraints.py` fails when a config drifts from a number here.
@@ -59,5 +59,6 @@ Recorded now, enforced once the code or the pipeline they need exists.
 
 | ID | Rule | Path | Reason | Owner | Expires |
 |---|---|---|---|---|---|
+| E-001 | Types: mypy `strict`, no import without types | `pyproject.toml`, `[[tool.mypy.overrides]]` for `vcr` and `vcr.*` | vcrpy 8.3.0 ships no `py.typed` and no stub package exists (`types-vcrpy` and `vcrpy-stubs` are not on PyPI), and the model router's cassette tests import it (ADR-0007 amendment, 2026-10-01). The override is `ignore_missing_imports` for those two modules only. Retire it when vcrpy ships types or the cassette layer stops using it | maintainer | 2026-12-29 |
 
-None yet. An exception is a temporary waiver of a floor rule or a threshold: it names its rule, path, reason, owner and an expiry at most 90 days out, and changes this file, so it needs the maintainer's approval. A reviewed false positive that stays one, such as the guard's `S104`, is a per-file ignore in `pyproject.toml` with its reason instead.
+An exception is a temporary waiver of a floor rule or a threshold: it names its rule, path, reason, owner and an expiry at most 90 days out, and changes this file, so it needs the maintainer's approval. A reviewed false positive that stays one, such as the guard's `S104`, is a per-file ignore in `pyproject.toml` with its reason instead.
