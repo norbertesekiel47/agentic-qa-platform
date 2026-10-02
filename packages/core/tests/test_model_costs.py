@@ -233,3 +233,34 @@ def test_cost_stays_exact_past_28_significant_digits() -> None:
     assert Fraction(record.cost_usd) == Fraction(
         123456789012345678 * 7123456789012345, 10**21
     )
+
+
+@pytest.mark.parametrize(
+    ("input_rate", "output_rate"),
+    [("1E-120", "3"), ("5E-324", "15"), ("1.8E+308", "5E-324"), ("1E+300", "1E-10")],
+    ids=[
+        "tiny-and-ordinary",
+        "smallest-and-ordinary",
+        "float-extremes",
+        "huge-and-tiny",
+    ],
+)
+def test_cost_is_exact_whatever_the_spread_of_the_rates(
+    input_rate: str, output_rate: str
+) -> None:
+    # A project may declare any finite price, and a billed call must still be
+    # recorded: the sum never rounds and never raises.
+    usage = Usage(input_tokens=1200, cached_input_tokens=200, output_tokens=300)
+    model = routed("config", input_rate, output_rate, input_rate)
+
+    record = record_of(model, usage)
+
+    assert (
+        Fraction(record.cost_usd)
+        == (
+            1000 * Fraction(Decimal(input_rate))
+            + 200 * Fraction(Decimal(input_rate))
+            + 300 * Fraction(Decimal(output_rate))
+        )
+        / 10**6
+    )

@@ -3,7 +3,6 @@
 
 import hashlib
 import json
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
@@ -48,9 +47,9 @@ PriceSource = Literal["map", "config"]
 class ModelInfo:
     """What a model can do and what it costs, in US dollars per million tokens.
     `provider` is the map's `litellm_provider` (None for a model a project
-    declares, or an entry that names none), and `tiered` says the map also
-    prices the model per token above a token threshold, which cost records don't
-    apply."""
+    declares, or a map entry that names none), and `tiered` says the map also has
+    a price per token that changes above a token threshold (a key such as
+    `input_cost_per_token_above_200k_tokens`), which cost records don't apply."""
 
     capabilities: frozenset[Capability]
     input_usd_per_mtok: Decimal
@@ -100,12 +99,6 @@ _FLAGS: Mapping[str, Capability] = {
     "supports_response_schema": "structured_output",
     "supports_vision": "vision",
 }
-# A price per token that changes above a token threshold, such as
-# input_cost_per_token_above_200k_tokens. "above_1hr" is a cache lifetime.
-_TIERS = re.compile(
-    r"(input_cost_per_token|output_cost_per_token|cache_read_input_token_cost)"
-    r"_above_\d+k_tokens"
-)
 
 
 class _FieldError(ValueError):
@@ -158,7 +151,9 @@ def _model(entry: Mapping[str, object]) -> ModelInfo | None:
         cached_input_usd_per_mtok=input_rate if cache_rate is None else cache_rate,
         source="map",
         provider=_provider(entry),
-        tiered=any(_TIERS.fullmatch(key) for key in entry),
+        tiered=any(
+            key.startswith(f"{field}_above_") for field in _PRICES for key in entry
+        ),
     )
 
 
