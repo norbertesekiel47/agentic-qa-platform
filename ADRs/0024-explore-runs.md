@@ -162,7 +162,7 @@ Building `aqa explore --plan-only` (#41) settled how the plan is shaped and hash
 - **A check type with no compiled fields yet.** The plan may name `probe_equals`, whose assertion gets fields in #48. A plan says what establishes a claim, and compiling it is #53's, so `--plan-only` accepts it. A full explore can't compile it until #48, and must say so before the browser opens.
 
 ### The hash
-- **`plan_hash` uses `spec_hash`'s rules:** `sha256:` and the sha256 of the canonical JSON (sorted keys, no whitespace, ASCII escapes) of the plan, without the fields a check doesn't use. `aqa_core.spec.canonical_hash` computes both, so the two hashes can't drift apart.
+- **`plan_hash` uses `spec_hash`'s rules:** `sha256:` and the sha256 of the canonical JSON (sorted keys, no whitespace, ASCII escapes) of the plan, leaving out every field whose value is null, such as the fields a check's type doesn't take. `aqa_core.spec.canonical_hash` computes both, so the two hashes can't drift apart.
 - **It covers the plan alone.** Subjects, claims, checks, unsupported entries and conditions count; the spec's hash doesn't. A compiled script records `spec_hash` beside it.
 
 ### Fitting the spec

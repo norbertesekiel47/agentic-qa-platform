@@ -147,7 +147,7 @@ class CoveragePlan(StrictModel):
 
 def plan_hash(plan: CoveragePlan) -> str:
     """The plan's `plan_hash`: the canonical hash of everything the plan says,
-    leaving out the fields it doesn't use (DATA_MODEL §7)."""
+    leaving out every field whose value is null (DATA_MODEL §7)."""
     return canonical_hash(plan.model_dump(mode="json", exclude_none=True))
 
 
