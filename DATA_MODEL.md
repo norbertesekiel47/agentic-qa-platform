@@ -405,6 +405,8 @@ budgets:                      # per explore run (ADR-0024)
   resolve_seconds: 10
 ```
 
+**Browser time zone (ADR-0025's 2026-10-02 amendment).** `browser.timezone`, in the project config, in a spec and in a compiled script's `browser`, is a name in the `tzdata` package's list, written as the IANA database spells it: case counts, so `utc` is an error. Backward-compatible aliases such as `Asia/Calcutta` and `US/Pacific` are accepted, because Chromium accepts them, and are passed on as written. The list is the pinned package's (TECH_STACK §1), never the host's: `localtime` and any zone only the host lists are errors, and the answer is the same on every machine (`aqa_core.browser.time_zones`).
+
 **Test secrets (ADR-0026).** A spec may reference only secrets declared here.
 - `origins` lists where the browser may fill the secret. `start` is the run's start origin, which comes from the invocation (`aqa explore --url`). Any other entry is an origin, and must also be one of the run's allowed origins, because a secret's destinations are the intersection of its binding and the run's allowed origins. A run checks each secret its spec references once its start origin is known, and a bound origin the run doesn't allow is an error, never dropped.
 - `field` is either `password`, meaning an `<input type="password">`, or a role and accessible name.
