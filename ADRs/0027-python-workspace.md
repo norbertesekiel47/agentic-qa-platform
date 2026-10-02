@@ -59,3 +59,15 @@ mypy's `files` gain `tests`, and pytest's `testpaths` gain `.claude/hooks` and `
 ## Amendment (2026-09-29): the type check is split in two
 
 ADR-0029 settles the import consequence above. `[tool.mypy]` now checks `packages` and `tests`, with only the three `src` folders on `mypy_path`, so package code that imports `manifest` or `policy_guard` fails with `import-not-found`. The scripts get their own run: `mypy --strict --no-explicit-package-bases .claude/hooks bench/harness`. CI now installs from the lockfile and runs `ruff format --check .`, so an unformatted Python block in a doc fails it. Pydantic's mypy plugin can be added when Pydantic is. A new Python minor version also edits setup-python's `python-version` in `ci.yml`.
+
+## Amendment (2026-10-01): a test reads `uv.lock`
+
+Option 3 of "Keeping litellm out", a test that `uv.lock` has no litellm, now backs the constraint. `constraint-dependencies = ["litellm<0"]` stays the ban: it fails a resolution that pulls litellm in and names it. The constraint has two routes around it, and the lock shows both:
+- A `[tool.uv.sources]` entry for litellm replaces the constraint in the lock's manifest. #59's security review reproduced it, and #67 again on uv 0.11.15: with a `path` source, `uv lock` succeeds, locks a litellm `[[package]]`, and writes `{ name = "litellm", directory = "…" }` where `{ name = "litellm", specifier = "<0" }` was.
+- Agents and people without Claude Code's hooks aren't stopped by policy_guard's per-edit approval of `[tool.uv]` (#59), and its `--scan` skips lockfiles.
+
+`tests/test_lockfile.py` parses `uv.lock` with `tomllib` and fails when either of these doesn't hold:
+- no `[[package]]` is named `litellm`;
+- the `[manifest]`'s constraints on litellm are exactly `[{ name = "litellm", specifier = "<0" }]`. A looser specifier, a marker that limits the ban to some platforms, a source in place of the specifier, a missing entry and a missing `[manifest]` all fail it.
+
+`uv run pytest --cov` runs it, so CI's `python` job does, and so does any agent or person without the hooks. Its fixture locks, written by the test, prove that each check can fail: a lock with a litellm package, a manifest constraint that lost its `<0` in each of the ways above, and a path-source lock in the shape uv wrote. The real `uv.lock` is never edited to test it. The test judges the lock only; how an update to the lock is proposed or merged is not decided here.
