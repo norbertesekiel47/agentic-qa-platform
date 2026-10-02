@@ -3,7 +3,8 @@
 session's pages start is judged against the run's `EgressPolicy`, the egress
 proxy's own allowlist; one the proxy would refuse is aborted before it leaves
 and recorded. Routing never sees a redirect's later hops or a dedicated
-worker's sockets, so the egress proxy stays the enforcer behind it."""
+worker's sockets, and a hostile page can open a socket around Playwright's
+in-page socket routing, so the egress proxy stays the enforcer behind it."""
 
 import re
 from urllib.parse import urlsplit
@@ -26,6 +27,9 @@ PROXIED_SCHEMES: dict[str, tuple[str, Requester]] = {
     "wss": ("https", "tunnel"),
 }
 
+# The longest host a record keeps; a longer one is no DNS name.
+MAX_HOST = 253
+
 # The port a WebSocket's URL leaves out, by scheme: WHATWG URL's defaults,
 # which Playwright's socket routing sees the URL serialized with.
 SOCKET_DEFAULT_PORTS = {"ws": 80, "wss": 443}
@@ -41,8 +45,9 @@ def refused_attempt(
         parts = urlsplit(url)
     except ValueError:  # brackets that don't close
         return BlockedAttempt(resource_type, url.partition(":")[0], "", None)
+    # Only a host an origin could write is recorded: a page chooses the rest.
     if parts.scheme not in PROXIED_SCHEMES:
-        return BlockedAttempt(resource_type, parts.scheme, parts.hostname or "", None)
+        return BlockedAttempt(resource_type, parts.scheme, "", None)
     origin_scheme, requester = PROXIED_SCHEMES[parts.scheme]
     # The proxy never sees a URL's user part: Chromium leaves it out of the
     # request line (HttpUtil::SpecForRequest) and a tunnel's CONNECT.
@@ -50,10 +55,13 @@ def refused_attempt(
     try:
         host, port = authority(f"{origin_scheme}://{host_and_port}")
     except ValueError:  # an authority no origin writes, nor Chromium
-        return BlockedAttempt(resource_type, parts.scheme, parts.hostname or "", None)
+        return BlockedAttempt(resource_type, parts.scheme, "", None)
     if policy.allows(host, port, requester):
         return None
-    return BlockedAttempt(resource_type, parts.scheme, host, port)
+    # A DNS name is at most 253 characters (RFC 1035 §2.3.4, written out).
+    return BlockedAttempt(
+        resource_type, parts.scheme, host if len(host) <= MAX_HOST else "", port
+    )
 
 
 def refused_sockets(policy: EgressPolicy) -> re.Pattern[str]:
