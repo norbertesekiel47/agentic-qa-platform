@@ -90,7 +90,7 @@ Each role declares required capabilities (tool calling, structured output, visio
 **Only `anthropic` has an adapter in M1.** Another `provider` is a config error that says so, rather than a role that fails at its first call. Each further provider arrives with its adapter and its wire-level cassettes (ADR-0007; TESTING §4). A role's `effort` is one of `low`, `medium`, `high`, `xhigh` or `max`, the levels the Anthropic adapter takes.
 
 **A cost record is exact, and no billed response goes unrecorded.**
-- *Exact:* tokens times per-million rates, as `Decimal`, so a record's `cost_usd` is the sum a person would write by hand (600 uncached input tokens at $2, 400 cached at $0.20 and 200 output at $10 cost $0.00328), and a rate such as 1.1e-07 a token is $0.11 a million rather than 0.10999999999999999.
+- *Exact:* tokens times per-million rates, as `Decimal`, so a record's `cost_usd` is the sum a person would write by hand (600 uncached input tokens at $2, 400 cached at $0.20 and 200 output at $10 cost $0.00328), and a rate of 2e-07 a token, the cache-read price of Sonnet 5.5, is $0.20 a million rather than 0.19999999999999998.
 - *`input_tokens` includes the cached ones,* as LangChain's `usage_metadata` reports them, so a record whose cached count exceeds its input count is rejected.
 - *Status:* `ok`, `refusal` (a `stop_reason` of `refusal`) or `invalid`, a response that arrived and then failed parsing or validation. Each was billed, so each gets a record. A call with no response, such as a transport error, has no usage and records nothing. DATA_MODEL §2 now lists the three values.
 - *The map's version stays on a config-priced record:* it names the map in force when the call was made, and `price_source` says which rates applied.
