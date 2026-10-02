@@ -3,7 +3,8 @@ Renovate's configuration true to the workspace's pins.
 
 Renovate's weekly pull requests bump a pin, `uv.lock` and the version TECH_STACK.md
 tracks for it, all in one branch. These tests fail when one of them is left
-behind, so a merged bump can't leave a document or an image false.
+behind, so a merged bump can't leave a document or an image false. They also
+prove the other constraints the bot must respect: the uv it runs, and litellm.
 """
 
 import json
@@ -25,8 +26,9 @@ HARNESS = REPO / "bench" / "harness"
 TRACKED_VERSION = re.compile(
     r"(?P<version>\d[\w.]*)<!-- renovate: (?P<name>[\w.-]+) -->"
 )
+# PEP 508 allows extras and spaces around `==`, and Renovate reads both.
 EXACT_PIN = re.compile(
-    r"(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)==(?P<version>[0-9][^\s;,]*)"
+    r"(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*==\s*(?P<version>[0-9][^\s;,]*)"
 )
 
 # Where the checks image (ADR-0023) names Playwright, by file in bench/harness. The
@@ -52,8 +54,9 @@ def normalize(name: str) -> str:
 def workspace_pins(root: Path) -> dict[str, set[str]]:
     """Every exact pin (`name==version`) in the root's and the members' pyproject.toml
     files, as the versions each package is pinned to."""
-    root_project = tomllib.loads((root / "pyproject.toml").read_text())
-    members = root_project["tool"]["uv"]["workspace"]["members"]
+    members = tomllib.loads((root / "pyproject.toml").read_text())["tool"]["uv"][
+        "workspace"
+    ]["members"]
     files = [root / "pyproject.toml"]
     for pattern in members:
         files += sorted(root.glob(f"{pattern}/pyproject.toml"))
@@ -91,9 +94,9 @@ def pin_mismatches(
         elif name not in tracked:
             problems.append(f"{name}=={pinned} has no tracked version in TECH_STACK.md")
         elif tracked[name] != versions:
-            lagging = " and ".join(sorted(tracked[name]))
+            tracked_as = " and ".join(sorted(tracked[name]))
             problems.append(
-                f"{name} is pinned to {pinned}, but TECH_STACK.md tracks {lagging}"
+                f"{name} is pinned to {pinned}, but TECH_STACK.md tracks {tracked_as}"
             )
     problems += [
         f"TECH_STACK.md tracks {name} {' and '.join(sorted(versions))}, which no pyproject.toml pins"
@@ -157,7 +160,15 @@ def resolve(
     )
 
 
+def uv_settings() -> dict[str, Any]:
+    """The root pyproject.toml's [tool.uv] table."""
+    root: dict[str, Any] = tomllib.loads((REPO / "pyproject.toml").read_text())
+    settings: dict[str, Any] = root["tool"]["uv"]
+    return settings
+
+
 def renovate_config() -> dict[str, Any]:
+    """Renovate's configuration for this repository."""
     config: dict[str, Any] = json.loads(RENOVATE.read_text())
     return config
 
@@ -212,7 +223,7 @@ def test_workspace_pins_reads_members_and_groups_and_only_exact_pins(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "root"\nversion = "0"\ndependencies = ["Typer==0.27.2", "rich>=15"]\n'
+        '[project]\nname = "root"\nversion = "0"\ndependencies = ["Typer==0.27.2", "rich>=15", "psycopg[binary] == 3.3.6"]\n'
         '[dependency-groups]\ndev = ["ruff==0.16.9", {include-group = "stubs"}]\n'
         'stubs = ["Types_PyYAML==6.0.12.20260906"]\n'
         '[tool.uv.workspace]\nmembers = ["packages/*"]\n'
@@ -226,6 +237,7 @@ def test_workspace_pins_reads_members_and_groups_and_only_exact_pins(
 
     assert workspace_pins(tmp_path) == {
         "typer": {"0.27.2"},
+        "psycopg": {"3.3.6"},
         "ruff": {"0.16.9"},
         "types-pyyaml": {"6.0.12.20260906"},
         "awslambdaric": {"4.1.0"},
@@ -246,31 +258,29 @@ def test_renovate_waits_three_days_after_a_release() -> None:
 
 def test_pre_1_0_minor_updates_get_their_own_pull_request() -> None:
     rules = renovate_config()["packageRules"]
-    group = next(
+    group_rule = next(
         i
         for i, rule in enumerate(rules)
         if rule.get("groupName") == "python dependencies"
     )
     # A later rule's `groupName: null` takes the update out of the group.
-    own = [
+    pre_1_0_rules = [
         rule
-        for rule in rules[group + 1 :]
+        for rule in rules[group_rule + 1 :]
         if rule.get("matchUpdateTypes") == ["minor"]
         and "groupName" in rule
         and rule["groupName"] is None
     ]
 
-    assert len(own) == 1
-    pre_1_0 = re.compile(own[0]["matchCurrentVersion"].strip("/"))
+    assert len(pre_1_0_rules) == 1
+    pre_1_0 = re.compile(pre_1_0_rules[0]["matchCurrentVersion"].strip("/"))
     assert pre_1_0.search("0.16.9")
     assert not pre_1_0.search("1.2.0")
     assert not pre_1_0.search("10.0.0")
 
 
 def test_renovate_runs_the_uv_the_workspace_requires() -> None:
-    required = tomllib.loads((REPO / "pyproject.toml").read_text())["tool"]["uv"][
-        "required-version"
-    ]
+    required = uv_settings()["required-version"]
 
     # Renovate reads required-version only from the pyproject it is updating, and
     # only the root has one. Members get this constraint instead, or the latest uv,
@@ -285,7 +295,8 @@ def test_renovate_finds_the_versions_the_check_reads() -> None:
     found: dict[str, set[str]] = {}
     for pattern in manager["matchStrings"]:
         # Renovate names a group (?<name>...), Python (?P<name>...).
-        for match in re.finditer(pattern.replace("(?<", "(?P<"), document):
+        python_pattern = re.sub(r"\(\?<(?=\w+>)", "(?P<", pattern)
+        for match in re.finditer(python_pattern, document):
             found.setdefault(normalize(match["depName"]), set()).add(
                 match["currentValue"]
             )
@@ -331,15 +342,13 @@ def test_a_checks_image_file_that_names_no_playwright_is_named() -> None:
 
 
 def test_an_update_that_needs_litellm_fails_to_resolve(tmp_path: Path) -> None:
-    banned = tomllib.loads((REPO / "pyproject.toml").read_text())["tool"]["uv"][
-        "constraint-dependencies"
-    ]
+    litellm_constraint = uv_settings()["constraint-dependencies"]
     links = tmp_path / "links"
     links.mkdir()
     fake_wheel(links, "litellm", [])
     fake_wheel(links, "needs_litellm", ["litellm"])
 
-    refused = resolve(tmp_path / "constrained", banned, links)
+    refused = resolve(tmp_path / "constrained", litellm_constraint, links)
     allowed = resolve(tmp_path / "unconstrained", [], links)
 
     # Same project, same index; only the workspace's constraint differs.
