@@ -17,7 +17,14 @@ from pydantic import (
     model_validator,
 )
 
-from aqa_core.browser import BrowserSettings
+from aqa_core.browser import (
+    BrowserSettings,
+    ColorScheme,
+    Locale,
+    ScaleFactor,
+    TimeZone,
+    Viewport,
+)
 from aqa_core.config import ModelRoleName
 from aqa_core.schema import (
     AtLeastOne,
@@ -120,15 +127,20 @@ AriaRole = Literal[
 
 _Sha256 = Annotated[StrictStr, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
 _Index = Annotated[StrictInt, Field(ge=0)]
-_Seq = Annotated[StrictInt, Field(ge=1)]
-_Pixels = Annotated[StrictInt, Field(ge=1)]
+_Positive = Annotated[StrictInt, Field(ge=1)]
 
 
 def _normalized(text: str) -> str:
-    if text != normalize(text):
+    normalized = normalize(text)
+    if not normalized:
+        raise ValueError(
+            f"{text!r} compares as empty: it holds only private-use glyphs and "
+            "whitespace, which comparing strips"
+        )
+    if text != normalized:
         raise ValueError(
             f"{text!r} is not normalized: it is compared with private-use glyphs "
-            f"stripped and whitespace collapsed, so write {normalize(text)!r}"
+            f"stripped and whitespace collapsed, so write {normalized!r}"
         )
     return text
 
@@ -193,7 +205,7 @@ class _Step(StrictModel):
     defaulted: a default of false would let a continuation repeat a purchase
     (ADR-0006 amendment)."""
 
-    seq: _Seq
+    seq: _Positive
     side_effect: StrictBool
     # Why the flag is true (ADR-0025): `false` needs positive evidence, and
     # anything else is `true` with its reason here.
@@ -264,7 +276,7 @@ class _Assertion(StrictModel):
     expect_index: _Index
 
 
-class _TextClaim(_Assertion):
+class _TextCheck(_Assertion):
     """A check of rendered text, by a literal `text` or a regex `pattern`
     (ADR-0025)."""
 
@@ -278,11 +290,11 @@ class _TextClaim(_Assertion):
         return self
 
 
-class TextVisible(_TextClaim):
+class TextVisible(_TextCheck):
     check: Literal["text_visible"]
 
 
-class TextInTarget(_TextClaim):
+class TextInTarget(_TextCheck):
     check: Literal["text_in_target"]
     target: NonEmpty
 
@@ -297,7 +309,7 @@ class UrlMatches(_Assertion):
     pattern: _Regex
 
 
-class Network(_Assertion):
+class NetworkCheck(_Assertion):
     """A request the browser itself made, or didn't."""
 
     check: Literal["network_none", "network_seen"]
@@ -316,7 +328,7 @@ class VisibleUnoccluded(_Assertion):
     target: NonEmpty
     # Width and height, in CSS pixels. Not strict on the outside, so a JSON
     # list becomes the tuple; each side stays strict.
-    min_size_px: Annotated[tuple[_Pixels, _Pixels], Field(strict=False)]
+    min_size_px: Annotated[tuple[_Positive, _Positive], Field(strict=False)]
     in_viewport: StrictBool
 
 
@@ -325,7 +337,7 @@ Assertion = Annotated[
     | TextInTarget
     | NotVisible
     | UrlMatches
-    | Network
+    | NetworkCheck
     | ProbeEqualsBaseline
     | VisibleUnoccluded,
     Field(discriminator="check"),
@@ -361,8 +373,20 @@ class Coverage(StrictModel):
 class ProbeBaseline(StrictModel):
     """When a probe's baseline is read, and which value of its JSON."""
 
-    capture_before_seq: _Seq
+    capture_before_seq: _Positive
     json_path: NonEmpty
+
+
+class _RecordedSettings(BrowserSettings):
+    """The settings a script was explored under, which its replays use
+    (ADR-0025). Every one is written, so a missing one can't quietly become
+    the pinned default."""
+
+    timezone: TimeZone
+    locale: Locale
+    viewport: Viewport
+    device_scale_factor: ScaleFactor
+    color_scheme: ColorScheme
 
 
 class CompiledBy(StrictModel):
@@ -388,8 +412,7 @@ class CompiledScript(StrictModel):
     compiled_at: AwareDatetime
     compiled_by: CompiledBy
     confirmed: StrictBool
-    # The settings the script was explored under, which its replays use.
-    browser: BrowserSettings
+    browser: _RecordedSettings
     coverage: Coverage
     targets: dict[NonEmpty, Target]
     probe_baselines: dict[NonEmpty, ProbeBaseline]

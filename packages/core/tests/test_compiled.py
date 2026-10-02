@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from aqa_core import strict_yaml
 from aqa_core.compiled import CompiledScript
+from aqa_core.spec import spec_hash
 from pydantic import ValidationError
 
 DATA_MODEL = Path(__file__).parents[3] / "DATA_MODEL.md"
@@ -47,6 +49,20 @@ def test_data_models_example_validates() -> None:
     assert pay_button.scope is not None
     assert pay_button.scope.css == "app-payment-step"
     assert script.browser.viewport == (1440, 900)
+
+
+def test_data_models_example_is_not_stale() -> None:
+    # §7's example compiles §6's example spec, so it carries that spec's hash;
+    # any other hash would make it stale (DATA_MODEL §7, spec_hash).
+    section_6 = DATA_MODEL.read_text().split("\n## 6. ", 1)[1]
+    found = re.search(r"```markdown\n---\n(.*?\n)---\n", section_6, re.DOTALL)
+    assert found is not None, "DATA_MODEL §6 has no example spec"
+    frontmatter = strict_yaml.parse(found[1])
+    assert isinstance(frontmatter, dict)
+
+    script = CompiledScript.model_validate_json(data_models_example())
+
+    assert script.spec_hash == spec_hash(frontmatter)
 
 
 def example() -> dict[str, Any]:
@@ -123,6 +139,7 @@ def test_an_unknown_field_is_rejected(path: tuple[str | int, ...]) -> None:
         # name is compared after normalizing.
         ({"role": "button", "name": "\uf218 Pay"}, "is not normalized"),
         ({"role": "button", "name": "Pay  now"}, "is not normalized"),
+        ({"role": "button", "name": "\uf218\xa0"}, "compares as empty"),
         ({"css": "button.pay", "scope": {}}, "names no kind"),
     ],
 )
@@ -136,6 +153,15 @@ def test_a_malformed_locator_is_rejected(locator: dict[str, Any], problem: str) 
     assert problem in message
 
 
+BASIS_ON_A_FALSE_FLAG = (
+    "Value error, side_effect_basis says why a step's side_effect is true; "
+    "this step's is false, so remove it"
+)
+TRUE_FLAG_WITHOUT_BASIS = (
+    "Value error, a step whose side_effect is true says why in side_effect_basis"
+)
+
+
 def test_side_effect_basis_goes_with_a_true_flag() -> None:
     # Step 4 is a side-effect step, so it must say why; step 1 is replay-safe,
     # so a basis would contradict its flag (DATA_MODEL §7).
@@ -147,15 +173,6 @@ def test_side_effect_basis_goes_with_a_true_flag() -> None:
         (("steps", 0, "navigate"), BASIS_ON_A_FALSE_FLAG),
         (("steps", 3, "click"), TRUE_FLAG_WITHOUT_BASIS),
     ]
-
-
-BASIS_ON_A_FALSE_FLAG = (
-    "Value error, side_effect_basis says why a step's side_effect is true; "
-    "this step's is false, so remove it"
-)
-TRUE_FLAG_WITHOUT_BASIS = (
-    "Value error, a step whose side_effect is true says why in side_effect_basis"
-)
 
 
 TAKES_ONE = "Value error, a text check takes text or pattern, exactly one"
@@ -261,3 +278,152 @@ def test_schema_version_is_the_integer_1(version: object) -> None:
     [(location, _, _)] = errors(script)
 
     assert location == ("schema_version",)
+
+
+def test_browser_records_every_setting() -> None:
+    # Replay uses the settings the script was explored under, so a missing
+    # one must not become the pinned default (DATA_MODEL §7, ADR-0025).
+    script = example()
+    script["browser"] = {}
+
+    assert [(location, kind) for location, kind, _ in errors(script)] == [
+        (("browser", setting), "missing")
+        for setting in (
+            "timezone",
+            "locale",
+            "viewport",
+            "device_scale_factor",
+            "color_scheme",
+        )
+    ]
+
+
+def put(script: dict[str, Any], path: tuple[str | int, ...], value: object) -> None:
+    parent: Any = script
+    for key in path[:-1]:
+        parent = parent[key]
+    parent[path[-1]] = value
+
+
+def test_every_action_and_check_validates() -> None:
+    # The actions and checks DATA_MODEL §7's example doesn't use, with the
+    # optional fields it leaves out.
+    script = example()
+    script["coverage"]["requires"] = [{"id": "c1", "condition": "after a reload"}]
+    script["targets"]["size"] = {
+        "semantic": "the size picker on the product page",
+        "locators": [{"role": "combobox"}],
+    }
+    script["steps"] += [
+        {"seq": 10, "action": "reload", "side_effect": False, "satisfies": ["c1"]},
+        {
+            "seq": 11,
+            "action": "select",
+            "target": "size",
+            "option": "M",
+            "side_effect": False,
+        },
+        {
+            "seq": 12,
+            "action": "fill",
+            "target": "email_input",
+            "value": "",
+            "side_effect": False,
+        },
+        {"seq": 13, "action": "press", "key": "Escape", "side_effect": False},
+    ]
+    script["assertions"] += [
+        {"id": "a7", "expect_index": 3, "check": "not_visible", "target": "pay_button"},
+        {
+            "id": "a8",
+            "expect_index": 1,
+            "check": "network_seen",
+            "method": "GET",
+            "url_pattern": "/api/cart",
+            "status_class": "2xx",
+        },
+    ]
+
+    compiled = CompiledScript.model_validate_json(json.dumps(script))
+
+    assert [step.action for step in compiled.steps[5:]] == [
+        "reload",
+        "select",
+        "fill",
+        "press",
+    ]
+    assert compiled.steps[5].satisfies == ("c1",)
+    assert [assertion.check for assertion in compiled.assertions[6:]] == [
+        "not_visible",
+        "network_seen",
+    ]
+    assert compiled.targets["size"].locators[0].name is None
+
+
+# A field that breaks its rule, and where validation reports it: a step's or
+# check's kind follows its index, and a list item's index follows its field.
+FIELD_RULES: list[tuple[tuple[str | int, ...], object, tuple[str | int, ...]]] = [
+    (("spec_hash",), "sha256:1bb957ce", ("spec_hash",)),
+    (("coverage", "plan_hash"), "sha256:" + "D8" * 32, ("coverage", "plan_hash")),
+    (("compiled_at",), "2026-10-12T14:03:22", ("compiled_at",)),
+    (
+        ("coverage", "expectations", 0, "assertions"),
+        [],
+        ("coverage", "expectations", 0, "assertions"),
+    ),
+    (("targets", "pay_button", "locators"), [], ("targets", "pay_button", "locators")),
+    (
+        ("targets", "pay_button", "locators"),
+        [{"css": "#pay"}, {"css": "#pay"}],
+        ("targets", "pay_button", "locators"),
+    ),
+    (("steps", 0, "seq"), 0, ("steps", 0, "navigate", "seq")),
+    (("assertions", 1, "method"), "PSOT", ("assertions", 1, "network_none", "method")),
+    (
+        ("assertions", 1, "status_class"),
+        "2XX",
+        ("assertions", 1, "network_none", "status_class"),
+    ),
+    (
+        ("assertions", 5, "min_size_px"),
+        [0, 24],
+        ("assertions", 5, "visible_unoccluded", "min_size_px", 0),
+    ),
+    (
+        ("assertions", 5, "min_size_px"),
+        ["44", 24],
+        ("assertions", 5, "visible_unoccluded", "min_size_px", 0),
+    ),
+    (("browser", "viewport"), [1440], ("browser", "viewport", 1)),
+]
+
+
+@pytest.mark.parametrize(("path", "value", "location"), FIELD_RULES)
+def test_a_field_breaking_its_rule_is_rejected(
+    path: tuple[str | int, ...], value: object, location: tuple[str | int, ...]
+) -> None:
+    script = example()
+    put(script, path, value)
+
+    [(found, _, _)] = errors(script)
+
+    assert found == location
+
+
+def test_press_takes_no_target() -> None:
+    # The agent's press(key) tool acts on the focused element (ARCHITECTURE
+    # §3.4), so a press step names no target.
+    script = example()
+    script["steps"].append(
+        {
+            "seq": 10,
+            "action": "press",
+            "key": "Enter",
+            "target": "pay_button",
+            "side_effect": False,
+        }
+    )
+
+    [(location, kind, _)] = errors(script)
+
+    assert (location, kind) == (("steps", 5, "press", "target"), "extra_forbidden")
