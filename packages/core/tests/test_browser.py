@@ -37,8 +37,8 @@ def is_time_zone(name: str) -> bool:
 
 @pytest.fixture
 def host_zone_directory(tmp_path: Path) -> Iterator[Path]:
-    """An empty directory that stands in for the host's zone files: zoneinfo's
-    search path for the length of the test."""
+    """A directory that stands in for the host's zone files, empty until a test
+    adds some: zoneinfo's search path for the length of the test."""
     original = zoneinfo.TZPATH
     zoneinfo.reset_tzpath(to=[str(tmp_path)])
     yield tmp_path
@@ -116,6 +116,15 @@ def test_an_invalid_setting_is_rejected(field: str, value: Any, problem: str) ->
         assert problem in str(raised.value)
 
 
+def test_a_refused_time_zone_names_the_value_and_an_example() -> None:
+    with pytest.raises(ValidationError) as raised:
+        BrowserSettings(timezone="Mars/Phobos")
+
+    [error] = raised.value.errors()
+    assert "'Mars/Phobos'" in error["msg"]
+    assert "such as Asia/Kolkata" in error["msg"]
+
+
 @pytest.mark.parametrize(
     "locale",
     ["de", "en-US", "EN-us", "sr-Latn-RS", "es-419", "de-CH-1996", "en-US-x-qa"],
@@ -152,7 +161,10 @@ def test_the_answer_is_the_same_whatever_the_host_lists(
 def test_a_missing_tzdata_package_is_an_error_not_a_fallback_to_the_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # An import of None in sys.modules fails as an uninstalled package does.
+    # A first answer with the package present, so a list kept from it can't hide
+    # the failure; then an import of None in sys.modules fails as an uninstalled
+    # package does.
+    BrowserSettings(timezone="UTC")
     monkeypatch.setitem(sys.modules, "tzdata", None)
 
     with pytest.raises(ModuleNotFoundError, match="tzdata"):
@@ -161,7 +173,7 @@ def test_a_missing_tzdata_package_is_an_error_not_a_fallback_to_the_host(
 
 def test_every_name_in_the_tzdata_package_is_a_time_zone() -> None:
     # The package's own file is the reference here. The probes above carry the
-    # literals, and the next two tests the cases where the source is wrong.
+    # literals, and the two tests above the cases where the source is wrong.
     names = (
         resources.files("tzdata")
         .joinpath("zones")

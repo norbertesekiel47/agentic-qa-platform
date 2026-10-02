@@ -30,8 +30,9 @@ async def cdp_accepts(cdp: CDPSession, name: str) -> bool:
     (https://chromedevtools.github.io/devtools-protocol/tot/Emulation/#method-setTimezoneOverride),
     because Chromium accepts any id while an override is in effect (LAB_NOTES,
     2026-10-02)."""
+    # Outside the try: a failure to clear (a closed browser, say) is no refusal.
+    await cdp.send("Emulation.setTimezoneOverride", {"timezoneId": ""})
     try:
-        await cdp.send("Emulation.setTimezoneOverride", {"timezoneId": ""})
         await cdp.send("Emulation.setTimezoneOverride", {"timezoneId": name})
     except Error:
         return False
@@ -83,9 +84,14 @@ def test_every_time_zone_the_check_accepts_opens_in_chromium() -> None:
 
 
 def test_cdp_refuses_and_reports_what_timezone_id_does_on_a_sample() -> None:
-    # Every 30th zone, then the refused names. They follow valid zones, so only
-    # the clear in `cdp_accepts` lets CDP refuse them as `timezone_id` does.
-    names = [*sorted(time_zones())[::30], *sorted(REFUSED)]
+    # Every 30th zone and the ones #90 names, then the refused names. They follow
+    # valid zones, so only the clear in `cdp_accepts` lets CDP refuse them as
+    # `timezone_id` does.
+    zones = sorted(time_zones())
+    names = [
+        *sorted({*zones[::30], "UTC", "Asia/Calcutta", "Factory"}),
+        *sorted(REFUSED),
+    ]
 
     async def scenario() -> tuple[dict[str, Any], dict[str, Any]]:
         async with async_playwright() as playwright:
