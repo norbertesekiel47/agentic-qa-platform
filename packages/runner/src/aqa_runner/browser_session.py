@@ -113,8 +113,10 @@ class BrowserSession:
             # Retired before the call: Playwright may store this snapshot, and
             # resolve refs against it, even if the call never returns.
             self._current = {}
-            await self._require_allowed_page()
+            # Counted from before the page's check, so a navigation during it
+            # counts too.
             changes = self._frame_changes
+            await self._require_allowed_page()
             taken = await self.page.aria_snapshot(mode="ai")
             try:
                 left_out = await self._frames_left_out(taken)

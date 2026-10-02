@@ -148,10 +148,12 @@ def is_blank(url: str) -> bool:
 async def reaches(frame: Frame) -> bool:
     """Whether `frame`'s parent can reach its document: whether they are on
     one origin."""
-    iframe = await frame.frame_element()
+    owner = await frame.frame_element()
     try:
         # contentDocument is null for a frame on another origin:
         # https://html.spec.whatwg.org/multipage/iframe-embed-object.html#dom-iframe-contentdocument
-        return bool(await iframe.evaluate("(frame) => frame.contentDocument !== null"))
+        # An <embed> has none at all (undefined), so its frame never counts
+        # as reached: `!= null` refuses both.
+        return bool(await owner.evaluate("(owner) => owner.contentDocument != null"))
     finally:
-        await iframe.dispose()
+        await owner.dispose()
