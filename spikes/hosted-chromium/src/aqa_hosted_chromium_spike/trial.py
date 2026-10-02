@@ -13,10 +13,16 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
+from dataclasses import asdict
 from pathlib import Path
 from typing import NotRequired, TypedDict
 
-from aqa_runner.sandbox import Chromium, SandboxUnavailableError, launch
+from aqa_runner.sandbox import (
+    Chromium,
+    SandboxObservations,
+    SandboxUnavailableError,
+    launch_with_observations,
+)
 from playwright.async_api import Browser, async_playwright
 
 # How often, and for how long after the launch, the trial samples its memory.
@@ -41,6 +47,11 @@ class Report(TypedDict):
     boot_id: str
     earlier_runs: list[str]
     sandbox: Sandbox
+    # What the sandbox check read, whether it proved the sandbox or refused it:
+    # the browser process and each renderer it compared with it (the README
+    # gives the fields). None when it read nothing: the sandbox couldn't
+    # start, or the OS has no sandbox check.
+    sandbox_observed: dict[str, object] | None
     # From asking Playwright to launch until the sandbox check passed, and when
     # it passed, in seconds since the epoch by the host's clock: the scripts
     # time a run from their request to this moment.
@@ -76,12 +87,13 @@ async def run_trial(chromium: Chromium, proc: Path, runs_file: Path) -> Report:
     # takes CPU that a small candidate would charge to the launch.
     started = time.perf_counter()
     browser: Browser | None
+    observed: SandboxObservations | None
     try:
-        browser = await launch(chromium)
+        browser, observed = await launch_with_observations(chromium)
     except SandboxUnavailableError as error:
         # The finding the spike looks for on a candidate, so it is reported.
         # Every other error still stops the trial.
-        sandbox = Sandbox(on=False, error=str(error))
+        sandbox, observed = Sandbox(on=False, error=str(error)), error.observed
         ready = ready_at = browser = None
     else:
         sandbox, ready = Sandbox(on=True), time.perf_counter() - started
@@ -96,6 +108,7 @@ async def run_trial(chromium: Chromium, proc: Path, runs_file: Path) -> Report:
         earlier_runs=earlier_runs,
         boot_id=boot_id(proc),
         sandbox=sandbox,
+        sandbox_observed=None if observed is None else asdict(observed),
         ready_seconds=ready,
         ready_at=ready_at,
         peak_memory_bytes=peak,
