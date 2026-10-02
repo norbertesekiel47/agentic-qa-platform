@@ -338,6 +338,15 @@ def test_every_request_in_every_cassette_asks_for_the_output_bound() -> None:
             assert body["max_tokens"] == MAX_OUTPUT_TOKENS, (path.name, body["model"])
 
 
+def test_a_client_asks_for_4096_tokens_and_waits_120_seconds_a_try(
+    sonnet: RoutedModel,
+) -> None:
+    # The values #41 chose (ADR-0024's #41 amendment), as the client holds them.
+    chat = AnthropicClient(sonnet, None).chat
+
+    assert (chat.max_tokens, chat.default_request_timeout) == (4096, 120)
+
+
 @pytest.mark.usefixtures("quiet_tracing")
 def test_a_request_that_gets_no_answer_times_out(
     monkeypatch: pytest.MonkeyPatch, sonnet: RoutedModel
