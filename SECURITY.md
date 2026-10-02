@@ -1,6 +1,6 @@
 # Security — Agentic QA Platform
 
-Last updated: 2026-10-02 (runner-side requests through the egress gate, #42; the launch's transport switches and fail-closed proxy, #43); 2026-10-01 (the egress proxy, #42; the browser session's empty environment, #36; the sandbox check, #35; M1 design decisions, ADR-0026). Threat model and controls for a multi-tenant SaaS that runs browser agents against customer web apps. Guarantees are stated as narrowly as they are actually enforced.
+Last updated: 2026-10-02 (the browser session's document-origin checks, #44; runner-side requests through the egress gate, #42; the launch's transport switches and fail-closed proxy, #43); 2026-10-01 (the egress proxy, #42; the browser session's empty environment, #36; the sandbox check, #35; M1 design decisions, ADR-0026). Threat model and controls for a multi-tenant SaaS that runs browser agents against customer web apps. Guarantees are stated as narrowly as they are actually enforced.
 
 ## 1. Assets
 
@@ -105,7 +105,7 @@ The agent reads arbitrary page content. A malicious or compromised page may say 
   3. **Service workers blocked** (`service_workers="block"`), since they can bypass page-level routing; popups inherit the context's routes and proxy.
   - **Document origins.** The proxy can't tell a page load from a resource load over HTTPS, so the tiers are enforced where authority lies:
     - Before every observation and action, the browser session checks that the top-level page and the target's frame are on allowed origins, judged by the URL Chromium reports for each frame. A subresource host that becomes a document gains no authority, and Chromium's error page is on no allowed origin.
-    - Frames from other origins are left out of snapshots, nested ones included, and a snapshot during which any frame navigated is discarded (ADR-0026 amendment, 2026-10-02).
+    - Frames from other origins are left out of snapshots, nested ones included, and a snapshot during which any frame navigated or was removed is discarded (ADR-0026 amendment, 2026-10-02).
     - Popups are recorded with their URL and opener, and closed.
   - **Egress blocks.** A request to a host that is neither an allowed origin nor a subresource host is refused and recorded, and it keeps the run from passing without being a finding: the run ends `errored` with `egress_blocked`, exit 6 (API.md §7).
     - *Exception:* a host the project config lists as expected-blocked. For it, the block's direct symptoms (its console error and a broken image, matched by the failed request) don't count against invariants.
