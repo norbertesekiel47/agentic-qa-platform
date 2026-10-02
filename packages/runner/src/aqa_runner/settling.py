@@ -29,7 +29,8 @@ STREAMS = frozenset({"eventsource"})
 type Settled = Literal["idle", "timeout"]
 
 # Whether the document changed since the last look: a mutation observer on the
-# whole document, installed at the first look, which counts as a change. It
+# page's own document, not its frames' or its shadow roots' content, installed
+# at the first look, which counts as a change (as a new document's does). It
 # runs in the page's world, whose scripts can reach it, so its answer is the
 # page's word: a page can look busy or quiet, and tell the run nothing else.
 DOM_CHANGED = """() => {
@@ -71,7 +72,12 @@ class Window:
 
 class Traffic:
     """Puts each request `page` sends into the window of the latest action,
-    and a redirect's next hop into the window of the request it continues."""
+    and a redirect's next hop into the window of the request it continues.
+
+    Made before the page sends anything, so every request it hears of has
+    started in a window. A handler's error reaches the next Playwright call
+    the session makes (Playwright 1.63 keeps it for that call), so a request
+    it never heard start fails loudly rather than leaving a window open."""
 
     def __init__(self, page: Page) -> None:
         self._window = Window()

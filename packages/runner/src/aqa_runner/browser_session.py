@@ -215,6 +215,9 @@ class BrowserSession:
         # Before the page's first navigation: `open_browser_session` hands
         # over a blank page.
         self._traffic = Traffic(page)
+        # https://playwright.dev/python/docs/api/class-page#page-event-crash
+        self._crashed = False
+        page.on("crash", self._note_crash)
 
     async def snapshot(self) -> str:
         """The page's accessibility snapshot in Playwright's AI mode
@@ -465,10 +468,10 @@ class BrowserSession:
         Only the page's own document: rendered text never enters a frame,
         an allowed origin's included.
 
-        An observation, so the page is checked first. If any frame
-        navigated or was removed meanwhile, the text may be another
-        document's, so it is discarded and `DocumentChangedError` raised,
-        as `resolve` does."""
+        An observation, so the page is checked before and after. If any
+        frame navigated or was removed meanwhile, the text may be another
+        document's, even when the page is back on an allowed origin, so it
+        is discarded and `DocumentChangedError` raised, as `resolve` does."""
         async with self._turn:
             changes = self._frame_changes
             await self._require_allowed_page()
@@ -481,6 +484,7 @@ class BrowserSession:
                     text = await rendered_text(body)
                 finally:
                     await body.dispose()
+            await self._require_allowed_page()
             if self._frame_changes != changes:
                 raise DocumentChangedError
             return text
@@ -526,11 +530,14 @@ class BrowserSession:
                 # Playwright's general error type: here, a navigation replaced
                 # the document mid-look, or the page's own scripts broke the
                 # look. Either is the page's doing, and whether it changed
-                # can't be told, so it counts as changing. A closed page is
-                # not.
-                if self.page.is_closed():
+                # can't be told, so it counts as changing. A closed or
+                # crashed page is not.
+                if self.page.is_closed() or self._crashed:
                     raise
                 return True
+
+    def _note_crash(self, _: Page) -> None:
+        self._crashed = True
 
     def _count_frame_change(self, _: Frame) -> None:
         self._frame_changes += 1
