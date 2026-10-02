@@ -125,6 +125,9 @@ _Avoid_: retry
 **Non-resumable**:
 The state of a run that can't safely continue because a side-effect step's outcome is unknown. The run ends as errored, with evidence.
 
+**Run record**:
+The directory a local run writes what it leaves behind to, under its spec root's `.aqa/runs/`, which git ignores: the coverage plan and the cost record of every model response, and later each step's intent and completion.
+
 **Attempt**:
 One pass through a run from step 1, in a fresh browser and after the spec's reset hook if it declares one. The report keeps every attempt.
 
