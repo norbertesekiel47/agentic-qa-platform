@@ -124,7 +124,8 @@ def compare_macos(browser: MacProcess, renderers: Sequence[MacProcess]) -> list[
 @dataclass(frozen=True)
 class SandboxObservations:
     """What the sandbox check read on this host: the browser process and each
-    renderer it compared with it. Its verdict comes from these same reads."""
+    renderer it compared with it. The check's reasons come from these same
+    reads."""
 
     browser: LinuxProcess | MacProcess
     renderers: Sequence[LinuxProcess | MacProcess]
@@ -242,8 +243,8 @@ def check_processes(
     browser_pid: int, renderer_pids: list[int]
 ) -> tuple[SandboxObservations | None, list[str]]:
     """What the check read of the browser and renderer processes, and why the
-    renderers can't be shown to be sandboxed, compared with the browser;
-    empty when they are. Each process is read once, and the reasons come from
+    renderers can't be shown to be sandboxed, compared with the browser: no
+    reasons when they are. Each process is read once, and the reasons come from
     exactly those reads. On an OS with no sandbox check nothing is read. The
     PIDs are this host's, so the browser must have been launched here, not
     connected to. A process that has exited stops the check with an

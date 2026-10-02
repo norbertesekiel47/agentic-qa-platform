@@ -363,8 +363,8 @@ def test_other_launch_errors_pass_through() -> None:
         asyncio.run(launch(FailingChromium(missing)))
 
 
-# What the sandbox check observed (#81): the reads its verdict comes from,
-# reported alongside it, so they can never vouch for a renderer it refuses.
+# What the sandbox check observed (#81): the reads its reasons come from,
+# reported alongside them, so they can never vouch for a renderer it refuses.
 
 
 # A child inherits its parent's namespaces, seccomp filters and sandbox, so
