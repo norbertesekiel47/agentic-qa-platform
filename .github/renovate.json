@@ -1,0 +1,54 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Weekly updates for the Python workspace (ADR-0031): the pins in the pyproject.toml files, uv.lock, and the versions TECH_STACK.md tracks. Every other manager is off."
+  ],
+  "extends": ["schedule:weekly"],
+  "enabledManagers": ["pep621", "custom.regex"],
+  "constraints": { "uv": ">=0.11.15,<0.12" },
+  "minimumReleaseAge": "3 days",
+  "semanticCommits": "enabled",
+  "lockFileMaintenance": { "enabled": true },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": [
+        "A version in TECH_STACK.md followed by an HTML comment, renovate: NAME, tracks the PyPI package NAME. tests/test_dependency_updates.py reads the same comments."
+      ],
+      "managerFilePatterns": ["/^TECH_STACK\\.md$/"],
+      "matchStrings": ["(?<currentValue>\\d[\\w.]*)<!-- renovate: (?<depName>[\\w.-]+) -->"],
+      "datasourceTemplate": "pypi",
+      "versioningTemplate": "pep440"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": ["Python and uv_build move by hand, with the checklist in ADR-0027."],
+      "matchDepTypes": ["requires-python", "build-system.requires"],
+      "enabled": false
+    },
+    {
+      "description": [
+        "One weekly pull request for minor and patch updates. Majors stay alone: separateMajorMinor outranks groups."
+      ],
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchPackageNames": ["!playwright"],
+      "groupName": "python dependencies"
+    },
+    {
+      "description": [
+        "A pre-1.0 minor can change anything (SemVer), and a Ruff one routinely changes lint output, so each package gets its own pull request. Patches stay in the group."
+      ],
+      "matchCurrentVersion": "/^0\\./",
+      "matchUpdateTypes": ["minor"],
+      "groupName": null
+    },
+    {
+      "description": [
+        "Playwright has its own pull request: it moves with the checks image (ADR-0023), which a person regenerates."
+      ],
+      "matchPackageNames": ["playwright"],
+      "groupName": "playwright"
+    }
+  ]
+}

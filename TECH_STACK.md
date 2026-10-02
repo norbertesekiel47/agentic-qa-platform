@@ -2,31 +2,33 @@
 
 Versions are the latest stable releases as of **2026-09-27** (checked on PyPI/npm). Pin exact versions in lockfiles at scaffold time; bump deliberately.
 
+A version followed by an HTML comment, `renovate: NAME`, is tracked: it is the exact pin of the Python package NAME in a `pyproject.toml`, and the weekly Renovate pull request bumps both together (ADR-0031). `tests/test_dependency_updates.py` fails when a pin and its tracked version differ. A version without the comment is the pick as of the date above, until a ticket adopts it.
+
 ## 1. Backend, runner, CLI (Python)
 
 | Concern | Choice | Version | Why |
 |---|---|---|---|
 | Language | Python | 3.14 | Matches existing tooling; flagship in the language most AI-engineer postings require (ADR-0005) |
 | Package/env | uv, and its build backend `uv_build` | 0.11.x | Fast, lockfile-based; one workspace (ADR-0027) |
-| Browser automation | Playwright for Python | 1.63.0 | Accessibility snapshots, tracing, robust locators |
-| Agent orchestration | LangGraph | 1.2.12 | Run graph and checkpointing (interrupts deferred past v1; ADR-0006) |
+| Browser automation | Playwright for Python | 1.63.0<!-- renovate: playwright --> | Accessibility snapshots, tracing, robust locators |
+| Agent orchestration | LangGraph | 1.2.12<!-- renovate: langgraph --> | Run graph and checkpointing (interrupts deferred past v1; ADR-0006) |
 | Checkpointer | Local runs (M1): LangGraph's in-memory saver. Uploaded and hosted runs (M4 onward): a custom `BaseCheckpointSaver` over our API | — | Runners have no DB access (ADR-0008) |
-| Chat-model layer | LangChain provider packages: `langchain-openai` 1.6.6 (OpenAI + OpenRouter via OpenAI-compatible base URL), `langchain-anthropic` 1.7.4, `langchain-deepseek` 1.1.1 | — | Native tool binding and structured output in LangGraph (ADR-0007) |
+| Chat-model layer | LangChain provider packages: `langchain-openai` 1.6.6<!-- renovate: langchain-openai --> (OpenAI + OpenRouter via OpenAI-compatible base URL), `langchain-anthropic` 1.7.4<!-- renovate: langchain-anthropic -->, `langchain-deepseek` 1.1.1<!-- renovate: langchain-deepseek --> | — | Native tool binding and structured output in LangGraph (ADR-0007) |
 | Cost and capability table | A vendored copy of LiteLLM's `model_prices_and_context_window.json`, pinned to an upstream commit and its sha256 | refreshed by script | Per-call cost and capability flags for many providers without hand-maintained prices. We don't install the `litellm` package, whose PyPI releases were compromised in March 2026 (ADR-0007 amendment) |
 | API framework | FastAPI | 0.141.1 | OpenAPI generation → typed TS client |
 | Lambda adapter | Mangum | 0.22.0 | ASGI on Lambda behind API Gateway |
-| Validation | Pydantic | 2.13.5 | Typed tools, verdicts, API models |
-| YAML | PyYAML, narrowed to YAML 1.2's core schema | 6.0.3 | Spec frontmatter and the project config, with duplicate keys, aliases and tags refused; already locked through LangChain (ADR-0030) |
+| Validation | Pydantic | 2.13.5<!-- renovate: pydantic --> | Typed tools, verdicts, API models |
+| YAML | PyYAML, narrowed to YAML 1.2's core schema | 6.0.3<!-- renovate: pyyaml --> | Spec frontmatter and the project config, with duplicate keys, aliases and tags refused; already locked through LangChain (ADR-0030) |
 | DB access | SQLAlchemy 2.1.1 + psycopg 3.3.6 | — | Async, typed; raw SQL for RLS policies |
 | Migrations | Alembic | 1.20.0 | Versioned schema, RLS policies in migrations |
-| CLI | Typer 0.27.2 + Rich 15.0.0 | — | Ergonomic CLI and terminal output |
+| CLI | Typer 0.27.2<!-- renovate: typer --> + Rich 15.0.0<!-- renovate: rich --> | — | Ergonomic CLI and terminal output |
 | Tracing | OpenTelemetry SDK 1.45.0 + LangSmith 0.14.1 | — | Portable traces; LangSmith for LLM debugging |
-| Logging | structlog | 26.1.0 | JSON logs with redaction processors |
+| Logging | structlog | 26.1.0<!-- renovate: structlog --> | JSON logs with redaction processors |
 | JWT verification | PyJWT | 2.15.0 | Clerk JWKS + run tokens |
 | AWS SDK | boto3 | 1.43.x | KMS, SQS, S3, Lambda invoke |
-| M1 spike images | Base `public.ecr.aws/lambda/microvms:al2023-minimal` (pinned by digest) for every candidate; awslambdaric runs the Lambda function's | awslambdaric 4.1.0 | One Amazon Linux 2023 image for all three candidates, so they differ only in their platform (ADR-0008 amendment, 2026-09-30) |
+| M1 spike images | Base `public.ecr.aws/lambda/microvms:al2023-minimal` (pinned by digest) for every candidate; awslambdaric runs the Lambda function's | awslambdaric 4.1.0<!-- renovate: awslambdaric --> | One Amazon Linux 2023 image for all three candidates, so they differ only in their platform (ADR-0008 amendment, 2026-09-30) |
 
-**Quality tooling:** Ruff 0.16.9, mypy 2.3.1 (strict), pytest 9.1.1, pytest-cov 7.1.0 with coverage 7.16.2, testcontainers 4.15.0, Hypothesis 6.168.2, VCR.py 8.3.0 (recorded LLM/HTTP fixtures), types-pyyaml 6.0.12.20260906 (PyYAML's stubs, for mypy), respx 0.23.1. CI installs uv 0.11.15 and runs osv-scanner 2.6.0, the dependency audit, as sha256-checked release binaries (ADR-0029).
+**Quality tooling:** Ruff 0.16.9<!-- renovate: ruff -->, mypy 2.3.1<!-- renovate: mypy --> (strict), pytest 9.1.1<!-- renovate: pytest -->, pytest-cov 7.1.0<!-- renovate: pytest-cov --> with coverage 7.16.2<!-- renovate: coverage -->, testcontainers 4.15.0, Hypothesis 6.168.2<!-- renovate: hypothesis -->, VCR.py 8.3.0<!-- renovate: vcrpy --> (recorded LLM/HTTP fixtures), types-pyyaml 6.0.12.20260906<!-- renovate: types-pyyaml --> (PyYAML's stubs, for mypy), respx 0.23.1<!-- renovate: respx -->. CI installs uv 0.11.15 and runs osv-scanner 2.6.0, the dependency audit, as sha256-checked release binaries (ADR-0029).
 
 ## 2. Dashboard (TypeScript)
 
@@ -129,7 +131,7 @@ The 2026-09-29 rule excludes Lambda functions, though. If Lambda MicroVMs win, c
 
 ## 7. Version policy
 
-- Lockfiles committed (`uv.lock`, `pnpm-lock.yaml`); Dependabot/Renovate weekly.
+- Lockfiles committed (`uv.lock`, `pnpm-lock.yaml`); Renovate weekly (ADR-0031): one pull request for minor and patch updates, one for each major, each pre-1.0 minor and Playwright, and none for a release under 3 days old. `pnpm-lock.yaml` joins at M7.
 - Majors are upgraded in dedicated PRs with the full test + benchmark smoke gate.
 - OpenTelemetry GenAI semantic conventions are still marked *Development*; pin the convention version and note it in traces.
 - The vendored price map is refreshed only by its script, in a reviewed pull request that records the new upstream commit and sha256. Cost records cite the version they used. The script is `uv run python -m aqa_core.price_map_refresh [ref]` (default `main`): it needs network access, rewrites `packages/core/src/aqa_core/price_map_data/`, and loading the map afterwards checks the new pair (ADR-0007 amendment, 2026-10-01). A reviewer of a refresh pull request checks the pin against upstream: `curl -s https://raw.githubusercontent.com/BerriAI/litellm/<commit>/model_prices_and_context_window.json | shasum -a 256` must print the `sha256` in `pin.json`.
