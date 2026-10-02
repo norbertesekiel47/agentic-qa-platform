@@ -9,23 +9,26 @@ from collections import Counter
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from ipaddress import IPv4Address, IPv6Address, ip_address
+from ipaddress import IPv4Address, ip_address
 from pathlib import Path
 
 import pytest
 from aqa_core.project import load_config, load_spec
+from aqa_runner import egress as egress_module
 from aqa_runner.egress import (
+    Connection,
     EgressPolicy,
     EgressProxy,
     EgressRefusedError,
     EgressUpstreamError,
+    IPAddress,
     address_refusal,
     egress_policy,
     system_resolve,
 )
 
 
-def addresses(*written: str) -> list[IPv4Address | IPv6Address]:
+def addresses(*written: str) -> list[IPAddress]:
     return [ip_address(text) for text in written]
 
 
@@ -81,15 +84,13 @@ ALWAYS_REFUSED = [
 
 @pytest.mark.parametrize("address", PUBLIC, ids=str)
 @pytest.mark.parametrize("private_allowed", [False, True])
-def test_public_addresses_pass(
-    address: IPv4Address | IPv6Address, *, private_allowed: bool
-) -> None:
+def test_public_addresses_pass(address: IPAddress, *, private_allowed: bool) -> None:
     assert address_refusal(address, private_allowed=private_allowed) is None
 
 
 @pytest.mark.parametrize("address", NON_PUBLIC, ids=str)
 def test_non_public_addresses_need_permission(
-    address: IPv4Address | IPv6Address,
+    address: IPAddress,
 ) -> None:
     assert address_refusal(address, private_allowed=False) is not None
     assert address_refusal(address, private_allowed=True) is None
@@ -98,7 +99,7 @@ def test_non_public_addresses_need_permission(
 @pytest.mark.parametrize("address", ALWAYS_REFUSED, ids=str)
 @pytest.mark.parametrize("private_allowed", [False, True])
 def test_link_local_and_metadata_are_refused_everywhere(
-    address: IPv4Address | IPv6Address, *, private_allowed: bool
+    address: IPAddress, *, private_allowed: bool
 ) -> None:
     assert address_refusal(address, private_allowed=private_allowed) is not None
 
@@ -197,15 +198,19 @@ def test_egress_policy_from_spec_config_and_start(tmp_path: Path) -> None:
 # answer; the servers listen on loopback and say which address was reached.
 
 
+# What a scripted resolver answers for each name: its addresses, or an error.
+type Answers = dict[str, Sequence[str] | OSError]
+
+
 class ScriptedResolver:
     """Answers each name from a script the test can change mid-run, and
     counts the lookups."""
 
-    def __init__(self, answers: dict[str, Sequence[str] | OSError]) -> None:
+    def __init__(self, answers: Answers) -> None:
         self.answers = answers
         self.lookups: Counter[str] = Counter()
 
-    async def __call__(self, host: str) -> list[IPv4Address | IPv6Address]:
+    async def __call__(self, host: str) -> list[IPAddress]:
         self.lookups[host] += 1
         await asyncio.sleep(0)  # a concurrent lookup could start meanwhile
         answer = self.answers[host]
@@ -288,6 +293,18 @@ def run_policy(
     )
 
 
+APP = "app.example.test"
+
+
+def app_egress(port: int, answers: Answers) -> tuple[EgressProxy, ScriptedResolver]:
+    """A run whose start origin is http://127.0.0.1:`port` and which declares
+    http://app.example.test:`port` private, with names answered from
+    `answers`."""
+    resolver = ScriptedResolver(answers)
+    policy = run_policy(port, private=[f"http://{APP}:{port}"])
+    return EgressProxy(policy, resolve=resolver), resolver
+
+
 def test_a_host_outside_the_allowlist_is_refused_before_any_lookup() -> None:
     async def scenario() -> tuple[EgressProxy, ScriptedResolver, EgressRefusedError]:
         resolver = ScriptedResolver({})
@@ -342,7 +359,7 @@ def test_start_origin_on_loopback_and_a_declared_private_origin_are_allowed() ->
     ],
 )
 def test_a_private_or_loopback_address_behind_an_allowed_origin_is_refused(
-    origin: str, answers: dict[str, Sequence[str] | OSError]
+    origin: str, answers: Answers
 ) -> None:
     async def scenario() -> tuple[EgressProxy, EgressRefusedError, list[str]]:
         async with loopback_servers() as servers:
@@ -394,48 +411,32 @@ def test_a_private_origin_resolving_to_metadata_is_refused_without_connecting(
 def test_a_rebound_name_still_connects_to_its_pinned_address() -> None:
     async def scenario() -> tuple[list[str], ScriptedResolver]:
         async with loopback_servers() as servers:
-            resolver = ScriptedResolver({"app.example.test": ["127.0.0.1"]})
-            egress = EgressProxy(
-                run_policy(
-                    servers.port, private=[f"http://app.example.test:{servers.port}"]
-                ),
-                resolve=resolver,
-            )
-            first = await reached(egress, "app.example.test", servers.port)
+            egress, resolver = app_egress(servers.port, {APP: ["127.0.0.1"]})
+            first = await reached(egress, APP, servers.port)
             # The name rebinds to another address the policy would also pass.
-            resolver.answers["app.example.test"] = ["::1"]
-            second = await reached(egress, "app.example.test", servers.port)
+            resolver.answers[APP] = ["::1"]
+            second = await reached(egress, APP, servers.port)
             return [first, second], resolver
 
     reached_addresses, resolver = asyncio.run(scenario())
 
     assert reached_addresses == ["127.0.0.1", "127.0.0.1"]
-    assert resolver.lookups == Counter({"app.example.test": 1})
+    assert resolver.lookups == Counter({APP: 1})
 
 
 def test_a_refused_answer_is_not_pinned() -> None:
     async def scenario() -> tuple[str, EgressProxy, ScriptedResolver]:
         async with loopback_servers() as servers:
-            resolver = ScriptedResolver({"app.example.test": ["169.254.169.254"]})
-            egress = EgressProxy(
-                run_policy(
-                    servers.port, private=[f"http://app.example.test:{servers.port}"]
-                ),
-                resolve=resolver,
-            )
+            egress, resolver = app_egress(servers.port, {APP: ["169.254.169.254"]})
             with pytest.raises(EgressRefusedError):
-                await egress.connect("app.example.test", servers.port, tunnel=False)
-            resolver.answers["app.example.test"] = ["127.0.0.1"]
-            return (
-                await reached(egress, "app.example.test", servers.port),
-                egress,
-                resolver,
-            )
+                await egress.connect(APP, servers.port, tunnel=False)
+            resolver.answers[APP] = ["127.0.0.1"]
+            return await reached(egress, APP, servers.port), egress, resolver
 
     address, egress, resolver = asyncio.run(scenario())
 
     assert address == "127.0.0.1"
-    assert resolver.lookups == Counter({"app.example.test": 2})
+    assert resolver.lookups == Counter({APP: 2})
     assert len(egress.refusals) == 1
 
 
@@ -467,45 +468,51 @@ def test_a_pinned_answer_is_judged_again_for_each_port() -> None:
 def test_concurrent_first_requests_resolve_a_name_once() -> None:
     async def scenario() -> tuple[list[str], ScriptedResolver]:
         async with loopback_servers() as servers:
-            resolver = ScriptedResolver({"app.example.test": ["127.0.0.1"]})
-            egress = EgressProxy(
-                run_policy(
-                    servers.port, private=[f"http://app.example.test:{servers.port}"]
-                ),
-                resolve=resolver,
-            )
+            egress, resolver = app_egress(servers.port, {APP: ["127.0.0.1"]})
             first, second = await asyncio.gather(
-                reached(egress, "app.example.test", servers.port),
-                reached(egress, "app.example.test", servers.port),
+                reached(egress, APP, servers.port), reached(egress, APP, servers.port)
             )
             return [first, second], resolver
 
     reached_addresses, resolver = asyncio.run(scenario())
 
     assert reached_addresses == ["127.0.0.1", "127.0.0.1"]
-    assert resolver.lookups == Counter({"app.example.test": 1})
+    assert resolver.lookups == Counter({APP: 1})
 
 
 def test_addresses_are_tried_in_the_answers_order() -> None:
     async def scenario() -> list[str]:
-        answers: dict[str, Sequence[str] | OSError] = {
-            "app.example.test": ["::1", "127.0.0.1"]
-        }
         found = []
         for ipv6_listens in (True, False):
             async with loopback_servers(ipv6_listens=ipv6_listens) as servers:
-                egress = EgressProxy(
-                    run_policy(
-                        servers.port,
-                        private=[f"http://app.example.test:{servers.port}"],
-                    ),
-                    resolve=ScriptedResolver(answers),
-                )
-                found.append(await reached(egress, "app.example.test", servers.port))
+                egress, _ = app_egress(servers.port, {APP: ["::1", "127.0.0.1"]})
+                found.append(await reached(egress, APP, servers.port))
         return found
 
     # The first address that accepts: [::1], or 127.0.0.1 once [::1] refuses.
     assert asyncio.run(scenario()) == ["::1", "127.0.0.1"]
+
+
+def test_an_address_that_never_answers_times_out_and_the_next_is_tried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    open_connection = asyncio.open_connection
+
+    async def dropping_ipv6(host: str, port: int) -> Connection:
+        if host == "::1":
+            await asyncio.Event().wait()  # an address that drops every packet
+        return await open_connection(host, port)
+
+    monkeypatch.setattr(asyncio, "open_connection", dropping_ipv6)
+    monkeypatch.setattr(egress_module, "CONNECT_TIMEOUT", 0.05)
+
+    async def scenario() -> str:
+        async with loopback_servers() as servers:
+            egress, _ = app_egress(servers.port, {APP: ["::1", "127.0.0.1"]})
+            # Bounded: without its own timeout, the egress would wait forever.
+            return await asyncio.wait_for(reached(egress, APP, servers.port), 5)
+
+    assert asyncio.run(scenario()) == "127.0.0.1"
 
 
 @pytest.mark.parametrize(
@@ -549,7 +556,7 @@ def test_an_unreachable_address_is_an_infrastructure_event() -> None:
 
 
 def test_the_system_resolver_answers_by_default() -> None:
-    async def scenario() -> tuple[list[IPv4Address | IPv6Address], str]:
+    async def scenario() -> tuple[list[IPAddress], str]:
         async with loopback_servers() as servers:
             start = f"http://localhost:{servers.port}"
             egress = EgressProxy(
