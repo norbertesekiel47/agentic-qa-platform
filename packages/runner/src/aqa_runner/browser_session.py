@@ -93,12 +93,26 @@ CONTAINS = """(element, owner) => {
     return false;
 }"""
 
+# Whether a frame's element, or one around it, is transformed, which stops
+# Playwright checking what a click in the frame hits (1.63's
+# `describeIFrameStyle`, which climbs `parentElementOrShadowHost`).
+TRANSFORMED = """(owner) => {
+    for (let node = owner; node; ) {
+        if (getComputedStyle(node).transform !== "none") return true;
+        const parent = node.parentNode;
+        node = parent instanceof ShadowRoot ? parent.host : node.parentElement;
+    }
+    return false;
+}"""
+
 # Fills a field with a value inside its own document, never through the
 # page's keyboard, and says whether it then holds the value. Like
 # Playwright's fill (1.63's injected script): text goes into the text kinds
 # of <input>, <textarea> and contenteditable elements, replacing what they
-# hold, as typing would (execCommand's insertText, which fires the input
-# events typing does); the date-like kinds of <input> take the value as set.
+# hold (execCommand's insertText, which fires `input`, though not
+# `beforeinput` or key events); the date-like kinds of <input> take the
+# value as set. A field whose page changes the value as it goes in (a mask)
+# reads back otherwise, and counts as not filled.
 FILL = """(element, value) => {
     const set = ["color", "date", "time", "datetime-local", "month", "range", "week"];
     const typed = ["", "email", "number", "password", "search", "tel", "text", "url"];
@@ -299,9 +313,11 @@ class BrowserSession:
 
     async def click(self, element: ElementHandle) -> None:
         """Click `element`, from `locate` or `resolve`, once the page and the
-        element's frame are checked."""
+        element's frame are checked, and Playwright will check what its click
+        hits."""
         async with self._turn:
             await self._require_actionable(element)
+            await self._require_hit_check(element)
             # https://playwright.dev/python/docs/api/class-elementhandle#element-handle-click
             await element.click()
 
@@ -341,12 +357,13 @@ class BrowserSession:
         `key` is one key, with only modifiers held down before it (`Shift+A`,
         `ControlOrMeta+a`); anything else raises `ValueError`. A key held
         down, such as Tab in `Tab+a`, could move the focus, and the next key
-        would follow it unchecked."""
-        held = [name for name in held_keys(key) if name not in MODIFIERS]
-        if held:
+        would follow it unchecked; and Playwright leaves the held keys down
+        when the last is empty (`Shift+`)."""
+        *held, pressed = press_keys(key)
+        if not pressed or not set(held) <= MODIFIERS:
             raise ValueError(
                 f"press takes one key, with only modifiers held before it "
-                f"({', '.join(sorted(MODIFIERS))}), not {held[0][:40]!r}"
+                f"({', '.join(sorted(MODIFIERS))}): {key[:40]!r} isn't that"
             )
         async with self._turn:
             await self._require_allowed_page()
@@ -463,6 +480,29 @@ class BrowserSession:
         await self._require_allowed(frame, "frame")
         await self._require_no_foreign_frame(element, frame)
 
+    async def _require_hit_check(self, element: ElementHandle) -> None:
+        """Record and raise a policy event if Playwright's click on `element`
+        would check nothing it hits while the page has a frame off the
+        allowed origins, which could be drawn at the click's point.
+
+        Playwright 1.63 makes no hit check for an element in a frame whose
+        element, or one around it, is transformed (`_checkFrameIsHitTarget`
+        and `describeIFrameStyle`): the click lands in whatever is drawn at
+        its point."""
+        frame = await element.owner_frame()
+        while frame is not None and frame.parent_frame is not None:
+            owner = await frame.frame_element()
+            try:
+                transformed = await owner.evaluate(TRANSFORMED)
+            finally:
+                await owner.dispose()
+            if transformed:
+                foreign = await self._foreign_frame(self.page.main_frame)
+                if foreign is not None:
+                    raise self._refuse(PolicyEvent("frame", *foreign))
+                return
+            frame = frame.parent_frame
+
     async def _require_no_foreign_frame(
         self, element: ElementHandle, frame: Frame
     ) -> None:
@@ -546,16 +586,19 @@ class BrowserSession:
         return PolicyEventError(event)
 
 
-def held_keys(key: str) -> list[str]:
-    """The keys `key`, a Playwright key or chord, holds down before its last:
-    `Shift+A` holds Shift. The key `+` is written `+`, or `Shift++` held."""
-    if key.endswith("++"):
-        rest = key[:-2]
-    elif key == "+":
-        rest = ""
-    else:
-        rest = key.rpartition("+")[0]
-    return rest.split("+") if rest else []
+def press_keys(key: str) -> list[str]:
+    """`key` split into the keys Playwright's press holds down and then the
+    key it presses, as Playwright 1.63's Keyboard.press splits it: a `+`
+    ends a key only after one, so `Shift++` is Shift and `+`."""
+    keys: list[str] = []
+    building = ""
+    for char in key:
+        if char == "+" and building:
+            keys.append(building)
+            building = ""
+        else:
+            building += char
+    return [*keys, building]
 
 
 def renumber(

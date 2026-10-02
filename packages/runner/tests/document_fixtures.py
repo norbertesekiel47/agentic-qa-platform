@@ -198,6 +198,16 @@ def page(sites: Sites, path: str, query: dict[str, list[str]]) -> str | None:
         "/liar": f"""<iframe src="{sites.cdn}/lying"></iframe>
             <iframe srcdoc="<label>Inner <input></label>"></iframe>""",
         "/lying": "<script>document.hasFocus = () => true;</script>",
+        # A frame of the start origin inside a transformed box, with a frame
+        # from the subresource host drawn over its button.
+        "/transformed": f"""<div style="transform: translateZ(0)">
+                <iframe src="/kept" style="position: absolute; left: 0; top: 0"></iframe>
+            </div>
+            <iframe src="{sites.cdn}/doc" style="position: absolute; left: 0; top: 0;
+                width: 400px; height: 200px; z-index: 1"></iframe>""",
+        "/transformed-own": """<div style="transform: translateZ(0)">
+                <iframe src="/kept"></iframe>
+            </div>""",
         # Fields of each kind fill takes, and a button, which takes none.
         "/fields": """<label>Notes <textarea>old</textarea></label>
             <div role="textbox" aria-label="Story" contenteditable>old</div>

@@ -11,7 +11,7 @@ from typing import Any, get_args
 import pytest
 from aqa_core.compiled import ByRole, Target
 from aqa_runner import browser_session
-from aqa_runner.browser_session import held_keys
+from aqa_runner.browser_session import press_keys
 from aqa_runner.document_origins import (
     REFUSED_BY_KIND,
     DocumentChangedError,
@@ -605,25 +605,26 @@ def test_a_click_that_would_land_in_a_frame_off_the_allowed_origins_is_refused(
 
 
 @pytest.mark.parametrize(
-    ("key", "held"),
+    ("key", "keys"),
     [
-        ("a", []),
-        ("Enter", []),
-        ("Shift+A", ["Shift"]),
-        ("Control+Shift+T", ["Control", "Shift"]),
-        ("ControlOrMeta+a", ["ControlOrMeta"]),
-        ("+", []),
-        ("Shift++", ["Shift"]),
-        ("Tab+a", ["Tab"]),
-        ("a+b+c", ["a", "b"]),
+        ("a", ["a"]),
+        ("Enter", ["Enter"]),
+        ("Shift+A", ["Shift", "A"]),
+        ("Control+Shift+T", ["Control", "Shift", "T"]),
+        ("+", ["+"]),
+        ("Shift++", ["Shift", "+"]),
+        ("++", ["+", ""]),
+        ("Shift+", ["Shift", ""]),
+        ("Tab+a", ["Tab", "a"]),
     ],
 )
-def test_held_keys(key: str, held: list[str]) -> None:
-    assert held_keys(key) == held
+def test_press_keys_splits_as_playwright_does(key: str, keys: list[str]) -> None:
+    # Playwright 1.63's Keyboard.press: a + ends a key only after one.
+    assert press_keys(key) == keys
 
 
-@pytest.mark.parametrize("key", ["Tab+a", "a+b", "Enter+Shift"])
-def test_press_refuses_a_key_held_down_that_isnt_a_modifier(
+@pytest.mark.parametrize("key", ["Tab+a", "a+b", "Enter+Shift", "Shift+", "++"])
+def test_press_refuses_anything_but_one_key_after_modifiers(
     sites: Sites, key: str
 ) -> None:
     # Tab held down would move the focus, maybe into another origin's frame,
@@ -635,7 +636,7 @@ def test_press_refuses_a_key_held_down_that_isnt_a_modifier(
                 ref_for(await session.snapshot(), "textbox", "Name")
             )
             await session.click(name)
-            with pytest.raises(ValueError, match="modifier"):
+            with pytest.raises(ValueError, match="one key"):
                 await session.press(key)
             return await session.page.get_by_label("Name").input_value()
 
@@ -837,3 +838,41 @@ def test_resolve_looks_nothing_up_on_a_page_off_the_allowed_origins(
     asyncio.run(scenario())
 
     assert looked == []
+
+
+def test_a_click_playwright_makes_no_hit_check_for_is_refused(sites: Sites) -> None:
+    # Playwright 1.63 checks no hit target for an element in a frame whose
+    # element, or one around it, is transformed: the click lands in whatever
+    # is drawn at its point, here the subresource host's frame.
+    async def scenario() -> tuple[PolicyEventError, bool]:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/transformed")
+            snapshot = await session.snapshot()
+            other = await session.locate(ref_for(snapshot, "button", "Other"))
+            with pytest.raises(PolicyEventError) as refused:
+                await session.click(other)
+            # The control: Playwright's own click, unchecked, lands there.
+            await other.click()
+            return refused.value, await asyncio.to_thread(
+                sites.saw, CDN, "/clicked", within=5
+            )
+
+    refused, landed = asyncio.run(scenario())
+
+    assert refused.event == PolicyEvent("frame", f"{sites.cdn}/doc", sites.cdn)
+    assert landed, "the unchecked click didn't reach the frame"
+
+
+def test_a_click_in_a_transformed_frame_goes_ahead_with_no_other_origins_frame(
+    sites: Sites,
+) -> None:
+    async def scenario() -> list[PolicyEvent]:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/transformed-own")
+            other = await session.locate(
+                ref_for(await session.snapshot(), "button", "Other")
+            )
+            await session.click(other)
+            return session.policy_events.kept
+
+    assert asyncio.run(scenario()) == []
