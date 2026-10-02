@@ -5,6 +5,7 @@ where they resolve, and DNS answers pinned for the whole run (ADR-0026 and its
 
 import asyncio
 import socket
+import time
 from collections import Counter
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
@@ -63,6 +64,7 @@ NON_PUBLIC = addresses(
     "::ffff:0:7f00:1",  # IPv4-translated 127.0.0.1, which Python calls global
     "fec0::1",  # site-local, deprecated but routable, which Python calls global
     "ff0e::1",  # global-scope multicast, not unicast
+    "224.0.0.1",  # multicast, which Python calls global
 )
 
 # Never reachable, whatever the project declares.
@@ -542,28 +544,33 @@ def test_an_address_that_never_answers_times_out_and_the_next_is_tried(
 def test_a_lookup_that_never_answers_is_an_infrastructure_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(egress_module, "RESOLVE_TIMEOUT", 0.05)
+    monkeypatch.setattr(egress_module, "RESOLVE_TIMEOUT", 0.2)
 
-    async def scenario() -> tuple[list[object], EgressGate, str]:
+    async def scenario() -> tuple[list[object], float, EgressGate, str]:
         async with loopback_servers() as servers:
             egress, resolver = app_egress(servers.port, {APP: ["127.0.0.1"]})
             resolver.stalled = True
+            started = time.monotonic()
             # Bounded: without its own deadline, the gate would wait forever.
             failures = await asyncio.wait_for(
                 asyncio.gather(
-                    egress.connect(APP, servers.port, "request"),
-                    egress.connect(APP, servers.port, "request"),
+                    *(egress.connect(APP, servers.port, "request") for _ in range(5)),
                     return_exceptions=True,
                 ),
                 5,
             )
+            waited = time.monotonic() - started
             resolver.stalled = False
-            return list(failures), egress, await reached(egress, APP, servers.port)
+            address = await reached(egress, APP, servers.port)
+            return list(failures), waited, egress, address
 
-    failures, egress, address = asyncio.run(scenario())
+    failures, waited, egress, address = asyncio.run(scenario())
 
-    assert [type(failure) for failure in failures] == [EgressUpstreamError] * 2
-    assert [event.host for event in egress.infrastructure_events] == [APP, APP]
+    assert [type(failure) for failure in failures] == [EgressUpstreamError] * 5
+    assert [event.host for event in egress.infrastructure_events] == [APP] * 5
+    # One deadline for each connection, queued behind the name's lookup or
+    # not: five waiting in turn would take five times as long.
+    assert waited < 0.5
     assert egress.refusals == []
     # Nothing was pinned while DNS stalled: once it answers, the name connects.
     assert address == "127.0.0.1"
