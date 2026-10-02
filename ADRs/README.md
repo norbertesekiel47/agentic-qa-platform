@@ -36,6 +36,7 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | [0028](0028-quality-bar.md) | The quality bar: coverage, complexity, the Ruff rule set and the floor guard | Accepted (amended 2026-09-29) |
 | [0029](0029-ci-on-the-uv-workspace.md) | CI on the uv workspace: jobs, installs, the mypy split and the dependency audit | Accepted (amended 2026-10-01) |
 | [0030](0030-spec-yaml-parsing.md) | Reading specs and the project config: PyYAML narrowed to YAML 1.2's core schema | Accepted |
+| [0031](0031-renovate-weekly-dependency-updates.md) | Renovate for weekly dependency updates, and how a bump keeps TECH_STACK.md true | Accepted |
 
 ## Template
 

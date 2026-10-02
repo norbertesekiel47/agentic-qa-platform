@@ -73,3 +73,7 @@ Option 3 of "Keeping litellm out", a test that `uv.lock` has no litellm, now bac
 Names compare case-insensitively, as uv reads them. On uv 0.11.15, a hand-edited lock with the constraint intact and a `[[package]]` named `LiteLLM` passes both `uv lock --check` and `uv sync --locked`, and the second installs litellm.
 
 `uv run pytest --cov` runs it, so CI's `python` job does. Fixture locks written by the test prove that each check can fail, and the real `uv.lock` is never edited to test it.
+
+## Amendment (2026-10-01): #62 checks the pins against TECH_STACK.md
+
+ADR-0031 settles two sentences above: "Nothing checks the pins against TECH_STACK.md, so a bump edits both" and "A version bump edits the member's pin and TECH_STACK.md together". `tests/test_dependency_updates.py` now fails when an exact pin and the version TECH_STACK.md tracks for it (the one followed by a `renovate: NAME` comment) differ, and Renovate's weekly pull request edits both. A bump by hand still edits both, and a new exact pin needs a tracked version in §1.
