@@ -17,11 +17,12 @@ M1's decision gate (ADR-0008 amendment, 2026-09-29): which hosted compute runs C
 
 ## The trial's report
 
-Each trial launches Chromium through `aqa_runner.sandbox.launch`, which runs the sandbox check (ADR-0026). It times the launch with nothing else running, then samples its memory for a second with a blank page open, closes the browser and reports one JSON object:
+Each trial launches Chromium through `aqa_runner.sandbox.launch_with_observations`: `launch`, which runs the sandbox check (ADR-0026), returning what the check read as well. It times the launch with nothing else running, then samples its memory for a second with a blank page open, closes the browser and reports one JSON object:
 
 | Field | Meaning |
 |---|---|
 | `sandbox` | `{"on": true}` when the sandbox check proved the sandbox. Otherwise `{"on": false, "error": …}`, with `launch`'s reason and host fix. Every other error stops the trial |
+| `sandbox_observed` | What the sandbox check read, whether it proved the sandbox or refused it: the very reads behind `sandbox`, which stays the verdict. `{"browser": {…}, "renderers": [{…}, …]}`, the browser process and each renderer the check compared with it. Each is `{"pid": …, "namespaces": {"user": "user:[…]", "pid": "pid:[…]", "net": "net:[…]"}, "seccomp_filters": …}`: its PID on the host, the targets of its `/proc/<pid>/ns/user`, `ns/pid` and `ns/net` links, and the `Seccomp_filters` count in `/proc/<pid>/status`. The check passes only with at least one renderer, each in a `user`, `pid` and `net` namespace other than the browser's and with more filters than the browser. `null` when the check read nothing because Chromium's sandbox couldn't start |
 | `ready_seconds` | From asking Playwright to launch until the sandbox check passed; `null` when it didn't |
 | `ready_at` | When the sandbox check passed, in seconds since the epoch by the host's clock; `null` when it didn't |
 | `peak_memory_bytes` | The largest sample of the summed PSS of the trial's process and all its descendants, sampled every 50 ms for 1 s after the launch, with a blank page open in the browser. A lower bound for a real run, whose pages hold content. Without a browser, the trial's own |
@@ -29,9 +30,11 @@ Each trial launches Chromium through `aqa_runner.sandbox.launch`, which runs the
 | `earlier_runs` | The run IDs of trials this environment ran before, in the order they ran, from a marker file in the temporary directory (`/tmp`) |
 | `boot_id` | `/proc/sys/kernel/random/boot_id` |
 
+Inside a container whose seccomp profile lets the sandbox start, such as Playwright's, every process already carries a filter, so a sandboxed browser shows 1 and its renderer 2 (LAB_NOTES, 2026-09-30).
+
 A run had a fresh VM only if `earlier_runs` is empty and the platform's own ID for the run is new. A boot ID can't separate MicroVMs restored from one snapshot (ADR-0008 amendment, 2026-09-30).
 
-The trial runs on Linux only, where the candidates run. Elsewhere, `trial_on_this_host()` refuses.
+The trial runs on Linux only, where the candidates run. Elsewhere, `trial_on_this_host()` refuses. The tests also call `run_trial` on macOS, where each process in `sandbox_observed` is `{"pid": …, "sandboxed": …}`, whether `sandbox_check` reported it sandboxed. An OS with no sandbox check reads nothing (`null`).
 
 ## The packages
 
