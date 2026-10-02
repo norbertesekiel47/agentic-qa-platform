@@ -1,4 +1,4 @@
-"""The rule tables that policy_guard.py checks against.
+"""The rule tables that policy_guard.py and policy_diff.py check against.
 
 policy_guard.py holds the checks and the entry points, and its docstring
 describes the rules. This module holds their data: what each rule matches,
