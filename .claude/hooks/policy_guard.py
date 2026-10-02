@@ -85,8 +85,8 @@ check are built from that definition. A name may run on past its shape
 directory is named exactly (not ``.claude/hooks-old``). In a shell command a
 name also ends at whitespace, a quote or an operator, may follow an attached
 short option or a variable (``-o.claude/...``, ``$D.ruff.toml``), its segments
-may sit behind several slashes or ``.`` and ``..`` steps, and a directory stands
-for every file under it.
+may sit behind quotes, several slashes or ``.`` and ``..`` steps, and a
+directory stands for every file under it.
 
 Known gaps, stated rather than hidden
 -------------------------------------
@@ -98,12 +98,13 @@ Known gaps, stated rather than hidden
   1-3; rules 4-6 have no backstop for a write through an opaque script. A
   watched file goes unseen when a ``find -delete`` or a script deletes it, a
   glob stands in its fixed part (``pyproj*.toml``), a ``cd`` comes before its
-  bare name, parameter expansion or quotes build it (``${f%.bak}``,
-  ``te''st_a.py``), or its name holds a space; so does a bare ``test``
-  directory that starts a word (the shell's ``test`` command), and quoted text
-  in a command that commits. A mutating command that names a test path asks,
-  even a formatter run or test output sent to ``tee``, and a shell write is
-  judged as source (write a test fake's stub with Write).
+  bare name, parameter expansion builds it (``${f%.bak}``), a command
+  substitution holding a space stands in for one of its segments, or its name
+  holds a space; so does a bare ``test`` directory that starts a word (the
+  shell's ``test`` command), and quoted text in a command that commits. A
+  mutating command that names a test path asks, even a formatter run or test
+  output sent to ``tee``, and a shell write is judged as source (write a test
+  fake's stub with Write).
 * This is a guardrail, not a security boundary. Other agents (Codex, Cursor)
   do not run Claude Code hooks. CI's ``--diff`` sees their changes, but runs
   the pull request's own copy of this guard and of its workflow, so a pull
@@ -469,8 +470,9 @@ def check_bash(command: str, project: Path) -> Verdict:
         for finding in added_findings("", command, project, tests=False)
         if writes or (launches and finding[1] == SANDBOX)
     )
-    # A path can reach a watched file through . and .. steps.
-    named = f"{command}\n{resolved_paths(command)}" if mutates else ""
+    # A path can reach a watched file through quotes and . and .. steps.
+    resolved = resolved_paths(command) if mutates else command
+    named = command if resolved == command else f"{command}\n{resolved}"
     if mutates and PROTECTED_IN_SHELL.search(named):
         verdict.asks.append(
             "this shell command may modify the policy guard or the settings that "

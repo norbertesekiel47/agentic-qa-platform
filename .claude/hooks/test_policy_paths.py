@@ -267,13 +267,23 @@ class ShellNameTests(PathTestCase):
             "rm .claude/settings.json.bak/../settings.json",
             "rm .claude/./hooks/policy_guard.py",
             "rm .github/scripts-old/../scripts/audit-lockfile.sh",
+            # Quotes and substitutions beside a step don't hide it.
+            "cp x '.claude/hooks-old'/../hooks/policy_guard.py",
+            'cp x ".claude/settings.json.bak"/../settings.json',
+            "cp x .claude/hooks-old$(true)/../hooks/policy_guard.py",
+            "cp x .claude/hooks-old`true`/../hooks/policy_guard.py",
         )
+
+    def test_quotes_inside_a_name_still_name_it(self) -> None:
+        self.assert_bash("ask", "rm te''st_a.py", "rm .claude/hoo''ks/policy_guard.py")
 
     def test_a_variable_before_a_name_may_be_empty(self) -> None:
         self.assert_bash(
             "ask",
             "prefix=; rm $prefix.claude/hooks/policy_guard.py",
             "D=./; cp x $D.ruff.toml",
+            "rm $1.claude/hooks/policy_guard.py",
+            "rm $" + "A" * 80 + ".ruff.toml",
         )
 
     def test_a_name_attached_to_a_short_option_is_named(self) -> None:
@@ -283,6 +293,9 @@ class ShellNameTests(PathTestCase):
             "cp -t.claude/hooks policy_guard.py",
             "curl -o.ruff.toml https://example.com/x",
             "cp -ttests helpers.py",
+            "wget -qnvcNkxEO.claude/hooks/policy_guard.py https://example.com/x",
+            "cp \\-t.claude/hooks policy_guard.py",
+            "cp {-t.claude/hooks,policy_guard.py}",
         )
 
     def test_shell_names_may_run_on_past_their_shape(self) -> None:
