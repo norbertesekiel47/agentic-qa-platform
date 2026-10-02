@@ -1,6 +1,6 @@
 # API — Agentic QA Platform
 
-Last updated: 2026-10-01 (`--url` is an origin, #39; explore exit codes and flags, ADR-0024). REST over HTTPS, JSON, base path `/v1`. The FastAPI app is the source of truth; its generated OpenAPI document produces the dashboard's typed client. This file is the design contract — update it in the same PR as any endpoint change.
+Last updated: 2026-10-02 (an invalid compiled script is a spec error, #46; `--url` is an origin, #39; explore exit codes and flags, ADR-0024). REST over HTTPS, JSON, base path `/v1`. The FastAPI app is the source of truth; its generated OpenAPI document produces the dashboard's typed client. This file is the design contract — update it in the same PR as any endpoint change.
 
 ## 1. Conventions
 
@@ -173,7 +173,7 @@ Exit codes:
 | `2` | Heal proposals pending |
 | `3` | Inconclusive. For `explore`: gave up (attempts or budget exhausted, a model refusal with no fallback, or a flaky confirmation) |
 | `4` | Non-resumable run |
-| `5` | Spec error: the spec is invalid, or an expectation has no establishing check (ADR-0024) |
+| `5` | Spec error: the spec or its compiled script is invalid, or an expectation has no establishing check (ADR-0024; DATA_MODEL §7, "Checked by the loader") |
 | `6` | Policy: egress blocked. The page requested a host that is neither an allowed origin, a subresource host nor expected-blocked. No finding; the run record names the refused host (ADR-0026) |
 | `10+` | Infrastructure errors, e.g. no sandbox, a failed reset hook, a provider outage, or an unreachable start origin |
 

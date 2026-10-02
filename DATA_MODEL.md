@@ -1,6 +1,6 @@
 # Data Model — Agentic QA Platform
 
-Last updated: 2026-10-01 (model roles and cost records, #40; M1 design decisions, ADR-0024–0026). PostgreSQL 16+ on RDS. Internal IDs are UUIDv7 (time-ordered). External identifiers (Clerk org/user IDs, GitHub IDs) are stored as their native strings/integers and mapped to internal IDs. All timestamps `timestamptz` UTC.
+Last updated: 2026-10-02 (loading a compiled script and bounding its text searches, #46; model roles and cost records, #40; M1 design decisions, ADR-0024–0026). PostgreSQL 16+ on RDS. Internal IDs are UUIDv7 (time-ordered). External identifiers (Clerk org/user IDs, GitHub IDs) are stored as their native strings/integers and mapped to internal IDs. All timestamps `timestamptz` UTC.
 
 ## 1. Entity overview
 
@@ -249,7 +249,7 @@ Free-form notes for humans. The agent never reads the body; anything that affect
 - **Check types:** `text_visible`, `text_in_target`, `not_visible`, `url_matches`, `network_none` / `network_seen` (method + URL pattern + status class, from the browser's own traffic), `probe_equals_baseline` / `probe_equals` (read-only GET to a declared probe on an allowed origin), deterministic visual checks — `visible_unoccluded` (hit-test at the element's center returns the element or a descendant; in viewport; minimum size), `pixel_diff` (region vs committed baseline image, threshold), `contrast_min` — and `model_verify` (only for `visual: model`; rejected in `strict` mode; explore rejects `visual: model` expectations as a spec error until M2 defines how they confirm).
 - **Text parameters (ADR-0025).**
   - `text` is a literal. It matches case-insensitively, as whole words (no word character may touch an edge of the literal that is itself a word character; so a literal starting with a sign or a decimal point, such as `-1` or `.5`, is found inside `10-1` or `10.5`, and a claim about such a number uses a `pattern`), against the element's normalized rendered text: private-use glyphs, soft hyphens and zero-width spaces stripped, whitespace collapsed (ADR-0025, "reading a compiled script").
-  - `pattern` is a Python regex (`re.search`, flags written out) for claims that need one, such as part of text written without spaces between words. It searches the same normalized rendered text; `url_matches` searches the page's URL as it is (ADR-0025, "resolving a target per use"). The search runs in the runner on text the page controls, so the executor bounds its time (#46).
+  - `pattern` is a Python regex (`re.search`, flags written out) for claims that need one, such as part of text written without spaces between words. It searches the same normalized rendered text; `url_matches` searches the page's URL as it is (ADR-0025, "resolving a target per use"). The page controls the text, and Python's `re` can't be interrupted, so each search, a `text` literal's included, runs in a child process that gets no environment and is killed after 2 s (`aqa_runner.text_search`). A search that runs out of time is the check's outcome, `check_timed_out` (*Replay outcomes*).
 
   The compiler prefers `text`. A claim that depends on case uses a `pattern` without `(?i)`.
 - **Meanings (ADR-0025).** A target's `semantic` says what the element is for and where it sits, never its current label. If an expectation claims a label, the label belongs in an assertion.
@@ -321,14 +321,16 @@ A compiled script is read as strictly as a spec (§6): an unknown field is an er
 
   A `text` is written normalized, as a `name` is. A `pattern` must compile as a Python regex.
 - **Also enforced:** `coverage.expectations` and `assertions` are not empty, and neither is an expectation's `assertions`. An expectation's `assertions` and a step's `satisfies` name each ID once. `compiled_by.mode` is `explore`, and `compiled_by.models` is keyed by model role (navigator, verifier, healer, vision_fallback).
-- **Checked by the loader, not the format (#46):**
-  - that every name a part of the script uses exists, and is unique where it is defined: targets, assertion IDs, the expectations `expect_index` names, conditions, probes and step numbers;
+- **Checked by the loader, not the format** (`aqa_core.project.load_compiled`, #46). Every problem is reported at once, each naming the file and the key, as a spec error (exit 5, API.md §7):
+  - that the JSON repeats no key, wherever it is: a reader keeps a key's last value, so a repeat could hide a lowered `side_effect`. Objects and arrays nest at most 256 deep;
+  - that every name a part of the script uses exists, and is unique where it is defined: targets, assertion IDs, the expectations `expect_index` names, conditions, probes and step numbers (`capture_before_seq` names a step's `seq`);
   - that each secret a `fill_secret` step names is declared in the project config (§9);
-  - that the JSON repeats no key.
+  - that every locator of a `not_visible` check's target has a `scope`. Unscoped, the target is absent from any page without a match, such as a wrong page or an app's 404, so the check would pass whatever the page (#52).
 
 ### Replay outcomes
 - **Binding unresolved:** no locator gives the match its use needs (see *Resolution per use*) within the wait budget → drift → heal path.
 - **Expectation failed:** the target resolved and the check evaluated false → `expectation_violated` (after invariants and all assertions are evaluated, so the report is complete).
+- **Check timed out** (`check_timed_out`): the check's text or URL search ran past its 2 s bound (*Text parameters*), so it established neither a pass nor a failure. A run with one can't pass. M2 maps it to `inconclusive`, never to `expectation_violated` (ADR-0024's 2026-10-02 amendment).
 - **Egress block:** a request to an undeclared host keeps the run from passing without producing a finding. The run ends `errored` with `error_code: egress_blocked`, with no verdict, and the run record names the refused host. The CLI exits 6 (§6, API.md §7, ADR-0026).
 
 ### What a heal patch may change (validator-enforced)
