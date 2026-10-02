@@ -41,10 +41,11 @@ PEER_CONNECTION = """async () => {
 
 
 def mdns_sockets(pids: list[int]) -> list[str]:
-    """Each UDP socket on mDNS's port that one of the processes `pids`
-    holds. On Linux, in the capture's network, every socket there is the
-    scenario's own, so `/proc/net` names them; on macOS, `lsof`, which needs
-    no root for one's own processes."""
+    """Each UDP socket on mDNS's port, as the OS lists it: on Linux, every
+    one in the capture's network, where every socket is the scenario's own
+    (`/proc/net`'s local address); on macOS, each that one of the processes
+    `pids` holds (`lsof`'s line, which needs no root for one's own
+    processes)."""
     if sys.platform == "linux":
         return [
             line.split()[1]
@@ -63,7 +64,7 @@ def mdns_sockets(pids: list[int]) -> list[str]:
     return listed.stdout.splitlines()[1:]
 
 
-def mdns_joins() -> list[str]:
+def interfaces_in_the_mdns_group() -> list[str]:
     """Each interface on which a process in the capture's network joined
     mDNS's IPv4 group (Linux's `/proc/net/igmp`: an interface's line, then
     one indented line per group)."""
@@ -91,5 +92,7 @@ async def peer_connection() -> dict[str, object]:
         return {
             "candidates": candidates,
             "sockets": mdns_sockets(pids),
-            "joins": mdns_joins() if sys.platform == "linux" else None,
+            "joins": interfaces_in_the_mdns_group()
+            if sys.platform == "linux"
+            else None,
         }
