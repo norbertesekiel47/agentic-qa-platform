@@ -216,7 +216,7 @@ _Avoid_: API key (that is the project credential for the CLI outside GitHub Acti
 The job a model does in a run: navigator, verifier, healer or vision fallback. Each role declares the capabilities its model must have.
 
 **Cost record**:
-What one model call leaves behind: its role, mode, model, token counts, latency and cost, the price map version in force and the rates it applied (the map's or the config's), and a status of `ok`, `refusal` or `invalid`. A billed response is always recorded, whatever became of it.
+What one model call leaves behind: its role, mode, model, token counts, latency and cost, the price map version in force and the rates it applied (the map's or the config's), and its status (DATA_MODEL §2). A billed response is always recorded, whatever became of it.
 
 **Price map**:
 The vendored copy of LiteLLM's model price and capability file, pinned to an upstream commit and its sha256. It is checked whenever it loads and refreshed only by its script, in a reviewed pull request.

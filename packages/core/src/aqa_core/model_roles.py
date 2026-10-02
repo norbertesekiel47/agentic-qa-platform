@@ -18,8 +18,6 @@ from aqa_core.price_map import Capability, ModelInfo, PriceMap, plain
 DEFAULT_PROVIDER: Final = "anthropic"
 # TECH_STACK §3: every role starts on Claude Sonnet 5.5.
 DEFAULT_MODEL: Final = "claude-sonnet-5-5"
-# The providers with an adapter in M1 (ADR-0007 amendment).
-PROVIDERS: Final = (DEFAULT_PROVIDER,)
 
 # What a role needs of its model (TECH_STACK §3), in the order a missing one is
 # named.
@@ -29,14 +27,9 @@ NEEDS: Final[Mapping[ModelRoleName, tuple[Capability, ...]]] = {
     "healer": ("tools", "structured_output", "vision"),
     "vision_fallback": ("tools", "vision"),
 }
-_LABELS: Final[Mapping[Capability, str]] = {
-    "tools": "tools",
-    "structured_output": "structured output",
-    "vision": "vision",
-}
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class RoutedModel:
     """A model to call: whose it is, its name, what it can do and costs, and the
     pinned price map's version in force."""
@@ -67,7 +60,8 @@ class RoleError(Exception):
 
 
 def _exact(price: float) -> Decimal:
-    """`price`, a float read from YAML, as the decimal it was written as."""
+    """`price`, a float read from YAML, as the shortest decimal that reads back as
+    it: 0.3, not 0.299999999999999988897769753748."""
     return plain(Decimal(str(price)))
 
 
@@ -75,11 +69,11 @@ def _declared(entry: ModelOverride) -> ModelInfo:
     input_rate = _exact(entry.input_usd_per_mtok)
     # A declared model has no cache-read price: cached input costs the input rate.
     return ModelInfo(
-        frozenset(entry.capabilities),
-        input_rate,
-        _exact(entry.output_usd_per_mtok),
-        input_rate,
-        "config",
+        capabilities=frozenset(entry.capabilities),
+        input_usd_per_mtok=input_rate,
+        output_usd_per_mtok=_exact(entry.output_usd_per_mtok),
+        cached_input_usd_per_mtok=input_rate,
+        source="config",
     )
 
 
@@ -105,11 +99,30 @@ def _routed_or_problem(
             f"({price_map.version[:7]}): declare it under models with its "
             "capabilities and prices"
         )
-    missing = [_LABELS[need] for need in NEEDS[role] if need not in info.capabilities]
+    elif info.provider is not None and info.provider != provider:
+        return (
+            f"'{name}' belongs to provider '{info.provider}' in the pinned price "
+            f"map, not '{provider}'"
+        )
+    elif info.tiered:
+        return (
+            f"'{name}' has token-threshold prices in the pinned price map, which "
+            "cost records don't apply: declare it under models with the flat "
+            "rates to record"
+        )
+    missing = [
+        need.replace("_", " ") for need in NEEDS[role] if need not in info.capabilities
+    ]
     if missing:
-        wins = " (its models entry wins over the pinned price map)" if entry else ""
+        wins = (
+            " (its models entry wins over the pinned price map)"
+            if entry is not None
+            else ""
+        )
         return f"'{name}' lacks {_and(missing)}, which {role} needs{wins}"
-    return RoutedModel(provider, name, info, price_map.version)
+    return RoutedModel(
+        provider=provider, name=name, info=info, price_map_version=price_map.version
+    )
 
 
 def _resolve_role(
@@ -120,13 +133,15 @@ def _resolve_role(
     problems: list[tuple[str, str]],
 ) -> ResolvedRole | None:
     provider = override.provider or DEFAULT_PROVIDER
-    if provider not in PROVIDERS:
+    if provider != DEFAULT_PROVIDER:
         problems.append(
             (
                 f"roles.{role}.provider",
-                f"'{provider}' has no adapter yet: M1 supports {_and(PROVIDERS)}",
+                f"'{provider}' has no adapter: only {DEFAULT_PROVIDER} is supported",
             )
         )
+        # An adapter that doesn't exist can't say whether a model suits it.
+        return None
     model = _routed_or_problem(
         role, override.model or DEFAULT_MODEL, provider, config, price_map
     )

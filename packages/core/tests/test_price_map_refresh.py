@@ -143,8 +143,20 @@ def test_an_answer_that_names_no_commit_is_refused(
         (b'{"model-a": "\xff"}', "is not JSON"),
         (b"[1]", "is not a JSON object"),
         (b'{"model-a": 1}', "'model-a' is not an object"),
+        (
+            b'{"model-a": {"input_cost_per_token": -1, "output_cost_per_token": 1}}',
+            "'model-a': input_cost_per_token must be",
+        ),
+        (b'{"model-a": {"supports_vision": "yes"}}', "'model-a': supports_vision"),
     ],
-    ids=["not-json", "not-utf8", "not-an-object", "entry-is-not-an-object"],
+    ids=[
+        "not-json",
+        "not-utf8",
+        "not-an-object",
+        "entry-is-not-an-object",
+        "negative-price",
+        "bad-flag",
+    ],
 )
 def test_a_download_that_is_not_a_map_of_objects_changes_nothing(
     tmp_path: Path, download: bytes, problem: str

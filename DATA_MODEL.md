@@ -388,7 +388,7 @@ egress:                       # ADR-0026
 secrets:                      # bindings only; values come from AQA_SECRET_<NAME>
   TEST_PASSWORD: { origins: [ start ], field: password }
   API_TOKEN: { origins: [ start ], field: { role: textbox, name: "API token" } }
-models:                       # only for models missing from the pinned price map (ADR-0007 amendment)
+models:                       # a model the pinned price map lacks, or a replacement for its entry (ADR-0007 amendment)
   "example-provider/example-model": { capabilities: [tools, structured_output], input_usd_per_mtok: 0.50, output_usd_per_mtok: 1.50 }
 budgets:                      # per explore run (ADR-0024)
   attempts: 3
@@ -412,9 +412,10 @@ budgets:                      # per explore run (ADR-0024)
 **Egress hosts.** `subresource_hosts` and `expected_blocked` list bare host names or IP addresses (an IPv6 address in brackets), with no scheme, port or wildcard. A subresource host is reached only on its scheme's default port: 80 for http, 443 for https and wss, and never over `ws://` (ADR-0026 amendment, 2026-10-01). `private_origins` lists origins; declaring one lets an allowed origin or a subresource host resolve to a private address, and doesn't make it reachable.
 
 **Model roles (ADR-0007 amendment, 2026-10-01).** Each of `navigator`, `verifier`, `healer` and `vision_fallback` defaults to `claude-sonnet-5-5` on `anthropic`, and `roles` overrides a role's `provider`, `model`, `effort` and `fallback`. Config load checks every role and reports every role problem at once, each as `roles.<role>.<field>`, after the file's own shape problems (roles are resolved from a valid file):
-- *Needs:* the model, and the fallback, must have the capabilities the role needs (TECH_STACK §3): `navigator` tools and structured output; `verifier` structured output and vision; `healer` tools, structured output and vision; `vision_fallback` tools and vision.
+- *Needs:* the model, and the fallback, must have the capabilities the role needs (TECH_STACK §3).
 - *Priced:* the model must be in the pinned price map or declared under `models`.
-- *Provider:* only `anthropic` has an adapter in M1; another provider is an error that says so. `fallback` names a model of the same provider.
+- *Belongs:* a map model's provider (`litellm_provider`) must be the role's. A map model the map prices in tiers above a token threshold (`input_cost_per_token_above_200k_tokens` and the like) can't be used from the map, because cost records don't apply the tiers: declare it under `models` with the flat rates to record.
+- *Provider:* only `anthropic` has an adapter in M1; another provider is an error that says so, and the role's only one. `fallback` names a model of the same provider.
 - *Effort:* `low`, `medium`, `high`, `xhigh` or `max`.
 
 **Model overrides.** A model missing from the pinned price map must be declared under `models`, with its capabilities and prices; otherwise config validation rejects it. A `models` entry also wins over the map for a model the map has, so a negotiated rate can be stated. Either way its cost records carry `price_source: config` and the rates they applied (`applied_prices`, §2), so a later change to this file doesn't change what past costs meant. A declared model has no cache-read rate: cached input tokens cost its input rate.

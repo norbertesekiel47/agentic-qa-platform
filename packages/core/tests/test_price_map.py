@@ -381,3 +381,106 @@ def test_a_rate_is_written_without_an_exponent(tmp_path: Path) -> None:
         "1000",
         "2000",
     )
+
+
+def test_a_cache_read_price_of_zero_is_a_free_cache_read(tmp_path: Path) -> None:
+    write_map(
+        tmp_path,
+        entry(
+            input_cost_per_token=3e-06,
+            output_cost_per_token=1.5e-05,
+            cache_read_input_token_cost=0,
+        ),
+    )
+
+    info = load_price_map(tmp_path).models["model-a"]
+
+    assert info.input_usd_per_mtok == Decimal(3)
+    assert info.cached_input_usd_per_mtok == Decimal(0)
+
+
+@pytest.mark.parametrize("field", ["input_cost_per_token", "output_cost_per_token"])
+def test_a_model_with_only_one_token_price_is_not_a_priced_model(
+    tmp_path: Path, field: str
+) -> None:
+    write_map(tmp_path, entry(**{field: 1e-06}))
+
+    assert "model-a" not in load_price_map(tmp_path).models
+
+
+def test_a_flag_that_is_not_true_or_false_is_rejected_on_a_model_with_no_prices(
+    tmp_path: Path,
+) -> None:
+    write_map(tmp_path, entry(supports_vision="yes"))
+
+    with pytest.raises(PriceMapError) as raised:
+        load_price_map(tmp_path)
+
+    assert "'model-a': supports_vision" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("fields", "provider"),
+    [({"litellm_provider": "anthropic"}, "anthropic"), ({}, None)],
+    ids=["named", "absent"],
+)
+def test_a_models_provider_is_the_maps_litellm_provider(
+    tmp_path: Path, fields: dict[str, str], provider: str | None
+) -> None:
+    write_map(
+        tmp_path,
+        entry(input_cost_per_token=1e-06, output_cost_per_token=2e-06, **fields),
+    )
+
+    assert load_price_map(tmp_path).models["model-a"].provider == provider
+
+
+@pytest.mark.parametrize("provider", [7, None, ["anthropic"]])
+def test_a_provider_that_is_not_text_is_rejected_by_name(
+    tmp_path: Path, provider: object
+) -> None:
+    write_map(
+        tmp_path,
+        entry(
+            input_cost_per_token=1e-06,
+            output_cost_per_token=2e-06,
+            litellm_provider=provider,
+        ),
+    )
+
+    with pytest.raises(PriceMapError) as raised:
+        load_price_map(tmp_path)
+
+    assert "'model-a': litellm_provider" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("field", "tiered"),
+    [
+        ("input_cost_per_token_above_200k_tokens", True),
+        ("output_cost_per_token_above_32k_tokens", True),
+        ("cache_read_input_token_cost_above_128k_tokens", True),
+        # A cache lifetime, not a token threshold.
+        ("cache_creation_input_token_cost_above_1hr", False),
+        ("input_cost_per_token_batches", False),
+        # Not a token threshold.
+        ("input_cost_per_token_above_1hr", False),
+    ],
+)
+def test_a_model_with_token_threshold_prices_is_marked_tiered(
+    tmp_path: Path, field: str, tiered: bool
+) -> None:
+    write_map(
+        tmp_path,
+        entry(
+            input_cost_per_token=1e-06, output_cost_per_token=2e-06, **{field: 3e-06}
+        ),
+    )
+
+    assert load_price_map(tmp_path).models["model-a"].tiered is tiered
+
+
+def test_the_default_models_are_neither_tiered_nor_from_another_provider() -> None:
+    for name in ("claude-sonnet-5-5", "claude-opus-5-5"):
+        info = vendored().models[name]
+        assert (info.provider, info.tiered) == ("anthropic", False)
