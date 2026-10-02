@@ -282,9 +282,10 @@ def _spelled(place: _Place) -> tuple[int | str, ...]:
 
 
 def _repeated_keys(text: str, path: Path) -> list[tuple[int | str, ...]]:
-    """Where `text`, which must be JSON, writes a key more than once, in the
-    order the text does. A reader keeps the last value, so a repeat could hide
-    a lowered `side_effect` (ADR-0025's 2026-10-02 amendment)."""
+    """Where `text`, which must be JSON, writes a key more than once: each
+    object's repeats, objects in the order the text opens them. A reader keeps
+    the last value, so a repeat could hide a lowered `side_effect` (ADR-0025's
+    2026-10-02 amendment)."""
     too_deep = SpecError([f"{path}: nested more than {_DEEPEST_JSON} levels deep"])
     try:
         parsed = json.loads(text, object_pairs_hook=_JsonObject.of)

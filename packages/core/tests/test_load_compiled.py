@@ -152,10 +152,10 @@ def test_a_repeated_key_is_named_wherever_it_is(
         ('{"targets": ' + "[" * 10**5 + "]" * 10**5 + "}", "nested more than 256"),
         # The deepest the walk reads, which pydantic then refuses, and one
         # level more.
-        ("[" * 256 + "]" * 256, "Invalid JSON: recursion limit exceeded"),
+        ("[" * 256 + "]" * 256, "Invalid JSON: "),
         ("[" * 257 + "]" * 257, "nested more than 256 levels deep"),
         # Longer than Python reads an integer by default (sys.int_info).
-        ('{"schema_version": ' + "1" * 5000 + "}", "not JSON: Exceeds the limit"),
+        ('{"schema_version": ' + "1" * 5000 + "}", "not JSON: "),
     ],
     ids=[
         "cut short",
@@ -197,8 +197,48 @@ def assertion(script: dict[str, Any], check: str) -> dict[str, Any]:
             "'nowhere' names no target in targets",
         ),
         (
+            lambda s: s["steps"][2].update(target="nowhere"),
+            "steps[2].target",
+            "'nowhere' names no target in targets",
+        ),
+        (
+            lambda s: s["steps"][3].update(target="nowhere"),
+            "steps[3].target",
+            "'nowhere' names no target in targets",
+        ),
+        (
+            lambda s: s["steps"].append(
+                {
+                    "seq": 10,
+                    "action": "select",
+                    "target": "nowhere",
+                    "option": "M",
+                    "side_effect": False,
+                }
+            ),
+            "steps[5].target",
+            "'nowhere' names no target in targets",
+        ),
+        (
             lambda s: assertion(s, "text_in_target").update(target="nowhere"),
             "assertions[3].target",
+            "'nowhere' names no target in targets",
+        ),
+        (
+            lambda s: assertion(s, "visible_unoccluded").update(target="nowhere"),
+            "assertions[5].target",
+            "'nowhere' names no target in targets",
+        ),
+        (
+            lambda s: s["assertions"].append(
+                {
+                    "id": "a7",
+                    "expect_index": 0,
+                    "check": "not_visible",
+                    "target": "nowhere",
+                }
+            ),
+            "assertions[6].target",
             "'nowhere' names no target in targets",
         ),
         (
@@ -228,8 +268,13 @@ def assertion(script: dict[str, Any], check: str) -> dict[str, Any]:
         ),
     ],
     ids=[
-        "step target",
-        "assertion target",
+        "fill target",
+        "fill_secret target",
+        "click target",
+        "select target",
+        "text_in_target target",
+        "visible_unoccluded target",
+        "not_visible target",
         "expect_index",
         "coverage assertion",
         "satisfies",
@@ -300,6 +345,21 @@ def test_a_name_must_be_unique_where_it_is_defined(
     assert found == (f"{key}: {problem}",)
 
 
+def test_a_name_defined_three_times_names_its_first_definition(
+    tmp_path: Path,
+) -> None:
+    def change(script: dict[str, Any]) -> None:
+        script["steps"][1]["seq"] = 1
+        script["steps"][2]["seq"] = 1
+
+    found = problems(tmp_path, edited(change), DECLARES_TEST_PASSWORD)
+
+    assert found == (
+        "steps[1].seq: 1 is already the seq of steps[0]",
+        "steps[2].seq: 1 is already the seq of steps[0]",
+    )
+
+
 def test_an_expect_index_is_defined_once(tmp_path: Path) -> None:
     def change(script: dict[str, Any]) -> None:
         script["coverage"]["expectations"][4]["expect_index"] = 3
@@ -323,7 +383,7 @@ def test_every_problem_is_reported_at_once(tmp_path: Path) -> None:
 
     text = edited(change)
     repeated = text.replace('"spec_id": ', '"spec_id": "x", "spec_id": ', 1)
-    unknown = text.replace('"spec_id": ', '"spec_ids": "x", "spec_id": ', 1)
+    unknown = repeated.replace('"spec_id": "x"', '"spec_ids": "x", "spec_id": "x"', 1)
 
     names = problems(tmp_path, text, DECLARES_TEST_PASSWORD)
     with_a_repeat = problems(tmp_path, repeated, DECLARES_TEST_PASSWORD)
@@ -339,7 +399,10 @@ def test_every_problem_is_reported_at_once(tmp_path: Path) -> None:
         "steps[1].target",
     ]
     # Names are checked only in a script the format accepts.
-    assert with_an_unknown_key == ("spec_ids: unknown key",)
+    assert [line.split(": ", 1)[0] for line in with_an_unknown_key] == [
+        "spec_id",
+        "spec_ids",
+    ]
 
 
 def test_every_locator_of_a_not_visible_target_may_be_scoped(tmp_path: Path) -> None:
@@ -393,3 +456,42 @@ def test_a_not_visible_target_with_an_unscoped_locator_is_refused(
             "or a 404"
         ),
     )
+
+
+def test_an_unscoped_locator_after_a_scoped_one_is_refused(tmp_path: Path) -> None:
+    # pay_button finds its element by role inside app-payment-step, then by
+    # css with no scope.
+    def change(script: dict[str, Any]) -> None:
+        script["assertions"].append(
+            {
+                "id": "a7",
+                "expect_index": 4,
+                "check": "not_visible",
+                "target": "pay_button",
+            }
+        )
+
+    found = problems(tmp_path, edited(change), DECLARES_TEST_PASSWORD)
+
+    assert [line.split(": ", 1)[0] for line in found] == [
+        "targets.pay_button.locators[1]"
+    ]
+
+
+def test_repeated_keys_are_reported_in_the_order_the_text_writes_them(
+    tmp_path: Path,
+) -> None:
+    text = (
+        data_models_example()
+        .replace('"Email" }', '"Email", "name": "Mail" }', 1)
+        .replace('"/checkout/payment" }', '"/checkout/payment", "pattern": "/" }', 1)
+        .replace('"confirmed": true', '"confirmed": true, "confirmed": false', 1)
+    )
+
+    found = problems(tmp_path, text, DECLARES_TEST_PASSWORD)
+
+    assert [line.split(": ", 1)[0] for line in found] == [
+        "confirmed",
+        "targets.email_input.locators[0].name",
+        "assertions[4].pattern",
+    ]

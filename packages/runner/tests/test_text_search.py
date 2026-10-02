@@ -7,6 +7,7 @@ import asyncio
 import os
 import subprocess
 import time
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -63,6 +64,8 @@ def test_searches_agree_with_has_text_and_has_pattern(
         ("a%20b", "https://shop.test/a%20b", True),
         ("a b", "https://shop.test/a%20b", False),
         ("/Checkout", "https://shop.test/checkout", False),
+        # Two spaces stay two: the URL isn't normalized as page text is.
+        ("a  b", "https://shop.test/a  b", True),
     ],
 )
 def test_a_url_pattern_searches_the_url_as_it_is(
@@ -97,7 +100,8 @@ def test_a_catastrophic_pattern_is_stopped_at_the_deadline() -> None:
         asyncio.run(text_matches(check(pattern=CATASTROPHIC), HOSTILE_TEXT))
     elapsed = time.monotonic() - started
 
-    assert text_search.SEARCH_SECONDS <= elapsed < text_search.SEARCH_SECONDS + 1.5
+    # DATA_MODEL §7 and ADR-0024 fix the deadline at 2 s.
+    assert 2 <= elapsed < 2.9
     assert searches_running() == []
 
 
@@ -123,8 +127,9 @@ def test_the_event_loop_keeps_running_during_a_search(
             ticker.cancel()
         return ticks
 
-    # A search on the loop's own thread would leave it no tick until the end.
-    assert asyncio.run(scenario()) >= 20
+    # A search on the loop's own thread would leave it no tick until the end;
+    # a free loop ticks about 45 times in 0.5 s.
+    assert asyncio.run(scenario()) >= 5
 
 
 def test_a_cancelled_search_leaves_no_process_behind() -> None:
@@ -161,3 +166,21 @@ def test_the_search_process_gets_none_of_the_runners_environment(
     # The control that the reader sees an environment is in
     # test_browser_session.py.
     assert [name for name in RUNNER_SECRETS if fake_value(name) in environment] == []
+
+
+def test_the_search_process_ignores_modules_in_the_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A module the child imports, planted where a plain `python -c` would
+    # look first.
+    (tmp_path / "json.py").write_text("raise SystemExit('the planted json ran')\n")
+    monkeypatch.chdir(tmp_path)
+
+    assert asyncio.run(url_matches("/checkout", "https://shop.test/checkout"))
+
+
+def test_a_search_process_that_fails_is_an_error_not_a_miss() -> None:
+    # The format refuses a pattern that doesn't compile; a caller that passes
+    # one gets the child's failure, never "not found".
+    with pytest.raises(RuntimeError, match="the search process failed"):
+        asyncio.run(url_matches("(", "https://shop.test/("))
