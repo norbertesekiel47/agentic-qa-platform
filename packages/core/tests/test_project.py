@@ -22,6 +22,7 @@ from aqa_core.project import (
     load_spec,
     secret_destinations,
     start_origin,
+    start_url,
 )
 from aqa_core.spec import Spec
 
@@ -275,6 +276,50 @@ def test_allowed_origins_are_the_start_origin_then_the_specs(tmp_path: Path) -> 
         "http://127.0.0.1:4100",
         "https://pay.example.test",
     )
+
+
+# The start URL (ADR-0026's 2026-10-01 amendment).
+
+
+def spec_starting_at(tmp_path: Path, path: str) -> Spec:
+    """The `login` spec, loaded with `path` as its start_url."""
+    root = write_project(tmp_path / "qa", BOUND)
+    spec = write_spec(root / "login.spec.md")
+    spec.write_text(
+        spec.read_text().replace("start_url: /login", f"start_url: '{path}'")
+    )
+    return load_spec(spec, load_config(root / "config.yaml"))
+
+
+@pytest.mark.parametrize(
+    ("path", "url"),
+    [
+        ("/", "http://127.0.0.1:4100/"),
+        ("/login", "http://127.0.0.1:4100/login"),
+        # Decoded first, these would be //evil.test, another origin.
+        ("/%2f%2fevil.test", "http://127.0.0.1:4100/%2f%2fevil.test"),
+        ("/%2F%2fevil.test", "http://127.0.0.1:4100/%2F%2fevil.test"),
+        (
+            "/login?next=%2F%2Fevil.test",
+            "http://127.0.0.1:4100/login?next=%2F%2Fevil.test",
+        ),
+        # A %2e inside a segment is not a dot segment; %25 is not decoded either.
+        ("/a%2eb", "http://127.0.0.1:4100/a%2eb"),
+        ("/%41%25", "http://127.0.0.1:4100/%41%25"),
+        ("/..;/x", "http://127.0.0.1:4100/..;/x"),
+        ("/login?next=//evil.test", "http://127.0.0.1:4100/login?next=//evil.test"),
+        ("/login#//evil.test", "http://127.0.0.1:4100/login#//evil.test"),
+        # An empty query or fragment is kept, as written.
+        ("/login?", "http://127.0.0.1:4100/login?"),
+        ("/login#", "http://127.0.0.1:4100/login#"),
+    ],
+)
+def test_the_start_url_is_the_start_origin_then_start_url_as_written(
+    tmp_path: Path, path: str, url: str
+) -> None:
+    spec = spec_starting_at(tmp_path, path)
+
+    assert start_url(spec, "http://127.0.0.1:4100") == url
 
 
 # Secret destinations (ADR-0026).
