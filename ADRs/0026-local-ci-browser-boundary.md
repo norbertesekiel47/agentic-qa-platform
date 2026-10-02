@@ -190,7 +190,7 @@ This supersedes the 2026-09-30 amendment's (#35) "Nothing yet stops other code f
 
 ## Amendment (2026-10-01): the egress proxy (#42)
 
-The egress proxy lands in three changes. First the egress gate (`aqa_runner.egress.EgressGate`): the run's policy, its DNS pins, its records and `connect`, the only way out. Then the proxy server, a class of its own that holds the run's gate, and the browser sessions' use of it. Then runner-side requests, which call the gate's `connect` too. What all three rely on is decided here.
+The egress proxy lands in three changes. First the egress gate (`aqa_runner.egress.EgressGate`): the run's policy, its DNS pins, its records and `connect`, the only way out. Then the proxy server (`aqa_runner.egress_proxy.EgressProxy`), a class of its own that holds the run's gate, and the browser sessions' use of it. Then runner-side requests, which call the gate's `connect` too. What all three rely on is decided here.
 
 - **Which hosts pass, by host and port.**
   - An allowed origin passes on its own port, or its scheme's default port when it writes none. The scheme isn't compared: a tunnel's `CONNECT` names only a host and a port, and which document may use which origin is the session's check (#44).
@@ -216,11 +216,13 @@ The egress proxy lands in three changes. First the egress gate (`aqa_runner.egre
 - **Records.**
   - `refusals` give the host, the port, the kind and why. Kind `host` is a host outside the allowlist, an egress block unless the project expects it; what it does to the run is #47's. Kind `address` is the IP policy.
   - `infrastructure_events` record a name that doesn't resolve and an answer with no address that accepts. `EgressUpstreamError` is an infrastructure error (API.md §7, 10+). Its code, and how a run reports an unreachable start origin, are #46's and #53's.
-- **Decided for the next two changes.**
+- **The proxy server** (`aqa_runner.egress_proxy.EgressProxy`) serves on 127.0.0.1 for the run, holding the run's gate, and every browser session goes through it: `open_browser_session` takes a required `egress`.
+  - *Each request is checked.* h11 frames HTTP/1.1, so each plain request on a kept-alive browser connection asks the gate on its own, and each goes upstream with `Connection: close` and the target's own `Host`. Hop-by-hop headers, `Upgrade` among them, stay behind: Chromium opens WebSockets through `CONNECT`.
   - *The proxy is set per browser context.* The session passes `proxy` to the one context it creates, with the bypass list `<-loopback>`, so loopback traffic goes through the proxy too. Playwright adds `<-loopback>` itself unless `PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK` is set in its driver's environment, which inherits the runner's; passing it explicitly makes that variable irrelevant. *Not the main mechanism:* `--proxy-server` at launch, which would give `launch` an option. A context created anywhere else has no proxy, though, so #43, which changes the launch for WebRTC and QUIC anyway, adds a launch-level proxy as a second layer.
-  - *Refusals never look like the app's response.* A refused or failed `CONNECT` fails the tunnel with a non-2xx status, which Chromium never shows a page. A refused or failed plain request has its connection closed with nothing sent: a synthesized 403 or 502 would reach the page as the app's response.
+  - *Refusals never look like the app's response.* A refused `CONNECT` gets 403 and a failed one 502, which fails the tunnel; Chromium never shows a page a proxy's `CONNECT` response. A refused or failed plain request has its connection closed with nothing sent, which the page sees as `net::ERR_EMPTY_RESPONSE`: a synthesized 403 or 502 would reach the page as the app's response. A response that breaks off upstream drops the browser's connection too, and is an infrastructure event.
+  - *No way around it.* With the proxy gone, Chromium fails the request (`net::ERR_PROXY_CONNECTION_FAILED`) rather than connecting directly; the session's tests show it, with loopback.
   - *Our own asyncio proxy, framed with h11.* *Rejected:* mitmproxy, which intercepts TLS, as we never do; proxy.py, which resolves names itself, so nothing could pin them; and a sidecar binary.
-  - *Runner-side requests* go to allowed origins only, through the gate's `connect`, with no cookie jar, and never follow a redirect.
+- **Decided for runner-side requests** (the next change): they go to allowed origins only, through the gate's `connect`, with no cookie jar, and never follow a redirect.
 
 ## Amendment (2026-10-01): secret bindings on the loaded spec (#88)
 

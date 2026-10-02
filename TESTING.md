@@ -1,6 +1,6 @@
 # Testing — Agentic QA Platform
 
-Last updated: 2026-10-01 (model roles, capability checks at config load and cost records, #40; the Chromium launch test, #77; the pinned price map's load check and refresh, #40; spec and project-config parsing, #39; browser session tests, #36; browser tests in CI, #35; M1 design decisions, ADR-0024–0026; CI gates, ADR-0029). Two different things are tested here: **the software is correct** (unit → E2E) and **the agent is good** (the benchmark). Both gate releases.
+Last updated: 2026-10-01 (the egress proxy's browser tests, #42; model roles, capability checks at config load and cost records, #40; the Chromium launch test, #77; the pinned price map's load check and refresh, #40; spec and project-config parsing, #39; browser session tests, #36; browser tests in CI, #35; M1 design decisions, ADR-0024–0026; CI gates, ADR-0029). Two different things are tested here: **the software is correct** (unit → E2E) and **the agent is good** (the benchmark). Both gate releases.
 
 ## 1. Test layers
 
@@ -113,7 +113,7 @@ A change is mergeable only when every gate that runs passes. The jobs are in `.g
 | `ruff check` · `ruff format --check` | `python` | Now |
 | `mypy --strict`, in two runs: the packages, `spikes` and `tests`, then the scripts in `bench/harness` and `.claude/hooks` | `python` | Now |
 | `pytest --cov`: every test in `packages/`, `spikes/`, `bench/harness/`, `.claude/hooks/` and `tests/`, including CONSTRAINTS.md's threshold checks and the coverage floor | `python` | Now. §1's layers (unit, integration, isolation, checkpointer, continuation, hygiene, egress/secrets, strict-mode) join as their code lands |
-| Browser tests: the sandbox check, the browser session and the spike's trial (#37), then the egress fixtures | `python`, after steps that install Playwright's headless shell, log the runner's AppArmor setting and relax it (ADR-0026) | The sandbox check (#35), the browser session (#36) and the trial (#37) now. The egress fixtures join as their code lands in M1 |
+| Browser tests: the sandbox check, the browser session and the spike's trial (#37), then the egress fixtures | `python`, after steps that install Playwright's headless shell, log the runner's AppArmor setting and relax it (ADR-0026) | The sandbox check (#35), the browser session (#36), the trial (#37) and the egress proxy's (#42) now. #43's packet-level egress suite joins when it lands |
 | Dependency audit of `uv.lock` and the checks image's `bench/harness/checks-requirements.txt` (osv-scanner) | `dependency-audit` | Now, and weekly |
 | Guard tests · policy scan | `guardrails` | Now |
 | The floor's moves: `policy_guard.py --diff refs/remotes/origin/main`, whose approval-class findings pass with the maintainer's `floor-change-approved` label (ADR-0028 amendment) | `floor` | Now, on pull requests, and again when a label is added or removed |
