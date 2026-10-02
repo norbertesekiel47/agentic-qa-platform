@@ -15,8 +15,7 @@ from urllib.parse import urlsplit
 import pytest
 from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.egress import Connection, EgressGate, EgressPolicy
-from aqa_runner.egress_proxy import EgressProxy
-from aqa_runner.routing import BlockedAttempt, BlockedAttempts
+from aqa_runner.egress_proxy import BlockedAttempt, BlockedAttempts, EgressProxy
 from playwright.async_api import Error, async_playwright
 
 from packages.runner.tests.egress_fixtures import (
@@ -129,10 +128,10 @@ def test_loopback_goes_through_the_proxy_too(
     # Only the start page's redirects reached the origin.
     assert origin.hosts() == [APP, APP]
     assert direct == ["net::ERR_BLOCKED_BY_CLIENT"] * 2
-    assert blocked.first == [
-        BlockedAttempt("document", "http", "127.0.0.1", origin.port),
-        BlockedAttempt("document", "http", "localhost", origin.port),
-    ]
+    assert blocked.counts == {
+        BlockedAttempt("document", "http", "127.0.0.1", origin.port): 1,
+        BlockedAttempt("document", "http", "localhost", origin.port): 1,
+    }
 
 
 def test_a_redirect_to_a_disallowed_host_is_refused_at_the_hop() -> None:
@@ -256,7 +255,7 @@ def test_a_websocket_to_a_disallowed_host_is_refused_at_connect() -> None:
     # it does receive.
     assert outcomes == ["error", "closed", "error"]
     assert [(r.host, r.kind) for r in egress.refusals] == [(EVIL, "host")]
-    assert blocked.first == [BlockedAttempt("websocket", "ws", EVIL, origin.port)]
+    assert blocked.counts == {BlockedAttempt("websocket", "ws", EVIL, origin.port): 1}
     # The allowed one went through the tunnel; the refused one never left.
     assert [(each.host.rsplit(":", 1)[0], each.upgrade) for each in origin.seen] == [
         (APP, None),

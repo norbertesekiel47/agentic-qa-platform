@@ -20,6 +20,7 @@ h11 frames HTTP/1.1 on both sides: https://h11.readthedocs.io/en/v0.16.0/api.htm
 import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable, Coroutine, Iterable
+from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Self
 from urllib.parse import urlsplit
@@ -34,7 +35,6 @@ from aqa_runner.egress import (
     EgressUpstreamError,
 )
 from aqa_runner.egress_peers import Peer, Upstream
-from aqa_runner.routing import BlockedAttempts
 
 # Headers that describe one hop and are never forwarded, with any header the
 # Connection header names (RFC 9110 §7.6.1). `Upgrade` stays behind too:
@@ -52,6 +52,45 @@ HOP_BY_HOP = {
     b"upgrade",
 }
 
+# How many distinct attempts routing's record keeps, so a page can't grow it
+# without bound; repeats and the total are counted whatever the bound.
+KEPT_ATTEMPTS = 1000
+
+
+@dataclass(frozen=True)
+class BlockedAttempt:
+    """A request or WebSocket the browser sessions' routing refused before it
+    reached the proxy (`aqa_runner.routing`): what kind (Playwright's resource
+    type, `websocket` for a socket) and where it went. Never the path, query
+    or user part, which a page can fill with what it exfiltrates; the host is
+    kept, though a page can choose it too, so redaction must cover it before
+    anything is saved (#49). `port` is None when the URL names none a scheme
+    gives."""
+
+    resource_type: str
+    scheme: str
+    host: str
+    port: int | None
+
+
+@dataclass
+class BlockedAttempts:
+    """What routing refused in a run: each distinct attempt, the first
+    `KEPT_ATTEMPTS` of them, with how many times it was made, and how many
+    attempts there were in all, so a page that repeats one attempt can't
+    crowd out the next. With the gate's refusals they are the run's egress
+    blocks (#47 reads both); the run's record persists them (#46, #53)."""
+
+    counts: dict[BlockedAttempt, int] = field(default_factory=dict)
+    total: int = 0
+
+    def add(self, attempt: BlockedAttempt) -> None:
+        self.total += 1
+        if attempt in self.counts:
+            self.counts[attempt] += 1
+        elif len(self.counts) < KEPT_ATTEMPTS:
+            self.counts[attempt] = 1
+
 
 class EgressProxy:
     """The run's egress proxy, serving on 127.0.0.1 while it is open (`async
@@ -61,8 +100,9 @@ class EgressProxy:
     def __init__(self, gate: EgressGate) -> None:
         self._gate = gate
         # What the browser sessions' routing refused before it reached the
-        # proxy (ADR-0026 amendment, 2026-10-02): evidence beside the gate's
-        # refusals, which are what the proxy itself enforced.
+        # proxy (ADR-0026 amendment, 2026-10-02). With the gate's refusals,
+        # which are what the proxy itself refused, these are the run's egress
+        # blocks.
         self.blocked_attempts = BlockedAttempts()
         self._server: asyncio.Server | None = None
         # Each browser connection's handler, so closing the proxy ends them
