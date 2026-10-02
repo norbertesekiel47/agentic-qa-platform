@@ -5,8 +5,11 @@ amendment; #46)."""
 
 import asyncio
 import os
+import signal
 import subprocess
 import time
+from collections.abc import Coroutine
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -94,10 +97,32 @@ async def started_search() -> list[int]:
     pytest.fail("no search process started within 5 s")
 
 
+def bounded[T](scenario: Coroutine[Any, Any, T]) -> T:
+    """`asyncio.run(scenario)`, failing the test if it hasn't returned within
+    6 s rather than hanging it: a search left running after its deadline
+    holds its caller in `wait()`, and pytest here has no per-test timeout.
+    It runs in a thread, so nothing here cancels the search or stops its
+    process before the 6 s are up; after them, the leftover processes are
+    killed so the thread can end."""
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        return pool.submit(asyncio.run, scenario).result(timeout=6)
+    except TimeoutError:
+        leftover = searches_running()
+        for pid in leftover:
+            os.kill(pid, signal.SIGKILL)
+        pytest.fail(
+            f"still running 6 s after the search began, its process {leftover} "
+            "never stopped"
+        )
+    finally:
+        pool.shutdown(wait=False)
+
+
 def test_a_catastrophic_pattern_is_stopped_at_the_deadline() -> None:
     started = time.monotonic()
     with pytest.raises(SearchTimeoutError):
-        asyncio.run(text_matches(check(pattern=CATASTROPHIC), HOSTILE_TEXT))
+        bounded(text_matches(check(pattern=CATASTROPHIC), HOSTILE_TEXT))
     elapsed = time.monotonic() - started
 
     # DATA_MODEL §7 and ADR-0024 fix the deadline at 2 s.
@@ -129,7 +154,7 @@ def test_the_event_loop_keeps_running_during_a_search(
 
     # A search on the loop's own thread would leave it no tick until the end;
     # a free loop ticks about 45 times in 0.5 s.
-    assert asyncio.run(scenario()) >= 5
+    assert bounded(scenario()) >= 5
 
 
 def test_a_cancelled_search_leaves_no_process_behind() -> None:
@@ -142,7 +167,7 @@ def test_a_cancelled_search_leaves_no_process_behind() -> None:
         with pytest.raises(asyncio.CancelledError):
             await search
 
-    asyncio.run(scenario())
+    bounded(scenario())
 
     assert searches_running() == []
 
@@ -161,7 +186,7 @@ def test_the_search_process_gets_none_of_the_runners_environment(
         finally:
             search.cancel()
 
-    environment = asyncio.run(scenario())
+    environment = bounded(scenario())
 
     # The control that the reader sees an environment is in
     # test_browser_session.py.
