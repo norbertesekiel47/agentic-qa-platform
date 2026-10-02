@@ -21,14 +21,14 @@ TECH_STACK = REPO / "TECH_STACK.md"
 RENOVATE = REPO / ".github" / "renovate.json"
 HARNESS = REPO / "bench" / "harness"
 
-# A version in TECH_STACK.md that follows a pin: `1.63.0` then an HTML comment
-# naming the PyPI package. The comment is invisible when the file is rendered.
-TRACKED_VERSION = re.compile(
-    r"(?P<version>\d[\w.]*)<!-- renovate: (?P<name>[\w.-]+) -->"
-)
 # PEP 508 allows extras and spaces around `==`, and Renovate reads both.
 EXACT_PIN = re.compile(
     r"(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*==\s*(?P<version>[0-9][^\s;,]*)"
+)
+PIN_HOW_TO_FIX = (
+    "left: the exact pins in the pyproject.toml files; right: the versions TECH_STACK.md "
+    "tracks. A tracked version is a version in §1 followed by an HTML comment naming "
+    "the PyPI package, as in 1.0.0<!-- renovate: NAME -->"
 )
 
 # Where the checks image (ADR-0023) names Playwright, by file in bench/harness. The
@@ -42,13 +42,35 @@ CHECKS_IMAGE_PLAYWRIGHT = {
 CHECKS_IMAGE_HOW_TO_FIX = (
     "Renovate doesn't update the checks image: regenerate checks-requirements.txt "
     "with the command in bench/harness/checks.Dockerfile, and bump the base image's "
-    "tag and digest there"
+    "tag and digest there. This check compares only the versions the three files name"
 )
 
 
 def normalize(name: str) -> str:
     """The package name as PEP 503 spells it, so `Types_PyYAML` finds `types-pyyaml`."""
     return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def renovate_config() -> dict[str, Any]:
+    """Renovate's configuration for this repository."""
+    config: dict[str, Any] = json.loads(RENOVATE.read_text())
+    return config
+
+
+def regex_manager() -> dict[str, Any]:
+    """The one custom manager, which reads TECH_STACK.md."""
+    [manager] = [
+        m for m in renovate_config()["customManagers"] if m["customType"] == "regex"
+    ]
+    regex: dict[str, Any] = manager
+    return regex
+
+
+def uv_settings() -> dict[str, Any]:
+    """The root pyproject.toml's [tool.uv] table."""
+    root: dict[str, Any] = tomllib.loads((REPO / "pyproject.toml").read_text())
+    settings: dict[str, Any] = root["tool"]["uv"]
+    return settings
 
 
 def workspace_pins(root: Path) -> dict[str, set[str]]:
@@ -66,6 +88,10 @@ def workspace_pins(root: Path) -> dict[str, set[str]]:
         requirements: list[str] = list(
             project.get("project", {}).get("dependencies", [])
         )
+        for extra in (
+            project.get("project", {}).get("optional-dependencies", {}).values()
+        ):
+            requirements += extra
         for group in project.get("dependency-groups", {}).values():
             requirements += [item for item in group if isinstance(item, str)]
         for requirement in requirements:
@@ -75,54 +101,17 @@ def workspace_pins(root: Path) -> dict[str, set[str]]:
 
 
 def tracked_versions(document: str) -> dict[str, set[str]]:
-    """The versions a document tracks, by package."""
+    """The versions the document tracks, found by the regex in Renovate's own
+    configuration, so this check and the bot can't disagree about what is tracked."""
     tracked: dict[str, set[str]] = {}
-    for found in TRACKED_VERSION.finditer(document):
-        tracked.setdefault(normalize(found["name"]), set()).add(found["version"])
+    for pattern in regex_manager()["matchStrings"]:
+        # Renovate names a group (?<name>...), Python (?P<name>...).
+        python_pattern = re.sub(r"\(\?<(?=\w+>)", "(?P<", pattern)
+        for match in re.finditer(python_pattern, document):
+            tracked.setdefault(normalize(match["depName"]), set()).add(
+                match["currentValue"]
+            )
     return tracked
-
-
-def pin_mismatches(
-    pins: dict[str, set[str]], tracked: dict[str, set[str]]
-) -> list[str]:
-    """What keeps the tracked versions from being the pins, one line each."""
-    problems: list[str] = []
-    for name, versions in sorted(pins.items()):
-        pinned = " and ".join(sorted(versions))
-        if len(versions) > 1:
-            problems.append(f"{name} is pinned to both {pinned}")
-        elif name not in tracked:
-            problems.append(f"{name}=={pinned} has no tracked version in TECH_STACK.md")
-        elif tracked[name] != versions:
-            tracked_as = " and ".join(sorted(tracked[name]))
-            problems.append(
-                f"{name} is pinned to {pinned}, but TECH_STACK.md tracks {tracked_as}"
-            )
-    problems += [
-        f"TECH_STACK.md tracks {name} {' and '.join(sorted(versions))}, which no pyproject.toml pins"
-        for name, versions in sorted(tracked.items())
-        if name not in pins
-    ]
-    return problems
-
-
-def checks_image_mismatches(pin: str, files: dict[str, str]) -> list[str]:
-    """The checks image's files that name a Playwright other than the pinned one."""
-    problems: list[str] = []
-    for name, text in sorted(files.items()):
-        versions = set(
-            re.findall(CHECKS_IMAGE_PLAYWRIGHT[name], text, flags=re.MULTILINE)
-        )
-        if not versions:
-            problems.append(
-                f"bench/harness/{name} names no Playwright, but the workspace pins {pin}"
-            )
-        elif versions != {pin}:
-            found = " and ".join(sorted(versions))
-            problems.append(
-                f"bench/harness/{name} has Playwright {found}, but the workspace pins {pin}"
-            )
-    return problems
 
 
 def fake_wheel(directory: Path, name: str, requires: list[str]) -> None:
@@ -160,70 +149,20 @@ def resolve(
     )
 
 
-def uv_settings() -> dict[str, Any]:
-    """The root pyproject.toml's [tool.uv] table."""
-    root: dict[str, Any] = tomllib.loads((REPO / "pyproject.toml").read_text())
-    settings: dict[str, Any] = root["tool"]["uv"]
-    return settings
-
-
-def renovate_config() -> dict[str, Any]:
-    """Renovate's configuration for this repository."""
-    config: dict[str, Any] = json.loads(RENOVATE.read_text())
-    return config
-
-
 def test_every_exact_pin_is_tracked_in_tech_stack_at_its_version() -> None:
-    problems = pin_mismatches(
-        workspace_pins(REPO), tracked_versions(TECH_STACK.read_text())
-    )
+    pins = workspace_pins(REPO)
 
-    assert not problems, "\n".join(problems)
-
-
-def test_a_pin_with_no_tracked_version_is_named() -> None:
-    document = "| Validation | Pydantic | 2.13.5<!-- renovate: pydantic --> |"
-
-    problems = pin_mismatches(
-        {"pydantic": {"2.13.5"}, "rich": {"15.0.0"}}, tracked_versions(document)
-    )
-
-    assert problems == ["rich==15.0.0 has no tracked version in TECH_STACK.md"]
+    assert pins
+    assert pins == tracked_versions(TECH_STACK.read_text()), PIN_HOW_TO_FIX
 
 
-def test_a_bumped_pin_is_named_when_its_tracked_version_lags() -> None:
-    document = "| Validation | Pydantic | 2.13.5<!-- renovate: pydantic --> |"
-
-    problems = pin_mismatches({"pydantic": {"2.13.6"}}, tracked_versions(document))
-
-    assert problems == ["pydantic is pinned to 2.13.6, but TECH_STACK.md tracks 2.13.5"]
-
-
-def test_a_tracked_version_with_no_pin_is_named() -> None:
-    document = "Hypothesis 6.168.2<!-- renovate: hypothesis -->, respx 0.23.1<!-- renovate: respx -->"
-
-    problems = pin_mismatches({"respx": {"0.23.1"}}, tracked_versions(document))
-
-    assert problems == [
-        "TECH_STACK.md tracks hypothesis 6.168.2, which no pyproject.toml pins"
-    ]
-
-
-def test_a_package_pinned_two_ways_is_named() -> None:
-    document = "| Playwright for Python | 1.63.0<!-- renovate: playwright --> |"
-
-    problems = pin_mismatches(
-        {"playwright": {"1.63.0", "1.64.0"}}, tracked_versions(document)
-    )
-
-    assert problems == ["playwright is pinned to both 1.63.0 and 1.64.0"]
-
-
-def test_workspace_pins_reads_members_and_groups_and_only_exact_pins(
+def test_workspace_pins_reads_members_groups_extras_and_only_exact_pins(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "root"\nversion = "0"\ndependencies = ["Typer==0.27.2", "rich>=15", "psycopg[binary] == 3.3.6"]\n'
+        '[project]\nname = "root"\nversion = "0"\n'
+        'dependencies = ["Typer==0.27.2", "rich>=15", "psycopg[binary] == 3.3.6"]\n'
+        '[project.optional-dependencies]\nspeed = ["orjson==3.12.0"]\n'
         '[dependency-groups]\ndev = ["ruff==0.16.9", {include-group = "stubs"}]\n'
         'stubs = ["Types_PyYAML==6.0.12.20260906"]\n'
         '[tool.uv.workspace]\nmembers = ["packages/*"]\n'
@@ -232,25 +171,60 @@ def test_workspace_pins_reads_members_and_groups_and_only_exact_pins(
     member.mkdir(parents=True)
     (member / "pyproject.toml").write_text(
         '[project]\nname = "a"\nversion = "0"\n'
-        'dependencies = ["awslambdaric==4.1.0; sys_platform == \'linux\'", "ruff==0.16.9", "other"]\n'
+        'dependencies = ["awslambdaric==4.1.0; sys_platform == \'linux\'", "ruff==0.16.8", "other"]\n'
     )
 
     assert workspace_pins(tmp_path) == {
         "typer": {"0.27.2"},
         "psycopg": {"3.3.6"},
-        "ruff": {"0.16.9"},
+        "orjson": {"3.12.0"},
+        "ruff": {"0.16.8", "0.16.9"},
         "types-pyyaml": {"6.0.12.20260906"},
         "awslambdaric": {"4.1.0"},
     }
+
+
+def test_tracked_versions_keeps_every_version_a_document_tracks_for_a_package() -> None:
+    document = (
+        "Ruff 0.16.9<!-- renovate: Ruff -->, ruff 0.16.8<!-- renovate: ruff -->, "
+        "stubs 6.0.12<!-- renovate: Types_PyYAML -->, 1.0 with no comment"
+    )
+
+    assert tracked_versions(document) == {
+        "ruff": {"0.16.8", "0.16.9"},
+        "types-pyyaml": {"6.0.12"},
+    }
+
+
+def test_renovate_reads_tech_stack_for_pypi_versions() -> None:
+    manager = regex_manager()
+
+    assert any(
+        re.search(p.strip("/"), TECH_STACK.name) for p in manager["managerFilePatterns"]
+    )
+    assert manager["datasourceTemplate"] == "pypi"
+    assert manager["versioningTemplate"] == "pep440"
+
+
+def test_renovate_runs_the_uv_the_workspace_requires() -> None:
+    # Renovate reads required-version only from the pyproject it is updating, and
+    # only the root has one. Members get this constraint instead, or the latest uv,
+    # which refuses the workspace.
+    assert renovate_config()["constraints"]["uv"] == uv_settings()["required-version"]
 
 
 def test_renovate_waits_three_days_after_a_release() -> None:
     config = renovate_config()
 
     assert config["minimumReleaseAge"] == "3 days"
-    # "strict" is Renovate's default: it opens no pull request for a release that
-    # is still pending. "none" and "flexible" would.
+    # Renovate's defaults: a release that is still pending gets no pull request, and
+    # one with no PyPI timestamp counts as pending. "none", "flexible" and
+    # "timestamp-optional" would let them through.
     assert config.get("internalChecksFilter", "strict") == "strict"
+    assert (
+        config.get("minimumReleaseAgeBehaviour", "timestamp-required")
+        == "timestamp-required"
+    )
     assert [
         rule for rule in config["packageRules"] if "minimumReleaseAge" in rule
     ] == []
@@ -258,15 +232,15 @@ def test_renovate_waits_three_days_after_a_release() -> None:
 
 def test_pre_1_0_minor_updates_get_their_own_pull_request() -> None:
     rules = renovate_config()["packageRules"]
-    group_rule = next(
+    [group_at] = [
         i
         for i, rule in enumerate(rules)
         if rule.get("groupName") == "python dependencies"
-    )
+    ]
     # A later rule's `groupName: null` takes the update out of the group.
     pre_1_0_rules = [
         rule
-        for rule in rules[group_rule + 1 :]
+        for rule in rules[group_at + 1 :]
         if rule.get("matchUpdateTypes") == ["minor"]
         and "groupName" in rule
         and rule["groupName"] is None
@@ -279,66 +253,30 @@ def test_pre_1_0_minor_updates_get_their_own_pull_request() -> None:
     assert not pre_1_0.search("10.0.0")
 
 
-def test_renovate_runs_the_uv_the_workspace_requires() -> None:
-    required = uv_settings()["required-version"]
-
-    # Renovate reads required-version only from the pyproject it is updating, and
-    # only the root has one. Members get this constraint instead, or the latest uv,
-    # which refuses the workspace.
-    assert renovate_config()["constraints"]["uv"] == required
-
-
-def test_renovate_finds_the_versions_the_check_reads() -> None:
+def test_renovate_touches_only_what_adr_0031_allows() -> None:
     config = renovate_config()
-    [manager] = [m for m in config["customManagers"] if m["customType"] == "regex"]
-    document = TECH_STACK.read_text()
-    found: dict[str, set[str]] = {}
-    for pattern in manager["matchStrings"]:
-        # Renovate names a group (?<name>...), Python (?P<name>...).
-        python_pattern = re.sub(r"\(\?<(?=\w+>)", "(?P<", pattern)
-        for match in re.finditer(python_pattern, document):
-            found.setdefault(normalize(match["depName"]), set()).add(
-                match["currentValue"]
-            )
+    rules = config["packageRules"]
+    group_names = [rule.get("groupName") for rule in rules]
 
-    assert manager["datasourceTemplate"] == "pypi"
-    assert any(
-        re.search(p.strip("/"), TECH_STACK.name) for p in manager["managerFilePatterns"]
-    )
-    assert found == tracked_versions(document)
+    assert config["enabledManagers"] == ["pep621", "custom.regex"]
+    assert config["lockFileMaintenance"]["enabled"] is True
+    assert config["semanticCommits"] == "enabled"
+    assert [rule for rule in [config, *rules] if rule.get("automerge")] == []
+    disabled = [rule["matchDepTypes"] for rule in rules if rule.get("enabled") is False]
+    assert disabled == [["requires-python", "build-system.requires"]]
+    # Later rules win, so Playwright's own group must come after the weekly one.
+    assert group_names.index("python dependencies") < group_names.index("playwright")
 
 
 def test_the_checks_image_follows_the_playwright_pin() -> None:
-    [pin] = workspace_pins(REPO)["playwright"]
-    files = {name: (HARNESS / name).read_text() for name in CHECKS_IMAGE_PLAYWRIGHT}
-
-    problems = checks_image_mismatches(pin, files)
-
-    assert not problems, "\n".join([*problems, CHECKS_IMAGE_HOW_TO_FIX])
-
-
-def test_a_checks_image_behind_the_pin_is_named() -> None:
-    files = {
-        "checks-requirements.in": "playwright==1.64.0\n",
-        "checks-requirements.txt": "playwright==1.64.0 \\\n    --hash=sha256:00\n",
-        "checks.Dockerfile": "FROM mcr.microsoft.com/playwright/python:v1.63.0-noble@sha256:00\n",
+    found = {
+        name: set(re.findall(pattern, (HARNESS / name).read_text(), flags=re.MULTILINE))
+        for name, pattern in CHECKS_IMAGE_PLAYWRIGHT.items()
     }
 
-    problems = checks_image_mismatches("1.64.0", files)
-
-    assert problems == [
-        "bench/harness/checks.Dockerfile has Playwright 1.63.0, but the workspace pins 1.64.0"
-    ]
-
-
-def test_a_checks_image_file_that_names_no_playwright_is_named() -> None:
-    files = {"checks-requirements.in": "pyee==13.0.1\n"}
-
-    problems = checks_image_mismatches("1.63.0", files)
-
-    assert problems == [
-        "bench/harness/checks-requirements.in names no Playwright, but the workspace pins 1.63.0"
-    ]
+    assert found == dict.fromkeys(
+        CHECKS_IMAGE_PLAYWRIGHT, workspace_pins(REPO)["playwright"]
+    ), CHECKS_IMAGE_HOW_TO_FIX
 
 
 def test_an_update_that_needs_litellm_fails_to_resolve(tmp_path: Path) -> None:

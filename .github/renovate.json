@@ -29,10 +29,9 @@
     },
     {
       "description": [
-        "One weekly pull request for minor and patch updates. Majors stay alone: separateMajorMinor outranks groups."
+        "One weekly pull request for minor and patch updates. Majors stay alone: separateMajorMinor outranks groups. Later rules win, so the two rules below take pre-1.0 minors and Playwright out of this group: keep them after it."
       ],
       "matchUpdateTypes": ["minor", "patch"],
-      "matchPackageNames": ["!playwright"],
       "groupName": "python dependencies"
     },
     {

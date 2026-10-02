@@ -76,4 +76,4 @@
 
 ## Amendment (2026-10-01): a uv bump also edits Renovate's constraint
 
-ADR-0031 adds `constraints.uv` to `.github/renovate.json`, so Renovate's member updates run a uv that the workspace accepts. A uv bump edits it with `required-version`, `ci.yml` and TECH_STACK.md, and a test holds it equal to `required-version`.
+ADR-0031 adds `constraints.uv` to `.github/renovate.json` and lists everything a uv bump edits, which now includes it.
