@@ -106,7 +106,7 @@ PR smoke: 8 dev-split cases (≈ 2 min, recorded cassettes). Nightly: full dev s
 
 ## 8. Quality gates (CI)
 
-A change is mergeable only when every gate that runs passes. The jobs are in `.github/workflows/ci.yml` (ADR-0019, ADR-0029). Each job is a required check on `main`, and a gate with nothing to check yet is left out rather than faked. [AGENTS.md §4](AGENTS.md#4-commands) runs the same gates locally.
+A change is mergeable only when every gate that runs passes. The jobs are in `.github/workflows/ci.yml` (ADR-0019, ADR-0029) and, for `floor`, `.github/workflows/floor.yml` (ADR-0028 amendment). Each job is a required check on `main`, and a gate with nothing to check yet is left out rather than faked. [AGENTS.md §4](AGENTS.md#4-commands) runs the same gates locally.
 
 | Gate | CI job | Runs |
 |---|---|---|
@@ -116,6 +116,7 @@ A change is mergeable only when every gate that runs passes. The jobs are in `.g
 | Browser tests: the sandbox check, the browser session and the spike's trial (#37), then the egress fixtures | `python`, after steps that install Playwright's headless shell, log the runner's AppArmor setting and relax it (ADR-0026) | The sandbox check (#35), the browser session (#36) and the trial (#37) now. The egress fixtures join as their code lands in M1 |
 | Dependency audit of `uv.lock` and the checks image's `bench/harness/checks-requirements.txt` (osv-scanner) | `dependency-audit` | Now, and weekly |
 | Guard tests · policy scan | `guardrails` | Now |
+| The floor's moves: `policy_guard.py --diff origin/main`, which passes approval-class findings once the maintainer puts the `floor-change-approved` label on the pull request | `floor` | Now, on pull requests, and again when a label is added or removed |
 | Secret scan (gitleaks, full history) | `secrets` | Now |
 | `fallow audit` | `fallow` | Now, on pull requests. It checks TypeScript only, so it finds nothing until M7 |
 | `pnpm lint` · `pnpm typecheck` · `vitest` · Playwright component/page tests | — | M7, with the dashboard, and its dependency audit |

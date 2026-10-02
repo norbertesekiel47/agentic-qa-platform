@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Guard for the AGENTS.md rules that get bent under pressure to go green.
 
-Three entry points, one rule set:
+Four entry points, one rule set (its tables are in ``policy_rules.py``):
 
 * PreToolUse (default): checks each Bash / Edit / Write / NotebookEdit call
   before it runs. Clear violations are refused; changes that need judgment are
@@ -10,6 +10,11 @@ Three entry points, one rule set:
   catch what the per-call check cannot see: files written by scripts,
   formatters, other agents or people.
 * ``--scan`` (CLI, for CI or pre-commit): the same scan; exit 1 on violations.
+* ``--diff <base>`` (CLI, CI's ``floor`` job): judges each file the working
+  tree changes since the merge base of ``<base>`` and HEAD, untracked files
+  included, as an edit is judged. Exit 1 on a refused finding, and on one
+  that needs approval unless ``AQA_FLOOR_CHANGE_APPROVED=true`` (CI sets it
+  from the maintainer's label); exit 2 when the diff can't be taken.
 
 Refused
 -------
@@ -38,7 +43,10 @@ Escalated to the user
    bar moves only with a human in the loop. Creating one of these files prompts
    once, which is how the initial bar gets approved.
 5. A test-file edit that leaves fewer assertions or tests, and a shell
-   command that may delete, move or rewrite a test file.
+   command that may delete, move or rewrite a test file. ``--diff`` adds a
+   deleted test file (a moved one reads as deleted) and any change to an
+   existing test that proves the bar (``BAR_TESTS``), where a flipped
+   expectation keeps every assertion.
 6. Edits to this guard or the settings that load it (``.claude/hooks/``,
    ``.claude/settings*.json``), including shell writes that name them and
    installers that rewrite them without naming them (``fallow hooks install``,
@@ -52,7 +60,7 @@ Excuses
   ``example``, ``placeholder``, ``redacted``, ``xxxxxx``) is not a secret.
 * ``AQA_POLICY_GUARD=off`` in Claude Code's environment (the shell that launched
   it, or a settings file's ``env``) disables the hooks for that session. An
-  explicit ``--scan`` still runs.
+  explicit ``--scan`` or ``--diff`` still runs.
 
 Scope
 -----
@@ -76,8 +84,11 @@ Known gaps, stated rather than hidden
   test path asks, even a formatter run or test output sent to ``tee``, and a
   shell write is judged as source (write a test fake's stub with Write).
 * This is a guardrail, not a security boundary. Other agents (Codex, Cursor)
-  do not run Claude Code hooks, and CI runs only ``--scan``, which sees file
-  contents but not deleted tests, dropped assertions or changed gate configs.
+  do not run Claude Code hooks. CI's ``--diff`` sees their changes, but runs
+  the pull request's own copy of this guard and of its workflow, so a pull
+  request that weakens either is judged by the weakened copy. After a push,
+  any label event (not only re-applying the approval label) brings the
+  label's approval back (ADR-0028 amendment, 2026-10-01).
 
 Contract (code.claude.com/docs/en/hooks): stdin is the hook payload as JSON.
 PreToolUse: exit 2 refuses and shows stderr to the model; a JSON

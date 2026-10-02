@@ -28,3 +28,7 @@ Option 3. `.github/workflows/ci.yml` runs three jobs:
 ## Amendment (2026-09-29): the Python gates join as two jobs
 
 ADR-0029 adds the `python` job (the workspace gates, installed from `uv.lock`) and the `dependency-audit` job (osv-scanner on `uv.lock`), and a weekly scheduled run. `guardrails` keeps the guard tests and the policy scan; its Ruff and mypy steps move to `python`. `main` requires all five checks: `guardrails`, `python`, `dependency-audit`, `secrets` and `fallow`. uv and osv-scanner are downloaded as linux x64 release binaries checked against a pinned sha256, so the allowlist stays as it is.
+
+## Amendment (2026-10-01): the floor job
+
+ADR-0028's amendment of this date adds the `floor` job, in `.github/workflows/floor.yml`: `policy_guard.py --diff origin/main` on every pull request, run again when a label is added or removed. It uses only the allowed actions, a read-only token and the `CI_RUNNER` label. `main` requires six checks: `guardrails`, `python`, `dependency-audit`, `secrets`, `fallow` and `floor`.
