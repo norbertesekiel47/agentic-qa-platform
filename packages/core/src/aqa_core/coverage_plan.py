@@ -44,21 +44,22 @@ M2Check = Literal["pixel_diff", "contrast_min", "model_verify"]
 _NETWORK = frozenset({"method", "url_pattern", "status_class"})
 _TEXT_OR_PATTERN = frozenset({"text", "pattern"})
 
-# The fields each check type takes beyond `check`: those it needs, and
-# whether it takes `text` or `pattern`, exactly one. These are DATA_MODEL §7's
+# The fields each check type needs beyond `check`. These are DATA_MODEL §7's
 # compiled fields, less what compiling adds, with a target named by its
 # meaning rather than by an ID.
-_FIELDS: Final[Mapping[CheckType, tuple[frozenset[str], bool]]] = {
-    "text_visible": (frozenset(), True),
-    "text_in_target": (frozenset({"target_meaning"}), True),
-    "not_visible": (frozenset({"target_meaning"}), False),
-    "url_matches": (frozenset({"pattern"}), False),
-    "network_none": (_NETWORK, False),
-    "network_seen": (_NETWORK, False),
-    "probe_equals": (frozenset({"probe", "value"}), False),
-    "probe_equals_baseline": (frozenset({"probe"}), False),
-    "visible_unoccluded": (frozenset({"target_meaning"}), False),
+_NEEDS_FIELDS: Final[Mapping[CheckType, frozenset[str]]] = {
+    "text_visible": frozenset(),
+    "text_in_target": frozenset({"target_meaning"}),
+    "not_visible": frozenset({"target_meaning"}),
+    "url_matches": frozenset({"pattern"}),
+    "network_none": _NETWORK,
+    "network_seen": _NETWORK,
+    "probe_equals": frozenset({"probe", "value"}),
+    "probe_equals_baseline": frozenset({"probe"}),
+    "visible_unoccluded": frozenset({"target_meaning"}),
 }
+# The check types that also take `text` or `pattern`, exactly one.
+_TEXT_CHECKS: Final = frozenset({"text_visible", "text_in_target"})
 
 
 class PlannedCheck(StrictModel):
@@ -81,20 +82,21 @@ class PlannedCheck(StrictModel):
 
     @model_validator(mode="after")
     def _its_types_fields(self) -> Self:
-        needs, text_or_pattern = _FIELDS[self.check]
+        needs = _NEEDS_FIELDS[self.check]
+        text_check = self.check in _TEXT_CHECKS
         given = {
             name
             for name in type(self).model_fields
             if name != "check" and getattr(self, name) is not None
         }
-        takes = needs | (_TEXT_OR_PATTERN if text_or_pattern else frozenset())
+        takes = needs | (_TEXT_OR_PATTERN if text_check else frozenset())
         problems = [
             f"a {self.check} check needs {name}" for name in sorted(needs - given)
         ]
         problems += [
             f"a {self.check} check takes no {name}" for name in sorted(given - takes)
         ]
-        if text_or_pattern and len(given & _TEXT_OR_PATTERN) != 1:
+        if text_check and len(given & _TEXT_OR_PATTERN) != 1:
             problems.append(f"a {self.check} check takes text or pattern, exactly one")
         if problems:
             raise ValueError("; ".join(problems))
