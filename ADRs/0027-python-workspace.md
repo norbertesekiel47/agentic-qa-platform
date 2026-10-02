@@ -62,12 +62,14 @@ ADR-0029 settles the import consequence above. `[tool.mypy]` now checks `package
 
 ## Amendment (2026-10-01): a test reads `uv.lock`
 
-Option 3 of "Keeping litellm out", a test that `uv.lock` has no litellm, now backs the constraint. `constraint-dependencies = ["litellm<0"]` stays the ban: it fails a resolution that pulls litellm in and names it. But the lock can end up without it, and nothing else looks at the lock:
+Option 3 of "Keeping litellm out", a test that `uv.lock` has no litellm, now backs the constraint. `constraint-dependencies = ["litellm<0"]` stays the ban: it fails a resolution that pulls litellm in and names it. The test notices only after the lock has changed, which is why it isn't the ban, but a lock can lose the constraint without any resolution failing, and no check reads the lock for litellm:
 - A `[tool.uv.sources]` entry for litellm replaces the constraint (#59's security review reproduced it on uv 0.11.15). With a `path` source, `uv lock` succeeds, locks a litellm `[[package]]`, and writes `{ name = "litellm", directory = "…" }` in the manifest where `{ name = "litellm", specifier = "<0" }` was.
 - policy_guard asks before an edit to `[tool.uv]` only inside Claude Code, and its `--scan` skips lockfiles. An agent without the hooks, or a person, can drop or loosen the constraint unchallenged.
 
 `tests/test_lockfile.py` parses `uv.lock` with `tomllib` and fails unless:
 - no `[[package]]` is named `litellm`, and
-- the `[manifest]`'s constraints on litellm are exactly `[{ name = "litellm", specifier = "<0" }]`. A looser specifier, a marker that limits the ban to some platforms, a source in place of the specifier, a missing entry and a missing `[manifest]` all fail it.
+- the `[manifest]`'s constraints on litellm are exactly `[{ name = "litellm", specifier = "<0" }]`. A looser specifier, a marker that limits the ban to some platforms, a source in place of the specifier, a second litellm entry, a missing entry and a missing `[manifest]` all fail it.
+
+Names compare case-insensitively, as uv reads them. On uv 0.11.15, a hand-edited lock with the constraint intact and a `[[package]]` named `LiteLLM` passes both `uv lock --check` and `uv sync --locked`, and the second installs litellm.
 
 `uv run pytest --cov` runs it, so CI's `python` job does. Fixture locks written by the test prove that each check can fail, and the real `uv.lock` is never edited to test it.
