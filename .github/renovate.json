@@ -4,6 +4,7 @@
     "Weekly updates for the Python workspace (ADR-0031): the pins in the pyproject.toml files, uv.lock, and the versions TECH_STACK.md tracks. Every other manager is off."
   ],
   "extends": ["schedule:weekly"],
+  "timezone": "UTC",
   "enabledManagers": ["pep621", "custom.regex"],
   "constraints": { "uv": ">=0.11.15,<0.12" },
   "minimumReleaseAge": "3 days",
