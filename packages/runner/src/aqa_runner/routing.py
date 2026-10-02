@@ -13,16 +13,15 @@ from playwright.async_api import BrowserContext, Route, WebSocketRoute
 
 from aqa_runner.egress import EgressPolicy, Requester
 
-# The scheme whose origins a URL's authority is read as, and how the egress
-# proxy sees the connection: Chromium sends a plain http request to it as
-# one, and tunnels https, ws and wss through CONNECT (ADR-0026's amendment on
-# the egress proxy). The proxy carries no other scheme.
-ORIGIN_SCHEMES = {"http": "http", "https": "https", "ws": "http", "wss": "https"}
-REQUESTERS: dict[str, Requester] = {
-    "http": "request",
-    "https": "tunnel",
-    "ws": "tunnel",
-    "wss": "tunnel",
+# For each scheme the egress proxy carries: the scheme whose origins its
+# authority is read as, and how the proxy sees the connection. Chromium sends
+# a plain http request to it as one, and tunnels https, ws and wss through
+# CONNECT (ADR-0026's amendment on the egress proxy).
+PROXIED_SCHEMES: dict[str, tuple[str, Requester]] = {
+    "http": ("http", "request"),
+    "https": ("https", "tunnel"),
+    "ws": ("http", "tunnel"),
+    "wss": ("https", "tunnel"),
 }
 
 
@@ -52,16 +51,17 @@ def refused_attempt(
     refused too."""
     parts = urlsplit(url)
     blocked = BlockedAttempt(resource_type, parts.scheme, parts.hostname or "", None)
-    if parts.scheme not in REQUESTERS:
+    if parts.scheme not in PROXIED_SCHEMES:
         return blocked
+    origin_scheme, requester = PROXIED_SCHEMES[parts.scheme]
     # The proxy never sees a URL's user part: Chromium leaves it out of the
     # request line (HttpUtil::SpecForRequest) and a tunnel's CONNECT.
     host_and_port = parts.netloc.rpartition("@")[2]
     try:
-        host, port = authority(f"{ORIGIN_SCHEMES[parts.scheme]}://{host_and_port}")
+        host, port = authority(f"{origin_scheme}://{host_and_port}")
     except ValueError:  # an authority no origin writes, nor Chromium
         return blocked
-    if policy.allows(host, port, REQUESTERS[parts.scheme]):
+    if policy.allows(host, port, requester):
         return None
     return BlockedAttempt(resource_type, parts.scheme, host, port)
 
@@ -89,7 +89,7 @@ async def install_routes(
     any other goes on to the egress proxy. Call it before the context's first
     page exists."""
 
-    async def request(route: Route) -> None:
+    async def on_request(route: Route) -> None:
         attempt = refused_attempt(
             route.request.url, policy, route.request.resource_type
         )
@@ -99,7 +99,7 @@ async def install_routes(
         blocked.add(attempt)
         await route.abort("blockedbyclient")
 
-    async def socket(route: WebSocketRoute) -> None:
+    async def on_websocket(route: WebSocketRoute) -> None:
         attempt = refused_attempt(route.url, policy, "websocket")
         if attempt is None:
             route.connect_to_server()
@@ -110,6 +110,6 @@ async def install_routes(
         await route.close()
 
     # https://playwright.dev/python/docs/api/class-browsercontext#browser-context-route
-    await context.route("**/*", request)
+    await context.route("**/*", on_request)
     # https://playwright.dev/python/docs/api/class-browsercontext#browser-context-route-web-socket
-    await context.route_web_socket("**/*", socket)
+    await context.route_web_socket("**/*", on_websocket)

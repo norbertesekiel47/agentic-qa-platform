@@ -19,9 +19,10 @@ from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.egress import EgressGate, EgressPolicy
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.routing import BlockedAttempt, BlockedAttempts, refused_attempt
-from playwright.async_api import BrowserContext, Error, Page, async_playwright
+from playwright.async_api import BrowserContext, async_playwright
 
-from packages.runner.tests.egress_fixtures import LOOPBACK, egress_proxy, gate, serving
+from packages.runner.tests.egress_fixtures import egress_proxy, serving
+from packages.runner.tests.test_egress_sessions import APP, EVIL, app_gate, load
 
 POLICY = EgressPolicy(
     allowed_origins=("http://app.example.test:8080", "https://[2001:db8::1]:8443"),
@@ -136,10 +137,6 @@ def test_routes_are_in_place_before_the_first_page(
     assert {"route", "route_web_socket"} <= set(session_calls[:first_page])
 
 
-APP = "app.example.test"
-EVIL = "evil.example.test"
-
-
 @asynccontextmanager
 async def browsing(
     egress: EgressGate,
@@ -151,11 +148,6 @@ async def browsing(
         open_browser_session(playwright.chromium, egress=proxy) as session,
     ):
         yield proxy, session
-
-
-def app_gate(port: int) -> EgressGate:
-    """A run that starts at http://app.example.test:`port`, a local server."""
-    return gate(allowed=(f"http://{APP}:{port}",), answers={APP: LOOPBACK})
 
 
 # How a page sends to `url`, by method, each settling whatever happens.
@@ -237,16 +229,6 @@ def test_blocked_attempts_keep_the_first_thousand_and_count_them_all() -> None:
     assert blocked.total == 1201
 
 
-async def navigate(page: Page, url: str) -> int | str:
-    """The status a navigation got, or the network error it failed with."""
-    try:
-        response = await page.goto(url)
-    except Error as error:
-        return error.message.split()[1]
-    assert response is not None
-    return response.status
-
-
 def test_a_redirect_hop_routing_never_sees_is_refused_by_the_proxy() -> None:
     # Routing sees only a redirect chain's first request (LAB_NOTES,
     # 2026-09-29), so it never enforces alone.
@@ -256,8 +238,8 @@ def test_a_redirect_hop_routing_never_sees_is_refused_by_the_proxy() -> None:
 
         async def scenario() -> tuple[int | str, BlockedAttempts]:
             async with browsing(egress) as (proxy, session):
-                outcome = await navigate(
-                    session.page, f"http://{APP}:{origin.port}/redirect?to={hop}"
+                outcome = await load(
+                    session, f"http://{APP}:{origin.port}/redirect?to={hop}"
                 )
                 return outcome, proxy.blocked_attempts
 
