@@ -1,6 +1,6 @@
 # Architecture — Agentic QA Platform
 
-Last updated: 2026-10-01 (the browser session, #36; the sandbox check, #35; M1 design decisions, ADR-0024–0026). Decisions referenced as ADR-NNNN live in [`ADRs/`](ADRs/).
+Last updated: 2026-10-02 (the local run record under the spec root, #41; the browser session, #36; the sandbox check, #35; M1 design decisions, ADR-0024–0026). Decisions referenced as ADR-NNNN live in [`ADRs/`](ADRs/).
 
 ## 1. System context
 
@@ -95,7 +95,7 @@ The healer cannot observe *intent* — only behavior. So it classifies what it *
 The compiled format separates **targets** (an element's meaning + locators) from **assertions** (what must be true). **Heal patches may change target locators and non-side-effect steps only; assertions, target meanings, side-effect steps, `side_effect` flags, browser settings, the coverage plan, and invariants are immutable in heals** — enforced by the patch validator (DATA_MODEL §7). A binding that can't be resolved is drift (heal path); a resolved target whose check evaluates false is `expectation_violated`. Changing what "correct" means requires a human edit to the spec in the PR. PR context (title, description, spec diff) may be passed to the healer as *hints*, but the platform never labels a change "intentional."
 
 ### 3.3 Checkpointing and continuation (ADR-0006 amendment)
-**Local runs (M1)** use LangGraph's in-memory checkpointer and a local run record under `.aqa/runs/<run_id>/`, with no API or dispatcher. The API-backed saver and the continuation rules below apply once runs upload or run hosted (M4 onward).
+**Local runs (M1)** use LangGraph's in-memory checkpointer and a local run record under the spec root's `.aqa/runs/<run_id>/` (`aqa_runner.run_record`; `.aqa/` holds a `.gitignore` of `*`), with no API or dispatcher. The API-backed saver and the continuation rules below apply once runs upload or run hosted (M4 onward).
 
 A checkpoint preserves graph state, not the browser. Resuming therefore requires rebuilding the session:
 - Every compiled step carries a required `side_effect` flag: `true` for submits, purchases and deletes; `false` for **replay-safe** steps (navigation, reads, idempotent fills). It is never defaulted. The explorer sets `false` only on positive evidence and records the basis for every `true` (ADR-0025). Only a person lowers the flag, by editing the compiled script.
@@ -208,7 +208,7 @@ No NAT Gateway · runners bill per ms with zero idle · control-plane Lambdas st
 
 ## 9. Observability
 
-OpenTelemetry spans across CLI → API → dispatcher → runner, using GenAI semantic conventions for LLM calls (pinned convention version). Export: **LangSmith** for benchmark/demo/dev runs only, and only when an aqa-specific setting turns it on (an ambient `LANGSMITH_TRACING` is ignored); **CloudWatch** for infra metrics and logs. Customer production runs are never exported to third parties by default. In M1, a local run writes its records to `.aqa/runs/<run_id>/` (gitignored).
+OpenTelemetry spans across CLI → API → dispatcher → runner, using GenAI semantic conventions for LLM calls (pinned convention version). Export: **LangSmith** for benchmark/demo/dev runs only, and only when an aqa-specific setting turns it on (an ambient `LANGSMITH_TRACING` is ignored); **CloudWatch** for infra metrics and logs. Customer production runs are never exported to third parties by default. In M1, a local run writes its records to the spec root's `.aqa/runs/<run_id>/`, which git ignores (§3.3).
 
 ## 10. Cross-project trace contract
 

@@ -1,6 +1,6 @@
 # API — Agentic QA Platform
 
-Last updated: 2026-10-02 (an invalid compiled script is a spec error, #46; `--url` is an origin, #39; explore exit codes and flags, ADR-0024). REST over HTTPS, JSON, base path `/v1`. The FastAPI app is the source of truth; its generated OpenAPI document produces the dashboard's typed client. This file is the design contract — update it in the same PR as any endpoint change.
+Last updated: 2026-10-02 (`aqa explore --plan-only`, its run record, and exit codes 3, 5, 10 and 11, #41; an invalid compiled script is a spec error, #46; `--url` is an origin, #39; explore exit codes and flags, ADR-0024). REST over HTTPS, JSON, base path `/v1`. The FastAPI app is the source of truth; its generated OpenAPI document produces the dashboard's typed client. This file is the design contract — update it in the same PR as any endpoint change.
 
 ## 1. Conventions
 
@@ -151,7 +151,7 @@ Connections live ≤ 2 hours (API Gateway limit); clients reconnect with `since_
 ```
 aqa init                          # scaffold qa/config.yaml + example spec
 aqa explore <spec> --url <url>    # coverage plan → exploration → confirmation replay → qa/.compiled/<spec id>.json (ADR-0024)
-            [--plan-only]         #   write the coverage plan and stop (no browser)
+            [--plan-only]         #   write the coverage plan to the run record and stop (no browser); required until #53
             [--force]             #   overwrite an up-to-date compiled script
             [--confirm-repeat]    #   allow one confirmation that repeats side effects when the spec has no reset hook
 aqa replay  [<spec>...] --url     # strict replay (default), no LLM; --mode verified for model-assisted visual checks
@@ -171,13 +171,15 @@ Exit codes:
 | `0` | All passed. For `explore`: compiled, including an unconfirmed script, which prints a warning |
 | `1` | Expectation violated (bug). Never returned by `explore` |
 | `2` | Heal proposals pending |
-| `3` | Inconclusive. For `explore`: gave up (attempts or budget exhausted, a model refusal with no fallback, or a flaky confirmation) |
+| `3` | Inconclusive. For `explore`: gave up (attempts or budget exhausted, a model refusal with no fallback, a coverage plan that didn't parse, was cut off at the output bound or doesn't fit its spec, or a flaky confirmation) |
 | `4` | Non-resumable run |
-| `5` | Spec error: the spec or its compiled script is invalid, or an expectation has no establishing check (ADR-0024; DATA_MODEL §7, "Checked by the loader") |
+| `5` | Spec error: the spec, its compiled script or the project config is invalid, a required setting is missing (a start origin, the provider's key), or an expectation has no establishing check (ADR-0024; DATA_MODEL §7, "Checked by the loader") |
 | `6` | Policy: egress blocked. The page requested a host that is neither an allowed origin, a subresource host nor expected-blocked. No finding; the run record names the refused host (ADR-0026) |
-| `10+` | Infrastructure errors, e.g. no sandbox, a failed reset hook, a provider outage, or an unreachable start origin |
+| `10` | No sandbox: Chromium's sandbox can't start, or the sandbox check can't prove it (`aqa_runner.sandbox.SandboxUnavailableError.exit_code`, ADR-0026) |
+| `11` | No model response: a model call got none (a provider outage, a timeout, a refused key), or a fallback got none after a billed refusal, whose cost record is kept (#41) |
+| `10+` | Other infrastructure errors, e.g. a failed reset hook or an unreachable start origin; their codes come with #53 |
 
-The run's start origin is `--url`, or the project config's `base_url` when `--url` is omitted (DATA_MODEL §9). Both must be origins: a `--url` with a path is an error, not cut back to its origin. A spec's `start_url` is only a path (ADR-0026). Test-secret values come from `AQA_SECRET_<NAME>` environment variables, and their bindings from the project config (DATA_MODEL §9).
+The run's start origin is `--url`, or the project config's `base_url` when `--url` is omitted (DATA_MODEL §9). Both must be origins: a `--url` with a path is an error, not cut back to its origin. A spec's `start_url` is only a path (ADR-0026). `<spec>` is a spec file's path, and its spec root is the nearest directory, from the spec's own up, that holds `config.yaml`. `explore` reads the whole project, so a problem in any spec of it stops the command. With `--plan-only`, the plan, its `plan_hash` and the cost record of every model response go to `plan.json` in the run record, `<spec root>/.aqa/runs/<run_id>/`, whose `.aqa/` holds a `.gitignore` of `*`; the one-line summary names it. Test-secret values come from `AQA_SECRET_<NAME>` environment variables, and their bindings from the project config (DATA_MODEL §9).
 
 ## 8. GitHub Action
 
