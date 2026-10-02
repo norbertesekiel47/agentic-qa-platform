@@ -348,8 +348,8 @@ def _one_selector(css: str) -> str:
         # Trimmed, `button:visible` followed by a no-break space would read
         # as :visible to Playwright and as :visible\xa0 to the scan below.
         raise ValueError(
-            f"{css!r} starts or ends with white space, which Playwright trims "
-            "before CSS reads the rest: write it trimmed"
+            f"{css!r} starts or ends with white space: write it trimmed "
+            "(Playwright trims the end before CSS reads the value)"
         )
     for name in _pseudo_classes(css):
         if name in PLAYWRIGHT_PSEUDO_CLASSES:
