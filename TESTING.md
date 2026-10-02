@@ -116,7 +116,7 @@ A change is mergeable only when every gate that runs passes. The jobs are in `.g
 | Browser tests: the sandbox check, the browser session and the spike's trial (#37), then the egress fixtures | `python`, after steps that install Playwright's headless shell, log the runner's AppArmor setting and relax it (ADR-0026) | The sandbox check (#35), the browser session (#36) and the trial (#37) now. The egress fixtures join as their code lands in M1 |
 | Dependency audit of `uv.lock` and the checks image's `bench/harness/checks-requirements.txt` (osv-scanner) | `dependency-audit` | Now, and weekly |
 | Guard tests · policy scan | `guardrails` | Now |
-| The floor's moves: `policy_guard.py --diff origin/main`, which passes approval-class findings once the maintainer puts the `floor-change-approved` label on the pull request | `floor` | Now, on pull requests, and again when a label is added or removed |
+| The floor's moves: `policy_guard.py --diff refs/remotes/origin/main`, whose approval-class findings pass with the maintainer's `floor-change-approved` label (ADR-0028 amendment) | `floor` | Now, on pull requests, and again when a label is added or removed |
 | Secret scan (gitleaks, full history) | `secrets` | Now |
 | `fallow audit` | `fallow` | Now, on pull requests. It checks TypeScript only, so it finds nothing until M7 |
 | `pnpm lint` · `pnpm typecheck` · `vitest` · Playwright component/page tests | — | M7, with the dashboard, and its dependency audit |
