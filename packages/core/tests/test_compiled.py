@@ -17,6 +17,8 @@ from aqa_core.compiled import (
     CompiledScript,
     NetworkNone,
     Target,
+    TextInTarget,
+    TextVisible,
     VisibleUnoccluded,
 )
 from aqa_core.spec import spec_hash
@@ -670,3 +672,23 @@ def test_a_pattern_python_warns_about_is_refused_even_when_cached() -> None:
 
     assert location == ("assertions", 4, "url_matches", "pattern")
     assert message.startswith("'[[:alpha:]]+' is not a Python regex: ")
+
+
+@pytest.mark.parametrize(
+    ("index", "rendered", "found"),
+    [
+        # a1 checks the literal "card has expired".
+        (0, "Sorry, your card has expired.", True),
+        (0, "Your card expired", False),
+        # a4 checks the pattern Classic Hoodie.*\bM\b, case-sensitively.
+        (3, "Classic Hoodie\n  size M", True),
+        (3, "classic hoodie size M", False),
+    ],
+)
+def test_a_text_check_matches_rendered_text(
+    index: int, rendered: str, found: bool
+) -> None:
+    check = CompiledScript.model_validate_json(data_models_example()).assertions[index]
+    assert isinstance(check, TextVisible | TextInTarget)
+
+    assert check.matches(rendered) is found

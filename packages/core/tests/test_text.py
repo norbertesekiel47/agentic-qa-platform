@@ -2,7 +2,7 @@
 whitespace collapsed (DATA_MODEL §7; ADR-0025; LAB_NOTES 2026-09-29)."""
 
 import pytest
-from aqa_core.text import normalize
+from aqa_core.text import has_pattern, has_text, normalize
 
 
 @pytest.mark.parametrize(
@@ -35,3 +35,51 @@ def test_normalize_strips_private_use_glyphs_and_collapses_whitespace(
     text: str, normalized: str
 ) -> None:
     assert normalize(text) == normalized
+
+
+@pytest.mark.parametrize(
+    ("rendered", "literal", "found"),
+    [
+        # A literal is a whole-word match, so a longer word or number around
+        # it doesn't count (ADR-0025).
+        ("Unfavorite Article", "Favorite Article", False),
+        ("Favorite Article (3)", "Favorite Article", True),
+        ("10", "1", False),
+        ("Total: 10", "1", False),
+        ("1 favorite", "1", True),
+        # Case doesn't matter: Chromium's rendered text applies CSS
+        # text-transform (LAB_NOTES, 2026-09-29).
+        ("POST COMMENT", "Post Comment", True),
+        ("STRASSE", "Stra\u00dfe", True),
+        # A literal that ends in punctuation still matches at a sentence's end.
+        ("Your card has expired.", "card has expired.", True),
+        ("Your card has expired.", "has exp", False),
+        # Both sides are compared normalized.
+        ("card \n has   expired", "card has expired", True),
+        ("Pay\xadment due", "Payment", True),
+    ],
+)
+def test_text_matches_whole_words_only(
+    rendered: str, literal: str, found: bool
+) -> None:
+    assert has_text(rendered, literal) is found
+
+
+@pytest.mark.parametrize(
+    ("rendered", "pattern", "found"),
+    [
+        # re.search: a match anywhere, with only the flags the pattern writes.
+        ("Classic Hoodie (size M)", "Hoodie", True),
+        ("Classic Hoodie", "^Hoodie", False),
+        # A pattern without (?i) is case-sensitive, so a claim about case holds.
+        ("POST COMMENT", "Post Comment", False),
+        ("POST COMMENT", "(?i)post comment", True),
+        # The rendered text is normalized first, so . crosses a line break that
+        # collapsed into a space.
+        ("Classic Hoodie \n  size M", r"Classic Hoodie.*\bM\b", True),
+    ],
+)
+def test_pattern_searches_without_added_flags(
+    rendered: str, pattern: str, found: bool
+) -> None:
+    assert has_pattern(rendered, pattern) is found

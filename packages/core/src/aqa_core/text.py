@@ -20,3 +20,20 @@ def normalize(text: str) -> str:
     stripped, then each run of whitespace, non-breaking spaces included, made
     one space, and the ends trimmed."""
     return " ".join(_STRIPPED.sub("", text).split())
+
+
+def has_text(rendered: str, literal: str) -> bool:
+    """Whether `literal` is in `rendered` as whole words, ignoring case: both
+    normalized and casefolded, with no word character just before or after
+    the literal, so "1" isn't found in "10" (ADR-0025)."""
+    words = re.escape(normalize(literal).casefold())
+    return (
+        re.search(rf"(?<!\w){words}(?!\w)", normalize(rendered).casefold()) is not None
+    )
+
+
+def has_pattern(rendered: str, pattern: str) -> bool:
+    """Whether the Python regex `pattern` matches anywhere in `rendered`,
+    normalized, with only the flags the pattern writes, such as (?i)
+    (ADR-0025)."""
+    return re.search(pattern, normalize(rendered)) is not None
