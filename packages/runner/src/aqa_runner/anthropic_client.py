@@ -19,6 +19,8 @@ from pydantic import BaseModel
 from aqa_runner.chat_client import Reply
 
 API_URL = "https://api.anthropic.com"
+# The one variable the adapter reads Anthropic's key from.
+KEY_VARIABLE = "ANTHROPIC_API_KEY"
 # The one stop reason that ends a complete answer. Anything else (`max_tokens`,
 # `pause_turn`, a stop sequence, ...) can leave a half-written one, which
 # LangChain would repair into something that parses.
@@ -67,7 +69,7 @@ class AnthropicClient:
             "base_url": os.environ.get("ANTHROPIC_API_URL")
             or os.environ.get("ANTHROPIC_BASE_URL")
             or API_URL,
-            "api_key": os.environ.get("ANTHROPIC_API_KEY", ""),
+            "api_key": os.environ.get(KEY_VARIABLE, ""),
             "max_tokens": MAX_OUTPUT_TOKENS,
             "timeout": REQUEST_TIMEOUT_SECONDS,
         }
