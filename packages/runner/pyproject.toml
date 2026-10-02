@@ -5,6 +5,7 @@ description = "The Agentic QA runner: run graph, tools, model router and browser
 license = "Apache-2.0"
 requires-python = ">=3.14"
 dependencies = [
+    "anthropic==1.9.0",
     "aqa-core",
     "h11==0.16.0",
     "langchain-anthropic==1.7.4",
