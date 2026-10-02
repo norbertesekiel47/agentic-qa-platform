@@ -2,8 +2,7 @@
 run's pages see (ADR-0025)."""
 
 import re
-import zoneinfo
-from functools import cache
+from importlib import resources
 from typing import Annotated, Literal
 
 from pydantic import AfterValidator, Field, StrictInt
@@ -27,21 +26,29 @@ _LANGUAGE_TAG = re.compile(
 )
 
 
-@cache
-def _time_zones() -> frozenset[str]:
-    # Ubuntu's tzdata lists `localtime`, a link to the host's own setting, not
-    # a zone; Chromium refuses it (LAB_NOTES, 2026-10-01).
-    return frozenset(zoneinfo.available_timezones()) - {"localtime"}
+def time_zones() -> frozenset[str]:
+    """The time zones a setting may name: the names in the tzdata package's own
+    list, aliases such as Asia/Calcutta included, so every machine gives the
+    same answer (ADR-0025, 2026-10-02 amendment).
+
+    Never `zoneinfo.available_timezones()`: it starts from this list and adds
+    every zone file on the host's search path, such as Ubuntu's `localtime`
+    (LAB_NOTES, 2026-10-02). A missing package raises, with no fallback to the
+    host's list. The package is a dependency, as the zoneinfo docs advise
+    (https://docs.python.org/3/library/zoneinfo.html#data-sources), and its
+    `zones` file lists one name per line."""
+    zones = resources.files("tzdata").joinpath("zones").read_text(encoding="utf-8")
+    return frozenset(zones.splitlines())
 
 
 def _time_zone(name: str) -> str:
     # By name, never zoneinfo.ZoneInfo(name): that also opens files such as
     # "localtime", and on a case-insensitive file system it finds "utc".
     # Chromium refuses both, but only once a page opens.
-    if name not in _time_zones():
+    if name not in time_zones():
         raise ValueError(
-            f"'{name}' is not an IANA time zone known to this host: write a zone's "
-            "canonical name, such as Asia/Kolkata"
+            f"'{name}' is not an IANA time zone in the tzdata package's list: write a "
+            "name as the IANA database spells it, such as Asia/Kolkata"
         )
     return name
 
