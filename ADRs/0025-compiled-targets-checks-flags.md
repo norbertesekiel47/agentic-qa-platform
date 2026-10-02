@@ -231,6 +231,16 @@ Building the compiler's locator generation (#52) settled choices that "Locator g
     - On the pilot it is the banner (`div.banner`) for everything the article page renders twice.
     - `html` and `body` never count, because every page has them.
 - **Every locator is resolved before it is kept.**
-  - The element's facts (tag, id, classes, attributes, labels and ancestors) are read in the page's own world, so they are the page's word.
+  - The element's facts (tag, id, classes, attributes, labels and ancestors) are read in the page's own world, so they are the page's word. They are checked strictly, with bounded sizes.
   - Each candidate is resolved alone, for the use, on the live page, and kept only if it finds that element.
-  - A page can make the generator build fewer or odder locators, but never one that finds another element. One that lies about an id gets the locator dropped (`test_a_locator_that_finds_another_element_is_dropped`).
+  - *Which element it found is judged outside the page's world.*
+    - *Options:* compare the two elements in the page's own world, or mark the element and read the mark back through Playwright's utility world.
+    - *Chosen:* the mark. Playwright's evaluation in the page's own world passes arguments through iterators the page can rewrite, and a page did make two elements compare equal (#52's adversarial review). So the element gets a random `data-aqa-generating` value for the trial. Playwright's `get_attribute` and a css count, both in the utility world the page's scripts can't reach, then say whether a found element carries it and nothing else does.
+    - A page that keeps the mark off the element, or copies it, gets no locator, and the mark is removed afterwards.
+  - A page can make the generator build fewer or odder locators, but never one that finds another element (`test_the_page_cannot_fake_which_element_a_locator_found`).
+- **The work per element is bounded.**
+  - Only the nearest 16 ancestors and the first 16 stable classes of a node are tried, each scope is counted on the page once, and one element costs at most 400 page round trips.
+  - A page whose scripts busy-loop can still stall one round trip. Only a bound on the whole explore run's time closes that (ADR-0024, `minutes`).
+- **Known limits, for the callers (#53, #46):**
+  - A class that flips with state, such as Bootstrap's `btn-outline-primary` and `btn-primary`, can't be told from a stable one. A target used before and after such a flip is checked at both uses (#52's third pull request).
+  - A page can copy a filled secret into a name, a test ID or a placeholder, and a locator built on it would carry the secret. Before a script is written, its caller must drop, never redact, any locator that reveals a secret value.

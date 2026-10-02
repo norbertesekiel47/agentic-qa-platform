@@ -20,7 +20,8 @@ from aqa_core.text import normalize
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.locator_generation import (
     LocatorError,
-    generate,
+    Seen,
+    generate_for_action,
     seen_element,
     snapshot_elements,
 )
@@ -61,7 +62,7 @@ def test_the_headers_icon_links_get_role_and_name_without_their_glyphs() -> None
         found = []
         for name in ("New Article", "Settings"):
             used = await seen_element(session, snapshot, ref_of(snapshot, "link", name))
-            found.append((used.name, await generate(session.page, used, "action")))
+            found.append((used.name, await generate_for_action(session.page, used)))
         return found
 
     [(new_article, new_article_locators), (settings, settings_locators)] = in_session(
@@ -91,7 +92,7 @@ def test_a_container_is_never_found_by_its_text() -> None:
             ref_with_text(snapshot, "listitem", "testing"),
         ):
             used = await seen_element(session, snapshot, ref)
-            found.append(await generate(session.page, used, "action"))
+            found.append(await generate_for_action(session.page, used))
         return found
 
     for locators in in_session(scenario):
@@ -117,13 +118,13 @@ def test_an_action_targets_locators_come_in_the_grammars_order() -> None:
         used = await seen_element(
             session, snapshot, ref_of(snapshot, "textbox", "Email")
         )
-        found.append(await generate(session.page, used, "action"))
+        found.append(await generate_for_action(session.page, used))
         await show(session, "login")
         snapshot = await session.snapshot()
         used = await seen_element(
             session, snapshot, ref_of(snapshot, "textbox", "Email")
         )
-        found.append(await generate(session.page, used, "action"))
+        found.append(await generate_for_action(session.page, used))
         return found
 
     fixture, login = in_session(scenario)
@@ -152,7 +153,7 @@ def test_a_structural_locator_may_name_a_custom_element_ancestor() -> None:
         snapshot = await session.snapshot()
         ref = ref_of(snapshot, "button", "Favorite Article (0)")
         used = await seen_element(session, snapshot, ref)
-        return await generate(session.page, used, "action")
+        return await generate_for_action(session.page, used)
 
     structural = [each for each in in_session(scenario) if isinstance(each, ByCss)]
 
@@ -181,7 +182,7 @@ def test_generated_and_state_tokens_are_never_used() -> None:
             used = await seen_element(
                 session, snapshot, ref_of(snapshot, "button", name)
             )
-            found.append(await generate(session.page, used, "action"))
+            found.append(await generate_for_action(session.page, used))
         return found
 
     assert in_session(scenario) == [
@@ -201,7 +202,7 @@ def test_an_element_only_position_tells_apart_has_no_locator() -> None:
         used = await seen_element(
             session, snapshot, ref_of(snapshot, "button", "Edit", 1)
         )
-        await generate(session.page, used, "action")
+        await generate_for_action(session.page, used)
 
     with pytest.raises(LocatorError, match="finds the button element alone"):
         in_session(scenario)
@@ -222,7 +223,7 @@ def test_a_scope_is_the_nearest_ancestor_unique_on_the_page() -> None:
         used = await seen_element(
             session, snapshot, ref_of(snapshot, "button", "Remove")
         )
-        return await generate(session.page, used, "action")
+        return await generate_for_action(session.page, used)
 
     assert in_session(scenario) == (
         ByRole(role="button", name="Remove", scope=ByCss(css="#cart")),
@@ -246,7 +247,7 @@ def test_a_locator_that_finds_another_element_is_dropped() -> None:
         await session.page.set_content(html)
         snapshot = await session.snapshot()
         used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Mine"))
-        return await generate(session.page, used, "action")
+        return await generate_for_action(session.page, used)
 
     assert in_session(scenario) == (
         ByRole(role="button", name="Mine"),
@@ -295,13 +296,24 @@ def test_the_banner_date_has_a_ref_only_when_styled() -> None:
 
 
 GARBLED = {
+    "a tag of the wrong type": (
+        "Object.defineProperty(Element.prototype, 'localName', { get: () => 7 });",
+        "described the element as no element is",
+    ),
+    "too many classes": (
+        (
+            "Object.defineProperty(Element.prototype, 'classList', "
+            "{ get: () => Array.from({ length: 300 }, (_, each) => 'c' + each) });"
+        ),
+        "described the element as no element is",
+    ),
     "facts of the wrong type": (
         "Element.prototype.getAttribute = function () { return 7; };",
         "described the element as no element is",
     ),
     "a reading that throws": (
         "DOMTokenList.prototype[Symbol.iterator] = () => { throw new Error('no'); };",
-        "broke the reading of the element",
+        "scripts broke the reading",
     ),
 }
 
@@ -317,30 +329,274 @@ def test_a_page_that_garbles_the_elements_facts_gets_no_locator(
         await session.page.set_content(html)
         snapshot = await session.snapshot()
         used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Go"))
-        await generate(session.page, used, "action")
+        await generate_for_action(session.page, used)
 
     with pytest.raises(LocatorError, match=message):
         in_session(scenario)
 
 
-def test_a_page_closed_during_the_reading_still_raises(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("method", ["evaluate", "get_attribute"])
+def test_a_page_closed_during_generating_still_raises(
+    monkeypatch: pytest.MonkeyPatch, method: str
 ) -> None:
-    # Only the page's own doing becomes LocatorError; a closed page is not.
-    reading = ElementHandle.evaluate
+    # Only the page's own doing becomes LocatorError; a closed page is not,
+    # whether it closes while the facts are read (evaluate) or while the mark
+    # is read back (get_attribute).
+    real = getattr(ElementHandle, method)
     closing: list[Page] = []
 
     async def closes_the_page(self: ElementHandle, *args: Any) -> Any:
         await closing[0].close()
-        return await reading(self, *args)
+        return await real(self, *args)
 
     async def scenario(session: BrowserSession) -> None:
         closing.append(session.page)
         await session.page.set_content("<button class='go'>Go</button>")
         snapshot = await session.snapshot()
         used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Go"))
-        monkeypatch.setattr(ElementHandle, "evaluate", closes_the_page)
-        await generate(session.page, used, "action")
+        monkeypatch.setattr(ElementHandle, method, closes_the_page)
+        await generate_for_action(session.page, used)
 
     with pytest.raises(Error):
+        in_session(scenario)
+
+
+def test_the_page_cannot_fake_which_element_a_locator_found() -> None:
+    # The page lies about the button's id, says every element carries the
+    # button's mark, and rewrites how arrays iterate, so a pair of two
+    # elements reads as the first one twice. Comparing in the page's own world
+    # would take the decoy for the button; Playwright's utility world doesn't.
+    html = """<script>
+      const real = Element.prototype.getAttribute;
+      Element.prototype.getAttribute = function (name) {
+        if (name === "data-aqa-generating") {
+          return real.call(document.querySelector(".mine"), name);
+        }
+        return name === "id" && this.classList.contains("mine")
+          ? "decoy" : real.call(this, name);
+      };
+      Array.prototype[Symbol.iterator] = function* () {
+        if (this.length === 2 && this[0] instanceof Element) {
+          yield this[0];
+          yield this[0];
+          return;
+        }
+        for (let index = 0; index < this.length; index++) yield this[index];
+      };
+    </script>
+    <button id="decoy">Other</button><button class="mine">Mine</button>"""
+
+    async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
+        await session.page.set_content(html)
+        snapshot = await session.snapshot()
+        used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Mine"))
+        return await generate_for_action(session.page, used)
+
+    assert ByCss(css="#decoy") not in in_session(scenario)
+
+
+def test_a_page_that_copies_the_mark_gets_no_locator() -> None:
+    # The page copies the mark onto every button, so no locator can be shown
+    # to find the one used: generating fails rather than trust either.
+    html = """<button class="mine">Mine</button><button>Other</button><script>
+      const copier = new MutationObserver(() => {
+        const mark = document.querySelector(".mine").getAttribute("data-aqa-generating");
+        if (!mark) return;
+        copier.disconnect();
+        for (const button of document.querySelectorAll("button"))
+          button.setAttribute("data-aqa-generating", mark);
+      });
+      copier.observe(document.body, { attributes: true, subtree: true });
+    </script>"""
+
+    async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
+        await session.page.set_content(html)
+        snapshot = await session.snapshot()
+        used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Mine"))
+        return await generate_for_action(session.page, used)
+
+    with pytest.raises(LocatorError, match="kept the mark off the element, or copied"):
+        in_session(scenario)
+
+
+@pytest.mark.parametrize(
+    ("css", "used"),
+    [
+        ("pay", True),
+        ("year-20240", True),
+        ("ab12", True),
+        ("ab12c", False),
+        ("Button_root__x7Kd2", False),
+        ("css-pay", False),
+        ("sc-pay", False),
+        ("jsx-pay", False),
+        ("emotion-pay", False),
+        ("svelte-pay", False),
+        ("ng-pay", False),
+        ("active", False),
+        ("1pay", False),
+        ("a\\:b", False),
+    ],
+)
+def test_what_counts_as_a_stable_class(css: str, used: bool) -> None:
+    # A plain identifier, with no generated prefix, no part of five or more
+    # characters that mixes letters and digits, and no state.
+    html = f"<button class='{css}'>Go</button><button>Stop</button>"
+
+    async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
+        await session.page.set_content(html)
+        snapshot = await session.snapshot()
+        seen = await seen_element(session, snapshot, ref_of(snapshot, "button", "Go"))
+        return await generate_for_action(session.page, seen)
+
+    structural = [each for each in in_session(scenario) if isinstance(each, ByCss)]
+
+    assert bool(structural) is used
+
+
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        # A bare tag names every element of its kind, so it is no scope.
+        (
+            "<article><p class='x'>One</p></article><aside><p class='x'>Two</p></aside>",
+            None,
+        ),
+        # A custom element's tag is one.
+        (
+            "<app-cart><p class='x'>One</p></app-cart><app-list><p class='x'>Two</p></app-list>",
+            ByCss(css="p.x", scope=ByCss(css="app-cart")),
+        ),
+    ],
+    ids=["bare tag", "custom tag"],
+)
+def test_a_scope_is_never_a_bare_standard_tag(
+    html: str, expected: Locator | None
+) -> None:
+    async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
+        await session.page.set_content(html)
+        snapshot = await session.snapshot()
+        used = await seen_element(
+            session, snapshot, ref_with_text(snapshot, "paragraph", "One")
+        )
+        return await generate_for_action(session.page, used)
+
+    if expected is None:
+        with pytest.raises(LocatorError):
+            in_session(scenario)
+    else:
+        assert in_session(scenario) == (expected,)
+
+
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        (
+            "<input type='email' class='f' placeholder=''><input type='text' class='f'>",
+            ByCss(css="input[type=email]"),
+        ),
+        (
+            "<x-chip class='chip'>One</x-chip><span class='chip'>Two</span>",
+            ByCss(css="x-chip"),
+        ),
+    ],
+    ids=["a type attribute", "a custom tag first"],
+)
+def test_structure_takes_the_most_particular_form(html: str, expected: Locator) -> None:
+    async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
+        await session.page.set_content(html)
+        first = await session.page.query_selector("body > *")
+        assert first is not None
+        return await generate_for_action(session.page, Seen(first))
+
+    assert in_session(scenario)[-1] == expected
+
+
+@pytest.mark.parametrize(("depth", "found"), [(15, True), (16, False)])
+def test_only_the_nearest_ancestors_are_tried_as_scopes(
+    depth: int, found: bool
+) -> None:
+    # The section that tells the two buttons apart is the 16th ancestor, or
+    # the 17th, past the ones tried.
+    nest = "<div>" * depth + "<button class='x'>Go</button>" + "</div>" * depth
+    html = f"<section class='a'>{nest}</section><section class='b'>{nest}</section>"
+
+    async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
+        await session.page.set_content(html)
+        snapshot = await session.snapshot()
+        used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Go"))
+        return await generate_for_action(session.page, used)
+
+    if found:
+        assert ByCss(css="button.x", scope=ByCss(css="section.a")) in in_session(
+            scenario
+        )
+    else:
+        with pytest.raises(LocatorError):
+            in_session(scenario)
+
+
+def test_the_work_one_element_costs_is_bounded() -> None:
+    # Sixteen nested ancestors, each unique on the page by any of its sixteen
+    # stable classes, around two identical elements: every scope is worth
+    # trying and none tells them apart, so generating stops at its budget of
+    # round trips rather than try all 4,000 or so.
+    letters = "abcdefghijklmnop"
+    opening = "".join(
+        f"<div class='{' '.join(f'l{level}{each}' for each in letters)}'>"
+        for level in range(16)
+    )
+    inner = " ".join(f"c{each}" for each in letters)
+    html = opening + f"<b class='{inner}'>x</b><b class='{inner}'>x</b>" + "</div>" * 16
+
+    async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
+        await session.page.set_content(html)
+        element = await session.page.query_selector("b")
+        assert element is not None
+        return await generate_for_action(session.page, Seen(element))
+
+    with pytest.raises(LocatorError, match="within 400 tries"):
+        in_session(scenario)
+
+
+def test_a_name_with_a_lone_surrogate_is_no_name() -> None:
+    # No locator can carry one, so the button is found by structure.
+    html = """<button class="save">x</button><button>y</button><script>
+      document.querySelector(".save").setAttribute("aria-label", "Save \\uD800");
+    </script>"""
+
+    async def scenario(
+        session: BrowserSession,
+    ) -> tuple[str | None, tuple[Locator, ...]]:
+        await session.page.set_content(html)
+        snapshot = await session.snapshot()
+        ref = ref_of(snapshot, "button", nth=0)
+        used = await seen_element(session, snapshot, ref)
+        return used.name, await generate_for_action(session.page, used)
+
+    name, locators = in_session(scenario)
+
+    assert name is None
+    assert locators == (ByCss(css="button.save"),)
+
+
+def test_a_page_that_navigates_mid_trial_gets_no_locator() -> None:
+    # The page reloads as soon as the element is marked, which destroys the
+    # element's world: whatever the trial was doing then, it ends in
+    # LocatorError, never a raw error.
+    html = """<button class="go">Go</button><script>
+      const reloader = new MutationObserver(() => {
+        reloader.disconnect();
+        location.reload();
+      });
+      reloader.observe(document.body, { attributes: true, subtree: true });
+    </script>"""
+
+    async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
+        await session.page.set_content(html)
+        snapshot = await session.snapshot()
+        used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Go"))
+        return await generate_for_action(session.page, used)
+
+    with pytest.raises(LocatorError):
         in_session(scenario)
