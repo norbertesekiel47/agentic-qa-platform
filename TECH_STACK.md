@@ -20,6 +20,7 @@ A version followed by an HTML comment, `renovate: NAME`, is tracked: it is the e
 | Lambda adapter | Mangum | 0.22.0 | ASGI on Lambda behind API Gateway |
 | Validation | Pydantic | 2.13.5<!-- renovate: pydantic --> | Typed tools, verdicts, API models |
 | YAML | PyYAML, narrowed to YAML 1.2's core schema | 6.0.3<!-- renovate: pyyaml --> | Spec frontmatter and the project config, with duplicate keys, aliases and tags refused; already locked through LangChain (ADR-0030) |
+| Time zone data | `tzdata`, the IANA database as a PyPI package | 2026.4<!-- renovate: tzdata --> | The one list `browser.timezone` is checked against: the same answer on every machine, where the host's own list differs by OS (ADR-0025 amendment, 2026-10-02) |
 | DB access | SQLAlchemy 2.1.1 + psycopg 3.3.6 | — | Async, typed; raw SQL for RLS policies |
 | Migrations | Alembic | 1.20.0 | Versioned schema, RLS policies in migrations |
 | CLI | Typer 0.27.2<!-- renovate: typer --> + Rich 15.0.0<!-- renovate: rich --> | — | Ergonomic CLI and terminal output |
