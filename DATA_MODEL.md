@@ -189,13 +189,13 @@ Free-form notes for humans. The agent never reads the body; anything that affect
 {
   "schema_version": 1,
   "spec_id": "checkout-expired-card",
-  "spec_hash": "sha256:…",
+  "spec_hash": "sha256:1bb957ced832db8d37da408b82b72090b14f556b010b728234016c7eef004d5f",
   "compiled_at": "2026-10-12T14:03:22Z",
   "compiled_by": { "mode": "explore", "models": { "navigator": "claude-sonnet-5-5" }, "price_map": "<upstream commit>" },
   "confirmed": true,
   "browser": { "timezone": "UTC", "locale": "en-US", "viewport": [1440, 900], "device_scale_factor": 1, "color_scheme": "light" },
   "coverage": {
-    "plan_hash": "sha256:…",
+    "plan_hash": "sha256:d8442e4d3e7f02414e6b7e8104794970554481c806c210d7e7a868fcd593b898",
     "expectations": [
       { "expect_index": 0, "subject": "the payment error message", "claim": "says the card has expired", "assertions": ["a1"] },
       { "expect_index": 1, "subject": "this user's orders", "claim": "no new order exists", "assertions": ["a2", "a3"] },
@@ -264,8 +264,8 @@ Free-form notes for humans. The agent never reads the body; anything that affect
   The replay records which locator resolved each target.
 - **Every step carries `side_effect`:** `true` for a step that changes app state (submit, purchase, delete), `false` for a **replay-safe** step (navigation, reads, idempotent fills). The flag is required and never defaulted — a missing flag fails validation, because a default of `false` would let a continuation re-execute a purchase (ADR-0006 amendment).
   - *Inference (ADR-0025):* `false` needs positive evidence. The step's settle window must end in idle, with no write request to any host and no WebSocket message sent, and the model must agree. A write that arrives before the next action counts against the step.
-  - *Otherwise* the flag is `true`, and `side_effect_basis` says why.
-  - *Only a person lowers it,* by editing this file.
+  - *Otherwise* the flag is `true`, and `side_effect_basis` says why. A step whose flag is `false` has no `side_effect_basis`.
+  - *Only a person lowers it,* by editing this file, and removes the basis with it.
 - **Actions:** `navigate`, `reload`, `click`, `fill`, `fill_secret`, `select`, `press`. A `navigate` to the start origin stores a path.
 - **Browser settings.** `browser` records the settings the script was explored under. Replay uses them rather than the current config (ADR-0025).
 - **`spec_hash`** is the sha256 of the canonical JSON of the parsed frontmatter without `tags`, written `sha256:<hex>`. The Markdown body never counts. A mismatch makes the script stale: `aqa explore` redoes it, and replay refuses it.
@@ -273,6 +273,43 @@ Free-form notes for humans. The agent never reads the body; anything that affect
   - *As parsed:* the hash covers the YAML's values, not normalized ones, so `HTTPS://Pay.test` and `https://pay.test` hash differently. A field the model gains later never changes an existing hash.
 - **`confirmed`** is `true` when the confirmation replay passed. It is `false` when a path with side-effect steps was written without one because the spec has no reset hook (ADR-0024).
 - **Location:** `<spec root>/.compiled/<spec id>.json`. The spec root is the directory holding `config.yaml` (§9), and spec IDs are unique per project (§6).
+
+### Reading a compiled script (schema version 1)
+A compiled script is read as strictly as a spec (§6): an unknown field is an error, and no value changes type, so `true` is not `1` and `"1"` is not a number (`aqa_core.compiled`).
+- **Required:** every field the example shows, except those this list makes optional. `schema_version` is the integer 1. `spec_hash` and `plan_hash` are `sha256:` and 64 lowercase hex digits. `compiled_at` has a time zone.
+- **Locators:**
+  - each names exactly one kind: `role`, `label`, `placeholder`, `testid` or `css`;
+  - `name` goes only with `role`, and is optional there;
+  - `role` is a WAI-ARIA role that Playwright's `get_by_role` accepts;
+  - a `name` is written normalized (no private-use glyphs, single spaces, none at either end), because it is compared normalized;
+  - `scope` is optional, and is itself a locator;
+  - a target lists at least one locator, and none twice.
+- **Steps:** each has `seq` (1 or more), `side_effect`, `side_effect_basis` exactly when `side_effect` is `true`, and optionally `satisfies`. The other fields depend on the action:
+
+  | Action | Fields |
+  |---|---|
+  | `navigate` | `url`: a path on the start origin, held to `start_url`'s rules (§6). The executor joins it to the start origin |
+  | `reload` | none |
+  | `click` | `target` |
+  | `fill` | `target`, `value` (may be empty) |
+  | `fill_secret` | `target`, `secret` (a secret name, §9) |
+  | `select` | `target`, `option` |
+  | `press` | `key`, with no target, as the agent's `press(key)` tool has none (ARCHITECTURE §3.4) |
+
+- **Assertions:** each has an `id` and an `expect_index`. Schema version 1 gives fields to these checks; the other check types above are refused by name until a milestone defines their fields (#48):
+
+  | Check | Fields |
+  |---|---|
+  | `text_visible` | `text` or `pattern`, exactly one |
+  | `text_in_target` | `target`, and `text` or `pattern`, exactly one |
+  | `not_visible` | `target` |
+  | `url_matches` | `pattern` |
+  | `network_none`, `network_seen` | `method`, `url_pattern`, `status_class` (`1xx` to `5xx`) |
+  | `probe_equals_baseline` | `probe` |
+  | `visible_unoccluded` | `target`, `min_size_px` (width and height, each 1 or more), `in_viewport` |
+
+  A `text` is written normalized, as a `name` is. A `pattern` must compile as a Python regex.
+- **Checked by the loader, not the format:** that the targets, assertions, conditions, probes and step numbers that parts of the script name exist and are unique, and that the JSON repeats no key (#46).
 
 ### Replay outcomes
 - **Binding unresolved:** no locator gives the match its use needs (see *Resolution per use*) within the wait budget → drift → heal path.
