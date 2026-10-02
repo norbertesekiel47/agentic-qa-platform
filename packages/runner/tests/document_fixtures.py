@@ -173,6 +173,19 @@ def page(sites: Sites, path: str, query: dict[str, list[str]]) -> str | None:
             setInterval(() => { if (!document.hasFocus()) grab(); }, 1);
             card.addEventListener("input", () => fetch("/typed"));
         </script>""",
+        # A frame from the subresource host slotted into a region of a shadow
+        # root, and one drawn over a paragraph inside the same link.
+        "/slotted": f"""<div id="card"><iframe src="{sites.cdn}/doc"></iframe></div>
+            <script>
+                card.attachShadow({{mode: "open"}}).innerHTML =
+                    '<section aria-label="Slotted" style="display: inline-block">' +
+                    "<slot></slot></section>";
+            </script>""",
+        "/inlink": f"""<a href="#" style="display: block; position: relative">
+                <p>Deal text</p>
+                <iframe src="{sites.cdn}/doc"
+                    style="position: absolute; inset: 0; width: 100%; height: 100%"></iframe>
+            </a>""",
         # Fields of each kind fill takes, and a button, which takes none.
         "/fields": """<label>Notes <textarea>old</textarea></label>
             <div role="textbox" aria-label="Story" contenteditable>old</div>

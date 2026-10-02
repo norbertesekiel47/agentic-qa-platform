@@ -68,11 +68,27 @@ LINE = re.compile(
 # Page text can't end a key so: a name is JSON-quoted or written /like this/.
 ELEMENT_REF = re.compile(r"\[ref=((?:f[0-9]+)?e[0-9]+)\]((?: \[cursor=pointer\])?)\Z")
 
-# Whether `owner`, a frame's element, is `element` or inside it, open shadow
-# roots included. Run in the element's own frame, where both are.
+# Whether `owner`, a frame's element, is inside what a click on `element`
+# lands in, run in the element's own frame, where both are. That is the
+# element Playwright's click targets, whose descendants its hit check
+# accepts: the closest button or link, unless the element is a field (1.63's
+# injected `retarget(node, "button-link")`). It climbs both trees from
+# `owner`: the DOM's, through shadow roots to their hosts, and the rendered
+# one through each slot a node is assigned to, which the hit check follows
+# (1.63's `expectHitTarget`: `assignedSlot ?? parentElementOrShadowHost`).
 CONTAINS = """(element, owner) => {
-    for (let node = owner; node; node = node instanceof ShadowRoot ? node.host : node.parentNode) {
-        if (node === element) return true;
+    const target =
+        element.matches("input, textarea, select") || element.isContentEditable
+            ? element
+            : element.closest("button, [role=button], a, [role=link]") ?? element;
+    const seen = new Set();
+    const nodes = [owner];
+    while (nodes.length > 0) {
+        const node = nodes.pop();
+        if (!node || seen.has(node)) continue;
+        if (node === target) return true;
+        seen.add(node);
+        nodes.push(node.assignedSlot, node instanceof ShadowRoot ? node.host : node.parentNode);
     }
     return false;
 }"""

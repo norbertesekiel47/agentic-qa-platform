@@ -545,3 +545,42 @@ def test_fill_refuses_an_element_that_takes_no_such_value(
     message = asyncio.run(scenario()).message
     assert "didn't take the value" in message
     assert "not a number" not in message
+
+
+# Elements a click lands through into a subresource host's frame, though
+# they don't contain it in the DOM: a region the frame is slotted into, and
+# a paragraph in a link the frame is drawn over (Playwright's click takes
+# the link as its target).
+THROUGH = {
+    "slotted": ("/slotted", "region", "Slotted"),
+    "in a link": ("/inlink", "paragraph", ""),
+}
+
+
+@pytest.mark.parametrize("how", THROUGH)
+def test_a_click_that_would_land_in_a_frame_off_the_allowed_origins_is_refused(
+    sites: Sites, how: str
+) -> None:
+    path, role, name = THROUGH[how]
+
+    async def scenario() -> tuple[PolicyEventError, bool]:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}{path}")
+            snapshot = await session.snapshot()
+            found = re.search(
+                rf"- {role}{f' "{name}"' if name else ''} \[ref=(e\d+)\]", snapshot
+            )
+            assert found is not None, snapshot
+            element = await session.locate(found[1])
+            with pytest.raises(PolicyEventError) as refused:
+                await session.click(element)
+            # The control: Playwright's own click, unchecked, lands there.
+            await element.click()
+            return refused.value, await asyncio.to_thread(
+                sites.saw, CDN, "/clicked", within=5
+            )
+
+    refused, landed = asyncio.run(scenario())
+
+    assert refused.event == PolicyEvent("frame", f"{sites.cdn}/doc", sites.cdn)
+    assert landed, "the unchecked click didn't reach the frame"
