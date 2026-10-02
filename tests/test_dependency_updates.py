@@ -259,13 +259,22 @@ def test_renovate_touches_only_what_adr_0031_allows() -> None:
     group_names = [rule.get("groupName") for rule in rules]
 
     assert config["enabledManagers"] == ["pep621", "custom.regex"]
+    assert config["timezone"] == "UTC"
     assert config["lockFileMaintenance"]["enabled"] is True
     assert config["semanticCommits"] == "enabled"
-    assert [rule for rule in [config, *rules] if rule.get("automerge")] == []
+    # Automerge is the one path from a compromised bot to main: no key, at any depth.
+    assert "automerge" not in RENOVATE.read_text()
+    assert config["extends"] == ["schedule:weekly"]
     disabled = [rule["matchDepTypes"] for rule in rules if rule.get("enabled") is False]
     assert disabled == [["requires-python", "build-system.requires"]]
-    # Later rules win, so Playwright's own group must come after the weekly one.
+    # Later rules win, so Playwright's own group must come after the weekly one, and
+    # must match by name alone: an update type would put some of its updates back.
+    playwright = rules[group_names.index("playwright")]
     assert group_names.index("python dependencies") < group_names.index("playwright")
+    assert {key for key in playwright if key.startswith("match")} == {
+        "matchPackageNames"
+    }
+    assert playwright["matchPackageNames"] == ["playwright"]
 
 
 def test_the_checks_image_follows_the_playwright_pin() -> None:
