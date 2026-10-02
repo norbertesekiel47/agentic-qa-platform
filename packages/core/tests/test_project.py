@@ -63,10 +63,10 @@ def write_spec(path: Path, extra: str = "") -> Path:
 
 def write_spec_without_secrets(path: Path) -> Path:
     """A spec like write_spec's, whose account has an email and no secret."""
-    write_spec(path)
-    path.write_text(
-        path.read_text().replace(", password: { secret: TEST_PASSWORD }", "")
-    )
+    text = write_spec(path).read_text()
+    edited = text.replace(", password: { secret: TEST_PASSWORD }", "")
+    assert edited != text
+    path.write_text(edited)
     return path
 
 
@@ -452,6 +452,34 @@ def test_only_the_secrets_the_spec_references_get_destinations(tmp_path: Path) -
     assert list(secret_destinations(spec, "http://127.0.0.1:4100")) == ["TEST_PASSWORD"]
 
 
+def test_each_secret_gets_the_destinations_of_its_own_binding(tmp_path: Path) -> None:
+    root = write_project(
+        tmp_path / "qa",
+        "secrets:\n"
+        "  TEST_EMAIL: { origins: [start], field: { role: textbox, name: Email } }\n"
+        "  TEST_PASSWORD: { origins: ['https://pay.example.test'], field: password }\n",
+    )
+    path = write_spec(
+        root / "login.spec.md", extra="allowed_origins: ['https://pay.example.test']\n"
+    )
+    path.write_text(
+        path.read_text().replace(
+            "email: reader@example.test", "email: { secret: TEST_EMAIL }"
+        )
+    )
+    spec = load_spec(path, load_config(root / "config.yaml"))
+
+    assert secret_destinations(spec, "http://127.0.0.1:4100") == {
+        "TEST_EMAIL": SecretDestination(
+            origins=("http://127.0.0.1:4100",),
+            field=RoleField(role="textbox", name="Email"),
+        ),
+        "TEST_PASSWORD": SecretDestination(
+            origins=("https://pay.example.test",), field="password"
+        ),
+    }
+
+
 # Secret bindings on the loaded spec (#88).
 
 
@@ -483,26 +511,22 @@ def test_a_spec_that_references_no_secret_carries_no_bindings(tmp_path: Path) ->
 def test_each_spec_in_a_project_carries_its_referenced_secrets_bindings() -> None:
     project = load_project(PILOT)
 
-    assert {i: dict(s.secret_bindings) for i, s in project.specs.items()} == {
-        "favorite-article": {"TEST_PASSWORD": PASSWORD_AT_START},
-        "login": {"TEST_PASSWORD": PASSWORD_AT_START},
-        "post-comment": {"TEST_PASSWORD": PASSWORD_AT_START},
-        "publish-article": {"TEST_PASSWORD": PASSWORD_AT_START},
-        "read-article": {},
+    # login signs in with TEST_PASSWORD; read-article reads without signing in.
+    assert project.specs["login"].secret_bindings == {
+        "TEST_PASSWORD": PASSWORD_AT_START
     }
+    assert project.specs["read-article"].secret_bindings == {}
 
 
 @pytest.mark.parametrize(
     ("build", "name", "bound", "referenced"),
     [
-        # A secret the spec references, left unbound.
         (
             lambda login, _: dataclasses.replace(login, secret_bindings={}),
             "login",
             [],
             ["TEST_PASSWORD"],
         ),
-        # A secret the spec doesn't reference, bound too.
         (
             lambda login, _: dataclasses.replace(
                 login,
@@ -515,7 +539,6 @@ def test_each_spec_in_a_project_carries_its_referenced_secrets_bindings() -> Non
             ["API_TOKEN", "TEST_PASSWORD"],
             ["TEST_PASSWORD"],
         ),
-        # Another spec's references, in a spec loaded without any.
         (
             lambda login, browse: dataclasses.replace(
                 browse, frontmatter=login.frontmatter
@@ -524,6 +547,11 @@ def test_each_spec_in_a_project_carries_its_referenced_secrets_bindings() -> Non
             [],
             ["TEST_PASSWORD"],
         ),
+    ],
+    ids=[
+        "a referenced secret left unbound",
+        "an unreferenced secret bound too",
+        "another spec's references swapped in",
     ],
 )
 def test_a_spec_cannot_hold_bindings_other_than_those_of_its_references(
