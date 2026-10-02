@@ -31,4 +31,4 @@ ADR-0029 adds the `python` job (the workspace gates, installed from `uv.lock`) a
 
 ## Amendment (2026-10-01): the floor job
 
-ADR-0028's amendment of this date adds the `floor` job, in `.github/workflows/floor.yml`: `policy_guard.py --diff origin/main` on every pull request, run again when a label is added or removed. It uses only the allowed actions, a read-only token and the `CI_RUNNER` label. `main` requires six checks: `guardrails`, `python`, `dependency-audit`, `secrets`, `fallow` and `floor`.
+ADR-0028's amendment of this date adds the `floor` job, in `.github/workflows/floor.yml`: `policy_guard.py --diff refs/remotes/origin/main` on every pull request, run again when a label is added or removed. It uses only the allowed actions, a read-only token and the `CI_RUNNER` label. Once a repository admin adds it after its first run, `main` requires six checks: `guardrails`, `python`, `dependency-audit`, `secrets`, `fallow` and `floor`.
