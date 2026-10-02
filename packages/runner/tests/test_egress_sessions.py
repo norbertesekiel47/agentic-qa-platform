@@ -16,6 +16,7 @@ import pytest
 from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.egress import Connection, EgressGate, EgressPolicy
 from aqa_runner.egress_proxy import EgressProxy
+from aqa_runner.routing import BlockedAttempt, BlockedAttempts
 from playwright.async_api import Error, async_playwright
 
 from packages.runner.tests.egress_fixtures import (
@@ -32,11 +33,27 @@ APP = "app.example.test"
 EVIL = "evil.example.test"
 
 
-# A WebSocket's outcome, as the page sees it.
+# A WebSocket's outcome, as the page sees it. A socket routing blocks closes
+# without an error (ADR-0026 amendment, 2026-10-02).
 OPEN_SOCKET = """(url) => new Promise((done) => {
     const socket = new WebSocket(url);
     socket.onopen = () => done("open");
     socket.onerror = () => done("error");
+    socket.onclose = () => done("closed");
+})"""
+
+# The same, for a socket a dedicated worker opens.
+OPEN_SOCKET_IN_A_WORKER = """(url) => new Promise((done) => {
+    const code = `
+        const socket = new WebSocket(${JSON.stringify(url)});
+        socket.onopen = () => postMessage("open");
+        socket.onerror = () => postMessage("error");
+        socket.onclose = () => postMessage("closed");
+    `;
+    const worker = new Worker(
+        URL.createObjectURL(new Blob([code], {type: "text/javascript"}))
+    );
+    worker.onmessage = (event) => done(event.data);
 })"""
 
 
@@ -75,26 +92,47 @@ def test_loopback_goes_through_the_proxy_too(
     # bypass list itself.
     if playwright_opts_out:
         monkeypatch.setenv("PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK", "1")
-    # The run's start origin is elsewhere, so a direct connection would load
-    # these pages, and the proxy refuses them.
+    # The loopback pages aren't on the run's allowlist, so a direct connection
+    # would load them. Routing aborts a direct load, so the proxy's own
+    # refusal shows on a redirect hop, which routing never sees (ADR-0026
+    # amendment, 2026-10-02).
     with serving() as origin:
-        egress = gate(allowed=("http://127.0.0.1:9",))
+        egress = app_gate(origin.port)
+        loopback = [
+            f"http://127.0.0.1:{origin.port}/",
+            f"http://localhost:{origin.port}/",
+        ]
+        start = f"http://{APP}:{origin.port}"
 
-        async def scenario() -> list[int | str]:
-            async with browsing(egress) as session:
-                return [
-                    await load(session, f"http://127.0.0.1:{origin.port}/"),
-                    await load(session, f"http://localhost:{origin.port}/"),
+        async def scenario() -> tuple[
+            list[int | str], list[int | str], BlockedAttempts
+        ]:
+            async with (
+                async_playwright() as playwright,
+                EgressProxy(egress) as proxy,
+                open_browser_session(playwright.chromium, egress=proxy) as session,
+            ):
+                hops = [
+                    await load(session, f"{start}/redirect?to={url}")
+                    for url in loopback
                 ]
+                direct = [await load(session, url) for url in loopback]
+                return hops, direct, proxy.blocked_attempts
 
-        outcomes = asyncio.run(scenario())
+        hops, direct, blocked = asyncio.run(scenario())
 
-    assert outcomes == ["net::ERR_EMPTY_RESPONSE"] * 2
+    assert hops == ["net::ERR_EMPTY_RESPONSE"] * 2
     assert [(r.host, r.kind) for r in egress.refusals] == [
         ("127.0.0.1", "host"),
         ("localhost", "host"),
     ]
-    assert origin.seen == []
+    # Only the start page's redirects reached the origin.
+    assert origin.hosts() == [APP, APP]
+    assert direct == ["net::ERR_BLOCKED_BY_CLIENT"] * 2
+    assert blocked.first == [
+        BlockedAttempt("document", "http", "127.0.0.1", origin.port),
+        BlockedAttempt("document", "http", "localhost", origin.port),
+    ]
 
 
 def test_a_redirect_to_a_disallowed_host_is_refused_at_the_hop() -> None:
@@ -187,26 +225,38 @@ def test_a_post_that_fails_upstream_is_sent_once() -> None:
 
 
 def test_a_websocket_to_a_disallowed_host_is_refused_at_connect() -> None:
+    # A page's sockets meet routing first, which aborts the one to EVIL. A
+    # dedicated worker's don't (Playwright's WebSocket routing runs in frames
+    # only), so the worker's socket to EVIL shows the proxy's own refusal
+    # (ADR-0026 amendment, 2026-10-02).
     with serving() as origin:
         egress = app_gate(origin.port)
+        evil = f"ws://{EVIL}:{origin.port}/ws"
 
-        async def scenario() -> list[str]:
-            async with browsing(egress) as session:
+        async def scenario() -> tuple[list[str], BlockedAttempts]:
+            async with (
+                async_playwright() as playwright,
+                EgressProxy(egress) as proxy,
+                open_browser_session(playwright.chromium, egress=proxy) as session,
+            ):
                 await session.page.goto(f"http://{APP}:{origin.port}/")
-                return [
-                    await session.page.evaluate(
-                        OPEN_SOCKET, f"ws://{EVIL}:{origin.port}/ws"
-                    ),
+                outcomes = [
+                    await session.page.evaluate(OPEN_SOCKET_IN_A_WORKER, evil),
+                    await session.page.evaluate(OPEN_SOCKET, evil),
                     await session.page.evaluate(
                         OPEN_SOCKET, f"ws://{APP}:{origin.port}/ws"
                     ),
                 ]
+                return outcomes, proxy.blocked_attempts
 
-        outcomes = asyncio.run(scenario())
+        outcomes, blocked = asyncio.run(scenario())
 
-    # Neither opens: the fixture answers 400 to the upgrade it does receive.
-    assert outcomes == ["error", "error"]
+    # None opens. The proxy refuses the worker's; routing closes the page's
+    # to EVIL, which fires no error; the fixture answers 400 to the upgrade
+    # it does receive.
+    assert outcomes == ["error", "closed", "error"]
     assert [(r.host, r.kind) for r in egress.refusals] == [(EVIL, "host")]
+    assert blocked.first == [BlockedAttempt("websocket", "ws", EVIL, origin.port)]
     # The allowed one went through the tunnel; the refused one never left.
     assert [(each.host.rsplit(":", 1)[0], each.upgrade) for each in origin.seen] == [
         (APP, None),

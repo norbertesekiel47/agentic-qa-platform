@@ -34,6 +34,7 @@ from aqa_runner.egress import (
     EgressUpstreamError,
 )
 from aqa_runner.egress_peers import Peer, Upstream
+from aqa_runner.routing import BlockedAttempts
 
 # Headers that describe one hop and are never forwarded, with any header the
 # Connection header names (RFC 9110 §7.6.1). `Upgrade` stays behind too:
@@ -59,6 +60,10 @@ class EgressProxy:
 
     def __init__(self, gate: EgressGate) -> None:
         self._gate = gate
+        # What the browser sessions' routing refused before it reached the
+        # proxy (ADR-0026 amendment, 2026-10-02): evidence beside the gate's
+        # refusals, which are what the proxy itself enforced.
+        self.blocked_attempts = BlockedAttempts()
         self._server: asyncio.Server | None = None
         # Each browser connection's handler, so closing the proxy ends them
         # all: none may forward a request after the proxy has closed.
@@ -88,7 +93,8 @@ class EgressProxy:
     @property
     def policy(self) -> EgressPolicy:
         """The run's policy. The browser session checks every document it
-        observes against its allowed origins (#44)."""
+        observes against its allowed origins (#44), and its routing judges
+        every request against it (#43), as the gate does at the proxy."""
         return self._gate.policy
 
     @property

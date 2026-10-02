@@ -1,10 +1,10 @@
 """The browser session every run uses, for explore and replay alike: a fresh
 browser launched through the sandbox check, with an empty environment, the
-run's browser settings and all its traffic through the run's egress proxy, and
-an accessibility snapshot whose element refs the agent's tools act on
-(ADR-0025, ADR-0026 and its 2026-10-01 amendments). It observes and acts only
-on documents from the run's allowed origins (#44, ADR-0026's amendment on
-document origins)."""
+run's browser settings, all its traffic through routing and the run's egress
+proxy, no service workers, and an accessibility snapshot whose element refs
+the agent's tools act on (ADR-0025, ADR-0026 and its 2026-10-01 and
+2026-10-02 amendments). It observes and acts only on documents from the
+run's allowed origins (#44, ADR-0026's amendment on document origins)."""
 
 import asyncio
 import re
@@ -27,10 +27,28 @@ from aqa_runner.document_origins import (
 )
 from aqa_runner.egress import EgressPolicy
 from aqa_runner.egress_proxy import EgressProxy
+from aqa_runner.routing import install_routes
 from aqa_runner.sandbox import Chromium, launch
 
 # The settings every run uses unless the caller passes its own (ADR-0025).
 PINNED_SETTINGS = BrowserSettings()
+
+# Run in every document of the session before its own scripts. Playwright's
+# `service_workers="block"` replaces only `navigator.serviceWorker.register`,
+# with one that resolves, so a page could still call the prototype's method
+# or delete the replacement (ADR-0026 amendment, 2026-10-02). This makes the
+# method itself, and the instance's, refuse, and neither can be replaced.
+SERVICE_WORKERS_REFUSED = """(() => {
+    if (typeof ServiceWorkerContainer === "undefined") return;
+    const refuse = () => Promise.reject(
+        new DOMException("Service workers are blocked", "SecurityError")
+    );
+    for (const target of [ServiceWorkerContainer.prototype, navigator.serviceWorker]) {
+        Object.defineProperty(target, "register", {
+            value: refuse, writable: false, configurable: false,
+        });
+    }
+})();"""
 
 # One line of Playwright's AI snapshot: `- ` and a key, then `:` and a value or
 # children, or nothing. Playwright single-quotes a key YAML would misread, so an
@@ -298,9 +316,9 @@ async def open_browser_session(
     settings: BrowserSettings = PINNED_SETTINGS,
 ) -> AsyncIterator[BrowserSession]:
     """Launch a fresh browser through the sandbox check, open one page with
-    `settings`, downloads refused and every request through `egress`, the
-    run's egress proxy, and close the browser, its temporary profile with it,
-    when the session ends."""
+    `settings`, downloads and service workers refused, and every request
+    through routing and `egress`, the run's egress proxy, and close the
+    browser, its temporary profile with it, when the session ends."""
     proxy = egress.url  # an egress proxy that isn't serving fails before a launch
     browser = await launch(chromium)
     try:
@@ -322,7 +340,14 @@ async def open_browser_session(
             # amendment, 2026-10-01).
             # https://playwright.dev/python/docs/api/class-browser#browser-new-context-option-proxy
             proxy={"server": proxy, "bypass": "<-loopback>"},
+            # A service worker's requests bypass routing.
+            # https://playwright.dev/python/docs/api/class-browser#browser-new-context-option-service-workers
+            service_workers="block",
         )
+        # https://playwright.dev/python/docs/api/class-browsercontext#browser-context-add-init-script
+        await context.add_init_script(SERVICE_WORKERS_REFUSED)
+        # Before the first page, so routing sees every request a page makes.
+        await install_routes(context, egress.policy, egress.blocked_attempts)
         yield BrowserSession(await context.new_page(), egress.policy)
     finally:
         await browser.close()
