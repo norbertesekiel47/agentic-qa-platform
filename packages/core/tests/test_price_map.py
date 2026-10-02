@@ -267,8 +267,11 @@ def test_a_model_with_no_cache_read_price_charges_cached_input_at_the_input_rate
     assert info.cached_input_usd_per_mtok == info.input_usd_per_mtok == Decimal(3)
 
 
-def test_a_price_of_zero_is_a_price(tmp_path: Path) -> None:
-    write_map(tmp_path, entry(input_cost_per_token=0, output_cost_per_token=0.0))
+@pytest.mark.parametrize("zero", [0, 0.0, -0.0], ids=["int", "float", "negative"])
+def test_a_price_of_zero_is_a_price_written_as_a_plain_zero(
+    tmp_path: Path, zero: float
+) -> None:
+    write_map(tmp_path, entry(input_cost_per_token=zero, output_cost_per_token=zero))
 
     info = load_price_map(tmp_path).models["model-a"]
 
@@ -276,8 +279,8 @@ def test_a_price_of_zero_is_a_price(tmp_path: Path) -> None:
         Decimal(0),
         Decimal(0),
     )
-    # Written out, not 0E+6.
-    assert str(info.input_usd_per_mtok) == "0"
+    # Written out: not 0E+6, and not -0.
+    assert str(info.input_usd_per_mtok) == str(info.output_usd_per_mtok) == "0"
 
 
 @pytest.mark.parametrize(

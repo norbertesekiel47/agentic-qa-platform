@@ -7,7 +7,7 @@ from pydantic import Field, model_validator
 
 from aqa_core.config import ModelRoleName
 from aqa_core.model_roles import RoutedModel
-from aqa_core.price_map import ModelInfo, plain
+from aqa_core.price_map import ModelInfo, PriceSource, plain
 from aqa_core.schema import StrictModel
 
 _Count = Annotated[int, Field(ge=0)]
@@ -47,7 +47,7 @@ class CostRecord(StrictModel):
     cached_input_tokens: _Count
     latency_ms: _Count
     price_map_version: str
-    price_source: Literal["map", "config"]
+    price_source: PriceSource
     applied_prices: AppliedPrices
     cost_usd: Decimal
     status: Status

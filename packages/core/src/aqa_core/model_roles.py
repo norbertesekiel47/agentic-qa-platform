@@ -87,7 +87,7 @@ def _and(items: Sequence[str]) -> str:
     return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
 
 
-def _routed(
+def _routed_or_problem(
     role: ModelRoleName,
     name: str,
     provider: str,
@@ -101,16 +101,18 @@ def _routed(
         info = _declared(entry)
     elif (info := price_map.models.get(name)) is None:
         return (
-            f"'{name}' is not in the pinned price map ({price_map.version[:7]}): "
-            "declare it under models with its capabilities and prices"
+            f"'{name}' is not a priced model in the pinned price map "
+            f"({price_map.version[:7]}): declare it under models with its "
+            "capabilities and prices"
         )
     missing = [_LABELS[need] for need in NEEDS[role] if need not in info.capabilities]
     if missing:
-        return f"'{name}' lacks {_and(missing)}, which {role} needs"
+        wins = " (its models entry wins over the pinned price map)" if entry else ""
+        return f"'{name}' lacks {_and(missing)}, which {role} needs{wins}"
     return RoutedModel(provider, name, info, price_map.version)
 
 
-def _role(
+def _resolve_role(
     role: ModelRoleName,
     override: ModelRole,
     config: ProjectConfig,
@@ -125,11 +127,13 @@ def _role(
                 f"'{provider}' has no adapter yet: M1 supports {_and(PROVIDERS)}",
             )
         )
-    model = _routed(role, override.model or DEFAULT_MODEL, provider, config, price_map)
+    model = _routed_or_problem(
+        role, override.model or DEFAULT_MODEL, provider, config, price_map
+    )
     fallback = (
         None
         if override.fallback is None
-        else _routed(role, override.fallback, provider, config, price_map)
+        else _routed_or_problem(role, override.fallback, provider, config, price_map)
     )
     for field, result in (("model", model), ("fallback", fallback)):
         if isinstance(result, str):
@@ -148,7 +152,9 @@ def resolve_roles(
     problems: list[tuple[str, str]] = []
     for role in get_args(ModelRoleName):
         override = config.roles.get(role, ModelRole())
-        if (found := _role(role, override, config, price_map, problems)) is not None:
+        if (
+            found := _resolve_role(role, override, config, price_map, problems)
+        ) is not None:
             resolved[role] = found
     if problems:
         raise RoleError(problems)

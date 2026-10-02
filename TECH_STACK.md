@@ -72,7 +72,7 @@ Example non-Claude configs to include in docs: OpenRouter (any model, one key), 
 
 Notes:
 - Anthropic's own computer-use and browser tools are **not** used as the action layer; our tools are provider-neutral. (For reference: Claude Opus 5.5 computer use requires `computer_toolset_20260801`.)
-- Capability validation happens at config load: e.g., assigning a text-only model to `vision_fallback` fails fast with a clear error. Each problem reads `<file>: roles.<role>.model: '<model>' lacks vision, which <role> needs`, every one is reported at once, and a `fallback` model is held to the same needs. Capabilities come from the pinned price map's `supports_function_calling`, `supports_response_schema` and `supports_vision`, or from the config's `models` entry (ADR-0007 amendment, 2026-10-02).
+- Capability validation happens at config load: e.g., assigning a text-only model to `vision_fallback` fails fast with a clear error. Each problem reads `<file>: roles.<role>.model: '<model>' lacks vision, which <role> needs`, every role problem is reported at once, and a `fallback` model is held to the same needs. Capabilities come from the pinned price map's `supports_function_calling`, `supports_response_schema` and `supports_vision`, or from the config's `models` entry (ADR-0007 amendment, 2026-10-01).
 
 ## 4. Infrastructure
 
