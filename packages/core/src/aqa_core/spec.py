@@ -174,9 +174,10 @@ class Spec:
     path: Path
     frontmatter: SpecFrontmatter
     spec_hash: str
-    # By secret name, as the project config binds them (DATA_MODEL §9), with
-    # `start` unresolved and not checked against the run's allowed origins: a
-    # run reads them through secret_destinations. Not part of spec_hash.
+    # By secret name, as load_spec and load_project take them from the project
+    # config (DATA_MODEL §9), with `start` unresolved and not checked against
+    # the run's allowed origins: a run reads them through secret_destinations.
+    # Not part of spec_hash.
     secret_bindings: Mapping[str, SecretBinding]
 
     def __post_init__(self) -> None:

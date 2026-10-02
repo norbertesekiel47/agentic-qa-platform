@@ -161,10 +161,10 @@ class Project:
 
 def load_project(spec_root: Path) -> Project:
     """The project whose config is `spec_root/config.yaml`, with every
-    `*.spec.md` below it, in subdirectories too, each carrying the config's
-    bindings of exactly the test secrets it references. Spec ids are unique in a
+    `*.spec.md` below it, in subdirectories too. Spec ids are unique in a
     project (DATA_MODEL §6). An invalid config doesn't stop the specs being
-    read: every problem in every file is reported together."""
+    read: every problem in every file is reported together. Each spec carries
+    the config's bindings of exactly the test secrets it references."""
     problems: list[str] = []
     try:
         config: ProjectConfig | None = load_config(spec_root / "config.yaml")
@@ -173,23 +173,26 @@ def load_project(spec_root: Path) -> Project:
         problems.extend(error.problems)
     # Unknown when the config is invalid, so references aren't checked then.
     declared = None if config is None else frozenset(config.secrets)
-    read_specs: dict[str, tuple[Path, SpecFrontmatter, str]] = {}
+    paths: dict[str, Path] = {}
+    specs: dict[str, Spec] = {}
     for path in sorted(p for p in spec_root.rglob("*.spec.md") if p.is_file()):
         try:
             frontmatter, hashed = _read_spec(path, declared)
         except SpecError as error:
             problems.extend(error.problems)
             continue
-        first, _, _ = read_specs.setdefault(frontmatter.id, (path, frontmatter, hashed))
+        first = paths.setdefault(frontmatter.id, path)
         if first != path:
             problems.append(
                 f"{path}: id: '{frontmatter.id}' is already the id of {first}: "
                 "spec ids are unique in a project"
             )
+        elif config is not None:  # an invalid config has no bindings to give
+            specs[frontmatter.id] = _spec_with_bindings(
+                path, frontmatter, hashed, config
+            )
     if config is None or problems:
         raise SpecError(problems)
-    # Built only now: an invalid config has no bindings to give them.
-    specs = {i: _spec_with_bindings(*entry, config) for i, entry in read_specs.items()}
     return Project(spec_root, config, specs)
 
 
@@ -240,12 +243,12 @@ class SecretDestination:
 
 
 def secret_destinations(spec: Spec, start: str) -> dict[str, SecretDestination]:
-    """For each test secret `spec` references, its binding, which `spec`
-    carries from the config it was loaded with, intersected with the run's
-    allowed origins (ADR-0026), where `start` is the run's start origin. A
-    bound origin the run doesn't allow is an error, never dropped: the secret
-    could otherwise be left with nowhere to go. fill_secret takes each
-    secret's origins and field from here, never from `spec.secret_bindings`."""
+    """For each test secret `spec` references, its binding in
+    `spec.secret_bindings` intersected with the run's allowed origins
+    (ADR-0026), where `start` is the run's start origin. A bound origin the
+    run doesn't allow is an error, never dropped: the secret could otherwise
+    be left with nowhere to go. fill_secret takes each secret's origins and
+    field from here, never from `spec.secret_bindings`."""
     allowed = allowed_origins(spec, start)
     destinations: dict[str, SecretDestination] = {}
     problems: list[str] = []
