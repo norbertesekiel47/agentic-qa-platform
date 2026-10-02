@@ -113,9 +113,9 @@ async def settle(window: Window, dom_changed: Callable[[], Awaitable[bool]]) -> 
     to the page: `"idle"`. After `SETTLE_SECONDS`, `"timeout"`, even while a
     look is under way."""
     quiet_since = time.monotonic()
-    bound = asyncio.timeout(SETTLE_SECONDS)
+    limit = asyncio.timeout(SETTLE_SECONDS)
     try:
-        async with bound:
+        async with limit:
             while True:
                 if await dom_changed():
                     quiet_since = time.monotonic()
@@ -124,6 +124,6 @@ async def settle(window: Window, dom_changed: Callable[[], Awaitable[bool]]) -> 
                     return "idle"
                 await asyncio.sleep(POLL_SECONDS)
     except TimeoutError:
-        if not bound.expired():
-            raise  # not settling's own bound
+        if not limit.expired():
+            raise  # not settling's own limit
         return "timeout"
