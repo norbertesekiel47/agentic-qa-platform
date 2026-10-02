@@ -139,7 +139,8 @@ Building resolution (#45) settled three choices that "Resolution per use" left o
   - *Chosen:* the second.
     - Under the first, a button relabeled from "Delete" to "Remove" finds nothing by role and name. A `not_visible` check would then pass in strict replay while the structural fallback still sees the button: a weaker check than the claim.
     - Under the second, any unique match resolves the element. Several matches are drift. The element is absent only when no locator finds one, none finds several, and at least one finds its scope empty.
-    - An unscoped locator's scope is the page. A role locator in a negative check also sees elements the accessibility tree hides, as the other kinds do, so a visible button under `aria-hidden` is seen rather than read as absent.
+    - An unscoped locator's scope is the page.
+    - A negative check counts only visible matches, and its role locators see past the accessibility tree. A visible button under `aria-hidden` is seen rather than read as absent. A hidden element with the target's old name, such as a closed dialog's "Delete", can't resolve first and hide the visible, relabeled one a fallback finds. *Options:* count every match and let the executor judge visibility, which a hidden decoy defeats; or count visible matches only. *Chosen:* the second.
 - **Actionable is one look at the page.**
   - *Options:*
     - visible, enabled, and a hit test finds the element: at the center of its first box, through its own root, and again after an instant scroll into view if the first test misses;
@@ -150,7 +151,7 @@ Building resolution (#45) settled three choices that "Resolution per use" left o
     - An element in an open shadow root is tested through its own root, so it counts. Page locators never enter a frame, so a frame's element is no match. A native control hidden under its own label, as some styled checkboxes are, fails the hit test: drift, never a wrong action.
     - The hit test runs in the page's own world, so it is the page's word, not a control. A page can make it pass or fail, but not choose which element it judges. An error from it, such as an element removed between two checks, is drift; only a closed page raises.
 - **`pattern` searches the normalized rendered text,** the same text `text` matches, so a pattern spans line items without `(?s)`. `url_matches` searches the URL as it is. The search runs in the runner on text the page controls, and Python's `re` can't be interrupted, so the executor bounds it (#46).
-- **`text` is whole words only where its edges are word characters,** so "(3)" is found in "Cart(3)" while "1" isn't found in "10". Text written without spaces between words, such as Japanese, needs a `pattern`.
+- **`text` is whole words only where its edges are word characters,** so "(3)" is found in "Cart(3)" while "1" isn't found in "10". Text written without spaces between words, such as Japanese, needs a `pattern`, and so does a number that starts with a sign or a decimal point, such as "-1", which would be found in "10-1".
 - **Role names are matched by Playwright's own role engine.**
   - The name is matched with an anchored pattern built from the normalized name. The pattern lets private-use glyphs sit anywhere and lets a space be any run of whitespace and glyphs.
   - Each character other than an ASCII letter or digit is written `\uXXXX`, which Python and JavaScript read alike, so no character of a name becomes selector syntax. An astral character stays literal.

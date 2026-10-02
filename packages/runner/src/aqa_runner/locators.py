@@ -180,9 +180,16 @@ def _miss(count: int) -> Miss:
 
 async def _match(page: Page, locator: Locator, use: Use) -> ElementHandle | Miss:
     """The one element `locator` finds for `use`, or why it doesn't."""
-    query = await _scoped(page, locator, hidden=use == "negative_check")
+    negative = use == "negative_check"
+    query = await _scoped(page, locator, hidden=negative)
     if query is None:
         return "no scope"
+    if negative:
+        # A negative check counts what is on screen: a role locator sees past
+        # the accessibility tree (aria-hidden), and only visible matches
+        # count, so a hidden element with the target's name can't stand in
+        # for the visible one a fallback finds.
+        query = query.filter(visible=True)
     # Counted first, so a broad locator costs one call, not one per match.
     count = await query.count()
     if count != 1:
@@ -220,10 +227,11 @@ async def resolve(
 
     - An action needs the first unique match that is actionable.
     - An assertion needs the first unique match; being attached is enough.
-    - A negative check resolves to the first unique match too, hidden or not.
-      Only when no locator finds one, none finds several, and at least one
-      finds its scope empty is the element absent; otherwise it is drift. An
-      unscoped locator's scope is the page.
+    - A negative check counts visible matches only, so it resolves to the
+      first unique visible match. Only when no locator finds one, none finds
+      several, and at least one finds no visible match in its scope is the
+      element absent; otherwise it is drift. An unscoped locator's scope is
+      the page.
 
     A css value that isn't valid CSS raises Playwright's Error: the script is
     broken, which is not drift.
