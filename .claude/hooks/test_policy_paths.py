@@ -261,20 +261,27 @@ class ShellNameTests(PathTestCase):
             "rm .claude/hooks/policy_rules.pyi",
         )
 
-    def test_shell_skips_inert_near_misses(self) -> None:
+    def test_shell_skips_a_bak_backup(self) -> None:
+        # No tool reads one.
         self.assert_bash(
             "allow",
-            # A .bak backup, which no tool reads.
             "cp x .claude/settings.json.bak",
             "cp pyproject.toml.bak /tmp/",
             "rm -rf .claude/hooks.bak",
-            # A directory other than the one named.
-            "rm -rf .claude/hooks-old",
-            "rm -rf my.claude/hooks",
-            # A name that another runs into.
-            "rm x.ruff.toml",
-            "rm x.pyproject.toml",
-            "rm base.tsconfig.json",
+        )
+
+    def test_shell_skips_a_directory_other_than_the_one_named(self) -> None:
+        self.assert_bash("allow", "rm -rf .claude/hooks-old", "rm -rf my.claude/hooks")
+
+    def test_shell_skips_a_name_another_runs_into(self) -> None:
+        self.assert_bash("allow", "rm x.ruff.toml", "rm x.pyproject.toml")
+
+    def test_tsconfig_variants_with_a_prefix_are_gate_config(self) -> None:
+        # A tsconfig's `extends` can read any of them, as it reads
+        # tsconfig.base.json.
+        self.assert_bash("ask", "rm base.tsconfig.json")
+        self.assertEqual(
+            self.write("apps/web/base.tsconfig.json", '{"strict": false}\n'), "ask"
         )
 
     def test_long_commands_are_checked_quickly(self) -> None:
@@ -291,10 +298,19 @@ class EditNameTests(PathTestCase):
         # renovate.json would shadow .github/renovate.json.
         self.put(".github/renovate.json", '{"automerge": false}\n')
         self.assertEqual(self.edit(".github/renovate.json", "false", "true"), "ask")
-        for rel in ("renovate.json", "renovate.jsonc", ".renovaterc.json5"):
+        # The 13 file names Renovate looks for, besides package.json's section.
+        names = [
+            f"{where}renovate.{ext}"
+            for where in ("", ".github/", ".gitlab/")
+            for ext in ("json", "jsonc", "json5")
+        ]
+        names += [".renovaterc", ".renovaterc.json", ".renovaterc.jsonc"]
+        names += [".renovaterc.json5"]
+        self.assertEqual(len(names), 13)
+        for rel in names:
             with self.subTest(rel=rel):
                 self.assertEqual(self.write(rel, '{"automerge": true}\n'), "ask")
-        self.assert_bash("ask", "mv .github/renovate.json /tmp/")
+                self.assert_bash("ask", f"rm {rel}")
 
     def test_gitleaksignore_changes_ask(self) -> None:
         # An entry there passes the secret scan.
