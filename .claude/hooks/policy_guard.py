@@ -390,6 +390,13 @@ def check_file_edit(
         rel = path.resolve().relative_to(project).as_posix()
     except ValueError:
         return None
+    before, after = edit_texts(tool_name, tool_input, path)
+    return judge_change(rel, before, after, project)
+
+
+def judge_change(rel: str, before: str, after: str, project: Path) -> Verdict:
+    """What changing `rel` from `before` to `after` breaks or needs approval for:
+    one judgment for an edit in Claude Code and for each file `--diff` reads."""
     verdict = Verdict(target=rel)
     if PROTECTED.search(rel):
         verdict.asks.append(
@@ -397,7 +404,6 @@ def check_file_edit(
         )
     if is_exempt(rel):
         return verdict
-    before, after = edit_texts(tool_name, tool_input, path)
     if not is_doc(rel):
         tests = bool(TEST_FILE.search(rel))
         verdict.findings = added_findings(before, after, project, tests=tests)
