@@ -33,6 +33,16 @@ class PolicyEvent:
     origin: str | None
 
 
+@dataclass(frozen=True)
+class Popup:
+    """A page another page opened, which the session recorded and closed.
+    `url` is its first URL as Playwright reports it once it has navigated
+    there; `opener` is the opener's URL, None when Playwright reports none."""
+
+    url: str
+    opener: str | None
+
+
 class PolicyEventError(Exception):
     """The session refused to observe or act on a document from an origin
     the run doesn't allow: a policy event, recorded in the session's

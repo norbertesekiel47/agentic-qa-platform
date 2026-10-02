@@ -22,6 +22,8 @@ from aqa_runner.document_origins import (
     DocumentChangedError,
     PolicyEvent,
     PolicyEventError,
+    Popup,
+    Records,
     document_origin,
 )
 from aqa_runner.egress import Connection
@@ -65,6 +67,16 @@ START = "http://app.example.test:8080"
 )
 def test_document_origin(url: str, inherited: str | None, origin: str | None) -> None:
     assert document_origin(url, inherited) == origin
+
+
+def test_records_keep_the_first_hundred_and_count_them_all() -> None:
+    # A page can open popups in a loop, so a session's records are bounded.
+    records: Records[int] = Records()
+    for entry in range(250):
+        records.add(entry)
+
+    assert records.kept == list(range(100))
+    assert records.total == 250
 
 
 # The fixture site, under four names that all reach it: the run's start origin,
@@ -114,6 +126,7 @@ def page(sites: Sites, path: str, query: dict[str, list[str]]) -> str | None:
         "/click": f'<a href="{attribute}">Go</a>',
         "/move": f"<button onclick='location = {script}'>Go</button>",
         "/popup": f"<button onclick='window.open({script})'>Go</button>",
+        "/tab": f'<a href="{attribute}" target="_blank" rel="noopener">Go</a>',
         # Frames from a subresource host, directly and inside a frame of the
         # start origin, and a data: URL's, whose content the session leaves
         # out; and frames from the start origin and another allowed origin,
@@ -317,3 +330,78 @@ def test_a_frame_that_navigates_during_a_snapshot_discards_it(
     # Observed again, the frame shows what it shows now.
     assert ref_for(again, "button", "Other")
     assert "Planted" not in again, again
+
+
+async def open_popup(session: BrowserSession, role: str) -> None:
+    """Use the page's control `Go`, which opens a popup, and wait until the
+    session has closed it."""
+    async with session.page.context.expect_page() as opened:
+        go = ref_for(await session.snapshot(), role, "Go")
+        await (await session.locate(go)).click()
+    popup = await opened.value
+    if not popup.is_closed():
+        await popup.wait_for_event("close", timeout=5000)
+
+
+def test_popups_are_recorded_with_their_url_and_opener_and_closed(
+    sites: Sites,
+) -> None:
+    # A window.open on another allowed origin, a link that opens a tab with no
+    # opener on the start origin, and a blank window, which is on its opener's
+    # origin.
+    openers = [
+        (f"{sites.app}/popup?to={to(f'{sites.other}/kept')}", "button"),
+        (f"{sites.app}/tab?to={to(f'{sites.app}/kept')}", "link"),
+        (f"{sites.app}/popup?to=", "button"),
+    ]
+
+    async def scenario() -> tuple[list[Popup], int, int]:
+        async with browsing(sites) as session:
+            for opener, role in openers:
+                await session.page.goto(opener)
+                await open_popup(session, role)
+            return (
+                session.popups.kept,
+                len(session.page.context.pages),
+                session.policy_events.total,
+            )
+
+    popups, pages, events = asyncio.run(scenario())
+
+    assert popups == [
+        Popup(f"{sites.other}/kept", openers[0][0]),
+        # Playwright reports the opener even when the link said noopener.
+        Popup(f"{sites.app}/kept", openers[1][0]),
+        Popup("about:blank", openers[2][0]),
+    ]
+    assert pages == 1, "a popup was left open"
+    assert events == 0
+
+
+@pytest.mark.parametrize("where", ["subresource host", "disallowed host"])
+def test_a_popup_off_the_allowed_origins_is_a_policy_event(
+    sites: Sites, where: str
+) -> None:
+    target = sites.cdn if where == "subresource host" else sites.evil
+    landed, origin = {
+        "subresource host": (f"{sites.cdn}/doc", sites.cdn),
+        "disallowed host": ("chrome-error://chromewebdata/", None),
+    }[where]
+    opener = f"{sites.app}/popup?to={to(f'{target}/doc')}"
+
+    async def scenario() -> tuple[list[Popup], list[PolicyEvent], str]:
+        async with browsing(sites) as session:
+            await session.page.goto(opener)
+            await open_popup(session, "button")
+            # The session's own page is still on the start origin.
+            return (
+                session.popups.kept,
+                session.policy_events.kept,
+                await session.snapshot(),
+            )
+
+    popups, events, snapshot = asyncio.run(scenario())
+
+    assert popups == [Popup(landed, opener)]
+    assert events == [PolicyEvent("popup", landed, origin)]
+    assert 'button "Go"' in snapshot, snapshot
