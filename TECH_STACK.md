@@ -11,6 +11,7 @@ A version followed by an HTML comment, `renovate: NAME`, is tracked: it is the e
 | Language | Python | 3.14 | Matches existing tooling; flagship in the language most AI-engineer postings require (ADR-0005) |
 | Package/env | uv, and its build backend `uv_build` | 0.11.x | Fast, lockfile-based; one workspace (ADR-0027) |
 | Browser automation | Playwright for Python | 1.63.0<!-- renovate: playwright --> | Accessibility snapshots, tracing, robust locators |
+| Egress proxy framing | h11 | 0.16.0<!-- renovate: h11 --> | HTTP/1.1 parsing for the in-runner egress proxy, so each request is read and checked whole and each response is framed correctly; already locked through httpcore (ADR-0026 amendment, 2026-10-01) |
 | Agent orchestration | LangGraph | 1.2.12<!-- renovate: langgraph --> | Run graph and checkpointing (interrupts deferred past v1; ADR-0006) |
 | Checkpointer | Local runs (M1): LangGraph's in-memory saver. Uploaded and hosted runs (M4 onward): a custom `BaseCheckpointSaver` over our API | — | Runners have no DB access (ADR-0008) |
 | Chat-model layer | LangChain provider packages: `langchain-openai` 1.6.6<!-- renovate: langchain-openai --> (OpenAI + OpenRouter via OpenAI-compatible base URL), `langchain-anthropic` 1.7.4<!-- renovate: langchain-anthropic -->, `langchain-deepseek` 1.1.1<!-- renovate: langchain-deepseek --> | — | Native tool binding and structured output in LangGraph (ADR-0007) |
