@@ -69,7 +69,7 @@ uv run ruff format --check .                                                   #
 uv run mypy                                                                    # types: packages, spikes and tests
 # mypy reads a `sys.platform` check as a constant for the host it runs on, so on macOS a Linux-only
 # branch goes unchecked, and CI, on Linux, fails it (LAB_NOTES, 2026-09-30). This run checks as CI
-# does; the run above also checks what only macOS reaches, such as the sandbox check's darwin branch.
+# does. Keep `uv run mypy` too: on a macOS host it alone checks the darwin branches.
 uv run mypy --platform linux                                                   # types: the same files, as Linux
 uv run mypy --strict --no-explicit-package-bases .claude/hooks bench/harness   # types: scripts
 uv run pytest --cov                                                            # every test, and the coverage floor
