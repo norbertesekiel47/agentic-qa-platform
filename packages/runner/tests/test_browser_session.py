@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,6 +32,7 @@ from playwright.async_api import (
     ElementHandle,
     Error,
     Page,
+    ProxySettings,
     async_playwright,
 )
 from pydantic import ValidationError
@@ -160,9 +161,18 @@ class RecordingChromium:
         self.chromium = chromium
         self.requested: list[bool] = []
 
-    async def launch(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
+    async def launch(
+        self,
+        *,
+        chromium_sandbox: bool,
+        env: Environment,
+        args: Sequence[str],
+        proxy: ProxySettings,
+    ) -> Browser:
         self.requested.append(chromium_sandbox)
-        return await self.chromium.launch(chromium_sandbox=chromium_sandbox, env=env)
+        return await self.chromium.launch(
+            chromium_sandbox=chromium_sandbox, env=env, args=args, proxy=proxy
+        )
 
 
 # A zone far from UTC (UTC+14), outside the UTC-10 to UTC+13 range where
@@ -176,9 +186,19 @@ class FarZoneChromium(RecordingChromium):
     without this the default-settings test couldn't tell a pin from the host."""
 
     @override
-    async def launch(self, *, chromium_sandbox: bool, env: Environment) -> Browser:
+    async def launch(
+        self,
+        *,
+        chromium_sandbox: bool,
+        env: Environment,
+        args: Sequence[str],
+        proxy: ProxySettings,
+    ) -> Browser:
         return await super().launch(
-            chromium_sandbox=chromium_sandbox, env={**env, "TZ": HOST_ZONE}
+            chromium_sandbox=chromium_sandbox,
+            env={**env, "TZ": HOST_ZONE},
+            args=args,
+            proxy=proxy,
         )
 
 

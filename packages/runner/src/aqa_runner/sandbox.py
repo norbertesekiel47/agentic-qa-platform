@@ -1,7 +1,8 @@
 """Chromium's sandbox: always on, and proved by the sandbox check before any
 page loads (ADR-0026 and its 2026-09-30 amendment; SECURITY.md §6). The same
 launch gives the browser an empty environment (ADR-0026's 2026-10-01
-amendment; SECURITY.md §5)."""
+amendment; SECURITY.md §5) and closes its ways out other than a context's own
+proxy (ADR-0026's 2026-10-02 amendment; SECURITY.md §7)."""
 
 import ctypes
 import sys
@@ -11,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from playwright.async_api import Browser, Error
+from playwright.async_api import Browser, Error, ProxySettings
 
 # Chromium's namespace sandbox gives each renderer its own user, pid and net
 # namespace. Its renderers are forked from the zygote, which already lives in
@@ -149,18 +150,58 @@ class SandboxUnavailableError(RuntimeError):
 # The environment variables a launch gives the browser, in Playwright's type.
 type Environment = dict[str, str | float | bool]
 
+# The switches every launch gives Chromium, which close the browser's ways out
+# other than a proxy (ADR-0026 amendment, 2026-10-02; SECURITY.md §7).
+# Playwright appends them to its own
+# (https://playwright.dev/python/docs/api/class-browsertype#browser-type-launch-option-args).
+TRANSPORT_SWITCHES = (
+    # WebRTC "should only use TCP to contact peers or servers unless the proxy
+    # server supports UDP" (Chromium's kWebRTCIPHandlingDisableNonProxiedUdp),
+    # and an HTTP proxy carries no UDP.
+    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+    # "Disables the QUIC protocol" (Chromium's network_switch_list.h). QUIC
+    # runs over UDP, which an HTTP proxy doesn't carry.
+    "--disable-quic",
+    # The browser resolves no name itself, so nothing it does (DNS prefetch,
+    # a STUN server's name) can send a DNS query: every name is the egress
+    # proxy's to resolve and pin. `^NOTFOUND` fails a lookup with
+    # ERR_NAME_NOT_RESOLVED (Chromium's net/dns/mapped_host_resolver.cc; any
+    # other host, `~NOTFOUND` included, would be looked up). The rule maps
+    # address literals too, so it spares the one the egress proxy listens on
+    # (`EgressProxy`).
+    "--host-resolver-rules=MAP * ^NOTFOUND, EXCLUDE 127.0.0.1",
+)
+
+# The proxy of every browser context that names none of its own, such as one
+# opened outside the browser session: one that can't be reached, so such a
+# context has no way out (ERR_PROXY_CONNECTION_FAILED). `.invalid` never
+# resolves (RFC 6761), and the resolver rule above stops the lookup before any
+# query leaves. Loopback goes to it too, as through the session's own proxy.
+# https://playwright.dev/python/docs/api/class-browsertype#browser-type-launch-option-proxy
+FAIL_CLOSED_PROXY: ProxySettings = {
+    "server": "http://launch-proxy.invalid:1",
+    "bypass": "<-loopback>",
+}
+
 
 class Chromium(Protocol):
     """The part of Playwright's `BrowserType` that `launch` uses."""
 
-    async def launch(self, *, chromium_sandbox: bool, env: Environment) -> Browser: ...
+    async def launch(
+        self,
+        *,
+        chromium_sandbox: bool,
+        env: Environment,
+        args: Sequence[str],
+        proxy: ProxySettings,
+    ) -> Browser: ...
 
 
 async def launch(chromium: Chromium) -> Browser:
-    """Launch Chromium with its sandbox on and an empty environment, and return
-    it only once the sandbox check has proved the sandbox. Nothing skips the
-    check: `launch` takes no option and reads no setting or environment
-    variable (ADR-0026)."""
+    """Launch Chromium with its sandbox on, an empty environment, the transport
+    switches and the fail-closed proxy, and return it only once the sandbox
+    check has proved the sandbox. Nothing skips the check: `launch` takes no
+    option and reads no setting or environment variable (ADR-0026)."""
     browser, _ = await launch_with_observations(chromium)
     return browser
 
@@ -178,7 +219,12 @@ async def launch_with_observations(
         # An empty one keeps them, and every AQA_SECRET_* value, out of every
         # Chromium process; a test secret reaches a page only through
         # fill_secret.
-        browser = await chromium.launch(chromium_sandbox=True, env={})
+        browser = await chromium.launch(
+            chromium_sandbox=True,
+            env={},
+            args=TRANSPORT_SWITCHES,
+            proxy=FAIL_CLOSED_PROXY,
+        )
     except Error as error:
         fixes = [fix for line, fix in NO_SANDBOX_LOGS.items() if line in error.message]
         if not fixes:
