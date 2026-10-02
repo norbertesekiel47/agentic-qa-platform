@@ -68,8 +68,8 @@ uv run ruff check .                                                            #
 uv run ruff format --check .                                                   # format
 uv run mypy                                                                    # types: packages, spikes and tests
 # mypy reads a `sys.platform` check as a constant for the host it runs on, so on macOS a Linux-only
-# branch goes unchecked, and CI, on Linux, fails it (LAB_NOTES, 2026-09-30). This run checks as CI
-# does. Keep `uv run mypy` too: on a macOS host it alone checks the darwin branches.
+# branch goes unchecked, while CI, on Linux, checks it (LAB_NOTES, 2026-09-30). The next run checks
+# as CI does; the run above alone checks a macOS host's darwin branches. On Linux they are the same.
 uv run mypy --platform linux                                                   # types: the same files, as Linux
 uv run mypy --strict --no-explicit-package-bases .claude/hooks bench/harness   # types: scripts
 uv run pytest --cov                                                            # every test, and the coverage floor
@@ -100,7 +100,7 @@ The secret scan reads commits, not the working tree, and the other gates read th
 
 **Enforcement.** Each rule in CONSTRAINTS.md has exactly one enforcer:
 - **Ruff** (lint and format, §4): the rule set, formatting, the function-size limits, `TODO`-style comments and broad exception handlers.
-- **mypy** (both type runs, §4; CONSTRAINTS.md, Types): types, and empty bodies in functions that return a value.
+- **mypy** (the type runs, §4; CONSTRAINTS.md, Types): types, and empty bodies in functions that return a value.
 - **pytest** (the test gate, §4): tests in strict mode with warnings as errors, and the coverage floor.
 - **policy_guard** (`.claude/hooks/policy_guard.py`): the rest of the floor. In Claude Code it runs before each tool call and at the end of each turn.
   - **Refused:** newly added suppressions, coverage pragmas, skipped/focused/rerun tests, tautological assertions, `suppress(Exception)` and, outside tests, unimplemented stubs (rule 1); Chromium sandbox disabling (§6); secrets in shell commands, and known-format credentials in any file (rule 9). A refused line other than a secret passes when it cites an existing `ADR-NNNN`, so write the ADR first. Fake test credentials must say so (e.g. contain `fake`).
