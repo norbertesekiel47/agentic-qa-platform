@@ -205,6 +205,14 @@ def allowed_origins(spec: Spec, start: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys((start, *spec.frontmatter.allowed_origins)))
 
 
+def start_url(spec: Spec, start: str) -> str:
+    """Where the run's first navigation goes: `start`, the run's start origin
+    as start_origin gives it, followed by the spec's start_url as written
+    (ADR-0026). Joined as text, never percent-decoded or resolved: decoded,
+    /%2f%2fevil.test would be //evil.test, another origin."""
+    return start + spec.frontmatter.preconditions.start_url
+
+
 @dataclass(frozen=True)
 class SecretDestination:
     """Where the browser may fill one test secret in this run."""
