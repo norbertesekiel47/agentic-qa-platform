@@ -60,7 +60,7 @@ A named element of the app under test, defined by its meaning together with its 
 _Avoid_: element, selector. Don't use "target" for the app or URL being tested; say "app under test".
 
 **Locator**:
-One way of finding a target on the page, such as by role and accessible name or by test ID. A target has several, tried in order until one gives the unique match its use needs: actionable for a step, present on the page for an assertion.
+One way of finding a target on the page, such as by role and accessible name or by test ID. A target has several, tried in order until one gives the unique match its use needs: actionable for a step, present on the page for an assertion. For a negative check, such as "not visible", finding nothing inside the locator's scope is a result, not drift, but only when no locator finds the element.
 _Avoid_: selector
 
 **Element ref**:
