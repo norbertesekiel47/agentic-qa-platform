@@ -318,6 +318,20 @@ def test_a_runner_request_that_fails_upstream_is_an_infrastructure_error(
     assert egress.refusals == []
 
 
+def test_a_runner_request_its_caller_times_out_lets_the_upstream_go() -> None:
+    # A runner-side request has no deadline of its own: its caller sets one.
+    async def scenario() -> None:
+        async with raw_upstream() as silent:
+            start = f"http://127.0.0.1:{silent.port}"
+            with pytest.raises(TimeoutError):
+                async with asyncio.timeout(0.2):
+                    await runner_request(gate(allowed=(start,)), "GET", start)
+            # Bounded: a connection left open would hold the upstream forever.
+            await asyncio.wait_for(silent.closed.wait(), 5)
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "url",
     [
