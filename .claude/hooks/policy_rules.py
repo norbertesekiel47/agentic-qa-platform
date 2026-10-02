@@ -2,8 +2,10 @@
 
 policy_guard.py holds the checks and the entry points, and its docstring
 describes the rules. This module holds their data: what each rule matches,
-where it applies and what it tells the agent. Like the guard, it runs on
-whatever python3 Claude Code finds, so it needs only the standard library.
+where it applies and what it tells the agent, and the two predicates over the
+scope tables that policy_guard.py and policy_diff.py share. Like the guard, it
+runs on whatever python3 Claude Code finds, so it needs only the standard
+library.
 """
 
 from __future__ import annotations
