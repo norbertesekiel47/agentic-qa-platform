@@ -9,6 +9,7 @@ from collections import Counter
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from http import HTTPStatus
+from typing import Any
 from urllib.parse import urlsplit
 
 import pytest
@@ -131,8 +132,10 @@ def test_a_redirect_to_a_subresource_host_passes_the_proxy(
     with serving() as origin:
         open_connection = asyncio.open_connection
 
-        async def to_fixture(host: str, port: int) -> Connection:
-            return await open_connection(host, origin.port if port == 80 else port)
+        async def to_fixture(host: str, port: int, **tls: Any) -> Connection:
+            return await open_connection(
+                host, origin.port if port == 80 else port, **tls
+            )
 
         monkeypatch.setattr(asyncio, "open_connection", to_fixture)
         egress = gate(

@@ -6,6 +6,7 @@ amendment on the egress proxy; SECURITY.md §7). Test-first (TESTING.md §2)."""
 import asyncio
 import socket
 import struct
+from typing import Any
 
 import pytest
 from aqa_runner.egress import Connection, EgressGate
@@ -502,10 +503,10 @@ def test_closing_the_proxy_ends_a_request_still_connecting(
             connecting, release = asyncio.Event(), asyncio.Event()
             open_connection = asyncio.open_connection
 
-            async def held(host: str, port: int) -> Connection:
+            async def held(host: str, port: int, **tls: Any) -> Connection:
                 connecting.set()
                 await release.wait()
-                return await open_connection(host, port)
+                return await open_connection(host, port, **tls)
 
             monkeypatch.setattr(asyncio, "open_connection", held)
             writer.write(

@@ -5,7 +5,6 @@ upstream's (ADR-0026 and its 2026-10-01 amendment on the egress proxy)."""
 
 import asyncio
 import contextlib
-import ssl
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -72,15 +71,6 @@ class Upstream(Peer):
     async def next(self) -> h11.Event:
         with self._failures():
             return await super().next()
-
-    async def start_tls(self, context: ssl.SSLContext, server_hostname: str) -> None:
-        """Speak TLS from here on, on the same connection, verifying the
-        upstream's certificate for `server_hostname`. A handshake that fails,
-        a certificate that doesn't verify included, is a failure like any
-        other: https://docs.python.org/3.14/library/asyncio-stream.html#asyncio.StreamWriter.start_tls
-        """
-        with self._failures():
-            await self.writer.start_tls(context, server_hostname=server_hostname)
 
     @contextlib.contextmanager
     def _failures(self) -> Iterator[None]:

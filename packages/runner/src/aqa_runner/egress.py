@@ -4,6 +4,7 @@ resolve, and each name's DNS answer pinned for the run (ADR-0026 and its
 
 import asyncio
 import socket
+import ssl
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -249,18 +250,29 @@ class EgressGate:
         self.refusals: list[Refusal] = []
         self.infrastructure_events: list[InfrastructureEvent] = []
 
-    async def connect(self, host: str, port: int, requester: Requester) -> Connection:
+    async def connect(
+        self,
+        host: str,
+        port: int,
+        requester: Requester,
+        *,
+        tls: ssl.SSLContext | None = None,
+    ) -> Connection:
         """A connection to `host` and `port`, written as an origin writes them
         (lowercase, an IPv6 address in brackets), for `requester`. Refused,
         before any lookup, unless the policy allows it; then refused unless
         every address of the host's pinned answer passes the IP policy for
         that host and port. Raises `EgressRefusedError` or
-        `EgressUpstreamError`, and records either."""
+        `EgressUpstreamError`, and records either.
+
+        With `tls`, the connection speaks TLS from its first byte, and the
+        address's certificate must verify for `host`: one that doesn't fails
+        like an address that doesn't answer."""
         if not self.policy.allows(host, port, requester):
             raise self._refuse(
                 host, port, "host", "not an allowed origin or a subresource host"
             )
-        return await self._open(host, port, await self._addresses(host, port))
+        return await self._open(host, port, await self._addresses(host, port), tls=tls)
 
     async def _addresses(self, host: str, port: int) -> tuple[IPAddress, ...]:
         literal = _ip_literal(host)
@@ -304,19 +316,30 @@ class EgressGate:
         return answer
 
     async def _open(
-        self, host: str, port: int, answer: tuple[IPAddress, ...]
+        self,
+        host: str,
+        port: int,
+        answer: tuple[IPAddress, ...],
+        *,
+        tls: ssl.SSLContext | None,
     ) -> Connection:
         """A connection to the first address in `answer` that accepts one
-        within `CONNECT_TIMEOUT`. Each is an address, so opening it looks
-        nothing up."""
+        within `CONNECT_TIMEOUT`, its TLS handshake included. Each is an
+        address, so opening it looks nothing up."""
+        # The name the certificate must give: an IPv6 address without brackets.
+        name = host.removeprefix("[").removesuffix("]") if tls else None
         problems = []
         for address in answer:
             try:
                 # https://docs.python.org/3.14/library/asyncio-stream.html#asyncio.open_connection
                 return await asyncio.wait_for(
-                    asyncio.open_connection(str(address), port), CONNECT_TIMEOUT
+                    asyncio.open_connection(
+                        str(address), port, ssl=tls, server_hostname=name
+                    ),
+                    CONNECT_TIMEOUT,
                 )
-            # Refused or unreachable, or TimeoutError, an OSError since 3.11.
+            # Refused or unreachable, a certificate that doesn't verify
+            # (ssl.SSLError), or TimeoutError, an OSError since 3.11.
             except OSError as error:
                 problems.append(f"{address}: {str(error) or type(error).__name__}")
         raise self.record_failure(host, port, "; ".join(problems))

@@ -5,10 +5,14 @@ The cookie test launches real Chromium on the OS that runs it: Linux in CI,
 macOS locally."""
 
 import asyncio
+import contextlib
+import socket
 import ssl
 import subprocess
+import threading
 from collections import Counter
 from http import HTTPStatus
+from ipaddress import ip_address
 from pathlib import Path
 
 import pytest
@@ -238,8 +242,9 @@ def test_a_runner_request_returns_a_redirect_unfollowed() -> None:
 
 
 def certificate(directory: Path, name: str) -> ssl.SSLContext:
-    """A server context with a self-signed certificate for `name`, made now;
-    its PEM file is `directory`/cert.pem."""
+    """A server context with a self-signed certificate for `name`, a host
+    name or an IP address, made now; its PEM file is `directory`/cert.pem."""
+    kind = "DNS" if _ip_literal(name) is None else "IP"
     subprocess.run(
         [
             "openssl",
@@ -257,7 +262,7 @@ def certificate(directory: Path, name: str) -> ssl.SSLContext:
             "-subj",
             f"/CN={name}",
             "-addext",
-            f"subjectAltName=DNS:{name}",
+            f"subjectAltName={kind}:{name}",
         ],
         check=True,
         capture_output=True,
@@ -265,6 +270,13 @@ def certificate(directory: Path, name: str) -> ssl.SSLContext:
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(directory / "cert.pem", directory / "key.pem")
     return context
+
+
+def _ip_literal(name: str) -> str | None:
+    try:
+        return str(ip_address(name))
+    except ValueError:
+        return None
 
 
 def test_a_runner_request_over_https_verifies_the_certificate(
@@ -303,6 +315,59 @@ def test_a_runner_request_over_https_verifies_the_certificate(
     assert [event.host for event in events] == [APP, "other.example.test"]
     assert all("certificate" in event.cause for event in events)
     assert egress.refusals == []
+
+
+def test_a_runner_request_to_an_ip_address_verifies_its_certificate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tls = certificate(tmp_path, "::1")
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "cert.pem"))
+    with serving("::1", tls=tls) as origin:
+        start = f"https://[::1]:{origin.port}"
+
+        response = asyncio.run(
+            runner_request(gate(allowed=(start,)), "GET", f"{start}/probe")
+        )
+
+    assert response.status == HTTPStatus.OK
+    assert [(each.host, each.path) for each in origin.seen] == [
+        (f"[::1]:{origin.port}", "/probe")
+    ]
+
+
+def test_a_runner_request_never_takes_plaintext_sent_before_the_handshake(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An on-path attacker without the certificate answers first, in the
+    # clear; the real server's TLS follows.
+    tls = certificate(tmp_path, APP)
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "cert.pem"))
+    listener = socket.create_server(("127.0.0.1", 0))
+    start = f"https://{APP}:{listener.getsockname()[1]}"
+
+    def answer() -> None:
+        connection, _ = listener.accept()
+        connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nforged")
+        # The client gives up on the handshake: an SSLError or a reset.
+        with (
+            contextlib.suppress(OSError),
+            tls.wrap_socket(connection, server_side=True) as private,
+        ):
+            private.recv(65536)
+            private.sendall(b"HTTP/1.1 204 No Content\r\n\r\n")
+        connection.close()
+
+    server = threading.Thread(target=answer)
+    server.start()
+    egress = gate(allowed=(start,), answers={APP: LOOPBACK})
+    try:
+        with pytest.raises(EgressUpstreamError) as failed:
+            asyncio.run(runner_request(egress, "GET", f"{start}/probe"))
+    finally:
+        server.join(5)
+        listener.close()
+
+    assert egress.infrastructure_events == [failed.value.event]
 
 
 @pytest.mark.parametrize(
