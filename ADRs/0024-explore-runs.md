@@ -113,3 +113,34 @@ Exceeding any of them is `gave_up`. Each can be overridden in the project config
 - **Injection surface.** The plan is immune by construction. Binding, navigation and secrets aren't, so M1 ships explore-focused injection fixtures (TESTING §1, SECURITY §4).
 - **API.md §7 gains exit code 5.**
 - **Refines earlier ADRs.** ADR-0006's reset rule (ARCHITECTURE §3.3) now applies to every attempt. ADR-0003's "compile the path it took" becomes "select and confirm the path".
+
+## Amendment (2026-10-02): the minimal strict executor (#46)
+
+Building the executor (#46) settled choices the Consequences above left open. DATA_MODEL §7 holds the rules ("Checked by the loader", *Text parameters*, *Replay outcomes*); this records why. #46 lands in three pull requests, and each adds its part here.
+
+### Reading a compiled script
+`aqa_core.project.load_compiled` reads the file: JSON that repeats no key, the same text validated in JSON mode, then the parts checked against each other and against the project config's secrets.
+- **An invalid compiled script is a spec error.**
+  - *Options:* `SpecError` and exit 5, or an error type and exit code of its own.
+  - *Chosen:* the first. The script is committed beside its spec and reviewed with it, and its problems are reported as a spec's are: each with its file and key, all at once. API.md §7's exit 5 now names the compiled script.
+- **Repeated keys are found by walking the parsed JSON with a stack.** Python 3.14's `json` reads arrays nested 100,000 deep, so recursion would run out first, and a path copied at every level made a 100,000-deep file take 10 s (LAB_NOTES, 2026-10-02). The walk links each value to its parent's place, and refuses objects and arrays nested more than 256 deep, beyond any script and beyond pydantic's own limit of about 200.
+- **A `not_visible` check's target scopes every locator.** Unscoped, the target is absent from any page that lacks a match, a wrong page or an app's 404 included, so the check would pass whatever the page. That is a broken script, so the loader refuses it, rather than resolution reporting drift. The locator generator (#52) scopes such targets.
+
+### Bounded text searches
+A `pattern` comes from the script and the text from the page, and Python's `re` can backtrack for exponential time: `(a+)+$` against forty `a`s and a `b`. A `text` literal's search is a regex too, built with lookarounds, whose cost grows with the text.
+- **Options:**
+  1. *A thread with a timeout.* `re` holds the GIL while it matches, so the event loop's thread would stall as well. Measured with Python 3.14.7 on macOS: while `re.search(r"(a+)+$", "a" * 24 + "b")` ran in a thread for 0.84 s, the main thread's `time.sleep(0.01)` loop ran once (a one-off `python -c` check; the script isn't kept). Nor can a thread be stopped, so it would keep its core after the deadline.
+  2. *The `regex` package's `timeout`.* It can be interrupted, but it is another engine than the `re.search` the format names, with its own syntax and behaviour, and a new dependency.
+  3. *A child process per search, killed at the deadline.*
+- **Chosen: 3** (`aqa_runner.text_search`).
+  - The child runs fixed code in isolated mode (`-I`) with an empty environment, so it never holds the runner's keys or test secrets. The search's kind, needle and text reach it on stdin as ASCII-only JSON, so no locale changes them and a lone surrogate survives.
+  - Matching is `aqa_core.text`'s, as in the format. A URL is searched as it is.
+  - The deadline is 2 s per search, starting the process included. A timeout or a cancellation kills the child, so no search outlives its check.
+  - *Cost:* one process start per text check. No model and no network are involved.
+- **What a timed-out search reports.**
+  - *Options:*
+    1. a fourth assertion outcome, `check_timed_out`;
+    2. `failed`, with the reason;
+    3. the run ends `errored`.
+  - *Chosen: 1.* A timed-out search established neither a pass nor a failure. Option 2 would let M2 file a finding the page never showed, and option 3 would leave the other assertions unevaluated, though every assertion is evaluated so the report is complete.
+  - *Rule:* a run with any timed-out check can't pass, and M2 maps the outcome to `inconclusive`, never to `expectation_violated`.
