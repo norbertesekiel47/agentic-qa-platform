@@ -168,15 +168,21 @@ The spike's trial reported only whether the check proved the sandbox, so #38's o
 
 ## Amendment (2026-10-01): only `launch` starts Chromium (#77)
 
-This supersedes the 2026-09-30 amendment's "Nothing yet stops other code from calling Playwright's launch directly."
+This supersedes the 2026-09-30 amendment's (#35) "Nothing yet stops other code from calling Playwright's launch directly."
 
-- **The gate.** `tests/test_chromium_launches.py` runs within `uv run pytest --cov`. It parses every module in `packages/*/src` and refuses each call that launches or connects to Chromium outside `packages/runner/src/aqa_runner/sandbox.py`. Its message gives the file and line, and names `aqa_runner.sandbox.launch` as the fix.
+- **The gate.** `tests/test_chromium_launches.py` runs within `uv run pytest --cov`. It parses every module in `packages/*/src` and refuses each call of, or reference to, a method that launches or connects to Chromium outside `packages/runner/src/aqa_runner/sandbox.py`. Its message gives the file and line, and names `aqa_runner.sandbox.launch` as the fix. A reference counts as well as a call, so `functools.partial(playwright.chromium.launch)` and a bound method passed on are refused too.
+- **The sandbox module** is the only module in `packages/*/src` left alone, and only for `launch`'s own call: the test also requires `chromium.launch` to be the module's only Chromium start, so a second launch or a connection added there fails.
 - **What counts.** Playwright's `BrowserType` starts or attaches to a browser through four methods: `launch`, `launch_persistent_context`, `connect` and `connect_over_cdp` ([`BrowserType`](https://playwright.dev/python/docs/api/class-browsertype), 1.63).
   - Only `BrowserType` has the last two, so they count on any object.
   - `launch` and `connect` are common names (`sqlite3.connect`, a socket's `connect`, `aqa_runner.sandbox.launch` itself). They count only on an object spelled as Chromium's `BrowserType`: an attribute `chromium` (`playwright.chromium`), a name `chromium`, or `playwright["chromium"]`.
-- **Residual risk.** The test reads spelling, not types. A `BrowserType` bound to another name (`browser_type = playwright.chromium`, then `browser_type.launch()`) or reached through `getattr` passes it, so review has to catch those. A type-aware check through mypy's build API would see them too. It was rejected because it ties a test to mypy's internals and runs a full type check inside pytest.
+- **Residual risk.** The test reads spelling, not types, so review has to catch what it can't see:
+  - a `BrowserType` under another name or attribute (`browser_type = playwright.chromium`, then `browser_type.launch()`; `self._chromium.launch()`);
+  - one reached through `getattr`;
+  - an unbound call through the class (`BrowserType.launch(playwright.chromium)`).
+
+  A type-aware check through mypy's build API would see them too. It was rejected because it ties a test to mypy's internals and runs a full type check inside pytest.
 - **Scope.**
   - The package tests aren't scanned. The negative controls in `packages/runner/tests/test_sandbox.py` launch without the sandbox, and the tests' doubles wrap Playwright's launch.
   - `spikes/` and `bench/` aren't scanned either. The spike's trial launches through `launch`. `bench/harness/toggle_checks.py` launches Chromium itself in the checks image, with an empty environment; ADR-0023's 2026-10-01 amendment (#77) records why.
   - Firefox and WebKit launches aren't covered, because nothing here launches them.
-- **A test, not a policy_guard rule.** A guard rule would refuse each edit in Claude Code, but the guard matches lines, and every guard change needs the maintainer's approval. CI's pytest binds every agent and person, and an AST walk matches the calls as calls (#77's triage).
+- **A test, not a policy_guard rule.** A guard rule would refuse each edit in Claude Code, but the guard matches lines, and every guard change needs the maintainer's approval. CI's pytest binds every agent and person, and an AST walk matches calls and references as such (#77's triage).

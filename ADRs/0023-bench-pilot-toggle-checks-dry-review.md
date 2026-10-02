@@ -56,7 +56,7 @@ CI's `python` job installs the workspace from `uv.lock` (ADR-0029), which includ
 
 ## Amendment (2026-10-01): the checks' browser skips the sandbox check and gets an empty environment (#77)
 
-A test now refuses any Chromium launch in `packages/` outside `aqa_runner.sandbox.launch`, which runs the sandbox check (ADR-0026's 2026-10-01 amendment, #77). `toggle_checks.py` still launches Chromium itself.
+A test now refuses a Chromium launch in `packages/*/src` outside `aqa_runner.sandbox.launch`, which runs the sandbox check (ADR-0026's 2026-10-01 amendment, #77). `toggle_checks.py` still launches Chromium itself.
 
 - **Why not through `launch`.** Installing `aqa_runner` in the checks image doesn't fit. Measured at `a631995`:
   - The image's Python is 3.12.3 (`python3 --version` in `mcr.microsoft.com/playwright/python:v1.63.0-noble`), while `aqa-runner` and `aqa-core` require Python 3.14 or later (`requires-python` in their `pyproject.toml`).
