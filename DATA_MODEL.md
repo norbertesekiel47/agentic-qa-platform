@@ -245,7 +245,7 @@ Free-form notes for humans. The agent never reads the body; anything that affect
 - **Subject and claim.** An expectation's subject says what it is about ("jake's comment", "the Pay button"). That is a target's meaning: fixed when the spec is explored, and not re-checked on replay. Everything the expectation says about its subject (text, state, position, destination, count) is its claim, and its assertions must establish all of it. So an expectation that claims what no check can establish, such as "shown above the article list", fails compilation by name.
 - **Check types:** `text_visible`, `text_in_target`, `not_visible`, `url_matches`, `network_none` / `network_seen` (method + URL pattern + status class, from the browser's own traffic), `probe_equals_baseline` / `probe_equals` (read-only GET to a declared probe on an allowed origin), deterministic visual checks — `visible_unoccluded` (hit-test at the element's center returns the element or a descendant; in viewport; minimum size), `pixel_diff` (region vs committed baseline image, threshold), `contrast_min` — and `model_verify` (only for `visual: model`; rejected in `strict` mode; explore rejects `visual: model` expectations as a spec error until M2 defines how they confirm).
 - **Text parameters (ADR-0025).**
-  - `text` is a literal. It matches case-insensitively, at word boundaries, against the element's normalized rendered text (whitespace collapsed, private-use glyphs stripped).
+  - `text` is a literal. It matches case-insensitively, at word boundaries, against the element's normalized rendered text: private-use glyphs, soft hyphens and zero-width spaces stripped, whitespace collapsed (ADR-0025, 2026-10-02 amendment).
   - `pattern` is a Python regex (`re.search`, flags written out) for claims that need one.
 
   The compiler prefers `text`. A claim that depends on case uses a `pattern` without `(?i)`.
@@ -282,8 +282,8 @@ A compiled script is read as strictly as a spec (§6): an unknown field is an er
   - each names exactly one kind: `role`, `label`, `placeholder`, `testid` or `css`;
   - `name` goes only with `role`, and is optional there;
   - `role` is a WAI-ARIA role that Playwright's `get_by_role` accepts;
-  - a `name` is written normalized (no private-use glyphs, single spaces, none at either end), because it is compared normalized;
-  - a `css` value is one CSS selector, with no `>>`: Playwright reads `>>` as a chain into other selector engines, even after `css=`;
+  - a `name` is written normalized (no private-use glyphs, soft hyphens or zero-width spaces, single spaces, none at either end), because it is compared normalized;
+  - a `css` value is one CSS selector, not only whitespace and with no `>>`. The executor sends it to Playwright as `css=<value>`, and Playwright still reads a `>>` as a chain into other selector engines. Inside an attribute value, write `\>\>`;
   - `scope` is optional, and is itself a locator;
   - a target lists at least one locator, and none twice.
 - **Steps:** each has `seq` (1 or more), `side_effect`, `side_effect_basis` exactly when `side_effect` is `true`, and optionally `satisfies`. The other fields depend on the action:
@@ -311,8 +311,9 @@ A compiled script is read as strictly as a spec (§6): an unknown field is an er
   | `visible_unoccluded` | `target`, `min_size_px` (width and height, each 1 or more), `in_viewport` |
 
   A `text` is written normalized, as a `name` is. A `pattern` must compile as a Python regex.
+- **Also enforced:** `coverage.expectations` and `assertions` are not empty, and neither is an expectation's `assertions`. An expectation's `assertions` and a step's `satisfies` name each ID once. `compiled_by.mode` is `explore`, and `compiled_by.models` is keyed by model role (navigator, verifier, healer, vision_fallback).
 - **Checked by the loader, not the format (#46):**
-  - that what parts of the script name exists and is unique: targets, assertion IDs, the expectations that `expect_index` names, conditions, probes and step numbers;
+  - that every name a part of the script uses exists, and is unique where it is defined: targets, assertion IDs, the expectations `expect_index` names, conditions, probes and step numbers;
   - that each secret a `fill_secret` step names is declared in the project config (§9);
   - that the JSON repeats no key.
 

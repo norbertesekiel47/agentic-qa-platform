@@ -23,6 +23,9 @@ from aqa_core.text import normalize
         ("\ue000a\uf8ff \ue000\uf900", "a \uf900"),
         ("\U000f0000b\U000ffffd", "b"),
         ("\U00100000c\U0010fffd", "c"),
+        # A soft hyphen and a zero-width space go, as Playwright drops them
+        # from accessible names: "Pay&shy;ment" renders as one word.
+        ("Pay\xadment\u200b now", "Payment now"),
         # Case, punctuation and other symbols are kept.
         ("Pay $5.00 \u2014 now \u2605", "Pay $5.00 \u2014 now \u2605"),
         ("\uf218\xa0", ""),

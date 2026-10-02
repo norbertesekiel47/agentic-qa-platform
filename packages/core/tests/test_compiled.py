@@ -3,13 +3,21 @@ amendment)."""
 
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 from aqa_core import strict_yaml
 from aqa_core.browser import BrowserSettings
-from aqa_core.compiled import ByCss, ByRole, CompiledScript, Target
+from aqa_core.compiled import (
+    ByCss,
+    ByRole,
+    CompiledScript,
+    NetworkNone,
+    Target,
+    VisibleUnoccluded,
+)
 from aqa_core.spec import spec_hash
 from pydantic import ValidationError
 
@@ -140,6 +148,10 @@ def test_an_unknown_field_is_rejected(path: tuple[str | int, ...]) -> None:
         ({"label": "Pay", "name": "Pay"}, "extra_forbidden"),
         ({"role": "buton", "name": "Pay"}, "literal_error"),
         ({"css": ""}, "string_too_short"),
+        ({"label": ""}, "string_too_short"),
+        ({"placeholder": ""}, "string_too_short"),
+        ({"testid": ""}, "string_too_short"),
+        ({"css": " \t"}, "value_error"),
         ({"css": "button.pay", "scope": {}}, "locator_kind"),
         (
             {"testid": "pay", "scope": {"label": "Payment", "scope": {"css": 7}}},
@@ -164,6 +176,7 @@ def test_a_malformed_locator_is_rejected(locator: dict[str, Any], kind: str) -> 
         # a name is compared after normalizing.
         ("\uf218 Pay", "is not normalized"),
         ("Pay  now", "is not normalized"),
+        ("Pay\xadment", "is not normalized"),
         (" Pay ", "is not normalized"),
         ("\uf218\xa0", "compares as empty"),
     ],
@@ -246,8 +259,11 @@ def test_a_text_is_written_normalized() -> None:
         # re.error, and each must still be a validation error.
         "a{4294967296}",
         "(" * 1000 + ")" * 1000,
+        # A pattern whose meaning Python says it will change: re.compile only
+        # warns, and this repo turns warnings into errors.
+        "[[:digit:]]+",
     ],
-    ids=["unclosed", "huge repeat", "deep nesting"],
+    ids=["unclosed", "huge repeat", "deep nesting", "nested set"],
 )
 @pytest.mark.parametrize(
     ("index", "check"), [(3, "text_in_target"), (4, "url_matches")]
@@ -275,7 +291,11 @@ def test_a_navigate_url_is_a_path_held_to_start_urls_rules(url: str) -> None:
     [(location, _, message)] = errors(script)
 
     assert location == ("steps", 0, "navigate", "url")
-    assert message.startswith(f"'{url}' is not a path:")
+    # Worded for a compiled step too, which has no start_url.
+    assert message == (
+        f"'{url}' is not a path: write a path such as /login, with no empty, . "
+        "or .. segment; the origin comes from the run (ADR-0026)"
+    )
 
 
 @pytest.mark.parametrize(
@@ -391,6 +411,24 @@ def test_every_action_and_check_validates() -> None:
 # check's kind follows its index, and a list item's index follows its field.
 FIELD_RULES: list[tuple[tuple[str | int, ...], object, tuple[str | int, ...]]] = [
     (("spec_hash",), "sha256:1bb957ce", ("spec_hash",)),
+    (("spec_hash",), "sha256:" + "d8" * 32 + "zz", ("spec_hash",)),
+    (("confirmed",), 1, ("confirmed",)),
+    (
+        ("assertions", 5, "in_viewport"),
+        "true",
+        ("assertions", 5, "visible_unoccluded", "in_viewport"),
+    ),
+    (("targets", "pay_button", "semantic"), "", ("targets", "pay_button", "semantic")),
+    (
+        ("targets", ""),
+        {"semantic": "the page's heading", "locators": [{"role": "heading"}]},
+        ("targets", "", "[key]"),
+    ),
+    (
+        ("probe_baselines", ""),
+        {"capture_before_seq": 9, "json_path": "$.count"},
+        ("probe_baselines", "", "[key]"),
+    ),
     (("coverage", "plan_hash"), "sha256:" + "D8" * 32, ("coverage", "plan_hash")),
     (("compiled_at",), "2026-10-12T14:03:22", ("compiled_at",)),
     (
@@ -422,6 +460,7 @@ FIELD_RULES: list[tuple[tuple[str | int, ...], object, tuple[str | int, ...]]] =
         ("assertions", 5, "visible_unoccluded", "min_size_px", 0),
     ),
     (("browser", "viewport"), [1440], ("browser", "viewport", 1)),
+    (("browser",), None, ("browser",)),
     (("browser", "timezone"), "Mars/Phobos", ("browser", "timezone")),
     (("browser", "locale"), "english", ("browser", "locale")),
     (("steps", 3, "side_effect_basis"), "", ("steps", 3, "click", "side_effect_basis")),
@@ -518,7 +557,8 @@ def test_locators_built_in_python_keep_their_kind() -> None:
 )
 def test_a_css_locator_is_one_css_selector(css: str) -> None:
     # Playwright reads >> as a chain into other selector engines, even after
-    # css=, which would reach into frames or match by position (ADR-0025).
+    # css=, which would reach into frames or match by position (ADR-0025,
+    # 2026-10-02 amendment).
     script = example()
     script["targets"]["pay_button"]["locators"][1] = {"css": css}
 
@@ -526,6 +566,8 @@ def test_a_css_locator_is_one_css_selector(css: str) -> None:
 
     assert location == ("targets", "pay_button", "locators", 1, "css", "css")
     assert "isn't one CSS selector" in message
+    # A >> inside an attribute value is written escaped instead.
+    assert r"write \>\>" in message
 
 
 @pytest.mark.parametrize("value", [0, 1, "false", "no", None])
@@ -564,3 +606,48 @@ def test_a_required_field_is_required(path: tuple[str | int, ...]) -> None:
 
     assert kind == "missing"
     assert location[-1] == path[-1]
+
+
+def test_a_script_built_in_python_validates() -> None:
+    # The compiler builds a script from objects (#52, #53): the browser
+    # settings it explored under, and lists where JSON has arrays.
+    script: dict[str, Any] = example()
+    script["compiled_at"] = datetime(2026, 10, 12, 14, 3, 22, tzinfo=UTC)
+    script["browser"] = BrowserSettings()
+
+    compiled = CompiledScript.model_validate(script)
+
+    assert compiled.browser == BrowserSettings()
+    visible = compiled.assertions[5]
+    assert isinstance(visible, VisibleUnoccluded)
+    assert visible.min_size_px == (44, 24)
+
+
+def test_a_locator_naming_no_kind_says_what_to_write() -> None:
+    script = example()
+    script["targets"]["pay_button"]["locators"][0] = {"name": "Pay"}
+
+    [(_, _, message)] = errors(script)
+
+    assert message == (
+        "a locator names exactly one kind: role, label, placeholder, testid or css"
+    )
+
+
+METHODS = ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
+STATUS_CLASSES = ("1xx", "2xx", "3xx", "4xx", "5xx")
+
+
+@pytest.mark.parametrize(
+    ("method", "status_class"), list(zip(METHODS, STATUS_CLASSES * 2, strict=False))
+)
+def test_every_method_and_status_class_validates(
+    method: str, status_class: str
+) -> None:
+    script = example()
+    script["assertions"][1].update(method=method, status_class=status_class)
+
+    network = CompiledScript.model_validate_json(json.dumps(script)).assertions[1]
+
+    assert isinstance(network, NetworkNone)
+    assert (network.method, network.status_class) == (method, status_class)
