@@ -144,3 +144,28 @@ A `pattern` comes from the script and the text from the page, and Python's `re` 
     3. the run ends `errored`.
   - *Chosen: 1.* A timed-out search established neither a pass nor a failure. Option 2 would let M2 file a finding the page never showed, and option 3 would leave the other assertions unevaluated, though every assertion is evaluated so the report is complete.
   - *Rule:* a run with any timed-out check can't pass, and M2 maps the outcome to `inconclusive`, never to `expectation_violated`.
+
+## Amendment (2026-10-02): the coverage plan (#41)
+
+Building `aqa explore --plan-only` (#41) settled how the plan is shaped and hashed. DATA_MODEL §7 ("Coverage plan first") holds the format; this records why. #41 lands in three pull requests, and each adds its part here.
+
+### The plan's shape
+`aqa_core.coverage_plan.CoveragePlan` is both what the model is asked to write and the frozen plan.
+- **One check model, not one per type.**
+  - *Options:* (1) a tagged union with a model per check type, as the compiled script has; (2) one `PlannedCheck` whose `check` is an enum of M1's nine types, with a validator holding each type to its own fields.
+  - *Chosen: 2.* The model writes the plan through Anthropic's structured output, and anthropic 1.9.0's `transform_schema`, which langchain-anthropic 1.7.4 applies to the response format, turns a single-value `Literal` into a bare string with a hint in its description (`{'type': 'string', 'title': 'Check', 'description': '{const: text_visible}'}`, measured at `1a46c0a`), so the API wouldn't hold a union's tag. An enum of several values stays an enum. The validator gives each type the fields its compiled assertion takes, less what compiling adds.
+- **A meaning per check.**
+  - *Options:* (1) each expectation's `subject` names the one target its checks read; (2) each check that reads an element names it, in `target_meaning`.
+  - *Chosen: 2.* One expectation can claim something of several elements. `login`'s expectation 4 says three header links are visible and not covered, which takes three targets, one per link (`bench/apps/conduit/qa/REVIEW.md`). The meaning is the expectation's subject when the check reads the subject itself. The locator generator (#52) takes `target_meaning` as the assertion target's meaning.
+- **Planned values follow the compiled script's rules.** A `text` must be normalized and a `pattern` must compile as a Python regex, through the same types `aqa_core.compiled` uses. A planned check then always fits the assertion it compiles to, and a plan that couldn't compile fails before the browser opens.
+- **What can't be covered says what it needs.** An `unsupported` expectation gives a reason, and `needs` names `pixel_diff`, `contrast_min` or `model_verify` when an M2 check would establish it. The spec error then names the cause, not only the expectation.
+- **A check type with no compiled fields yet.** The plan may name `probe_equals`, whose assertion gets fields in #48. A plan says what establishes a claim, and compiling it is #53's, so `--plan-only` accepts it. A full explore can't compile it until #48, and must say so before the browser opens.
+
+### The hash
+- **`plan_hash` uses `spec_hash`'s rules:** `sha256:` and the sha256 of the canonical JSON (sorted keys, no whitespace, ASCII escapes) of the plan, without the fields a check doesn't use. `aqa_core.spec.canonical_hash` computes both, so the two hashes can't drift apart.
+- **It covers the plan alone.** Subjects, claims, checks, unsupported entries and conditions count; the spec's hash doesn't. A compiled script records `spec_hash` beside it.
+
+### Fitting the spec
+- **Checked after the answer parses**, by `aqa_core.coverage_plan.misfits`: one entry per expectation, in the spec's order, and only probes the spec declares.
+  - *Options:* (1) a response schema built for each spec, whose `expect_index` and `probe` are enums of that spec's values; (2) one fixed schema, and this check after parsing.
+  - *Chosen: 2.* For a spec that declares no probe, option 1 would need a schema without probe checks, since an empty enum accepts no value: two shapes instead of one. A misfit is reported like an answer that doesn't parse.

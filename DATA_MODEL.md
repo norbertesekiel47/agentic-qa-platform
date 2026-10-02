@@ -1,6 +1,6 @@
 # Data Model — Agentic QA Platform
 
-Last updated: 2026-10-02 (loading a compiled script and bounding its text searches, #46; model roles and cost records, #40; M1 design decisions, ADR-0024–0026). PostgreSQL 16+ on RDS. Internal IDs are UUIDv7 (time-ordered). External identifiers (Clerk org/user IDs, GitHub IDs) are stored as their native strings/integers and mapped to internal IDs. All timestamps `timestamptz` UTC.
+Last updated: 2026-10-02 (the coverage plan's format and hash, #41; loading a compiled script and bounding its text searches, #46; model roles and cost records, #40; M1 design decisions, ADR-0024–0026). PostgreSQL 16+ on RDS. Internal IDs are UUIDv7 (time-ordered). External identifiers (Clerk org/user IDs, GitHub IDs) are stored as their native strings/integers and mapped to internal IDs. All timestamps `timestamptz` UTC.
 
 ## 1. Entity overview
 
@@ -241,10 +241,15 @@ Free-form notes for humans. The agent never reads the body; anything that affect
 
 ### Compilation rules
 - **Every expectation maps to ≥ 1 assertion** (`expect_index`). If the compiler can't produce a check that actually establishes an expectation, compilation **fails and names it** — it never substitutes a weaker proxy (e.g., "no confirmation heading" is not accepted as "no order created"). The author either adds a probe/observable or rewrites the expectation as the UI condition it really is.
-- **Coverage plan first (ADR-0024).** Explore writes the plan from the spec alone, before the browser opens, and keeps it frozen for the run. The compiled script stores it as `coverage`:
+- **Coverage plan first (ADR-0024).** Explore writes the plan from the spec alone, before the browser opens, and keeps it frozen for the run (`aqa_core.coverage_plan`).
+  - *As written:* one entry per expectation, in the spec's order, each with its `expect_index`, `subject` and `claim`. Then either `checks`, at least one and none twice, or `unsupported`, with a `reason`, plus `needs` when an M2 check would establish the claim (`pixel_diff`, `contrast_min` or `model_verify`). The plan also lists `requires`, the conditions, each `id` once. A plan fits its spec only with one entry per expectation and only with probes the spec declares.
+  - *A planned check* has one of M1's nine check types: *Check types* below, less `pixel_diff`, `contrast_min` and `model_verify`. Its fields are its assertion's, less what compiling adds. It has no `id` or `expect_index`, and no `min_size_px`, `in_viewport` or baseline capture. Instead of a `target`, it has a `target_meaning`: what the element it reads is for and where it sits. That is the expectation's subject, or the part of the subject the check reads when the claim names several elements, such as one of three header links. `probe_equals` takes a `probe` and a `value`, an integer or a string. A `text` is normalized and a `pattern` is a Python regex, as in a compiled script.
+  - *Compiling* turns each planned check into the assertion of the same type (#53), and each `target_meaning` into a target's `semantic` (#52). A plan can name `probe_equals` before its assertion has fields (#48), but can't be compiled until then.
+
+  The compiled script stores the plan as `coverage`:
   - for each expectation: its subject, its claim and the assertions that establish it;
   - `requires`: conditions the goal or expectations need, such as `{ "id": "c1", "condition": "checked after reloading the article page" }`. The step that satisfies a condition carries `"satisfies": ["c1"]`. Compilation fails if a required condition is left without a satisfying step before the assertions;
-  - `plan_hash`: identifies the plan the run froze, as written before the browser opened (subjects, claims, planned checks and required conditions). Assertion IDs and `satisfies` marks are compile-time links to it.
+  - `plan_hash`: identifies the plan the run froze, as written before the browser opened (subjects, claims, planned checks and required conditions). It is `sha256:` and the sha256 of the plan's canonical JSON, by `spec_hash`'s rules, without the fields a check doesn't use. Assertion IDs and `satisfies` marks are compile-time links to it.
 - **Subject and claim.** An expectation's subject says what it is about ("jake's comment", "the Pay button"). That is a target's meaning: fixed when the spec is explored, and not re-checked on replay. Everything the expectation says about its subject (text, state, position, destination, count) is its claim, and its assertions must establish all of it. So an expectation that claims what no check can establish, such as "shown above the article list", fails compilation by name.
 - **Check types:** `text_visible`, `text_in_target`, `not_visible`, `url_matches`, `network_none` / `network_seen` (method + URL pattern + status class, from the browser's own traffic), `probe_equals_baseline` / `probe_equals` (read-only GET to a declared probe on an allowed origin), deterministic visual checks — `visible_unoccluded` (hit-test at the element's center returns the element or a descendant; in viewport; minimum size), `pixel_diff` (region vs committed baseline image, threshold), `contrast_min` — and `model_verify` (only for `visual: model`; rejected in `strict` mode; explore rejects `visual: model` expectations as a spec error until M2 defines how they confirm).
 - **Text parameters (ADR-0025).**
@@ -285,7 +290,7 @@ Free-form notes for humans. The agent never reads the body; anything that affect
 ### Reading a compiled script (schema version 1)
 A compiled script is read as strictly as a spec (§6): an unknown field is an error, and no value changes type, so `true` is not `1` and `"1"` is not a number (`aqa_core.compiled`).
 - **Required:** every field the example shows, `browser`'s five settings included, except those this list makes optional. `schema_version` is the integer 1. `spec_hash` and `plan_hash` are `sha256:` and 64 lowercase hex digits. `compiled_at` has a time zone.
-  - The example's `spec_hash` is the hash of §6's example. Its `plan_hash` is illustrative: explore defines the plan's canonical form (#53).
+  - The example's `spec_hash` is the hash of §6's example. Its `plan_hash` is illustrative: no plan was written for it (*Coverage plan first* defines the hash).
 - **Locators:**
   - each names exactly one kind: `role`, `label`, `placeholder`, `testid` or `css`;
   - `name` goes only with `role`, and is optional there;
