@@ -193,6 +193,11 @@ def page(sites: Sites, path: str, query: dict[str, list[str]]) -> str | None:
         # A field, and a frame of the start origin: no other origin's frame.
         "/own": """<label>Top <input></label>
             <iframe srcdoc="<label>Inner <input></label>"></iframe>""",
+        # A frame from the subresource host that says it has the focus
+        # whatever has it, beside a field in a frame of the start origin.
+        "/liar": f"""<iframe src="{sites.cdn}/lying"></iframe>
+            <iframe srcdoc="<label>Inner <input></label>"></iframe>""",
+        "/lying": "<script>document.hasFocus = () => true;</script>",
         # Fields of each kind fill takes, and a button, which takes none.
         "/fields": """<label>Notes <textarea>old</textarea></label>
             <div role="textbox" aria-label="Story" contenteditable>old</div>
