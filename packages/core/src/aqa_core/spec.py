@@ -114,10 +114,15 @@ def _start_url(text: str) -> str:
     return text
 
 
+# A path on the start origin: a spec's start_url, and a compiled navigate
+# step's url (DATA_MODEL §7).
+StartPath = Annotated[StrictStr, AfterValidator(_start_url)]
+
+
 class Preconditions(StrictModel):
     """Where a run starts and the state it starts from."""
 
-    start_url: Annotated[StrictStr, AfterValidator(_start_url)]
+    start_url: StartPath
     account: Account | None = None
     reset: Reset | None = None
     # Read-only GET endpoints, by name (DATA_MODEL §6).
