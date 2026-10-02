@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 # --- scope ---------------------------------------------------------------------
@@ -20,6 +21,11 @@ from typing import Literal
 # bench/apps/ holds vendored third-party apps whose planted bugs are the point
 # (ADR-0021; gitleaks still scans it for secrets).
 EXEMPT_DIRS = (".claude/hooks", ".scratch", "apps/dashboard/src/client", "bench/apps")
+
+
+def is_exempt(rel: str) -> bool:
+    return any(rel == d or rel.startswith(d + "/") for d in EXEMPT_DIRS)
+
 
 # Prose quotes the rule 1 and 2 patterns when it describes the rules.
 DOC_SUFFIXES = frozenset({".md", ".mdx", ".markdown", ".rst", ".txt", ".adoc"})
@@ -387,6 +393,14 @@ SKIP_SUFFIXES = frozenset(
 LOCKFILES = frozenset(
     {"pnpm-lock.yaml", "package-lock.json", "yarn.lock", "uv.lock", "poetry.lock"}
 )
+
+
+def binary_or_lockfile(rel: str) -> bool:
+    """A file whose content no rule reads."""
+    path = Path(rel)
+    return path.suffix.lower() in SKIP_SUFFIXES or path.name in LOCKFILES
+
+
 MAX_SCAN_BYTES = 2_000_000
 GENERATED = re.compile(r"@generated|auto-?generated|do not edit", re.IGNORECASE)
 SCAN_PREFILTER = re.compile(
