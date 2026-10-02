@@ -19,6 +19,7 @@ from aqa_runner.document_origins import (
     DocumentChangedError,
     PolicyEvent,
     PolicyEventError,
+    Popup,
     Records,
     document_origin,
 )
@@ -69,7 +70,9 @@ class BrowserSession:
     Each observation first checks that the page is on one of the run's
     allowed origins, from `policy`; otherwise it records a policy event in
     `policy_events` and raises `PolicyEventError`. A snapshot leaves out the
-    content of every frame that isn't on one of them.
+    content of every frame that isn't on one of them. Every page another page
+    opens is recorded in `popups` and closed, and is a policy event too when
+    it isn't on one of them.
 
     `page` is public until #53 makes it private. No production code outside
     this module may use it: it observes and acts without the checks."""
@@ -85,6 +88,10 @@ class BrowserSession:
         # included (https://playwright.dev/python/docs/api/class-page#page-event-frame-navigated).
         self._navigations = 0
         page.on("framenavigated", self._count_navigation)
+        self.popups: Records[Popup] = Records()
+        # Every page opened in the context from now on, popups of popups
+        # included (https://playwright.dev/python/docs/api/class-browsercontext#browser-context-event-page).
+        page.context.on("page", self._close_popup)
 
     async def snapshot(self) -> str:
         """The page's accessibility snapshot in Playwright's AI mode
@@ -165,6 +172,20 @@ class BrowserSession:
 
     def _count_navigation(self, _: Frame) -> None:
         self._navigations += 1
+
+    async def _close_popup(self, popup: Page) -> None:
+        """Record a page that another page opened, and close it: the session
+        observes and acts on its own page only. Playwright reports the popup
+        once it has navigated to its first URL, and its opener even when the
+        page asked for none. A blank popup is on its opener's origin."""
+        url = popup.url
+        opener = await popup.opener()
+        self.popups.add(Popup(url, None if opener is None else opener.url))
+        inherited = None if opener is None else origin_of(opener.main_frame)
+        origin = document_origin(url, inherited)
+        if origin not in self._policy.allowed_origins:
+            self.policy_events.add(PolicyEvent("popup", url, origin))
+        await popup.close()
 
     def _require_allowed_page(self) -> None:
         """Record and raise a policy event unless the session's page is on one
