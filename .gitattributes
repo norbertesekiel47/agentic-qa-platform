@@ -1,0 +1,4 @@
+# The vendored price map is checked against the sha256 in pin.json, so git must
+# hand out its exact bytes: no line-ending conversion, whatever core.autocrlf
+# says (ADR-0007 amendment, 2026-10-01).
+packages/core/src/aqa_core/price_map_data/model_prices_and_context_window.json -text

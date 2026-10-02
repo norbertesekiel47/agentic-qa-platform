@@ -6,21 +6,19 @@ import hashlib
 import http.client
 import json
 import re
-import shutil
 import sys
-import tempfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from aqa_core.price_map import (
-    COMMIT,
+    COMMIT_PATTERN,
     MAP_FILE,
     PIN_FILE,
     UPSTREAM,
     VENDORED,
     Pin,
     PriceMapError,
-    load_price_map,
+    parse_models,
 )
 
 # Fetch(host, path): the body of an HTTPS GET.
@@ -44,30 +42,25 @@ def _resolve_commit(ref: str, fetch: Fetch) -> str:
     except ValueError:
         answer = None
     commit = answer.get("sha") if isinstance(answer, dict) else None
-    if not isinstance(commit, str) or not re.fullmatch(COMMIT, commit):
+    if not isinstance(commit, str) or not re.fullmatch(COMMIT_PATTERN, commit):
         raise RefreshError(f"GitHub gave no commit for '{ref}'")
     return commit
 
 
 def refresh(ref: str, directory: Path = VENDORED, *, fetch: Fetch) -> Pin:
     """Copy the map at upstream's `ref` into `directory` and pin the commit
-    that `ref` names, with the copy's sha256. Both files are written only
-    after the pair loads."""
+    that `ref` names, with the copy's sha256. Nothing is written unless the
+    download is a price map; a failed write between the two files leaves a map
+    that doesn't match its pin, which loading rejects."""
     commit = _resolve_commit(ref, fetch)
     data = fetch("raw.githubusercontent.com", f"/{UPSTREAM}/{commit}/{MAP_FILE}")
+    try:
+        parse_models(data, f"the download at {commit}")
+    except PriceMapError as error:
+        raise RefreshError(str(error)) from None
     pin = Pin(upstream=UPSTREAM, commit=commit, sha256=hashlib.sha256(data).hexdigest())
-    with tempfile.TemporaryDirectory() as scratch:
-        staged = Path(scratch)
-        (staged / MAP_FILE).write_bytes(data)
-        (staged / PIN_FILE).write_text(pin.model_dump_json(indent=2) + "\n")
-        try:
-            load_price_map(staged)
-        except PriceMapError as error:
-            raise RefreshError(
-                f"the download at {commit} is unusable: {error}"
-            ) from None
-        shutil.copyfile(staged / MAP_FILE, directory / MAP_FILE)
-        shutil.copyfile(staged / PIN_FILE, directory / PIN_FILE)
+    (directory / MAP_FILE).write_bytes(data)
+    (directory / PIN_FILE).write_text(pin.model_dump_json(indent=2) + "\n")
     return pin
 
 
@@ -86,6 +79,9 @@ def fetch_https(host: str, path: str) -> bytes:
         )
         response = connection.getresponse()
         body = response.read()
+    except http.client.HTTPException as error:
+        # An answer that stops short is not an OSError.
+        raise RefreshError(f"https://{host}{path}: {error!r}") from None
     finally:
         connection.close()
     if response.status != 200:
