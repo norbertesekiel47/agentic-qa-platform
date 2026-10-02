@@ -359,7 +359,7 @@ The second change of #44 gives the browser session the surface that #46's execut
 
 - **The surface,** agreed with #46. Each method is async, takes the session's lock, and checks before it does anything. A refusal records a policy event and raises `PolicyEventError`.
   - `navigate(url)` and `reload()`.
-  - `click(element)`, `fill(element, value)`, `select(element, option)` and `press(key)`. Each action returns its settle window (#46; ADR-0024's amendment, Settling). An element comes from `locate(ref)` (the navigator's) or `resolve(target, use)` (the executor's), so both reach the same checks. `select` takes the option whose value or label is `option` (Playwright's `select_option` with a string).
+  - `click(element)`, `fill(element, value)`, `select(element, option)` and `press(key)`. Each action returns its settle window, and #46 adds `settle(window)`, `text_of(element)` and `visible_text()`, which check the page as every observation does (ADR-0024's amendment, Settling and Reading text). An element comes from `locate(ref)` (the navigator's) or `resolve(target, use)` (the executor's), so both reach the same checks. `select` takes the option whose value or label is `option` (Playwright's `select_option` with a string).
   - `resolve(target, use)`, which wraps `aqa_runner.locators.resolve` and keeps its overloads.
   - `url()`, a method because it takes the lock and checks the page. `snapshot()` and `locate(ref)` stay the navigator's.
 - **`navigate(url)`**
