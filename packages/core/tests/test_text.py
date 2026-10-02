@@ -18,6 +18,11 @@ from aqa_core.text import normalize
         ("  Post\n\tComment\u2003 ", "Post Comment"),
         # A glyph between two spaces leaves one space, not two.
         ("Favorite \ue900 Article", "Favorite Article"),
+        # Each private-use range's first and last code points go, and the
+        # character after the BMP range stays.
+        ("\ue000a\uf8ff \ue000\uf900", "a \uf900"),
+        ("\U000f0000b\U000ffffd", "b"),
+        ("\U00100000c\U0010fffd", "c"),
         # Case, punctuation and other symbols are kept.
         ("Pay $5.00 \u2014 now \u2605", "Pay $5.00 \u2014 now \u2605"),
         ("\uf218\xa0", ""),

@@ -283,6 +283,7 @@ A compiled script is read as strictly as a spec (§6): an unknown field is an er
   - `name` goes only with `role`, and is optional there;
   - `role` is a WAI-ARIA role that Playwright's `get_by_role` accepts;
   - a `name` is written normalized (no private-use glyphs, single spaces, none at either end), because it is compared normalized;
+  - a `css` value is one CSS selector, with no `>>`: Playwright reads `>>` as a chain into other selector engines, even after `css=`;
   - `scope` is optional, and is itself a locator;
   - a target lists at least one locator, and none twice.
 - **Steps:** each has `seq` (1 or more), `side_effect`, `side_effect_basis` exactly when `side_effect` is `true`, and optionally `satisfies`. The other fields depend on the action:
@@ -297,7 +298,7 @@ A compiled script is read as strictly as a spec (§6): an unknown field is an er
   | `select` | `target`, `option` |
   | `press` | `key`, with no target, as the agent's `press(key)` tool has none (ARCHITECTURE §3.4) |
 
-- **Assertions:** each has an `id` and an `expect_index`. Schema version 1 gives fields to these checks; the other check types above are refused by name until a milestone defines their fields (#48):
+- **Assertions:** each has an `id` and an `expect_index`. Schema version 1 gives fields to these checks. The other check types above are refused by name until their fields are defined: `probe_equals` in #48, and `pixel_diff`, `contrast_min` and `model_verify` in M2.
 
   | Check | Fields |
   |---|---|
@@ -310,7 +311,10 @@ A compiled script is read as strictly as a spec (§6): an unknown field is an er
   | `visible_unoccluded` | `target`, `min_size_px` (width and height, each 1 or more), `in_viewport` |
 
   A `text` is written normalized, as a `name` is. A `pattern` must compile as a Python regex.
-- **Checked by the loader, not the format:** that the targets, assertions, conditions, probes and step numbers that parts of the script name exist and are unique, and that the JSON repeats no key (#46).
+- **Checked by the loader, not the format (#46):**
+  - that what parts of the script name exists and is unique: targets, assertion IDs, the expectations that `expect_index` names, conditions, probes and step numbers;
+  - that each secret a `fill_secret` step names is declared in the project config (§9);
+  - that the JSON repeats no key.
 
 ### Replay outcomes
 - **Binding unresolved:** no locator gives the match its use needs (see *Resolution per use*) within the wait budget → drift → heal path.

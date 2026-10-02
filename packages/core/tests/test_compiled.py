@@ -8,7 +8,8 @@ from typing import Any
 
 import pytest
 from aqa_core import strict_yaml
-from aqa_core.compiled import CompiledScript
+from aqa_core.browser import BrowserSettings
+from aqa_core.compiled import ByCss, ByRole, CompiledScript, Target
 from aqa_core.spec import spec_hash
 from pydantic import ValidationError
 
@@ -45,8 +46,9 @@ def test_data_models_example_validates() -> None:
         "visible_unoccluded",
     ]
     pay_button = script.targets["pay_button"].locators[0]
+    assert isinstance(pay_button, ByRole)
     assert (pay_button.role, pay_button.name) == ("button", "Pay")
-    assert pay_button.scope is not None
+    assert isinstance(pay_button.scope, ByCss)
     assert pay_button.scope.css == "app-payment-step"
     assert script.browser.viewport == (1440, 900)
 
@@ -76,8 +78,10 @@ def errors(script: dict[str, Any]) -> list[tuple[tuple[str | int, ...], str, str
     message."""
     with pytest.raises(ValidationError) as raised:
         CompiledScript.model_validate_json(json.dumps(script))
+    # Our own messages without pydantic's "Value error, " prefix.
     return [
-        (error["loc"], error["type"], error["msg"]) for error in raised.value.errors()
+        (error["loc"], error["type"], error["msg"].removeprefix("Value error, "))
+        for error in raised.value.errors()
     ]
 
 
@@ -127,38 +131,59 @@ def test_an_unknown_field_is_rejected(path: tuple[str | int, ...]) -> None:
 
 
 @pytest.mark.parametrize(
-    ("locator", "problem"),
+    ("locator", "kind"),
     [
-        ({}, "names no kind"),
-        ({"role": "button", "label": "Pay"}, "names 2 kinds: role, label"),
-        ({"name": "Pay"}, "a name goes with a role"),
-        ({"label": "Pay", "name": "Pay"}, "a name goes with a role"),
-        ({"role": "buton", "name": "Pay"}, "Input should be 'alert'"),
-        ({"css": ""}, "at least 1 character"),
-        # A name with a glyph or a doubled space could never match, because a
-        # name is compared after normalizing.
-        ({"role": "button", "name": "\uf218 Pay"}, "is not normalized"),
-        ({"role": "button", "name": "Pay  now"}, "is not normalized"),
-        ({"role": "button", "name": "\uf218\xa0"}, "compares as empty"),
-        ({"css": "button.pay", "scope": {}}, "names no kind"),
+        ({}, "locator_kind"),
+        ({"role": "button", "label": "Pay"}, "locator_kind"),
+        ({"name": "Pay"}, "locator_kind"),
+        # A name goes only with a role.
+        ({"label": "Pay", "name": "Pay"}, "extra_forbidden"),
+        ({"role": "buton", "name": "Pay"}, "literal_error"),
+        ({"css": ""}, "string_too_short"),
+        ({"css": "button.pay", "scope": {}}, "locator_kind"),
+        (
+            {"testid": "pay", "scope": {"label": "Payment", "scope": {"css": 7}}},
+            "string_type",
+        ),
     ],
 )
-def test_a_malformed_locator_is_rejected(locator: dict[str, Any], problem: str) -> None:
+def test_a_malformed_locator_is_rejected(locator: dict[str, Any], kind: str) -> None:
     script = example()
     script["targets"]["pay_button"]["locators"][0] = locator
 
-    [(location, _, message)] = errors(script)
+    [(location, found, _)] = errors(script)
 
     assert location[:4] == ("targets", "pay_button", "locators", 0)
+    assert found == kind
+
+
+@pytest.mark.parametrize(
+    ("name", "problem"),
+    [
+        # A name with a glyph or extra whitespace could never match, because
+        # a name is compared after normalizing.
+        ("\uf218 Pay", "is not normalized"),
+        ("Pay  now", "is not normalized"),
+        (" Pay ", "is not normalized"),
+        ("\uf218\xa0", "compares as empty"),
+    ],
+)
+def test_a_role_name_is_written_normalized(name: str, problem: str) -> None:
+    script = example()
+    script["targets"]["pay_button"]["locators"][0] = {"role": "button", "name": name}
+
+    [(location, _, message)] = errors(script)
+
+    assert location == ("targets", "pay_button", "locators", 0, "role", "name")
     assert problem in message
 
 
 BASIS_ON_A_FALSE_FLAG = (
-    "Value error, side_effect_basis says why a step's side_effect is true; "
+    "side_effect_basis says why a step's side_effect is true; "
     "this step's is false, so remove it"
 )
 TRUE_FLAG_WITHOUT_BASIS = (
-    "Value error, a step whose side_effect is true says why in side_effect_basis"
+    "a step whose side_effect is true says why in side_effect_basis"
 )
 
 
@@ -175,32 +200,32 @@ def test_side_effect_basis_goes_with_a_true_flag() -> None:
     ]
 
 
-TAKES_ONE = "Value error, a text check takes text or pattern, exactly one"
+TAKES_ONE = "a text check takes text or pattern, exactly one"
 
 
 @pytest.mark.parametrize(
-    ("index", "check", "change", "problem"),
+    ("index", "check", "add", "remove"),
     [
         # a1 is a text_visible check with a text, a4 a text_in_target check
-        # with a pattern.
-        (0, "text_visible", {"pattern": "card has expired"}, TAKES_ONE),
-        (0, "text_visible", {"text": None}, TAKES_ONE),
-        (3, "text_in_target", {"text": "Classic Hoodie"}, TAKES_ONE),
-        (3, "text_in_target", {"pattern": None}, TAKES_ONE),
+        # with a pattern: each gets both, or loses its only one.
+        (0, "text_visible", {"pattern": "card has expired"}, ()),
+        (0, "text_visible", {}, ("text",)),
+        (3, "text_in_target", {"text": "Classic Hoodie"}, ()),
+        (3, "text_in_target", {}, ("pattern",)),
     ],
 )
 def test_a_text_check_takes_text_or_pattern(
-    index: int, check: str, change: dict[str, Any], problem: str
+    index: int, check: str, add: dict[str, str], remove: tuple[str, ...]
 ) -> None:
     script = example()
     assertion = script["assertions"][index]
-    assertion.update(change)
-    for key in [key for key, value in assertion.items() if value is None]:
+    assertion.update(add)
+    for key in remove:
         del assertion[key]
 
     [(location, _, message)] = errors(script)
 
-    assert (location, message) == (("assertions", index, check), problem)
+    assert (location, message) == (("assertions", index, check), TAKES_ONE)
 
 
 def test_a_text_is_written_normalized() -> None:
@@ -214,19 +239,27 @@ def test_a_text_is_written_normalized() -> None:
 
 
 @pytest.mark.parametrize(
+    "pattern",
+    [
+        "Classic Hoodie (size M",
+        # re.compile raises OverflowError and RecursionError for these, not
+        # re.error, and each must still be a validation error.
+        "a{4294967296}",
+        "(" * 1000 + ")" * 1000,
+    ],
+    ids=["unclosed", "huge repeat", "deep nesting"],
+)
+@pytest.mark.parametrize(
     ("index", "check"), [(3, "text_in_target"), (4, "url_matches")]
 )
-def test_a_pattern_must_compile(index: int, check: str) -> None:
+def test_a_pattern_must_compile(pattern: str, index: int, check: str) -> None:
     script = example()
-    script["assertions"][index]["pattern"] = "Classic Hoodie (size M"
+    script["assertions"][index]["pattern"] = pattern
 
     [(location, _, message)] = errors(script)
 
     assert location == ("assertions", index, check, "pattern")
-    assert message == (
-        "Value error, 'Classic Hoodie (size M' is not a Python regex: "
-        "missing ), unterminated subpattern at position 15"
-    )
+    assert message.startswith(f"{pattern!r} is not a Python regex: ")
 
 
 @pytest.mark.parametrize(
@@ -242,14 +275,15 @@ def test_a_navigate_url_is_a_path_held_to_start_urls_rules(url: str) -> None:
     [(location, _, message)] = errors(script)
 
     assert location == ("steps", 0, "navigate", "url")
-    assert message.startswith(f"Value error, '{url}' is not a path:")
+    assert message.startswith(f"'{url}' is not a path:")
 
 
 @pytest.mark.parametrize(
     ("part", "index", "field", "value"),
     [
         ("steps", 0, "action", "hover"),
-        # Checks whose fields DATA_MODEL §7 doesn't give yet (#48).
+        # Checks whose fields DATA_MODEL §7 doesn't give yet: probe_equals
+        # gets them in #48; pixel_diff, contrast_min and model_verify in M2.
         ("assertions", 2, "check", "probe_equals"),
         ("assertions", 5, "check", "pixel_diff"),
         ("assertions", 5, "check", "contrast_min"),
@@ -262,15 +296,13 @@ def test_an_unknown_action_or_check_is_refused_by_name(
     script = example()
     script[part][index][field] = value
 
-    [(location, _, message)] = errors(script)
+    [(location, kind, message)] = errors(script)
 
-    assert location == (part, index)
-    assert message.startswith(
-        f"Input tag '{value}' found using '{field}' does not match"
-    )
+    assert (location, kind) == ((part, index), "union_tag_invalid")
+    assert repr(value) in message
 
 
-@pytest.mark.parametrize("version", [True, 1.0, "1", 2])
+@pytest.mark.parametrize("version", [True, 1.0, "1", 2, 0])
 def test_schema_version_is_the_integer_1(version: object) -> None:
     script = example()
     script["schema_version"] = version
@@ -280,35 +312,30 @@ def test_schema_version_is_the_integer_1(version: object) -> None:
     assert location == ("schema_version",)
 
 
-def test_browser_records_every_setting() -> None:
+@pytest.mark.parametrize(
+    "missing",
+    [list(BrowserSettings.model_fields), ["locale"]],
+    ids=["all", "one"],
+)
+def test_browser_records_every_setting(missing: list[str]) -> None:
     # Replay uses the settings the script was explored under, so a missing
-    # one must not become the pinned default (DATA_MODEL §7, ADR-0025).
+    # one must not become the pinned default (DATA_MODEL §7, ADR-0025). The
+    # settings come from BrowserSettings, so one added later is required too.
     script = example()
-    script["browser"] = {}
+    for setting in missing:
+        del script["browser"][setting]
 
-    assert [(location, kind) for location, kind, _ in errors(script)] == [
-        (("browser", setting), "missing")
-        for setting in (
-            "timezone",
-            "locale",
-            "viewport",
-            "device_scale_factor",
-            "color_scheme",
-        )
-    ]
+    [(location, _, message)] = errors(script)
 
-
-def put(script: dict[str, Any], path: tuple[str | int, ...], value: object) -> None:
-    parent: Any = script
-    for key in path[:-1]:
-        parent = parent[key]
-    parent[path[-1]] = value
+    assert location == ("browser",)
+    assert message.startswith(f"records no {', '.join(missing)}:")
 
 
 def test_every_action_and_check_validates() -> None:
     # The actions and checks DATA_MODEL §7's example doesn't use, with the
     # optional fields it leaves out.
     script = example()
+    steps, assertions = len(script["steps"]), len(script["assertions"])
     script["coverage"]["requires"] = [{"id": "c1", "condition": "after a reload"}]
     script["targets"]["size"] = {
         "semantic": "the size picker on the product page",
@@ -346,18 +373,18 @@ def test_every_action_and_check_validates() -> None:
 
     compiled = CompiledScript.model_validate_json(json.dumps(script))
 
-    assert [step.action for step in compiled.steps[5:]] == [
+    assert [step.action for step in compiled.steps[steps:]] == [
         "reload",
         "select",
         "fill",
         "press",
     ]
-    assert compiled.steps[5].satisfies == ("c1",)
-    assert [assertion.check for assertion in compiled.assertions[6:]] == [
+    assert compiled.steps[steps].satisfies == ("c1",)
+    assert [assertion.check for assertion in compiled.assertions[assertions:]] == [
         "not_visible",
         "network_seen",
     ]
-    assert compiled.targets["size"].locators[0].name is None
+    assert compiled.targets["size"].locators == (ByRole(role="combobox"),)
 
 
 # A field that breaks its rule, and where validation reports it: a step's or
@@ -395,6 +422,40 @@ FIELD_RULES: list[tuple[tuple[str | int, ...], object, tuple[str | int, ...]]] =
         ("assertions", 5, "visible_unoccluded", "min_size_px", 0),
     ),
     (("browser", "viewport"), [1440], ("browser", "viewport", 1)),
+    (("browser", "timezone"), "Mars/Phobos", ("browser", "timezone")),
+    (("browser", "locale"), "english", ("browser", "locale")),
+    (("steps", 3, "side_effect_basis"), "", ("steps", 3, "click", "side_effect_basis")),
+    (("steps", 3, "target"), "", ("steps", 3, "click", "target")),
+    (("steps", 3, "satisfies"), ["c1", "c1"], ("steps", 3, "click", "satisfies")),
+    (("steps", 2, "secret"), "test_password", ("steps", 2, "fill_secret", "secret")),
+    (("coverage", "expectations"), [], ("coverage", "expectations")),
+    (("assertions",), [], ("assertions",)),
+    (
+        ("coverage", "expectations", 1, "assertions"),
+        ["a2", "a2"],
+        ("coverage", "expectations", 1, "assertions"),
+    ),
+    (
+        ("coverage", "requires"),
+        [{"id": "c1", "condition": "after a reload", "replay_safe": True}],
+        ("coverage", "requires", 0, "replay_safe"),
+    ),
+    (
+        ("probe_baselines", "orders_count", "capture_before_seq"),
+        0,
+        ("probe_baselines", "orders_count", "capture_before_seq"),
+    ),
+    (
+        ("assertions", 0, "expect_index"),
+        -1,
+        ("assertions", 0, "text_visible", "expect_index"),
+    ),
+    (("compiled_by", "mode"), "heal", ("compiled_by", "mode")),
+    (
+        ("compiled_by", "models"),
+        {"pilot": "claude-sonnet-5-5"},
+        ("compiled_by", "models", "pilot", "[key]"),
+    ),
 ]
 
 
@@ -403,7 +464,7 @@ def test_a_field_breaking_its_rule_is_rejected(
     path: tuple[str | int, ...], value: object, location: tuple[str | int, ...]
 ) -> None:
     script = example()
-    put(script, path, value)
+    at(script, path[:-1])[str(path[-1])] = value
 
     [(found, _, _)] = errors(script)
 
@@ -427,3 +488,79 @@ def test_press_takes_no_target() -> None:
     [(location, kind, _)] = errors(script)
 
     assert (location, kind) == (("steps", 5, "press", "target"), "extra_forbidden")
+
+
+def test_locators_built_in_python_keep_their_kind() -> None:
+    # The compiler builds locators as objects (#52), not as JSON.
+    locators = (
+        ByRole(role="button", name="Pay", scope=ByCss(css="app-payment-step")),
+        ByCss(css="app-payment-step button[type=submit]"),
+    )
+
+    target = Target(semantic="the payment step's submit button", locators=locators)
+
+    assert target.locators == locators
+    # A locator prints as the script writes it, without empty fields.
+    assert json.loads(str(target.locators[0])) == {
+        "role": "button",
+        "name": "Pay",
+        "scope": {"css": "app-payment-step"},
+    }
+
+
+@pytest.mark.parametrize(
+    "css",
+    [
+        "iframe >> internal:control=enter-frame >> input[type=password]",
+        "body >> xpath=//button",
+        "button>>nth=0",
+    ],
+)
+def test_a_css_locator_is_one_css_selector(css: str) -> None:
+    # Playwright reads >> as a chain into other selector engines, even after
+    # css=, which would reach into frames or match by position (ADR-0025).
+    script = example()
+    script["targets"]["pay_button"]["locators"][1] = {"css": css}
+
+    [(location, _, message)] = errors(script)
+
+    assert location == ("targets", "pay_button", "locators", 1, "css", "css")
+    assert "isn't one CSS selector" in message
+
+
+@pytest.mark.parametrize("value", [0, 1, "false", "no", None])
+def test_side_effect_is_a_boolean(value: object) -> None:
+    # A lax reading would take 0 or "no" as false, and false lets a
+    # continuation repeat the step (ADR-0006 amendment).
+    script = example()
+    script["steps"][3]["side_effect"] = value
+
+    [(location, kind, _)] = errors(script)
+
+    assert (location, kind) == (("steps", 3, "click", "side_effect"), "bool_type")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("spec_id",),
+        ("confirmed",),
+        ("compiled_by", "price_map"),
+        ("coverage", "requires"),
+        ("targets", "pay_button", "semantic"),
+        ("probe_baselines", "orders_count", "json_path"),
+        ("steps", 0, "url"),
+        ("steps", 3, "target"),
+        ("assertions", 0, "id"),
+        ("assertions", 1, "url_pattern"),
+    ],
+    ids=lambda path: ".".join(map(str, path)),
+)
+def test_a_required_field_is_required(path: tuple[str | int, ...]) -> None:
+    script = example()
+    del at(script, path[:-1])[str(path[-1])]
+
+    [(location, kind, _)] = errors(script)
+
+    assert kind == "missing"
+    assert location[-1] == path[-1]
