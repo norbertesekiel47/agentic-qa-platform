@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 from aqa_core.config import ProjectConfig
 from aqa_core.project import allowed_origins
+from aqa_core.schema import DEFAULT_PORTS
 from aqa_core.spec import Spec
 
 type IPAddress = IPv4Address | IPv6Address
@@ -23,7 +24,14 @@ type Resolve = Callable[[str], Awaitable[Sequence[IPAddress]]]
 
 type Connection = tuple[asyncio.StreamReader, asyncio.StreamWriter]
 
-DEFAULT_PORTS = {"http": 80, "https": 443}
+# Why a connection was refused: its host and port aren't on the allowlist, or
+# the IP policy refused an address the host resolves to.
+type RefusalKind = Literal["host", "address"]
+
+# Seconds to wait for one address to accept a connection before trying the
+# next in the answer, so an address that drops packets can't stall the rest
+# for the OS's own timeout (over a minute).
+CONNECT_TIMEOUT = 10
 
 # Cloud metadata services that the link-local rule doesn't already refuse
 # (169.254.169.254 and ECS's 169.254.170.2 are link-local): AWS's over IPv6,
@@ -42,9 +50,9 @@ NAT64 = IPv6Network("64:ff9b::/96")
 IPV4_COMPATIBLE = IPv6Network("::/96")
 
 
-def _judged(address: IPAddress) -> IPAddress:
+def _unwrapped(address: IPAddress) -> IPAddress:
     """The address the IP policy judges: the IPv4 address that an IPv6 form
-    embeds, or `address` itself. Python calls `::7f00:1` and
+    wraps, or `address` itself. Python calls `::7f00:1` and
     `64:ff9b::a9fe:a9fe` global, though they reach 127.0.0.1 and
     169.254.169.254."""
     if isinstance(address, IPv4Address):
@@ -67,15 +75,15 @@ def address_refusal(address: IPAddress, *, private_allowed: bool) -> str | None:
     address that isn't public passes only when `private_allowed`: for the
     start origin and the project's declared private origins, in local and CI
     runs."""
-    address_judged = _judged(address)
+    unwrapped = _unwrapped(address)
     if (
-        address_judged.is_link_local
-        or address_judged.is_unspecified
-        or any(address_judged in network for network in METADATA)
+        unwrapped.is_link_local
+        or unwrapped.is_unspecified
+        or any(unwrapped in network for network in METADATA)
     ):
         return f"{address} is a link-local, unspecified or cloud metadata address"
     # https://docs.python.org/3.14/library/ipaddress.html#ipaddress.IPv4Address.is_global
-    if not address_judged.is_global and not private_allowed:
+    if not unwrapped.is_global and not private_allowed:
         return (
             f"{address} is not a public address: only the start origin and the "
             "project's declared private origins may resolve to one"
@@ -116,7 +124,8 @@ class EgressPolicy:
         plain request is http's (80); a tunnel carries https or wss (443)."""
         if (host, port) in map(authority, self.allowed_origins):
             return True
-        return host in self.subresource_hosts and port == (443 if tunnel else 80)
+        scheme = "https" if tunnel else "http"
+        return host in self.subresource_hosts and port == DEFAULT_PORTS[scheme]
 
     def may_be_private(self, host: str, port: int) -> bool:
         """Whether `host` and `port` may resolve to a loopback or private
@@ -142,7 +151,7 @@ class Refusal:
 
     host: str
     port: int
-    kind: Literal["host", "address"]
+    kind: RefusalKind
     detail: str
 
 
@@ -258,19 +267,23 @@ class EgressProxy:
     async def _open(
         self, host: str, port: int, answer: tuple[IPAddress, ...]
     ) -> Connection:
-        """A connection to the first address in `answer` that accepts one.
-        Each is an address, so opening it looks nothing up."""
+        """A connection to the first address in `answer` that accepts one
+        within `CONNECT_TIMEOUT`. Each is an address, so opening it looks
+        nothing up."""
         problems = []
         for address in answer:
             try:
                 # https://docs.python.org/3.14/library/asyncio-stream.html#asyncio.open_connection
-                return await asyncio.open_connection(str(address), port)
-            except OSError as error:  # refused, unreachable or timed out
-                problems.append(f"{address}: {error}")
+                return await asyncio.wait_for(
+                    asyncio.open_connection(str(address), port), CONNECT_TIMEOUT
+                )
+            # Refused or unreachable, or TimeoutError, an OSError since 3.11.
+            except OSError as error:
+                problems.append(f"{address}: {str(error) or type(error).__name__}")
         raise self._fail(host, port, "; ".join(problems))
 
     def _refuse(
-        self, host: str, port: int, kind: Literal["host", "address"], detail: str
+        self, host: str, port: int, kind: RefusalKind, detail: str
     ) -> EgressRefusedError:
         refusal = Refusal(host, port, kind, detail)
         self.refusals.append(refusal)

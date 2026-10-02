@@ -41,7 +41,7 @@ AtLeastOne = AfterValidator(_at_least_one)
 NonEmpty = Annotated[StrictStr, Field(min_length=1)]
 PositiveNumber = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 
-_DEFAULT_PORTS = {"http": 80, "https": 443}
+DEFAULT_PORTS = {"http": 80, "https": 443}
 # Characters no origin or host contains as written. WHATWG URL parsing reads
 # a backslash as a slash and drops tabs and newlines, so either could turn a
 # value that reads as one origin into another.
@@ -88,7 +88,7 @@ def parse_origin(text: str) -> str:
     except ValueError:  # brackets that don't close
         raise problem from None
     if (
-        parts.scheme not in _DEFAULT_PORTS
+        parts.scheme not in DEFAULT_PORTS
         or parts.path not in ("", "/")
         or not parts.hostname
     ):
@@ -102,7 +102,7 @@ def parse_origin(text: str) -> str:
     # such as [v1.example.test], leaving a different host.
     if host is None or port == 0 or ("[" in parts.netloc) != host.startswith("["):
         raise problem
-    if port is None or port == _DEFAULT_PORTS[parts.scheme]:
+    if port is None or port == DEFAULT_PORTS[parts.scheme]:
         return f"{parts.scheme}://{host}"
     return f"{parts.scheme}://{host}:{port}"
 
