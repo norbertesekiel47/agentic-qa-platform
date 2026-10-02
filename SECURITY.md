@@ -103,10 +103,10 @@ The agent reads arbitrary page content. A malicious or compromised page may say 
      - *Runner-side requests:* the runner's own probe and reset requests aren't the browser's, so neither the proxy nor the launch's switches and fail-closed proxy carry them: they leave through the run's egress gate, the one the proxy asks for every connection, so the same rules cover them. They go to allowed origins only, matched by scheme, host and port, so a request never goes out in plaintext on an allowed https origin's port, and never to subresource hosts, under the same DNS pins and IP policy. They carry no cookies at all, the browser's or any a response set, never follow a redirect, and speak TLS from the first byte, verifying the certificate against the URL's host (ADR-0026 amendment, 2026-10-01).
   2. **Playwright routing (defense in depth).** `context.route("**/*")` and `context.route_web_socket("**/*")` are installed **before any page is created**, mirroring the allowlist and logging blocked attempts as evidence. Routing sees only the first request of a redirect chain, never the redirected hops (LAB_NOTES, 2026-09-29), so it never carries enforcement alone.
   3. **Service workers blocked** (`service_workers="block"`), since they can bypass page-level routing; popups inherit the context's routes and proxy.
-  - **Document origins.** The proxy can't tell a page load from a resource load over HTTPS, so the tiers are enforced where authority lies:
-    - Before every observation and action, the browser session checks that the top-level page and the target's frame are on allowed origins, judged by the URL Chromium reports for each frame, and for a blank frame by whether its parent can reach it. A subresource host that becomes a document gains no authority, and Chromium's error page is on no allowed origin. #44 lands the observations first and the actions second.
-    - Frames from other origins are left out of snapshots, nested ones included, and a snapshot during which any frame navigated or was removed is discarded (ADR-0026 amendment, 2026-10-02).
-    - Popups are recorded with their URL and opener, and closed; a blank popup is a policy event.
+  - **Document origins.** The proxy passes both tiers of hosts and can't tell a page load from a resource load over HTTPS, so the tiers are enforced where authority lies, in the browser session (ADR-0026 amendment, 2026-10-02). #44 lands the observations first and the actions second.
+    - Before every observation and action, the session checks that the top-level page and the target's frame are on allowed origins, judged by the URL Chromium reports for each frame, and for a blank frame by whether its parent can reach it. A subresource host that becomes a document gains no authority, and neither does Chromium's error page, which a document shows when the proxy refuses its host (an egress block, below).
+    - Frames from other origins are left out of snapshots, nested ones included, and a snapshot during which any frame navigated or was removed is discarded.
+    - Popups are recorded with their URL and opener, and closed; until then their requests take the context's proxy and routes, as the page's do (item 3). A blank popup is a policy event.
   - **Egress blocks.** A request to a host that is neither an allowed origin nor a subresource host is refused and recorded, and it keeps the run from passing without being a finding: the run ends `errored` with `egress_blocked`, exit 6 (API.md §7).
     - *Exception:* a host the project config lists as expected-blocked. For it, the block's direct symptoms (its console error and a broken image, matched by the failed request) don't count against invariants.
     - *Proxy failures:* the proxy never makes up a response the page could count as the app's. On an upstream failure it drops the connection, and an unreachable start origin is an infrastructure error (ADR-0026).
@@ -116,7 +116,7 @@ The agent reads arbitrary page content. A malicious or compromised page may say 
     - WebSockets, QUIC, IPv6 and DNS prefetch;
     - redirect chains to disallowed hosts and to subresource hosts;
     - DNS rebinding and service-worker registration attempts;
-    - documents reached by clicks, `location` changes and popups.
+    - documents reached by clicks, redirects, `location` changes and popups, and frames from other origins.
 
     The tests observe traffic at the packet level.
 - Per-org limits: concurrent runs, runs/hour, steps/run, minutes/run, tokens/run.
