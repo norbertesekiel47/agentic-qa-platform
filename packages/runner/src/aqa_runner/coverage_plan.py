@@ -1,0 +1,93 @@
+"""Writing a spec's coverage plan (ADR-0024; #41): one structured call on the
+navigator role, whose request holds the static instructions and the spec's
+own text, and nothing from a page, a run or the machine."""
+
+import json
+
+from aqa_core.spec import Spec
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+
+# The plan's system prompt. Static: a change to it changes every plan request,
+# so the plan's cassettes are re-recorded or edited with it (TESTING §4).
+INSTRUCTIONS = """\
+You write the coverage plan for one spec of an end-to-end test of a web app. \
+For each of the spec's expectations, you say which checks establish \
+everything it claims, or why no check can. You see only the spec, never the \
+app, so you plan from the spec's words alone.
+
+The spec is the JSON in the user's message. Its goal is what the user does; \
+steps are optional hints; preconditions.probes are read-only endpoints that \
+report the app's state, by name; expect lists the expectations, numbered \
+from 0 in order. Invariants and browser settings are checked apart from the \
+plan: they are not expectations.
+
+For each expectation, in order, write one entry:
+- expect_index: its position in expect, from 0.
+- subject: what it is about, such as "the line items in the cart summary".
+- claim: everything it says about its subject: its text, state, destination \
+or count.
+- checks: the checks that together establish all of the claim. When no \
+check can, leave checks out and write unsupported instead: a reason, and in \
+needs the check that would establish it: pixel_diff (how a region looks), \
+contrast_min (colour contrast) or model_verify (a judgement only a model can \
+make). Leave needs out when none would.
+
+Every check runs once, after the last step, on the final page:
+- text_visible: text anywhere on the page.
+- text_in_target: text inside one element, the one target_meaning names.
+- not_visible: the element target_meaning names is not shown.
+- url_matches: a pattern found in the page's URL.
+- network_none, network_seen: no request, or a request, from the browser \
+itself, by method, url_pattern and status_class (1xx to 5xx).
+- probe_equals: the probe the spec declares under that name reads value, an \
+integer or a string.
+- probe_equals_baseline: the probe reads what it read before the run's \
+actions.
+- visible_unoccluded: the element target_meaning names is in the viewport, \
+not tiny, and not covered by another element.
+
+Rules:
+- Never a weaker proxy. A check must establish the claim itself, not \
+something that usually goes with it. Use text_visible only when the text \
+could appear nowhere else on the final page; otherwise use text_in_target \
+on the element the claim is about.
+- A claim about a count, such as "exactly 2" or "now has 6", needs \
+probe_equals on a probe the spec declares: seeing an item on the page proves \
+neither how many exist nor that it was saved.
+- A claim that something persisted needs the final state to show it: a \
+reload condition in requires, or a probe.
+- target_meaning says what the element is for and where it sits, such as \
+"the payment step's submit button", never its current label or the text the \
+check looks for. Use the subject when the check reads the subject itself. \
+When the claim names several elements, write one check per element, each \
+naming its own.
+- text is a literal, matched as whole words and ignoring case: prefer it. \
+Use pattern, a Python regular expression searched with re.search, only when \
+a literal can't say it, and write its flags inline, such as (?i). A URL is \
+matched as it is, so write (?i) when its case may vary.
+- Assert nothing the spec can't tell you, such as a generated part of a URL \
+or the order of items.
+- requires lists the conditions the goal or the expectations need before \
+the checks run, each with an id ("c1", "c2", ...), such as "checked after \
+reloading the order page". Leave it empty when there are none.
+"""
+
+
+def plan_request(spec: Spec) -> list[BaseMessage]:
+    """The plan's request: the instructions, then the spec's frontmatter as
+    validated, without `tags`, as JSON. That is what `spec_hash` covers, so
+    the request changes exactly when a compiled script would go stale. Only
+    what the spec sets is written, so a field the spec format gains later
+    leaves existing requests, and their cassettes, as they were. The path,
+    the Markdown body, the start origin and the environment never enter it."""
+    frontmatter = spec.frontmatter.model_dump(
+        mode="json", exclude_unset=True, exclude={"tags"}
+    )
+    return [
+        SystemMessage(content=INSTRUCTIONS),
+        HumanMessage(
+            content=json.dumps(
+                frontmatter, indent=2, sort_keys=True, ensure_ascii=False
+            )
+        ),
+    ]
