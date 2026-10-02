@@ -344,7 +344,9 @@ def test_a_refused_action_opens_no_window(site: Site, action: str) -> None:
             loaded = await session.navigate(f"{site.origin}/page/refused")
             with pytest.raises(PolicyEventError):
                 await refused(session)
-            # What the page sends next is still the navigation's.
+            # What the page sends next is still the navigation's. Only the
+            # request counts: from about:blank, CORS rejects the fetch's
+            # answer, and the page ignores that rejection.
             await session.page.evaluate(
                 f"() => {{ fetch({later!r}).catch(() => {{}}); }}"
             )
