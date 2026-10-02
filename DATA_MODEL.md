@@ -1,6 +1,6 @@
 # Data Model — Agentic QA Platform
 
-Last updated: 2026-10-02 (the coverage plan's format and hash, #41; loading a compiled script and bounding its text searches, #46; model roles and cost records, #40; M1 design decisions, ADR-0024–0026). PostgreSQL 16+ on RDS. Internal IDs are UUIDv7 (time-ordered). External identifiers (Clerk org/user IDs, GitHub IDs) are stored as their native strings/integers and mapped to internal IDs. All timestamps `timestamptz` UTC.
+Last updated: 2026-10-02 (`ws://` to a subresource host on port 443, corrected, #43; the coverage plan's format and hash, #41; loading a compiled script and bounding its text searches, #46; model roles and cost records, #40; M1 design decisions, ADR-0024–0026). PostgreSQL 16+ on RDS. Internal IDs are UUIDv7 (time-ordered). External identifiers (Clerk org/user IDs, GitHub IDs) are stored as their native strings/integers and mapped to internal IDs. All timestamps `timestamptz` UTC.
 
 ## 1. Entity overview
 
@@ -427,7 +427,7 @@ budgets:                      # per explore run (ADR-0024)
 
 **Start URL.** A run's first navigation goes to the start origin followed by the spec's `start_url` as written: joined as text, never resolved and never percent-decoded, so `/%2f%2fevil.test` stays a path on the start origin (ADR-0026's start URL amendment). `aqa_core.project.start_url` builds it, and the executor's first navigation (#46), explore's and the confirmation replay's (#53) call it rather than building it. A compiled `navigate` path (§7) is joined to the start origin by the same rule: its single leading `/`, then the path as written, never decoded. One that breaks §6's segment rule can read as a path starting `//`, as `/..//evil.test` does.
 
-**Egress hosts.** `subresource_hosts` and `expected_blocked` list bare host names or IP addresses (an IPv6 address in brackets), with no scheme, port or wildcard. A subresource host is reached only on its scheme's default port: 80 for http, 443 for https and wss, and never over `ws://` (ADR-0026 amendment, 2026-10-01). `private_origins` lists origins; declaring one lets an allowed origin or a subresource host resolve to a private address, and doesn't make it reachable.
+**Egress hosts.** `subresource_hosts` and `expected_blocked` list bare host names or IP addresses (an IPv6 address in brackets), with no scheme, port or wildcard. A subresource host is reached only on its scheme's default port: 80 for http, 443 for https and wss, and never over `ws://` on its default port 80; `ws://` written to port 443 tunnels as wss does (ADR-0026 amendment, 2026-10-01, corrected 2026-10-02). `private_origins` lists origins; declaring one lets an allowed origin or a subresource host resolve to a private address, and doesn't make it reachable.
 
 **Model roles (ADR-0007 amendment, 2026-10-01).** Each of `navigator`, `verifier`, `healer` and `vision_fallback` defaults to `claude-sonnet-5-5` on `anthropic`, and `roles` overrides a role's `provider`, `model`, `effort` and `fallback`. Config load checks every role and reports every role problem at once, each as `roles.<role>.<field>`, after the file's own shape problems (roles are resolved from a valid file):
 - *Needs:* the model, and the fallback, must have the capabilities the role needs (TECH_STACK §3).
