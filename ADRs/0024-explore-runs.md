@@ -129,14 +129,14 @@ Building the executor (#46) settled choices the Consequences above left open. DA
 ### Bounded text searches
 A `pattern` comes from the script and the text from the page, and Python's `re` can backtrack for exponential time: `(a+)+$` against forty `a`s and a `b`. A `text` literal's search is a regex too, built with lookarounds, whose cost grows with the text.
 - **Options:**
-  1. *A thread with a timeout.* `re` holds the GIL while it matches, so the event loop's thread would stall as well. Measured with Python 3.14.7 on macOS: while `re.search(r"(a+)+$", "a" * 24 + "b")` ran in a thread for 0.84 s, the main thread's `time.sleep(0.01)` loop ran once (a one-off `python -c` check; the script isn't kept). Nor can a thread be stopped, so it would keep its core after the deadline.
+  1. *A thread with a timeout.* `re` holds the GIL while it matches, so the event loop's thread would stall as well. Measured with Python 3.14.7 on macOS at `0690045`: while `re.search(r"(a+)+$", "a" * 24 + "b")` ran in a `threading.Thread` for 0.78 s, a `while t.is_alive(): time.sleep(0.01)` loop in the main thread ran once (`uv run python -c` with those lines). Nor can a thread be stopped, so it would keep its core after the deadline.
   2. *The `regex` package's `timeout`.* It can be interrupted, but it is another engine than the `re.search` the format names, with its own syntax and behaviour, and a new dependency.
   3. *A child process per search, killed at the deadline.*
 - **Chosen: 3** (`aqa_runner.text_search`).
   - The child runs fixed code in isolated mode (`-I`) with an empty environment, so it never holds the runner's keys or test secrets. The search's kind, needle and text reach it on stdin as ASCII-only JSON, so no locale changes them and a lone surrogate survives.
   - Matching is `aqa_core.text`'s, as in the format. A URL is searched as it is.
   - The deadline is 2 s per search, starting the process included. A timeout or a cancellation kills the child, so no search outlives its check.
-  - *Cost:* one process start per text check. No model and no network are involved.
+  - *Cost:* one process start per text check, a median of 25.4 ms (51.9 ms at most) over 50 `url_matches` calls on macOS at `0690045` (`uv run python -c` timing each call with `time.perf_counter`). No model and no network are involved.
 - **What a timed-out search reports.**
   - *Options:*
     1. a fourth assertion outcome, `check_timed_out`;
