@@ -45,7 +45,7 @@ Escalated to the user
 5. A test-file edit that leaves fewer assertions or tests, and a shell
    command that may delete, move or rewrite a test file. ``--diff`` adds a
    deleted test file (a moved one reads as deleted) and any change to an
-   existing test that proves the bar (``BAR_TESTS``), where a flipped
+   existing file that proves the bar (``BAR_TESTS``), where a flipped
    expectation keeps every assertion.
 6. Edits to this guard or the settings that load it (``.claude/hooks/``,
    ``.claude/settings*.json``), including shell writes that name them and
@@ -87,8 +87,8 @@ Known gaps, stated rather than hidden
   do not run Claude Code hooks. CI's ``--diff`` sees their changes, but runs
   the pull request's own copy of this guard and of its workflow, so a pull
   request that weakens either is judged by the weakened copy. After a push,
-  any label event (not only re-applying the approval label) brings the
-  label's approval back (ADR-0028 amendment, 2026-10-01).
+  any label event or reopening the pull request, not only re-applying the
+  approval label, brings the approval back (ADR-0028 amendment, 2026-10-01).
 
 Contract (code.claude.com/docs/en/hooks): stdin is the hook payload as JSON.
 PreToolUse: exit 2 refuses and shows stderr to the model; a JSON
@@ -637,27 +637,28 @@ def changed_files(project: Path, merge_base: str) -> list[tuple[str, str]]:
     ]
 
 
-def diff_verdicts(project: Path, base: str) -> list[Verdict]:
+def diff_verdicts(cwd: Path, base: str) -> list[Verdict]:
     """A verdict per file the working tree changes since `base`'s merge base."""
+    # git names files from the top level, whichever directory it runs in.
+    root = Path(git(cwd, "rev-parse", "--show-toplevel").strip())
     commit = git(
-        project, "rev-parse", "--verify", "--end-of-options", f"{base}^{{commit}}"
+        root, "rev-parse", "--verify", "--end-of-options", f"{base}^{{commit}}"
     )
-    merge_base = git(project, "merge-base", commit.strip(), "HEAD").strip()
+    merge_base = git(root, "merge-base", commit.strip(), "HEAD").strip()
     verdicts = []
-    for status, rel in changed_files(project, merge_base):
-        before = (
-            ""
-            if status in {"A", "?"}
-            else git(project, "cat-file", "blob", f"{merge_base}:{rel}")
-        )
-        after = "" if status == "D" else read_text(project / rel)
-        verdict = judge_change(rel, before, after, project)
-        if status == "D" and TEST_FILE.search(rel) and not is_exempt(rel):
+    for status, rel in changed_files(root, merge_base):
+        new, deleted = status in {"A", "?"}, status == "D"
+        before = "" if new else git(root, "cat-file", "blob", f"{merge_base}:{rel}")
+        # Not read_text(): a file judged as emptied would go unchecked, so a
+        # read error ends the run (exit 2).
+        after = "" if deleted else (root / rel).read_text(errors="replace")
+        verdict = judge_change(rel, before, after, root)
+        if deleted and TEST_FILE.search(rel) and not is_exempt(rel):
             verdict.asks.append(
                 f"{rel}: this change deletes a test file. Approve only if its "
                 "checks are obsolete, not inconvenient."
             )
-        elif status not in {"A", "?"} and BAR_TESTS.search(rel):
+        elif not new and BAR_TESTS.search(rel):
             verdict.asks.append(
                 f"{rel} proves the bar: a change there can weaken an expectation "
                 "without removing an assertion."
@@ -672,10 +673,11 @@ def diff_cli(base: str, project: Path) -> int:
         verdicts = diff_verdicts(project, base)
     except subprocess.CalledProcessError as error:
         reason = os.fsdecode(error.stderr).strip() or f"exit {error.returncode}"
-        subcommand = error.cmd[3]  # git -C <project> <subcommand> ...
-        sys.stderr.write(f"policy_guard --diff {base}: git {subcommand}: {reason}\n")
+        command = " ".join(map(str, error.cmd))
+        sys.stderr.write(f"policy_guard --diff {base}: `{command}` failed: {reason}\n")
         return 2
-    except (OSError, subprocess.SubprocessError) as error:
+    # No git on PATH, a file it can't read, or git hanging past its timeout.
+    except (OSError, subprocess.TimeoutExpired) as error:
         sys.stderr.write(f"policy_guard --diff {base}: {error}\n")
         return 2
     refused = [v for v in verdicts if v.findings or v.secrets]
