@@ -37,8 +37,9 @@ NAMED_START_URLS = [
 
 # What URL parsing gives a meaning to: separators, dots, % with the hex digits
 # of %2e, %2f and %5c in either case, a letter and a non-ASCII letter, and the
-# backslash and whitespace the spec parser refuses.
-ALPHABET = "/.%2eEfF5cC;?#@:aé\\\t\n "
+# backslash, the tab, LF and CR a URL parser drops, and a space, all of which
+# the spec parser must keep refusing.
+ALPHABET = "/.%2eEfF5cC;?#@:aé\\\t\n\r "
 
 # The [start origin, URL] pairs, as JSON text, whose URL Chromium reads on
 # another origin or with a path starting //, which a parser resolving that
