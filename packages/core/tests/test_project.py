@@ -24,6 +24,7 @@ from aqa_core.project import (
     load_config,
     load_project,
     load_spec,
+    path_on_origin,
     secret_destinations,
     start_origin,
     start_url,
@@ -341,7 +342,8 @@ def spec_starting_at(tmp_path: Path, path: str) -> Spec:
     return load_spec(spec, load_config(root / "config.yaml"))
 
 
-@pytest.mark.parametrize(
+# Paths, each with the URL it makes on http://127.0.0.1:4100.
+AS_WRITTEN = pytest.mark.parametrize(
     ("path", "url"),
     [
         ("/", "http://127.0.0.1:4100/"),
@@ -364,12 +366,21 @@ def spec_starting_at(tmp_path: Path, path: str) -> Spec:
         ("/login#", "http://127.0.0.1:4100/login#"),
     ],
 )
+
+
+@AS_WRITTEN
 def test_the_start_url_is_the_start_origin_then_start_url_as_written(
     tmp_path: Path, path: str, url: str
 ) -> None:
     spec = spec_starting_at(tmp_path, path)
 
     assert start_url(spec, "http://127.0.0.1:4100") == url
+
+
+@AS_WRITTEN
+def test_a_path_is_joined_to_the_start_origin_as_written(path: str, url: str) -> None:
+    # A compiled navigate's path is joined as start_url is (DATA_MODEL §9).
+    assert path_on_origin("http://127.0.0.1:4100", path) == url
 
 
 def test_the_start_url_is_on_the_runs_start_origin_never_the_specs(
