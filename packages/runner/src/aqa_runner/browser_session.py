@@ -68,6 +68,15 @@ LINE = re.compile(
 # Page text can't end a key so: a name is JSON-quoted or written /like this/.
 ELEMENT_REF = re.compile(r"\[ref=((?:f[0-9]+)?e[0-9]+)\]((?: \[cursor=pointer\])?)\Z")
 
+# Whether `owner`, a frame's element, is `element` or inside it, open shadow
+# roots included. Run in the element's own frame, where both are.
+CONTAINS = """(element, owner) => {
+    for (let node = owner; node; node = node instanceof ShadowRoot ? node.host : node.parentNode) {
+        if (node === element) return true;
+    }
+    return false;
+}"""
+
 # A ref this session gives.
 SESSION_REF = re.compile(r"e([1-9][0-9]{0,17})")
 
@@ -271,17 +280,13 @@ class BrowserSession:
     async def resolve(self, target: Target, use: Use) -> Resolved | Absent | Unresolved:
         """`target`'s element for `use`, as `aqa_runner.locators.resolve`
         finds it on the page: an observation, so the page is checked before
-        and after, which also covers a page that navigated meanwhile. The
-        caller owns a resolved element's handle."""
+        and after, which also covers a page that navigated meanwhile (and
+        took the element's document with it). The caller owns a resolved
+        element's handle."""
         async with self._turn:
             await self._require_allowed_page()
             found = await resolve_target(self.page, target, use)
-            try:
-                await self._require_allowed_page()
-            except PolicyEventError:
-                if isinstance(found, Resolved):
-                    await found.element.dispose()
-                raise
+            await self._require_allowed_page()
             return found
 
     async def url(self) -> str:
@@ -333,13 +338,40 @@ class BrowserSession:
 
     async def _require_actionable(self, element: ElementHandle) -> None:
         """Record and raise a policy event unless the page, and the frame of
-        `element`, are on the run's allowed origins. An element in no frame
-        is on none."""
+        `element`, are on the run's allowed origins, and `element` contains
+        no frame that isn't, at any depth. An element in no frame is on none.
+
+        An action lands wherever the browser draws at the point it uses:
+        Playwright's hit check accepts the element or any descendant, and
+        every point over a frame hits the frame's element, so a click on an
+        element around another origin's frame lands in that frame."""
         await self._require_allowed_page()
         frame = await element.owner_frame()
         if frame is None:
             raise self._refuse(PolicyEvent("frame", "", None))
         await self._require_allowed(frame, "frame")
+        for child in frame.child_frames:
+            foreign = await self._foreign_frame(child)
+            if foreign is None:
+                continue
+            owner = await child.frame_element()
+            try:
+                inside = await element.evaluate(CONTAINS, owner)
+            finally:
+                await owner.dispose()
+            if inside:
+                raise self._refuse(PolicyEvent("frame", *foreign))
+
+    async def _foreign_frame(self, frame: Frame) -> tuple[str, str | None] | None:
+        """The URL and origin of the first frame, `frame` or one inside it,
+        that isn't on one of the run's allowed origins; None when all are."""
+        origin = await frame_origin(frame)
+        if origin not in self._policy.allowed_origins:
+            return frame.url, origin
+        for child in frame.child_frames:
+            if (foreign := await self._foreign_frame(child)) is not None:
+                return foreign
+        return None
 
     async def _focused_frame(self) -> Frame:
         """The frame whose document has the focus, found from the page down

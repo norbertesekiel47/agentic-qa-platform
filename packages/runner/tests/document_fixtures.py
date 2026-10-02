@@ -69,6 +69,14 @@ class Sites:
 
     port: int
     seen: list[tuple[str, str]] = field(default_factory=list)
+    # Notified as each request arrives, from the site's thread.
+    arrived: threading.Condition = field(default_factory=threading.Condition)
+
+    def saw(self, host: str, path: str, *, within: float) -> bool:
+        """Whether a request for `path` on `host` arrives within `within`
+        seconds. It blocks: call it in a thread from a browser test."""
+        with self.arrived:
+            return self.arrived.wait_for(lambda: (host, path) in self.seen, within)
 
     @property
     def app(self) -> str:
@@ -131,7 +139,12 @@ def page(sites: Sites, path: str, query: dict[str, list[str]]) -> str | None:
             <section aria-label="Offers" style="display: inline-block">
                 <iframe src="{sites.cdn}/doc"></iframe>
             </section>
-            <iframe src="/nest"></iframe>""",
+            <iframe src="/nest"></iframe>
+            <section aria-label="Shadow" id="host"></section>
+            <script>
+                host.attachShadow({{mode: "open"}}).innerHTML =
+                    '<iframe src="{sites.cdn}/doc"></iframe>';
+            </script>""",
         # A form, and a link to where `to` names.
         "/form": f"""<a href="{attribute}">Go</a>
             <label>Name <input></label>
@@ -149,7 +162,9 @@ def serving_sites(monkeypatch: pytest.MonkeyPatch) -> Iterator[Sites]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             target = urlsplit(self.path)
-            served.seen.append((self.headers["Host"].split(":")[0], target.path))
+            with served.arrived:
+                served.seen.append((self.headers["Host"].split(":")[0], target.path))
+                served.arrived.notify_all()
             query = parse_qs(target.query)
             if target.path == "/redirect":
                 self.send_response(HTTPStatus.FOUND)
