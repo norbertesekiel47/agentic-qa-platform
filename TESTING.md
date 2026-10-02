@@ -28,6 +28,8 @@ Last updated: 2026-10-01 (the egress proxy's browser tests, #42; model roles, ca
 | Load | Concurrent hosted runs, API p95, WebSocket fan-out | k6 / Locust against staging | Pre-release |
 | Security | Authz matrix, injection fixtures (explore-focused from M1: task hijack, decoy success, decoy binding after a failed confirmation, navigation and secret steering; heal-focused from M2), redaction, dependency audit | pytest, osv-scanner (ADR-0029), pnpm audit, Trivy | Every commit (audit weekly) |
 
+**Shared egress fixtures.** The egress proxy's fixture servers, its local DNS fixture and the egress proxy every browser session needs live in `packages/runner/tests/egress_fixtures.py`. The runner's tests import them as `packages.runner.tests.egress_fixtures`, the path pytest names those test modules by, with no change to pytest's configuration. Fixtures in a `conftest.py` would turn about 20 helpers into fixture arguments threaded through some 40 tests, typed with names mypy can't import from a `conftest.py`.
+
 ## 2. Test-driven development scope
 
 Written test-first (red → green → refactor): replay engine (including M1's confirmation-replay executor), locator generation and resolution, deterministic visual checks, text matching, expectation-coverage compiler rules, `side_effect` inference, heal-verdict schema and heal-patch validator (target locators and non-side-effect steps only), step intents and lease fencing, RLS policies and `set_config` context, token/OIDC/webhook verification, domain verification, API-key hashing, secret redaction and origin binding, egress enforcement (including the IP policy and document-origin checks), runner startup hygiene.

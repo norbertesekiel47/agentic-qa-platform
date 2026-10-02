@@ -25,8 +25,6 @@ from aqa_runner.browser_session import (
     open_browser_session,
     renumber,
 )
-from aqa_runner.egress import EgressGate, EgressPolicy
-from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.sandbox import Environment, SandboxUnavailableError
 from playwright.async_api import (
     Browser,
@@ -37,6 +35,8 @@ from playwright.async_api import (
     async_playwright,
 )
 from pydantic import ValidationError
+
+from packages.runner.tests.egress_fixtures import egress_proxy
 
 # What the runner's own environment may hold and the browser's must not:
 # provider keys, cloud credentials and test secrets (ADR-0026, SECURITY §5).
@@ -49,16 +49,6 @@ RUNNER_SECRETS = [
     "AWS_SESSION_TOKEN",
     "AQA_SECRET_TEST_PASSWORD",
 ]
-
-
-def egress_proxy(start: str = "http://127.0.0.1:9") -> EgressProxy:
-    """The egress proxy every session goes through, for a run whose start
-    origin is `start`: the fixture site, or one no test reaches (ADR-0026
-    amendment, 2026-10-01)."""
-    policy = EgressPolicy(
-        allowed_origins=(start,), subresource_hosts=(), private_origins=(start,)
-    )
-    return EgressProxy(EgressGate(policy))
 
 
 def fake_value(name: str) -> str:
