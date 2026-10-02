@@ -37,8 +37,9 @@ SUBRESOURCE_PORTS: dict[BrowserRequester, int] = {
     "tunnel": DEFAULT_PORTS["https"],
 }
 
-# Why a connection was refused: its host and port aren't on the allowlist, or
-# the IP policy refused an address the host resolves to.
+# Why a connection was refused: its host and port aren't on the allowlist (or,
+# for a runner-side request, its whole origin, scheme included, isn't), or the
+# IP policy refused an address the host resolves to.
 type RefusalKind = Literal["host", "address"]
 
 # Seconds a connection waits for its host's answer, whether it looks the name
@@ -175,8 +176,10 @@ def egress_policy(spec: Spec, config: ProjectConfig, start: str) -> EgressPolicy
 class Refusal:
     """A connection the egress gate refused, recorded for the run. `host`
     means the host isn't an allowed origin or a subresource host on that port,
-    an egress block unless the project expects it (#47). `address` means the
-    IP policy refused where the host resolves."""
+    an egress block unless the project expects it (#47); for a runner-side
+    request it can also mean an allowed host and port on another scheme than
+    the allowed origin's, and `detail` names the origin refused. `address`
+    means the IP policy refused where the host resolves."""
 
     host: str
     port: int
