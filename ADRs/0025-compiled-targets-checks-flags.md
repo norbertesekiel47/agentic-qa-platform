@@ -119,7 +119,7 @@ Building the strict reader (#45) and its reviews raised choices this ADR left op
   - *Chosen:* one class per kind. `name` then exists only beside `role`, and the executor and the compiler dispatch on the class with nothing left optional. The JSON is the same either way.
 - **A `css` value has no `>>`.**
   - *Options:* refuse it, escape it, or parse CSS to allow it inside quoted attribute values.
-  - *Chosen:* refuse it. Playwright chains selectors at `>>` even after `css=`. On 1.63 a value chained into XPath and into an engine that enters frames. Escaping would hide the author's mistake, and an attribute value can write `\>\>`. The executor always sends the value as `css=<value>`, so no other engine is reachable.
+  - *Chosen:* refuse it. Playwright chains selectors at `>>` even after `css=`. On 1.63 a value chained into XPath and into an engine that enters frames. Escaping would hide the author's mistake, and an attribute value can write `\>\>`. Resolution must send the value as `css=<value>` (#45), so no other engine is reachable.
 - **`side_effect_basis` goes only with a true flag.**
   - *Options:* refuse it on a false flag, or allow it.
   - *Chosen:* refuse it. A person who lowers a flag removes its basis in the same edit, so the pull request shows both.
