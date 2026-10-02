@@ -5,9 +5,11 @@ of it: at the number the gate passes, one step past it the gate fails. So a
 config that drifts from CONSTRAINTS.md in either direction fails a test.
 """
 
+import itertools
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -409,6 +411,24 @@ def audit_cut() -> float:
 
 
 CUT = audit_cut()
+CHECKS_LOCK = "bench/harness/checks-requirements.txt"
+
+
+def ci_lockfiles() -> list[str]:
+    """The lockfiles CI's dependency-audit step hands the audit script."""
+    workflow = (REPO / ".github/workflows/ci.yml").read_text()
+    step = re.search(r'audit-lockfile\.sh "\$RUNNER_TEMP/osv-scanner" (.+)', workflow)
+    if not step:
+        raise LookupError("ci.yml's dependency-audit job doesn't run the audit script")
+    return step.group(1).split()
+
+
+CI_LOCKFILES = ci_lockfiles()
+
+
+def test_ci_audits_the_checks_image_lock() -> None:
+    assert {"uv.lock", CHECKS_LOCK} <= set(CI_LOCKFILES)
+    assert all((REPO / lockfile).is_file() for lockfile in CI_LOCKFILES)
 
 
 def osv_report(*scores: str) -> dict[str, Any]:
@@ -421,28 +441,53 @@ def osv_report(*scores: str) -> dict[str, Any]:
     return {"results": [{"packages": [package]}]}
 
 
-def audit(
-    tmp_path: Path, scanner_exit: int, report: dict[str, Any]
-) -> subprocess.CompletedProcess[str]:
-    """The audit script, with a fake osv-scanner that writes `report` and exits.
+Reports = dict[str, tuple[int, dict[str, Any] | None]]
 
-    Without jq the script can't judge anything, and a failure to run it would
-    pass every case that expects the audit to fail, so both are errors here.
+
+def audit_files(tmp_path: Path, reports: Reports) -> subprocess.CompletedProcess[str]:
+    """The audit script over `reports`' lockfiles, with a fake osv-scanner.
+
+    For each lockfile the fake exits with its code and writes its report where
+    `--output-file` says (None writes nothing), and every call's arguments go to
+    `calls.txt`. Without jq the script can't judge anything, and a failure to run
+    it would pass every case that expects the audit to fail, so both are errors
+    here.
     """
     assert shutil.which("jq"), "the dependency audit needs jq on PATH (ADR-0029)"
-    (tmp_path / "report.json").write_text(json.dumps(report))
+    cases = ""
+    for i, (lockfile, (code, report)) in enumerate(reports.items()):
+        copy = ""
+        if report is not None:
+            written = tmp_path / f"report-{i}.json"
+            written.write_text(json.dumps(report))
+            copy = f'cp "{written}" "$out"; '
+        cases += f"  {shlex.quote(lockfile)}) {copy}exit {code};;\n"
     scanner = tmp_path / "osv-scanner"
     scanner.write_text(
         "#!/bin/bash\n"
-        'while [ $# -gt 0 ]; do [ "$1" = --output-file ] && out=$2; shift; done\n'
-        f'cp "{tmp_path / "report.json"}" "$out"\n'
-        f"exit {scanner_exit}\n"
+        f'echo "$*" >> "{tmp_path / "calls.txt"}"\n'
+        "while [ $# -gt 0 ]; do\n"
+        '  case "$1" in --output-file) out=$2;; --lockfile) lockfile=$2;; esac\n'
+        "  shift\n"
+        "done\n"
+        'case "$lockfile" in\n'
+        f"{cases}"
+        "esac\n"
+        'echo "unexpected lockfile $lockfile" >&2\n'
+        "exit 99\n"
     )
     scanner.chmod(0o755)
-    result = run([str(AUDIT), str(scanner), "uv.lock"])
+    result = run([str(AUDIT), str(scanner), *reports])
     # 126 and 127 are the shell's "can't execute" and "command not found".
     assert result.returncode not in {126, 127}, result.stderr
     return result
+
+
+def audit(
+    tmp_path: Path, scanner_exit: int, report: dict[str, Any]
+) -> subprocess.CompletedProcess[str]:
+    """The audit script over CI's lockfiles, the fake scanner giving each `report`."""
+    return audit_files(tmp_path, dict.fromkeys(CI_LOCKFILES, (scanner_exit, report)))
 
 
 @pytest.mark.parametrize(
@@ -492,6 +537,67 @@ def test_a_scanner_error_fails_the_audit_with_its_exit_code(tmp_path: Path) -> N
     result = audit(tmp_path, 128, {"results": []})
 
     assert result.returncode == 128, result.stdout + result.stderr
+
+
+def clean_reports() -> Reports:
+    """Every lockfile CI audits, each with a clean scan."""
+    return dict.fromkeys(CI_LOCKFILES, (0, {"results": []}))
+
+
+@pytest.mark.parametrize("lockfile", CI_LOCKFILES)
+@pytest.mark.parametrize(
+    ("score", "passes"),
+    [(f"{CUT - 0.1:.1f}", True), (f"{CUT:.1f}", False), ("", False)],
+    ids=["below-the-cut", "at-the-cut", "unscored"],
+)
+def test_an_advisory_in_one_audited_lockfile_is_judged_by_its_score(
+    tmp_path: Path, lockfile: str, score: str, *, passes: bool
+) -> None:
+    reports = clean_reports() | {lockfile: (1, osv_report(score))}
+
+    result = audit_files(tmp_path, reports)
+
+    assert (result.returncode == 0) is passes, result.stdout + result.stderr
+    # The finding says which lockfile it is in, whether or not it fails the audit.
+    finding = f"{lockfile}: demo 1.0: GHSA-fake-0 (CVSS {score or 'none'})"
+    assert finding in result.stdout
+
+
+def test_a_scanner_error_on_the_last_lockfile_fails_the_audit(tmp_path: Path) -> None:
+    reports = clean_reports() | {CI_LOCKFILES[-1]: (128, {"results": []})}
+
+    result = audit_files(tmp_path, reports)
+
+    assert result.returncode == 128, result.stdout + result.stderr
+
+
+def test_a_lockfile_with_no_report_fails_the_audit(tmp_path: Path) -> None:
+    # The scanner exits 0 for the last lockfile and writes nothing. The clean
+    # report that the lockfile before it left must not be judged in its place.
+    reports = clean_reports() | {CI_LOCKFILES[-1]: (0, None)}
+
+    result = audit_files(tmp_path, reports)
+
+    assert result.returncode != 0, result.stdout + result.stderr
+
+
+def test_the_audit_needs_a_lockfile(tmp_path: Path) -> None:
+    result = audit_files(tmp_path, {})
+
+    assert result.returncode == 2
+    assert "no lockfile" in result.stdout
+
+
+def test_the_scanner_reads_the_root_waivers_for_every_lockfile(tmp_path: Path) -> None:
+    audit_files(tmp_path, clean_reports())
+
+    calls = [line.split() for line in (tmp_path / "calls.txt").read_text().splitlines()]
+    # One scan per lockfile: osv-scanner skips a file that parses to nothing when
+    # it scans two at once, and `--config` makes the root file the only waivers.
+    for call, lockfile in zip(calls, CI_LOCKFILES, strict=True):
+        pairs = set(itertools.pairwise(call))
+        assert ("--config", "osv-scanner.toml") in pairs
+        assert ("--lockfile", lockfile) in pairs
 
 
 # --- dependency audit waivers ----------------------------------------------------------
@@ -636,7 +742,9 @@ def test_a_waiver_outside_the_rule_is_named(
 
 
 def test_the_repo_waivers_follow_the_rule() -> None:
-    config = tomllib.loads(WAIVERS.read_text()) if WAIVERS.exists() else {}
+    # The audit passes this file to osv-scanner with --config, which fails on a
+    # missing one, so it must exist, and no other waiver file is read.
+    config = tomllib.loads(WAIVERS.read_text())
     exceptions = CONSTRAINTS.read_text().partition("## Exceptions")[2]
 
     assert waiver_problems(config, exceptions, datetime.now(UTC).date()) == []
