@@ -5,12 +5,12 @@ cassettes for the Anthropic adapter (TESTING §4)."""
 import hashlib
 import json
 import os
+import socketserver
 import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, cast
 
@@ -45,24 +45,27 @@ class Endpoint:
 def langsmith_endpoint() -> Iterator[Endpoint]:
     endpoint = Endpoint(url="")
 
-    class Handler(BaseHTTPRequestHandler):
-        def _answer(self) -> None:
-            self.rfile.read(int(self.headers.get("content-length") or 0))
-            endpoint.requests.append((self.command, self.path))
-            self.send_response(200)
-            self.send_header("content-type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({}).encode())
+    class Handler(socketserver.StreamRequestHandler):
+        """Reads one request, writes it down, and answers 200 `{}`."""
 
-        do_GET = do_POST = do_PATCH = do_PUT = _answer  # noqa: N815
+        def handle(self) -> None:
+            method, path, _ = self.rfile.readline().decode().split(" ", 2)
+            length = 0
+            while (line := self.rfile.readline().strip()) != b"":
+                name, _, value = line.decode().partition(":")
+                if name.lower() == "content-length":
+                    length = int(value)
+            self.rfile.read(length)
+            endpoint.requests.append((method, path))
+            self.wfile.write(
+                b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n"
+                b"content-length: 2\r\nconnection: close\r\n\r\n{}"
+            )
 
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
-            pass
-
-    server = HTTPServer(("127.0.0.1", 0), Handler)
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
     endpoint.url = f"http://127.0.0.1:{server.server_address[1]}"
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    threading.Thread(target=server.serve_forever, daemon=True).start()
     yield endpoint
     server.shutdown()
     server.server_close()
