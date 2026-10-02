@@ -1,0 +1,49 @@
+# The floor's moves in CI (CONSTRAINTS.md, Floor; ADR-0028 amendment,
+# 2026-10-01). policy_guard's per-call checks run only in Claude Code, so this
+# job runs `policy_guard.py --diff` on every pull request:
+# - a refused finding (a new suppression, skip, tautology, stub or swallowed
+#   exception) always fails it;
+# - an approval-class finding (a deleted test, fewer assertions, a changed
+#   gate config, an edit to the guard) fails it unless the maintainer has put
+#   the floor-change-approved label on the pull request.
+#
+# The label approves the head it was applied to: on a new push (synchronize)
+# the job ignores it, so approval-class findings fail again until the
+# maintainer removes and re-adds the label. Adding or removing a label starts a
+# new run, because re-running a job keeps the original event's data. This
+# workflow is separate from ci.yml so that a label change re-runs only this job.
+#
+# Runner, supply-chain and token notes: ci.yml's header (ADR-0019, ADR-0029).
+
+name: floor
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: floor-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  floor:
+    name: floor
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    env:
+      AQA_FLOOR_CHANGE_APPROVED: ${{ github.event.action != 'synchronize' && contains(github.event.pull_request.labels.*.name, 'floor-change-approved') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Every branch's history, so origin/main and the merge base resolve.
+          fetch-depth: 0
+          persist-credentials: false
+      # The guard runs on a bare interpreter, as Claude Code runs it.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: The floor's moves since main
+        run: python .claude/hooks/policy_guard.py --diff origin/main
