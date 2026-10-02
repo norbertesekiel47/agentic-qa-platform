@@ -503,11 +503,9 @@ def test_a_resolved_role_cannot_be_changed() -> None:
 
 @pytest.mark.parametrize("capability", CAPABILITIES)
 def test_a_models_entry_accepts_each_capability(
-    tmp_path: Path, capability: str
+    tmp_path: Path, capability: Capability
 ) -> None:
-    load_config(
-        write(tmp_path, f"models: {{ acme/m: {entry({capability})} }}\n")  # type: ignore[arg-type]
-    )
+    load_config(write(tmp_path, f"models: {{ acme/m: {entry({capability})} }}\n"))
 
 
 @pytest.mark.parametrize("capability", ["audio", "Tools", "function_calling"])
