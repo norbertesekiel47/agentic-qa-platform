@@ -23,7 +23,7 @@
   ],
   "packageRules": [
     {
-      "description": ["Python and uv_build move by hand, with the checklist in ADR-0027."],
+      "description": ["Python and uv_build move by hand (ADR-0027, ADR-0031)."],
       "matchDepTypes": ["requires-python", "build-system.requires"],
       "enabled": false
     },

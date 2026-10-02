@@ -1,6 +1,6 @@
 # Tech Stack — Agentic QA Platform
 
-Versions are the latest stable releases as of **2026-09-27** (checked on PyPI/npm). Pin exact versions in lockfiles at scaffold time; bump deliberately.
+Versions are the latest stable releases as of **2026-09-27** (checked on PyPI/npm), except the tracked ones below. Pin exact versions in lockfiles at scaffold time; bump deliberately.
 
 A version followed by an HTML comment, `renovate: NAME`, is tracked: it is the exact pin of the Python package NAME in a `pyproject.toml`, and the weekly Renovate pull request bumps both together (ADR-0031). `tests/test_dependency_updates.py` fails when a pin and its tracked version differ. A version without the comment is the pick as of the date above, until a ticket adopts it.
 
@@ -22,7 +22,7 @@ A version followed by an HTML comment, `renovate: NAME`, is tracked: it is the e
 | DB access | SQLAlchemy 2.1.1 + psycopg 3.3.6 | — | Async, typed; raw SQL for RLS policies |
 | Migrations | Alembic | 1.20.0 | Versioned schema, RLS policies in migrations |
 | CLI | Typer 0.27.2<!-- renovate: typer --> + Rich 15.0.0<!-- renovate: rich --> | — | Ergonomic CLI and terminal output |
-| Tracing | OpenTelemetry SDK 1.45.0 + LangSmith 0.14.1 | — | Portable traces; LangSmith for LLM debugging |
+| Tracing | OpenTelemetry SDK 1.45.0 + LangSmith (locked through LangChain; its version is in `uv.lock`) | — | Portable traces; LangSmith for LLM debugging |
 | Logging | structlog | 26.1.0<!-- renovate: structlog --> | JSON logs with redaction processors |
 | JWT verification | PyJWT | 2.15.0 | Clerk JWKS + run tokens |
 | AWS SDK | boto3 | 1.43.x | KMS, SQS, S3, Lambda invoke |
@@ -131,7 +131,7 @@ The 2026-09-29 rule excludes Lambda functions, though. If Lambda MicroVMs win, c
 
 ## 7. Version policy
 
-- Lockfiles committed (`uv.lock`, `pnpm-lock.yaml`); Renovate weekly (ADR-0031): one pull request for minor and patch updates, one for each major, each pre-1.0 minor and Playwright, and none for a release under 3 days old. `pnpm-lock.yaml` joins at M7.
+- Lockfiles committed (`uv.lock`, `pnpm-lock.yaml`); Renovate weekly (ADR-0031): one pull request for minor and patch updates, one for each major, each pre-1.0 minor and Playwright, one for lock-file maintenance, and none for a bumped dependency's release under 3 days old. `pnpm-lock.yaml` joins at M7.
 - Majors are upgraded in dedicated PRs with the full test + benchmark smoke gate.
 - OpenTelemetry GenAI semantic conventions are still marked *Development*; pin the convention version and note it in traces.
 - The vendored price map is refreshed only by its script, in a reviewed pull request that records the new upstream commit and sha256. Cost records cite the version they used. The script is `uv run python -m aqa_core.price_map_refresh [ref]` (default `main`): it needs network access, rewrites `packages/core/src/aqa_core/price_map_data/`, and loading the map afterwards checks the new pair (ADR-0007 amendment, 2026-10-01). A reviewer of a refresh pull request checks the pin against upstream: `curl -s https://raw.githubusercontent.com/BerriAI/litellm/<commit>/model_prices_and_context_window.json | shasum -a 256` must print the `sha256` in `pin.json`.
