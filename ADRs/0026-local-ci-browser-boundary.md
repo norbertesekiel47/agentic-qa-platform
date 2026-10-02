@@ -141,3 +141,12 @@ Every browser a run uses comes from a **browser session** (CONTEXT.md): one for 
     - Only the session takes accessibility snapshots of its page, since any other snapshot changes what Playwright's refs resolve to. Keeping the page private to the session is for #44 and #53, which add its observations and actions.
   - *Rejected:* refs prefixed with their snapshot's number (`s3e12`), which need no map but lengthen every ref and expose frame structure, and Playwright's refs unchanged, which can't refuse a stale ref.
   - *Not decided here:* which frame each ref came from, which #44's checks on cross-origin frames need.
+
+## Amendment (2026-10-01): the start URL (#89)
+
+A run's first navigation goes to its **start URL** (CONTEXT.md): the start origin followed by the spec's `start_url` as written. `aqa_core.project.start_url(spec, start)` builds it; the executor's first navigation (#46), explore's and the confirmation replay's (#53) call it rather than building it.
+
+- **Joined as text,** never percent-decoded and never resolved. The start origin has no path, and `start_url` opens with one `/` that no `/` or `\` follows (DATA_MODEL §6), so a URL parser ends the host at that `/`. `tests/test_start_url.py` reads each start URL's origin with Chromium's own `URL` parser: the values below, and every accepted `start_url` of up to 4 characters after the `/`, against DNS, IPv4 and IPv6 start origins.
+- **Why:** some accepted values are safe only as text. A browser keeps `%2f` encoded, but decoded, `/%2f%2fevil.test` is `//evil.test`, which Chromium resolves against the start origin to `https://evil.test`. `/..;/x` is no dot segment to a browser, and `//` in a query or fragment names no host.
+- *Rejected:* Python's `urljoin`, and a path that Playwright resolves against a context's [`base_url`](https://playwright.dev/python/docs/api/class-browser#browser-new-context-option-base-url) with the `URL()` constructor (`constructURLBasedOnBaseURL` in 1.63's driver). Callers pass the start URL itself, in a context with no `base_url`.
+- **Compiled `navigate` paths** (DATA_MODEL §7) are joined to the start origin by the same rule: their single leading `/`, then the path as written, never decoded. #45 validates them and #46 joins them.
