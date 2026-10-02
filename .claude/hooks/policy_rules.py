@@ -289,6 +289,11 @@ ASSERTION = re.compile(
 )
 # Counted too: renaming a test away drops it without touching an assertion.
 TEST_DEF = re.compile(r"^\s*(?:async\s+)?def\s+test|\b(?:it|test)\(", re.MULTILINE)
+# The tests that prove the bar: the root tests/ (CONSTRAINTS.md's threshold
+# checks, AGENTS.md §4's command checks) and the guard's own. Flipping an
+# expected outcome there weakens the bar and keeps every assertion, so --diff
+# asks about any change to an existing one. A new one can't lower the floor.
+BAR_TESTS = re.compile(r"^(?:tests/|\.claude/hooks/test_[^/]*\.py$)")
 
 # --- shell heuristics ---------------------------------------------------------------
 
