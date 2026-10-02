@@ -101,17 +101,23 @@ class DiffTestCase(unittest.TestCase):
         self.git("add", "--all")
         self.git("commit", "-q", "--allow-empty", "-m", message)
 
-    def diff(self, *args: str, **env: str) -> Result:
-        """`policy_guard.py --diff`, run from the project as CI runs it."""
+    def guard(
+        self, *args: str, cwd: Path | None = None, env: dict[str, str] | None = None
+    ) -> Result:
+        """policy_guard.py with `args`, run from `cwd`: the project by default."""
         return subprocess.run(
-            [sys.executable, str(HOOK), "--diff", *(args or ("main",))],
-            cwd=self.project,
-            env={**self.environ, **env},
+            [sys.executable, str(HOOK), *args],
+            cwd=cwd or self.project,
+            env={**self.environ, **(env or {})},
             input="",
             capture_output=True,
             text=True,
             check=False,
         )
+
+    def diff(self, base: str = "main", **env: str) -> Result:
+        """`policy_guard.py --diff <base>`, run from the project as CI runs it."""
+        return self.guard("--diff", base, env=env)
 
     def assert_refused(self, rel: str) -> str:
         """A refused finding fails --diff even with the maintainer's approval."""
@@ -229,6 +235,14 @@ class ScopeTests(DiffTestCase):
             "bench/apps/conduit/frontend/src/b.ts", "// @ts-expect-error upstream\n"
         )
         self.assert_clean()
+
+    def test_a_run_from_a_subdirectory_sees_the_whole_repository(self) -> None:
+        self.put("tests/test_a.py", "def test_a():\n    assert f() == 1\n")
+        self.commit("work")
+        self.put("packages/core/new.py", "x = f()  # noqa\n")
+        result = self.guard("--diff", "main", cwd=self.project / "tests")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("packages/core/new.py", result.stdout)
 
     def test_uncommitted_changes_are_included(self) -> None:
         self.put("packages/core/a.py", "x = 1\n")
@@ -434,15 +448,7 @@ class ExitCodeTests(DiffTestCase):
         self.assertIn("elsewhere", result.stderr)
 
     def test_no_base_exits_2(self) -> None:
-        result = subprocess.run(
-            [sys.executable, str(HOOK), "--diff"],
-            cwd=self.project,
-            env=self.environ,
-            input="",
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        result = self.guard("--diff")
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("--diff <base>", result.stderr)
 
@@ -454,16 +460,22 @@ class ExitCodeTests(DiffTestCase):
 
     def test_a_directory_outside_a_repository_exits_2(self) -> None:
         with tempfile.TemporaryDirectory() as elsewhere:
-            result = subprocess.run(
-                [sys.executable, str(HOOK), "--diff", "main"],
-                cwd=elsewhere,
-                env={**self.environ, "GIT_CEILING_DIRECTORIES": elsewhere},
-                input="",
-                capture_output=True,
-                text=True,
-                check=False,
+            result = self.guard(
+                "--diff",
+                "main",
+                cwd=Path(elsewhere),
+                env={"GIT_CEILING_DIRECTORIES": elsewhere},
             )
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+
+    def test_a_file_it_cannot_read_exits_2(self) -> None:
+        # Judged as emptied, its new content would go unchecked.
+        self.on_main({"packages/core/a.py": "x = 1\n"})
+        self.put("packages/core/a.py", "x = f()  # type: ignore\n")
+        (self.project / "packages/core/a.py").chmod(0)
+        result = self.diff()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("packages/core/a.py", result.stderr)
 
 
 if __name__ == "__main__":
