@@ -542,8 +542,25 @@ def test_a_provider_that_gives_no_response_exits_11(tmp_path: Path, run: Run) ->
 
     assert result.exit_code == 11, result.output
     assert "no response" in result.stderr
-    # Nothing was billed, so nothing is recorded.
-    assert not (tmp_path / "qa" / ".aqa").exists()
+    # The run is recorded; nothing was billed, so it has no cost record.
+    record = record_of(tmp_path / "qa")
+    assert (record["outcome"], record["calls"]) == ("no_response", [])
+
+
+def test_a_spec_root_whose_run_records_are_a_link_exits_5_before_any_model_call(
+    tmp_path: Path, run: Run
+) -> None:
+    # A repository can commit .aqa as a link pointing anywhere.
+    spec = project(tmp_path / "qa")
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "qa" / ".aqa").symlink_to(tmp_path / "elsewhere")
+
+    result, factory = run([str(spec), "--plan-only"])
+
+    assert result.exit_code == 5, result.output
+    assert "a link" in result.stderr
+    assert factory.built == []
+    assert list((tmp_path / "elsewhere").iterdir()) == []
 
 
 def test_a_fallback_that_gives_no_response_exits_11_and_keeps_the_refusal(

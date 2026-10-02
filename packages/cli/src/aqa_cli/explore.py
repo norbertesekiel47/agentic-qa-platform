@@ -101,7 +101,7 @@ def _resolve(path: Path, url: str | None) -> tuple[Path, Spec, ModelRouter]:
 
 
 def _write_record(
-    root: Path,
+    record: RunRecord,
     spec: Spec,
     *,
     outcome: Outcome,
@@ -109,10 +109,9 @@ def _write_record(
     plan: CoveragePlan | None,
     reasons: Sequence[str],
 ) -> Path:
-    """A new run record under `root`, holding the outcome and why, the plan
-    the model wrote, if any, and the cost record of every response, so a
-    billed response is always kept."""
-    record = RunRecord.create(root)
+    """Write the run's plan.json: the outcome and why, the plan the model
+    wrote, if any, and the cost record of every response, so a billed
+    response is always kept."""
     record.write(
         "plan.json",
         {
@@ -188,13 +187,19 @@ def explore(
     except SpecError as error:
         _stop("spec_error", str(spec_path), "nothing was planned", error.problems)
     spec_id = spec.frontmatter.id
+    # Made before the call, so a spec root that can't hold the record stops
+    # the run before anything is billed.
+    try:
+        record = RunRecord.create(root)
+    except ValueError as error:  # a .aqa or .aqa/runs that is a link
+        _stop("spec_error", str(spec_path), "nothing was planned", (str(error),))
     try:
         planned = asyncio.run(make_plan(router, spec))
     except ModelCallError as error:
         # The refusal before the failed fallback was billed: keep its record.
         if not isinstance(error.__cause__, ProviderError):
             _write_record(
-                root,
+                record,
                 spec,
                 outcome="error",
                 calls=error.records,
@@ -204,7 +209,7 @@ def explore(
             raise  # not the provider's failure, so not "no response"
         why = f"the fallback model gave no response: {error.__cause__}"
         path = _write_record(
-            root,
+            record,
             spec,
             outcome="no_response",
             calls=error.records,
@@ -214,23 +219,28 @@ def explore(
         cost = _cost(error.records)
         _stop("no_response", spec_id, why, (f"cost: ${cost}", f"run record: {path}"))
     except ProviderError as error:
-        # Nothing was billed, so there is nothing to record.
-        _stop("no_response", spec_id, f"the model gave no response: {error}")
+        why = f"the model gave no response: {error}"
+        path = _write_record(
+            record, spec, outcome="no_response", calls=(), plan=None, reasons=(why,)
+        )
+        _stop("no_response", spec_id, why, (f"run record: {path}",))
     calls = planned.routed.calls
     judged = _judge(planned, spec)
     if isinstance(judged, CoveragePlan):
         path = _write_record(
-            root, spec, outcome="planned", calls=calls, plan=judged, reasons=()
+            record, spec, outcome="planned", calls=calls, plan=judged, reasons=()
         )
         typer.echo(
-            f"planned {spec_id}: plan {plan_hash(judged)}, "
-            f"{len(judged.expectations)} expectations covered, ${_cost(calls)}, "
-            f"run record: {path}"
+            _visible(
+                f"planned {spec_id}: plan {plan_hash(judged)}, "
+                f"{len(judged.expectations)} expectations covered, "
+                f"${_cost(calls)}, run record: {path}"
+            )
         )
         return
     outcome, why, reasons = judged
     path = _write_record(
-        root,
+        record,
         spec,
         outcome=outcome,
         calls=calls,
