@@ -3,16 +3,20 @@ the role's fallback when the first model refuses (ADR-0007 amendments; #40)."""
 
 import asyncio
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 from aqa_core.config import Effort, ModelRoleName
 from aqa_core.model_costs import Mode, Usage
 from aqa_core.model_roles import RoutedModel
 from aqa_core.project import load_config
-from aqa_runner.model_router import ChatClient, ModelRouter, Reply, Routed
+from aqa_runner.anthropic_client import build_client
+from aqa_runner.chat_client import ChatClient, Reply
+from aqa_runner.model_router import ModelRouter, Routed
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from langsmith.utils import tracing_is_enabled
@@ -25,6 +29,7 @@ USAGE = Usage(input_tokens=1000, cached_input_tokens=400, output_tokens=200)
 
 class Verdict(BaseModel):
     ok: bool
+    reason: str
 
 
 def reply(
@@ -220,12 +225,17 @@ def test_a_schema_answer_that_does_not_parse_is_recorded_as_invalid(
 
 
 def test_a_schema_answer_that_parses_is_returned_parsed(tmp_path: Path) -> None:
-    sonnet = FakeClient(reply('{"ok": true}', parsed=Verdict(ok=True)))
+    sonnet = FakeClient(
+        reply('{"ok": true}', parsed=Verdict(ok=True, reason="cart empty"))
+    )
     routed = router(tmp_path, "", Factory(**{"claude-sonnet-5-5": sonnet}))
 
     result = call(routed, schema=Verdict)
 
-    assert (result.outcome, result.parsed) == ("ok", Verdict(ok=True))
+    assert (result.outcome, result.parsed) == (
+        "ok",
+        Verdict(ok=True, reason="cart empty"),
+    )
     assert sonnet.calls[0][2] is Verdict
 
 
@@ -306,3 +316,53 @@ def test_constructing_a_router_switches_ambient_tracing_off(
 
     assert not tracing_is_enabled()
     assert "LANGCHAIN_TRACING" not in os.environ
+
+
+VERDICT_PROMPT = "Is the cart empty? Answer with ok and a reason."
+
+
+def refusal_then_fallback_through_the_adapter(tmp_path: Path) -> Routed:
+    """A healer call through the real Anthropic adapter, whose model refuses and
+    whose fallback answers. The cassette `refusal_then_fallback` replays it."""
+    path = tmp_path / "config.yaml"
+    path.write_text(FALLBACK)
+    routed = ModelRouter.from_config(load_config(path), build_client)
+    return asyncio.run(
+        routed.call(
+            "healer", "heal", [HumanMessage(content=VERDICT_PROMPT)], schema=Verdict
+        )
+    )
+
+
+def test_a_refusal_through_the_real_adapter_is_recorded_and_the_fallback_answers(
+    tmp_path: Path, cassette: Callable[[str], AbstractContextManager[Any]]
+) -> None:
+    with cassette("refusal_then_fallback") as recording:
+        result = refusal_then_fallback_through_the_adapter(tmp_path)
+
+    # The two requests the adapter sent: the role's model, then its fallback.
+    assert [body["model"] for body in recording.sent] == [
+        "claude-sonnet-5-5",
+        "claude-opus-5-5",
+    ]
+    assert not any(
+        body.get("tool_choice", {}).get("type") in {"any", "tool"}
+        for body in recording.sent
+    )
+    assert result.outcome == "ok"
+    assert result.parsed == Verdict(ok=True, reason="The cart shows no items.")
+    refused, answered = result.calls
+    assert (refused.model, refused.status, refused.output_tokens) == (
+        "claude-sonnet-5-5",
+        "refusal",
+        0,
+    )
+    assert (answered.model, answered.status, answered.output_tokens) == (
+        "claude-opus-5-5",
+        "ok",
+        33,
+    )
+    # Priced at each model's own rates: 205 in and nothing out at $2; 205 in and
+    # 33 out at Opus 5.5's $4 and $20, per million tokens.
+    assert refused.cost_usd == Decimal("0.00041")
+    assert answered.cost_usd == Decimal("0.00148")

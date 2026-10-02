@@ -3,46 +3,20 @@ amendments): a model per role, a cost record for every response, and the role's
 fallback when a model refuses."""
 
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol, Self
+from typing import Self
 
 from aqa_core.config import Effort, ModelRoleName, ProjectConfig
-from aqa_core.model_costs import CostRecord, Mode, Status, Usage, cost_record
+from aqa_core.model_costs import CostRecord, Mode, Status, cost_record
 from aqa_core.model_roles import ResolvedRole, RoutedModel, resolve_roles
 from aqa_core.price_map import vendored
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
+from aqa_runner.chat_client import ChatClient, ClientFactory, Reply
 from aqa_runner.tracing import ignore_ambient_tracing
-
-
-@dataclass(frozen=True)
-class Reply:
-    """What a provider's client brings back from one call. `parsed` is the
-    answer to a schema, or None when the call gave no schema or the output did
-    not parse and validate."""
-
-    message: AIMessage
-    usage: Usage
-    refused: bool
-    parsed: BaseModel | None
-
-
-class ChatClient(Protocol):
-    """One provider's way of calling one model. A call has tools or a schema,
-    not both."""
-
-    async def call(
-        self,
-        messages: Sequence[BaseMessage],
-        tools: Sequence[BaseTool],
-        schema: type[BaseModel] | None,
-    ) -> Reply: ...
-
-
-ClientFactory = Callable[[RoutedModel, Effort | None], ChatClient]
 
 
 @dataclass(frozen=True)

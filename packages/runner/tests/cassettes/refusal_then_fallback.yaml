@@ -1,0 +1,55 @@
+# HAND-WRITTEN RESPONSES. Nothing in this file was recorded from api.anthropic.com
+# (no provider key was available when it was made). The request bodies are what
+# aqa_runner.anthropic_client sent, through langchain-anthropic, to a local stub; the
+# responses were written by hand in the Messages API's shape. To replace this file
+# with a real recording, run the tests with AQA_RECORD_CASSETTES=1 and a key:
+#   set -a; . .scratch/provider.env; set +a; AQA_RECORD_CASSETTES=1 \
+#     uv run pytest packages/runner/tests/test_anthropic_wire.py \
+#     packages/runner/tests/test_anthropic_client.py packages/runner/tests/test_model_router.py
+interactions:
+- request:
+    body: '{"max_tokens":4096,"messages":[{"role":"user","content":"Is the cart empty?
+      Answer with ok and a reason."}],"model":"claude-sonnet-5-5","output_config":{"format":{"type":"json_schema","schema":{"type":"object","title":"Verdict","properties":{"ok":{"type":"boolean","title":"Ok"},"reason":{"type":"string","title":"Reason"}},"additionalProperties":false,"required":["ok","reason"]}}}}'
+    headers:
+      anthropic-version:
+      - '2023-06-01'
+      content-type:
+      - application/json
+    method: POST
+    uri: https://api.anthropic.com/v1/messages
+  response:
+    body:
+      string: '{"id": "msg_handwritten_05", "type": "message", "role": "assistant",
+        "model": "claude-sonnet-5-5", "content": [], "stop_reason": "refusal", "stop_sequence":
+        null, "usage": {"cache_creation_input_tokens": 0, "cache_read_input_tokens":
+        0, "input_tokens": 205, "output_tokens": 0}}'
+    headers:
+      content-type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+- request:
+    body: '{"max_tokens":128000,"messages":[{"role":"user","content":"Is the cart
+      empty? Answer with ok and a reason."}],"model":"claude-opus-5-5","output_config":{"format":{"type":"json_schema","schema":{"type":"object","title":"Verdict","properties":{"ok":{"type":"boolean","title":"Ok"},"reason":{"type":"string","title":"Reason"}},"additionalProperties":false,"required":["ok","reason"]}}}}'
+    headers:
+      anthropic-version:
+      - '2023-06-01'
+      content-type:
+      - application/json
+    method: POST
+    uri: https://api.anthropic.com/v1/messages
+  response:
+    body:
+      string: '{"id": "msg_handwritten_06", "type": "message", "role": "assistant",
+        "model": "claude-opus-5-5", "content": [{"type": "text", "text": "{\"ok\":
+        true, \"reason\": \"The cart shows no items.\"}"}], "stop_reason": "end_turn",
+        "stop_sequence": null, "usage": {"cache_creation_input_tokens": 0, "cache_read_input_tokens":
+        0, "input_tokens": 205, "output_tokens": 33}}'
+    headers:
+      content-type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+version: 1
