@@ -6,7 +6,7 @@ it has none, in real Chromium through the browser session."""
 
 import asyncio
 import re
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from aqa_core.compiled import (
@@ -16,6 +16,8 @@ from aqa_core.compiled import (
     ByRole,
     ByTestId,
     Locator,
+    Target,
+    TextInTarget,
 )
 from aqa_core.text import normalize
 from aqa_runner.browser_session import BrowserSession, open_browser_session
@@ -23,13 +25,16 @@ from aqa_runner.locator_generation import (
     LocatorError,
     Seen,
     generate_for_action,
+    generate_for_assertion,
     seen_element,
     snapshot_elements,
 )
+from aqa_runner.locators import Resolved, Unresolved, rendered_text, resolve
+from aqa_runner.text_search import text_matches
 from playwright.async_api import ElementHandle, Error, Page, async_playwright
 
 from packages.runner.tests.egress_fixtures import egress_proxy
-from packages.runner.tests.pilot_pages import RENDERINGS, in_session, put, show
+from packages.runner.tests.pilot_pages import PAGES, RENDERINGS, in_session, put, show
 
 
 def ref_of(snapshot: str, role: str, name: str | None = None, nth: int = 0) -> str:
@@ -82,8 +87,8 @@ def test_the_headers_icon_links_get_role_and_name_without_their_glyphs() -> None
 
 def test_a_container_is_never_found_by_its_text() -> None:
     # Headings, paragraphs and list items take their names from their text,
-    # so only controls get a name (ADR-0025: never text-only locators for
-    # containers).
+    # so only controls get a name, as an action's target or an assertion's
+    # (ADR-0025: never text-only locators for containers).
     async def scenario(session: BrowserSession) -> list[tuple[Locator, ...]]:
         await show(session, "article-signed-out")
         snapshot = await session.snapshot()
@@ -95,6 +100,9 @@ def test_a_container_is_never_found_by_its_text() -> None:
         ):
             used = await seen_element(session, snapshot, ref)
             found.append(await generate_for_action(session.page, used))
+            found.append(
+                await generate_for_assertion(session.page, used, checks_text=False)
+            )
         return found
 
     for locators in in_session(scenario):
@@ -706,3 +714,306 @@ def test_tries_running_out_keep_the_locators_found() -> None:
         return await generate_for_action(session.page, used)
 
     assert in_session(scenario) == (ByRole(role="button", name="Go"),)
+
+
+async def generated(
+    page: Page,
+    used: Seen,
+    use: Literal["action", "assertion"],
+    check: TextInTarget | None,
+) -> tuple[Locator, ...]:
+    """The locators for `use`, as its caller asks for them: a text check
+    locates its target by no name."""
+    if use == "action":
+        return await generate_for_action(page, used)
+    return await generate_for_assertion(page, used, checks_text=check is not None)
+
+
+def test_a_text_assertions_target_is_found_by_no_name() -> None:
+    # The author link's name is what read-article's check claims, so it is
+    # found by structure instead (ADR-0025).
+    async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
+        await show(session, "article-signed-out")
+        snapshot = await session.snapshot()
+        used = await seen_element(session, snapshot, ref_of(snapshot, "link", "anna"))
+        return await generate_for_assertion(session.page, used, checks_text=True)
+
+    assert in_session(scenario) == (
+        ByCss(css="a.author", scope=ByCss(css="div.banner")),
+    )
+
+
+@pytest.mark.parametrize("checks_text", [True, False])
+def test_a_name_that_shares_words_with_the_text_is_no_way_to_check_it(
+    checks_text: bool,
+) -> None:
+    # "Save" doesn't accept "Save changes" nor the other way round, yet a
+    # change to the text would change both. With nothing else to tell the
+    # buttons apart, a text check gets no locator; a check of no text keeps
+    # the name.
+    html = """<button aria-label="Save" class="act">Save changes</button>
+    <button aria-label="Cancel" class="act">Cancel changes</button>"""
+
+    async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
+        await put(session, html)
+        snapshot = await session.snapshot()
+        used = await seen_element(session, snapshot, ref_of(snapshot, "button", "Save"))
+        return await generate_for_assertion(session.page, used, checks_text=checks_text)
+
+    if checks_text:
+        with pytest.raises(LocatorError):
+            in_session(scenario)
+    else:
+        assert in_session(scenario) == (ByRole(role="button", name="Save"),)
+
+
+def test_an_assertion_targets_locators_come_in_the_grammars_order() -> None:
+    # Test ID, stable id, role, then structure; no label or placeholder.
+    html = """<label>Pay <input data-testid="pay" id="pay-field" class="pay"
+      placeholder="Amount"></label>"""
+
+    async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
+        await put(session, html)
+        snapshot = await session.snapshot()
+        used = await seen_element(session, snapshot, ref_of(snapshot, "textbox", "Pay"))
+        return await generate_for_assertion(session.page, used, checks_text=True)
+
+    assert in_session(scenario) == (
+        ByTestId(testid="pay"),
+        ByCss(css="#pay-field"),
+        ByRole(role="textbox"),
+        ByCss(css="input.pay"),
+    )
+
+
+def test_an_assertion_that_checks_no_text_keeps_role_and_name() -> None:
+    # login's visible_unoccluded check claims nothing about the label, so the
+    # header link keeps its name.
+    async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
+        await show(session, "home")
+        snapshot = await session.snapshot()
+        used = await seen_element(
+            session, snapshot, ref_of(snapshot, "link", "New Article")
+        )
+        return await generate_for_assertion(session.page, used, checks_text=False)
+
+    assert ByRole(role="link", name="New Article") in in_session(scenario)
+
+
+def text_check(**fields: Any) -> TextInTarget:
+    """A text_in_target check, as the coverage plan's would be compiled."""
+    return TextInTarget.model_validate(
+        {"id": "a1", "expect_index": 0, "check": "text_in_target", "target": "t"}
+        | fields
+    )
+
+
+async def is_same(page: Page, found: ElementHandle, used: ElementHandle) -> bool:
+    same: bool = await page.evaluate("([a, b]) => a === b", [found, used])
+    return same
+
+
+async def narrowed(element: ElementHandle, css: str) -> Seen:
+    """The element under a ref'd one that the caller points at, as the
+    navigator will for one the snapshot gives no ref (#53). The favorites
+    count is one: an inline span inside the favorite button, whose text the
+    snapshot folds into the button's (LAB_NOTES, 2026-10-02)."""
+    inner = await element.query_selector(css)
+    assert inner is not None, css
+    return Seen(inner)
+
+
+async def banner_part(
+    session: BrowserSession, part: str
+) -> tuple[Seen, Literal["action", "assertion"], TextInTarget | None]:
+    """One of the article banner's date, author, favorite button and
+    favorites count, with its use and its check, as the pilot uses it:
+    read-article checks the date and author, and favorite-article clicks the
+    button and checks the count."""
+    signed_out = part in ("date", "author")
+    await show(session, "article-signed-out" if signed_out else "article")
+    snapshot = await session.snapshot()
+    if signed_out:
+        author = await seen_element(session, snapshot, ref_of(snapshot, "link", "anna"))
+        if part == "author":
+            return author, "assertion", text_check(text="anna")
+        # Styled, the date is a block, so the snapshot gives it a ref.
+        ref = ref_with_text(snapshot, "generic", "January 4, 2026")
+        return (
+            await seen_element(session, snapshot, ref),
+            "assertion",
+            text_check(text="January 4, 2026"),
+        )
+    button = await seen_element(
+        session, snapshot, ref_of(snapshot, "button", "Favorite Article (0)")
+    )
+    if part == "favorite button":
+        return button, "action", None
+    count = await narrowed(button.element, "span.counter")
+    return count, "assertion", text_check(pattern=r"\b0\b")
+
+
+@pytest.mark.parametrize("part", ["date", "author", "favorite button", "count"])
+def test_the_banners_meta_is_scoped_to_the_banner(part: str) -> None:
+    # Each is rendered twice, in the banner and again under the article, so
+    # each locator is scoped to the banner, and is ambiguous without it.
+    async def scenario(
+        session: BrowserSession,
+    ) -> list[tuple[Locator, Resolved | Unresolved]]:
+        used, use, check = await banner_part(session, part)
+        found = []
+        for locator in await generated(session.page, used, use, check):
+            alone = locator.model_copy(update={"scope": None})
+            target = Target(semantic="the banner's part", locators=(alone,))
+            found.append((locator, await resolve(session.page, target, use)))
+        return found
+
+    found = in_session(scenario)
+
+    assert found
+    for locator, unscoped in found:
+        assert locator.scope == ByCss(css="div.banner")
+        assert unscoped == Unresolved(("ambiguous",))
+
+
+def test_the_date_is_found_by_structure_so_a_wrong_date_fails_its_check() -> None:
+    # conduit-bug-001 (bench/manifest.v1.json) renders article dates one day
+    # early: its one change is the zone of article-meta's date pipe
+    # (bench/apps/conduit/frontend/src/app/features/article/components/
+    # article-meta.component.ts, dateZone), so it is applied here to both of
+    # the clean page's article dates. The date's target still resolves, and
+    # read-article's check fails rather than drifting (ADR-0025).
+    bug_001 = """(dates) => dates.forEach((date) => {
+        date.textContent = " January 3, 2026 ";
+    })"""
+
+    async def scenario(
+        session: BrowserSession,
+    ) -> tuple[tuple[Locator, ...], list[bool]]:
+        used, _, check = await banner_part(session, "date")
+        assert check is not None
+        locators = await generate_for_assertion(session.page, used, checks_text=True)
+        target = Target(semantic="the article's date in its banner", locators=locators)
+        passes = []
+        for change in (None, bug_001):
+            if change is not None:
+                await session.page.eval_on_selector_all(
+                    "app-article-meta span.date", change
+                )
+            found = await resolve(session.page, target, "assertion")
+            assert isinstance(found, Resolved), found
+            passes.append(await text_matches(check, await rendered_text(found.element)))
+        return locators, passes
+
+    locators, passes = in_session(scenario)
+
+    assert all(isinstance(each, ByCss) for each in locators)
+    assert passes == [True, False]
+
+
+def test_the_favorites_count_is_the_count_not_the_button() -> None:
+    # #20: conduit-benign-002 moves the count out of the button, so its
+    # target is the count itself. After favoriting, its check passes.
+    async def scenario(
+        session: BrowserSession,
+    ) -> tuple[tuple[Locator, ...], bool, bool]:
+        await show(session, "article-favorited")
+        snapshot = await session.snapshot()
+        ref = ref_of(snapshot, "button", "Unfavorite Article (1)")
+        button = await seen_element(session, snapshot, ref)
+        count = await narrowed(button.element, "span.counter")
+        check = text_check(pattern=r"\b1\b")
+        locators = await generate_for_assertion(session.page, count, checks_text=True)
+        target = Target(
+            semantic="the favorites count in the article banner", locators=locators
+        )
+        found = await resolve(session.page, target, "assertion")
+        assert isinstance(found, Resolved), found
+        return (
+            locators,
+            await is_same(session.page, found.element, count.element),
+            await text_matches(check, await rendered_text(found.element)),
+        )
+
+    locators, is_the_count, passes = in_session(scenario)
+
+    assert is_the_count
+    assert passes
+    assert not [each for each in locators if isinstance(each, ByRole)]
+
+
+# What a locator must never be: positional, or built from a generated name,
+# and the controls whose name may locate them (ADR-0025). The test's own
+# reading, independent of the generator's.
+POSITIONAL = re.compile(r":(?:nth|first|last|only)-|\bnth=")
+GENERATED = re.compile(
+    r"(?:^|[\s.#\[=])(?:css|sc|jsx|emotion|svelte|ng)-|_ng"
+    r"|(?=[A-Za-z0-9]*[0-9])(?=[A-Za-z0-9]*[A-Za-z])\b[A-Za-z0-9]{5,}\b"
+)
+CONTROLS = {
+    "button",
+    "link",
+    "textbox",
+    "checkbox",
+    "radio",
+    "combobox",
+    "option",
+    "tab",
+}
+
+
+def broken_rules(locator: Locator) -> list[str]:
+    """Which of the grammar's never-rules `locator` or its scope breaks."""
+    broken = []
+    if isinstance(locator, ByCss):
+        if POSITIONAL.search(locator.css):
+            broken.append("positional")
+        if GENERATED.search(locator.css):
+            broken.append("generated")
+    if isinstance(locator, ByRole) and locator.name and locator.role not in CONTROLS:
+        broken.append("text for a container")
+    if isinstance(locator, ByRole) and locator.role in {
+        "generic",
+        "none",
+        "presentation",
+    }:
+        broken.append("no role of its own")
+    if locator.scope is not None:
+        broken.extend(broken_rules(locator.scope))
+    return broken
+
+
+@pytest.mark.parametrize("page", PAGES)
+def test_every_pilot_locator_keeps_the_grammar_and_finds_its_element(page: str) -> None:
+    # Every element the snapshot gives a ref, as an action and as an
+    # assertion: each locator generated keeps the never-rules and, alone,
+    # resolves to that element. An element no locator finds is left out.
+    async def scenario(session: BrowserSession) -> list[tuple[Locator, bool]]:
+        await show(session, page)
+        snapshot = await session.snapshot()
+        found = []
+        for ref in snapshot_elements(snapshot):
+            used = await seen_element(session, snapshot, ref)
+            for use in ("action", "assertion"):
+                try:
+                    locators = await generated(session.page, used, use, None)
+                except LocatorError:
+                    continue
+                for locator in locators:
+                    target = Target(semantic="a pilot element", locators=(locator,))
+                    resolved = await resolve(session.page, target, use)
+                    same = isinstance(resolved, Resolved) and await is_same(
+                        session.page, resolved.element, used.element
+                    )
+                    found.append((locator, same))
+        return found
+
+    found = in_session(scenario)
+
+    assert len(found) >= 10
+    assert [locator for locator, same in found if not same] == []
+    assert [
+        (locator, broken_rules(locator))
+        for locator, _ in found
+        if broken_rules(locator)
+    ] == []
