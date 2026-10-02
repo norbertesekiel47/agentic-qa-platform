@@ -14,14 +14,16 @@ from pathlib import Path
 
 import pytest
 from aqa_core.project import load_config, load_spec
+from aqa_core.schema import authority
 from aqa_runner import egress as egress_module
 from aqa_runner.egress import (
     Connection,
+    EgressGate,
     EgressPolicy,
-    EgressProxy,
     EgressRefusedError,
     EgressUpstreamError,
     IPAddress,
+    Requester,
     address_refusal,
     egress_policy,
     system_resolve,
@@ -121,12 +123,12 @@ POLICY = EgressPolicy(
     ("host", "port"),
     [("127.0.0.1", 4100), ("pay.example.test", 443), ("[::1]", 8080)],
 )
-@pytest.mark.parametrize("tunnel", [False, True])
+@pytest.mark.parametrize("requester", ["request", "tunnel"])
 def test_allowed_origins_pass_on_their_own_port(
-    host: str, port: int, *, tunnel: bool
+    host: str, port: int, requester: Requester
 ) -> None:
     # CONNECT names no scheme, so an origin passes by its host and port alone.
-    assert POLICY.allows(host, port, tunnel=tunnel)
+    assert POLICY.allows(host, port, requester)
 
 
 @pytest.mark.parametrize(
@@ -141,22 +143,22 @@ def test_allowed_origins_pass_on_their_own_port(
         ("staging.example.test", 8080),
     ],
 )
-@pytest.mark.parametrize("tunnel", [False, True])
+@pytest.mark.parametrize("requester", ["request", "tunnel"])
 def test_other_hosts_and_ports_are_refused(
-    host: str, port: int, *, tunnel: bool
+    host: str, port: int, requester: Requester
 ) -> None:
-    assert not POLICY.allows(host, port, tunnel=tunnel)
+    assert not POLICY.allows(host, port, requester)
 
 
 @pytest.mark.parametrize("host", ["fonts.example.test", "[2001:db8::5]"])
 def test_subresource_hosts_pass_only_on_their_schemes_default_port(host: str) -> None:
     # A plain request is http's, on port 80; a tunnel carries https or wss, on
     # port 443.
-    assert POLICY.allows(host, 80, tunnel=False)
-    assert POLICY.allows(host, 443, tunnel=True)
-    assert not POLICY.allows(host, 443, tunnel=False)
-    assert not POLICY.allows(host, 80, tunnel=True)
-    assert not POLICY.allows(host, 8443, tunnel=True)
+    assert POLICY.allows(host, 80, "request")
+    assert POLICY.allows(host, 443, "tunnel")
+    assert not POLICY.allows(host, 443, "request")
+    assert not POLICY.allows(host, 80, "tunnel")
+    assert not POLICY.allows(host, 8443, "tunnel")
 
 
 def test_only_the_start_and_declared_private_origins_may_be_private() -> None:
@@ -270,9 +272,9 @@ def unused_port() -> int:
         return int(probe.getsockname()[1])
 
 
-async def reached(egress: EgressProxy, host: str, port: int) -> str:
+async def reached(egress: EgressGate, host: str, port: int) -> str:
     """Which loopback server a connection to `host` and `port` reaches."""
-    reader, writer = await egress.connect(host, port, tunnel=False)
+    reader, writer = await egress.connect(host, port, "request")
     try:
         return (await reader.read()).decode()
     finally:
@@ -296,21 +298,21 @@ def run_policy(
 APP = "app.example.test"
 
 
-def app_egress(port: int, answers: Answers) -> tuple[EgressProxy, ScriptedResolver]:
+def app_egress(port: int, answers: Answers) -> tuple[EgressGate, ScriptedResolver]:
     """A run whose start origin is http://127.0.0.1:`port` and which declares
     http://app.example.test:`port` private, with names answered from
     `answers`."""
     resolver = ScriptedResolver(answers)
     policy = run_policy(port, private=[f"http://{APP}:{port}"])
-    return EgressProxy(policy, resolve=resolver), resolver
+    return EgressGate(policy, resolve=resolver), resolver
 
 
 def test_a_host_outside_the_allowlist_is_refused_before_any_lookup() -> None:
-    async def scenario() -> tuple[EgressProxy, ScriptedResolver, EgressRefusedError]:
+    async def scenario() -> tuple[EgressGate, ScriptedResolver, EgressRefusedError]:
         resolver = ScriptedResolver({})
-        egress = EgressProxy(run_policy(4100), resolve=resolver)
+        egress = EgressGate(run_policy(4100), resolve=resolver)
         with pytest.raises(EgressRefusedError) as refused:
-            await egress.connect("evil.example.test", 443, tunnel=True)
+            await egress.connect("evil.example.test", 443, "tunnel")
         return egress, resolver, refused.value
 
     egress, resolver, refused = asyncio.run(scenario())
@@ -323,11 +325,11 @@ def test_a_host_outside_the_allowlist_is_refused_before_any_lookup() -> None:
 
 
 def test_start_origin_on_loopback_and_a_declared_private_origin_are_allowed() -> None:
-    async def scenario() -> tuple[list[str], EgressProxy, ScriptedResolver]:
+    async def scenario() -> tuple[list[str], EgressGate, ScriptedResolver]:
         async with loopback_servers() as servers:
             private = f"http://staging.example.test:{servers.port}"
             resolver = ScriptedResolver({"staging.example.test": ["127.0.0.1"]})
-            egress = EgressProxy(
+            egress = EgressGate(
                 run_policy(servers.port, private=[private]), resolve=resolver
             )
             return (
@@ -361,16 +363,16 @@ def test_start_origin_on_loopback_and_a_declared_private_origin_are_allowed() ->
 def test_a_private_or_loopback_address_behind_an_allowed_origin_is_refused(
     origin: str, answers: Answers
 ) -> None:
-    async def scenario() -> tuple[EgressProxy, EgressRefusedError, list[str]]:
+    async def scenario() -> tuple[EgressGate, EgressRefusedError, list[str]]:
         async with loopback_servers() as servers:
             allowed = origin.format(port=servers.port)
-            egress = EgressProxy(
+            egress = EgressGate(
                 run_policy(servers.port, other=[allowed]),
                 resolve=ScriptedResolver(answers),
             )
-            host = allowed.removeprefix("http://").removesuffix(f":{servers.port}")
+            host, _ = authority(allowed)
             with pytest.raises(EgressRefusedError) as refused:
-                await egress.connect(host, servers.port, tunnel=False)
+                await egress.connect(host, servers.port, "request")
             return egress, refused.value, servers.accepted
 
     egress, refused, accepted = asyncio.run(scenario())
@@ -388,16 +390,16 @@ def test_a_private_or_loopback_address_behind_an_allowed_origin_is_refused(
 def test_a_private_origin_resolving_to_metadata_is_refused_without_connecting(
     answer: list[str],
 ) -> None:
-    async def scenario() -> tuple[EgressProxy, EgressRefusedError]:
+    async def scenario() -> tuple[EgressGate, EgressRefusedError]:
         private = "http://staging.example.test:8080"
-        egress = EgressProxy(
+        egress = EgressGate(
             run_policy(4100, private=[private]),
             resolve=ScriptedResolver({"staging.example.test": answer}),
         )
         with pytest.raises(EgressRefusedError) as refused:
             # Bounded: a connection attempt to a metadata address would hang.
             await asyncio.wait_for(
-                egress.connect("staging.example.test", 8080, tunnel=False), 5
+                egress.connect("staging.example.test", 8080, "request"), 5
             )
         return egress, refused.value
 
@@ -425,11 +427,11 @@ def test_a_rebound_name_still_connects_to_its_pinned_address() -> None:
 
 
 def test_a_refused_answer_is_not_pinned() -> None:
-    async def scenario() -> tuple[str, EgressProxy, ScriptedResolver]:
+    async def scenario() -> tuple[str, EgressGate, ScriptedResolver]:
         async with loopback_servers() as servers:
             egress, resolver = app_egress(servers.port, {APP: ["169.254.169.254"]})
             with pytest.raises(EgressRefusedError):
-                await egress.connect(APP, servers.port, tunnel=False)
+                await egress.connect(APP, servers.port, "request")
             resolver.answers[APP] = ["127.0.0.1"]
             return await reached(egress, APP, servers.port), egress, resolver
 
@@ -444,7 +446,7 @@ def test_a_pinned_answer_is_judged_again_for_each_port() -> None:
     async def scenario() -> tuple[str, EgressRefusedError, ScriptedResolver]:
         async with loopback_servers() as servers:
             resolver = ScriptedResolver({"app.example.test": ["127.0.0.1"]})
-            egress = EgressProxy(
+            egress = EgressGate(
                 run_policy(
                     servers.port,
                     private=[f"http://app.example.test:{servers.port}"],
@@ -455,7 +457,7 @@ def test_a_pinned_answer_is_judged_again_for_each_port() -> None:
             address = await reached(egress, "app.example.test", servers.port)
             # The same name on a port that isn't a declared private origin's.
             with pytest.raises(EgressRefusedError) as refused:
-                await egress.connect("app.example.test", 9, tunnel=False)
+                await egress.connect("app.example.test", 9, "request")
             return address, refused.value, resolver
 
     address, refused, resolver = asyncio.run(scenario())
@@ -523,14 +525,14 @@ def test_an_address_that_never_answers_times_out_and_the_next_is_tried(
 def test_an_unresolvable_name_is_an_infrastructure_event(
     answer: Sequence[str] | OSError,
 ) -> None:
-    async def scenario() -> tuple[EgressProxy, EgressUpstreamError]:
+    async def scenario() -> tuple[EgressGate, EgressUpstreamError]:
         private = "http://app.example.test:8080"
-        egress = EgressProxy(
+        egress = EgressGate(
             run_policy(4100, private=[private]),
             resolve=ScriptedResolver({"app.example.test": answer}),
         )
         with pytest.raises(EgressUpstreamError) as failed:
-            await egress.connect("app.example.test", 8080, tunnel=False)
+            await egress.connect("app.example.test", 8080, "request")
         return egress, failed.value
 
     egress, failed = asyncio.run(scenario())
@@ -543,10 +545,10 @@ def test_an_unresolvable_name_is_an_infrastructure_event(
 def test_an_unreachable_address_is_an_infrastructure_event() -> None:
     port = unused_port()
 
-    async def scenario() -> tuple[EgressProxy, EgressUpstreamError]:
-        egress = EgressProxy(run_policy(port), resolve=ScriptedResolver({}))
+    async def scenario() -> tuple[EgressGate, EgressUpstreamError]:
+        egress = EgressGate(run_policy(port), resolve=ScriptedResolver({}))
         with pytest.raises(EgressUpstreamError) as failed:
-            await egress.connect("127.0.0.1", port, tunnel=False)
+            await egress.connect("127.0.0.1", port, "request")
         return egress, failed.value
 
     egress, failed = asyncio.run(scenario())
@@ -559,7 +561,7 @@ def test_the_system_resolver_answers_by_default() -> None:
     async def scenario() -> tuple[list[IPAddress], str]:
         async with loopback_servers() as servers:
             start = f"http://localhost:{servers.port}"
-            egress = EgressProxy(
+            egress = EgressGate(
                 EgressPolicy(
                     allowed_origins=(start,),
                     subresource_hosts=(),

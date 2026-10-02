@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from aqa_core.config import RoleField
 from aqa_core.project import SpecError, load_config
+from aqa_core.schema import authority
 from pydantic import ValidationError
 
 # DATA_MODEL §9's example, verbatim.
@@ -87,6 +88,29 @@ def test_base_url_is_stored_as_a_normalized_origin(
     tmp_path: Path, written: str, stored: str
 ) -> None:
     assert load_config(write(tmp_path, f"base_url: '{written}'\n")).base_url == stored
+
+
+@pytest.mark.parametrize(
+    ("origin", "host_and_port"),
+    [
+        ("http://localhost", ("localhost", 80)),
+        ("HTTPS://Shop.Example.Test/", ("shop.example.test", 443)),
+        ("http://[0:0::1]:4100", ("[::1]", 4100)),
+        ("https://127.0.0.1:8443", ("127.0.0.1", 8443)),
+    ],
+)
+def test_an_origins_authority_is_its_host_and_port(
+    origin: str, host_and_port: tuple[str, int]
+) -> None:
+    # The egress proxy matches requests by host and port (ADR-0026 amendment,
+    # 2026-10-01), read as parse_origin reads the origin.
+    assert authority(origin) == host_and_port
+
+
+@pytest.mark.parametrize("text", ["http://a.test/path", "ftp://a.test", "a.test:80"])
+def test_authority_refuses_what_is_not_an_origin(text: str) -> None:
+    with pytest.raises(ValueError, match="not an origin"):
+        authority(text)
 
 
 @pytest.mark.parametrize(

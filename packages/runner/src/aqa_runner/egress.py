@@ -1,6 +1,6 @@
-"""The run's egress: which hosts the browser may reach and where they may
-resolve (ADR-0026 and its 2026-10-01 amendment on the egress proxy; SECURITY.md
-§7)."""
+"""The run's egress gate: which hosts the run may reach, where they may
+resolve, and each name's DNS answer pinned for the run (ADR-0026 and its
+2026-10-01 amendment on the egress proxy; SECURITY.md §7)."""
 
 import asyncio
 import socket
@@ -9,20 +9,30 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv6Address, IPv6Network, ip_address, ip_network
 from typing import Literal
-from urllib.parse import urlsplit
 
 from aqa_core.config import ProjectConfig
 from aqa_core.project import allowed_origins
-from aqa_core.schema import DEFAULT_PORTS
+from aqa_core.schema import DEFAULT_PORTS, authority
 from aqa_core.spec import Spec
 
 type IPAddress = IPv4Address | IPv6Address
 
-# How the egress proxy looks a name up: the system resolver in a run, and a
+# How the egress gate looks a name up: the system resolver in a run, and a
 # scripted one, the local DNS fixture, in tests.
 type Resolve = Callable[[str], Awaitable[Sequence[IPAddress]]]
 
 type Connection = tuple[asyncio.StreamReader, asyncio.StreamWriter]
+
+# Who asks for a connection: the egress proxy, for one of the browser's plain
+# requests (http's) or for a tunnel (CONNECT, which carries https or wss).
+type Requester = Literal["request", "tunnel"]
+
+# The one port a subresource host passes on, by requester: its scheme's
+# default.
+SUBRESOURCE_PORTS: dict[Requester, int] = {
+    "request": DEFAULT_PORTS["http"],
+    "tunnel": DEFAULT_PORTS["https"],
+}
 
 # Why a connection was refused: its host and port aren't on the allowlist, or
 # the IP policy refused an address the host resolves to.
@@ -91,17 +101,6 @@ def address_refusal(address: IPAddress, *, private_allowed: bool) -> str | None:
     return None
 
 
-def authority(origin: str) -> tuple[str, int]:
-    """The host and port `origin` names, with the scheme's default port when
-    it writes none. `origin` is written as `aqa_core.schema.parse_origin`
-    returns it, so its host is lowercase and an IPv6 host keeps its
-    brackets."""
-    parts = urlsplit(origin)
-    if parts.port is None:
-        return parts.netloc, DEFAULT_PORTS[parts.scheme]
-    return parts.netloc.removesuffix(f":{parts.port}"), parts.port
-
-
 @dataclass(frozen=True)
 class EgressPolicy:
     """Which hosts a run's egress passes, and which of them may resolve to a
@@ -118,14 +117,13 @@ class EgressPolicy:
     # The start origin, then the project config's.
     private_origins: tuple[str, ...]
 
-    def allows(self, host: str, port: int, *, tunnel: bool) -> bool:
-        """Whether a request to `host` and `port` passes: an allowed origin's
-        host and port, or a subresource host on its scheme's default port. A
-        plain request is http's (80); a tunnel carries https or wss (443)."""
+    def allows(self, host: str, port: int, requester: Requester) -> bool:
+        """Whether `requester` may connect to `host` and `port`: an allowed
+        origin's host and port, or a subresource host on its scheme's default
+        port, 80 for a plain request and 443 for a tunnel."""
         if (host, port) in map(authority, self.allowed_origins):
             return True
-        scheme = "https" if tunnel else "http"
-        return host in self.subresource_hosts and port == DEFAULT_PORTS[scheme]
+        return host in self.subresource_hosts and port == SUBRESOURCE_PORTS[requester]
 
     def may_be_private(self, host: str, port: int) -> bool:
         """Whether `host` and `port` may resolve to a loopback or private
@@ -144,7 +142,7 @@ def egress_policy(spec: Spec, config: ProjectConfig, start: str) -> EgressPolicy
 
 @dataclass(frozen=True)
 class Refusal:
-    """A connection the egress proxy refused, recorded for the run. `host`
+    """A connection the egress gate refused, recorded for the run. `host`
     means the host isn't an allowed origin or a subresource host on that port,
     an egress block unless the project expects it (#47). `address` means the
     IP policy refused where the host resolves."""
@@ -157,7 +155,7 @@ class Refusal:
 
 @dataclass(frozen=True)
 class InfrastructureEvent:
-    """A connection the egress proxy couldn't make: the name didn't resolve,
+    """A connection the egress gate couldn't make: the name didn't resolve,
     or no address accepted. Never the app's response, and never a finding."""
 
     host: str
@@ -166,7 +164,7 @@ class InfrastructureEvent:
 
 
 class EgressRefusedError(Exception):
-    """The egress proxy refused a connection (ADR-0026)."""
+    """The egress gate refused a connection (ADR-0026)."""
 
     def __init__(self, refusal: Refusal) -> None:
         super().__init__(f"{refusal.host}:{refusal.port}: {refusal.detail}")
@@ -174,7 +172,7 @@ class EgressRefusedError(Exception):
 
 
 class EgressUpstreamError(Exception):
-    """The egress proxy couldn't reach an allowed host: an infrastructure
+    """The egress gate couldn't reach an allowed host: an infrastructure
     error (API.md §7, 10+), never a finding (ADR-0026)."""
 
     def __init__(self, event: InfrastructureEvent) -> None:
@@ -200,12 +198,13 @@ def _ip_literal(host: str) -> IPAddress | None:
         return None
 
 
-class EgressProxy:
-    """A run's egress proxy: its policy, its DNS pins and what it refused or
-    couldn't reach (ADR-0026). `connect` is its only way out.
+class EgressGate:
+    """A run's egress gate: its policy, its DNS pins and what it refused or
+    couldn't reach (ADR-0026). Every connection the run makes to the outside
+    goes through `connect`, and every allowlist decision is the policy's.
 
-    One proxy serves a whole run, every browser session and runner-side
-    request in it, so each name's pin holds for the run."""
+    One gate serves a whole run, every browser session and runner-side request
+    in it, so each name's pin holds for the run."""
 
     def __init__(
         self, policy: EgressPolicy, *, resolve: Resolve = system_resolve
@@ -220,14 +219,14 @@ class EgressProxy:
         self.refusals: list[Refusal] = []
         self.infrastructure_events: list[InfrastructureEvent] = []
 
-    async def connect(self, host: str, port: int, *, tunnel: bool) -> Connection:
+    async def connect(self, host: str, port: int, requester: Requester) -> Connection:
         """A connection to `host` and `port`, written as an origin writes them
-        (lowercase, an IPv6 address in brackets), for a plain request or a
-        tunnel. Refused, before any lookup, unless the policy allows the host
-        and port; then refused unless every address of the host's pinned
-        answer passes the IP policy for that host and port. Raises
-        `EgressRefusedError` or `EgressUpstreamError`, and records either."""
-        if not self.policy.allows(host, port, tunnel=tunnel):
+        (lowercase, an IPv6 address in brackets), for `requester`. Refused,
+        before any lookup, unless the policy allows it; then refused unless
+        every address of the host's pinned answer passes the IP policy for
+        that host and port. Raises `EgressRefusedError` or
+        `EgressUpstreamError`, and records either."""
+        if not self.policy.allows(host, port, requester):
             raise self._refuse(
                 host, port, "host", "not an allowed origin or a subresource host"
             )
