@@ -3,7 +3,6 @@ derives from them before its browser starts (DATA_MODEL §6, §7, §9;
 ADR-0025; ADR-0026; #39; #88)."""
 
 import dataclasses
-import errno
 import json
 import os
 import re
@@ -206,30 +205,29 @@ def test_a_config_that_is_a_directory_does_not_hide_the_specs_problems(
     with pytest.raises(SpecError) as raised:
         load_project(root)
 
-    assert set(raised.value.problems) == {
-        f"{root / 'config.yaml'}: a directory, not a file",
-        f"{login}: owner: unknown key",
-    }
+    assert sorted(raised.value.problems) == sorted(
+        [
+            f"{root / 'config.yaml'}: a directory, not a file",
+            f"{login}: owner: unknown key",
+        ]
+    )
 
 
 def test_a_permission_error_is_not_a_spec_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Only a directory is reported as a spec error: any other read error is an
-    # infrastructure error (#91). Not chmod 000, which reads fine as root.
-    root = write_project(tmp_path / "qa", BOUND)
-    login = write_spec(root / "login.spec.md")
-    config = load_config(root / "config.yaml")
-
-    def refuse(path: Path, *_args: object, **_kwargs: object) -> NoReturn:
-        raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(path))
+    # Only a directory is a spec error: any other read error propagates as it
+    # is, for the caller to report as an infrastructure error (#91). The read
+    # is patched because chmod 000 reads fine as root.
+    def refuse(*_args: object, **_kwargs: object) -> NoReturn:
+        raise PermissionError("Permission denied")
 
     monkeypatch.setattr(Path, "read_text", refuse)
 
     with pytest.raises(PermissionError):
-        load_config(root / "config.yaml")
+        load_config(tmp_path / "config.yaml")
     with pytest.raises(PermissionError):
-        load_spec(login, config)
+        load_spec(tmp_path / "login.spec.md", ProjectConfig())
 
 
 def test_a_project_without_a_config_is_an_error(tmp_path: Path) -> None:

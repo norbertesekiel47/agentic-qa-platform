@@ -36,6 +36,8 @@ class SpecError(Exception):
 
 
 def _read_text(path: Path) -> str:
+    """The text of `path`. A directory and text that isn't UTF-8 are spec
+    errors; any other read error propagates as it is (DATA_MODEL §6)."""
     try:
         # utf-8-sig: a byte order mark an editor wrote is not part of the text.
         return path.read_text(encoding="utf-8-sig")
