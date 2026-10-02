@@ -1,7 +1,7 @@
-"""Only `aqa_runner.sandbox.launch` starts Chromium in the packages' source
-(`packages/*/src`). Any other launch of, or connection to, Chromium there, as
-far as its spelling shows, fails here, so every browser the packages use has
-passed the sandbox check (ADR-0026, #77).
+"""Only `aqa_runner.sandbox.launch`, through `launch_with_observations`, starts
+Chromium in the packages' source (`packages/*/src`). Any other launch of, or
+connection to, Chromium there, as far as its spelling shows, fails here, so
+every browser the packages use has passed the sandbox check (ADR-0026, #77).
 """
 
 import ast
@@ -11,8 +11,11 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 
-# The one module in packages/*/src that may start Chromium, through launch.
+# The one module in packages/*/src that may start Chromium, and the function
+# there that starts it and runs the sandbox check. `launch` delegates to it
+# (ADR-0026's amendment for #81).
 SANDBOX = "packages/runner/src/aqa_runner/sandbox.py"
+CHECKED_LAUNCH = "launch_with_observations"
 # ADR-0026's negative controls, which launch without the sandbox on purpose.
 # The gate scans no package tests.
 NEGATIVE_CONTROLS = "packages/runner/tests/test_sandbox.py"
@@ -83,19 +86,20 @@ def test_packages_launch_chromium_only_through_the_sandbox_check() -> None:
 
 
 # The gate leaves the sandbox module alone, so nothing there may start Chromium
-# except launch's own call to Playwright, which the sandbox check follows.
-def test_launch_is_the_sandbox_modules_only_chromium_start() -> None:
+# except the checked launch's own call to Playwright, which the sandbox check
+# follows.
+def test_the_sandbox_module_starts_chromium_only_in_the_checked_launch() -> None:
     module = ast.parse((REPO / SANDBOX).read_text())
-    [launch] = [
+    [checked] = [
         node
         for node in module.body
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "launch"
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == CHECKED_LAUNCH
     ]
 
     in_module = [ast.unparse(start) for start in chromium_starts(ast.unparse(module))]
-    in_launch = [ast.unparse(start) for start in chromium_starts(ast.unparse(launch))]
+    in_checked = [ast.unparse(start) for start in chromium_starts(ast.unparse(checked))]
 
-    assert in_module == in_launch == ["chromium.launch"]
+    assert in_module == in_checked == ["chromium.launch"]
 
 
 # The files the gate leaves alone, each with a start it must still see there:
