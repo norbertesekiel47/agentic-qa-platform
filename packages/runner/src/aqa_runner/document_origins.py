@@ -10,10 +10,11 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from aqa_core.schema import parse_origin
+from playwright.async_api import Frame
 
 # Where a document on no allowed origin was found: the session's top-level
-# page, or a popup.
-type Reached = Literal["document", "popup"]
+# page, the frame of an element the session was about to give out, or a popup.
+type PolicyEventKind = Literal["document", "frame", "popup"]
 
 # How many of each record a session keeps; it counts them all. A page can
 # open popups in a loop (Playwright launches Chromium with popup blocking
@@ -28,7 +29,7 @@ class PolicyEvent:
     reports it; `origin` is None when the document has none a run could
     allow, such as Chromium's error page. What it does to the run is #47's."""
 
-    kind: Reached
+    kind: PolicyEventKind
     url: str
     origin: str | None
 
@@ -60,13 +61,13 @@ class PolicyEventError(Exception):
 
 
 class DocumentChangedError(Exception):
-    """A frame of the page navigated while the session took a snapshot, so
-    content from a document it never checked could be in it: the snapshot
-    is discarded, and the caller takes another."""
+    """A frame of the page navigated or was removed while the session took a
+    snapshot, so content from a document it never checked could be in it:
+    the snapshot is discarded, and the caller takes another."""
 
     def __init__(self) -> None:
         super().__init__(
-            "the page navigated while the snapshot was taken, so it was "
+            "the page changed while the snapshot was taken, so it was "
             "discarded: take a new snapshot"
         )
 
@@ -114,3 +115,12 @@ def document_origin(url: str, inherited: str | None) -> str | None:
             return inherited
         case _:
             return None
+
+
+def frame_origin(frame: Frame) -> str | None:
+    """The origin of `frame`'s document, from the URL Chromium reports for it
+    (https://playwright.dev/python/docs/api/class-frame#frame-url), which the
+    page's scripts can't forge. about:blank and about:srcdoc inherit their
+    parent frame's."""
+    parent = frame.parent_frame
+    return document_origin(frame.url, None if parent is None else frame_origin(parent))
