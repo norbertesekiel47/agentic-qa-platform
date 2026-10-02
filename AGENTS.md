@@ -63,6 +63,7 @@ sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0                  #
 # On a bare python3 of .python-version's version, as CI runs the guard:
 python3 -m unittest discover -s .claude/hooks                                  # guard tests
 python3 .claude/hooks/policy_guard.py --scan                                   # policy scan
+python3 .claude/hooks/policy_guard.py --diff origin/main                       # the floor's moves since main: approval-class ones pass once the maintainer approves
 # In the workspace:
 uv run ruff check .                                                            # lint
 uv run ruff format --check .                                                   # format
