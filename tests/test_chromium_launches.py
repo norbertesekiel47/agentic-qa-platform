@@ -1,6 +1,7 @@
-"""Only `aqa_runner.sandbox.launch` starts Chromium in packages/. Any other
-launch of, or connection to, Chromium there fails here, so every browser the
-packages use has passed the sandbox check (ADR-0026, #77).
+"""Only `aqa_runner.sandbox.launch` starts Chromium in the packages' source
+(`packages/*/src`). Any other launch of, or connection to, Chromium there fails
+here, so every browser the packages use has passed the sandbox check
+(ADR-0026, #77).
 """
 
 import ast
@@ -10,12 +11,12 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 
-# The one module in packages/ that may call Playwright's launch.
+# The one module in packages/*/src that may call Playwright's launch.
 SANDBOX = "packages/runner/src/aqa_runner/sandbox.py"
 # ADR-0026's negative controls, which launch without the sandbox on purpose.
+# The gate scans no package tests.
 NEGATIVE_CONTROLS = "packages/runner/tests/test_sandbox.py"
-ALLOWED = [SANDBOX, NEGATIVE_CONTROLS]
-ALLOWED_IDS = ["sandbox-module", "negative-controls"]
+LEFT_ALONE = {"sandbox-module": SANDBOX, "negative-controls": NEGATIVE_CONTROLS}
 
 HOW_TO_FIX = (
     "launch it through aqa_runner.sandbox.launch, which proves the sandbox and "
@@ -24,10 +25,11 @@ HOW_TO_FIX = (
 
 # The BrowserType methods that start or attach to a browser, in Playwright
 # 1.63 (https://playwright.dev/python/docs/api/class-browsertype). No other
-# class has the last two, while `launch` and `connect` are common names, so
-# those two count only on an object spelled `chromium`.
-STARTS = {"launch", "connect"}
-BROWSER_TYPE_ONLY = {"launch_persistent_context", "connect_over_cdp"}
+# class has launch_persistent_context or connect_over_cdp. `launch` and
+# `connect` are common names, so they count only on an object spelled
+# `chromium`.
+ON_ANY_OBJECT = {"launch_persistent_context", "connect_over_cdp"}
+ON_CHROMIUM = {"launch", "connect"}
 
 
 def is_chromium(node: ast.expr) -> bool:
@@ -51,8 +53,8 @@ def chromium_starts(source: str) -> list[ast.Call]:
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and (
-            node.func.attr in BROWSER_TYPE_ONLY
-            or (node.func.attr in STARTS and is_chromium(node.func.value))
+            node.func.attr in ON_ANY_OBJECT
+            or (node.func.attr in ON_CHROMIUM and is_chromium(node.func.value))
         )
     ]
 
@@ -76,10 +78,21 @@ def test_packages_launch_chromium_only_through_the_sandbox_check() -> None:
 
 
 # The gate's silence on the real tree means something only if it recognises
-# the launches it allows.
-@pytest.mark.parametrize("allowed", ALLOWED, ids=ALLOWED_IDS)
-def test_the_gate_recognises_the_launches_it_allows(allowed: str) -> None:
-    assert chromium_starts((REPO / allowed).read_text())
+# the launches it leaves alone: launch's own call to Playwright, and the
+# negative control's launch without the sandbox.
+RECOGNISED = {
+    "sandbox-module": (SANDBOX, "chromium.launch"),
+    "negative-controls": (NEGATIVE_CONTROLS, "playwright.chromium.launch"),
+}
+
+
+@pytest.mark.parametrize(("path", "call"), RECOGNISED.values(), ids=list(RECOGNISED))
+def test_the_gate_recognises_the_launches_it_leaves_alone(path: str, call: str) -> None:
+    found = [
+        ast.unparse(start.func) for start in chromium_starts((REPO / path).read_text())
+    ]
+
+    assert call in found, found
 
 
 def plant(root: Path, relative: str, source: str) -> None:
@@ -88,13 +101,13 @@ def plant(root: Path, relative: str, source: str) -> None:
     path.write_text(source)
 
 
-@pytest.mark.parametrize("allowed", ALLOWED, ids=ALLOWED_IDS)
+@pytest.mark.parametrize("path", LEFT_ALONE.values(), ids=list(LEFT_ALONE))
 def test_the_sandbox_module_and_package_tests_may_launch_directly(
-    tmp_path: Path, allowed: str
+    tmp_path: Path, path: str
 ) -> None:
     plant(
         tmp_path,
-        allowed,
+        path,
         "async def start(playwright):\n    return await playwright.chromium.launch()\n",
     )
 
@@ -103,7 +116,7 @@ def test_the_sandbox_module_and_package_tests_may_launch_directly(
 
 ROGUE = "packages/runner/src/aqa_runner/rogue.py"
 
-# One call to each method in STARTS and BROWSER_TYPE_ONLY.
+# One call to each method in ON_ANY_OBJECT and ON_CHROMIUM.
 FORMS = {
     "launch": "playwright.chromium.launch()",
     "launch_persistent_context": "playwright.chromium.launch_persistent_context(profile)",
@@ -131,8 +144,8 @@ def test_a_direct_chromium_call_fails_the_gate(tmp_path: Path, call: str) -> Non
 # attribute, a name for it, and Playwright's `__getitem__`. Only BrowserType has
 # launch_persistent_context and connect_over_cdp, so those count on any object.
 SPELLINGS = {
-    "sync": "browser = playwright.chromium.launch()",
-    "attribute-of-self": "browser = self.chromium.launch()",
+    "playwright-attribute": "browser = playwright.chromium.launch()",
+    "self-attribute": "browser = self.chromium.launch()",
     "bare-name": "browser = chromium.launch()",
     "subscript": 'browser = playwright["chromium"].connect(endpoint)',
     "persistent-context-on-any-object": "context = browser_type.launch_persistent_context(profile)",
