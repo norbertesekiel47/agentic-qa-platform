@@ -42,6 +42,7 @@ PUBLIC = addresses(
     "::ffff:8.8.8.8",  # IPv4-mapped
     "64:ff9b::808:808",  # NAT64's well-known prefix
     "2002:808:808::1",  # 6to4
+    "::ffff:0:808:808",  # IPv4-translated (RFC 2765)
 )
 
 # Loopback, private, unique-local and shared addresses: reachable only for the
@@ -59,6 +60,9 @@ NON_PUBLIC = addresses(
     "::7f00:1",  # IPv4-compatible 127.0.0.1, which Python calls global
     "64:ff9b::7f00:1",  # NAT64 of 127.0.0.1, which Python calls global
     "2002:7f00:1::1",  # 6to4 of 127.0.0.1
+    "::ffff:0:7f00:1",  # IPv4-translated 127.0.0.1, which Python calls global
+    "fec0::1",  # site-local, deprecated but routable, which Python calls global
+    "ff0e::1",  # global-scope multicast, not unicast
 )
 
 # Never reachable, whatever the project declares.
@@ -72,7 +76,14 @@ ALWAYS_REFUSED = [
         "::a9fe:a9fe",
         "64:ff9b::a9fe:a9fe",
         "2002:a9fe:a9fe::1",
+        "::ffff:0:a9fe:a9fe",  # IPv4-translated
+        # NAT64's local-use prefix (RFC 8215), whose IPv4 can't be read back
+        "64:ff9b:1::a9fe:a9fe",
+        "64:ff9b:1::1",
         "fd00:ec2::254",  # AWS instance metadata over IPv6
+        "fd00:ec2::23",  # EKS Pod Identity's credentials over IPv6
+        "fd20:ce::254",  # GCP's metadata server on IPv6-only VMs
+        "fd00:c1::a9fe:a9fe",  # OCI's instance metadata over IPv6
         "100.100.100.200",  # Alibaba Cloud metadata
         "::ffff:100.100.100.200",
         "168.63.129.16",  # Azure WireServer, a public address
@@ -206,15 +217,18 @@ type Answers = dict[str, Sequence[str] | OSError]
 
 class ScriptedResolver:
     """Answers each name from a script the test can change mid-run, and
-    counts the lookups."""
+    counts the lookups. While `stalled`, a lookup never answers."""
 
     def __init__(self, answers: Answers) -> None:
         self.answers = answers
         self.lookups: Counter[str] = Counter()
+        self.stalled = False
 
     async def __call__(self, host: str) -> list[IPAddress]:
         self.lookups[host] += 1
         await asyncio.sleep(0)  # a concurrent lookup could start meanwhile
+        if self.stalled:
+            await asyncio.Event().wait()
         answer = self.answers[host]
         if isinstance(answer, OSError):
             raise answer
@@ -388,8 +402,16 @@ def test_a_private_or_loopback_address_behind_an_allowed_origin_is_refused(
     ids=str,
 )
 def test_a_private_origin_resolving_to_metadata_is_refused_without_connecting(
-    answer: list[str],
+    answer: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    dialled: list[str] = []
+
+    async def dial(host: str, port: int) -> Connection:
+        dialled.append(f"{host} {port}")
+        raise ConnectionRefusedError
+
+    monkeypatch.setattr(asyncio, "open_connection", dial)
+
     async def scenario() -> tuple[EgressGate, EgressRefusedError]:
         private = "http://staging.example.test:8080"
         egress = EgressGate(
@@ -397,14 +419,14 @@ def test_a_private_origin_resolving_to_metadata_is_refused_without_connecting(
             resolve=ScriptedResolver({"staging.example.test": answer}),
         )
         with pytest.raises(EgressRefusedError) as refused:
-            # Bounded: a connection attempt to a metadata address would hang.
-            await asyncio.wait_for(
-                egress.connect("staging.example.test", 8080, "request"), 5
-            )
+            await egress.connect("staging.example.test", 8080, "request")
         return egress, refused.value
 
     egress, refused = asyncio.run(scenario())
 
+    # The whole answer is judged before any address is dialled, even one the
+    # policy passes.
+    assert dialled == []
     assert refused.refusal.kind == "address"
     assert egress.refusals == [refused.refusal]
     assert egress.infrastructure_events == []
@@ -515,6 +537,36 @@ def test_an_address_that_never_answers_times_out_and_the_next_is_tried(
             return await asyncio.wait_for(reached(egress, APP, servers.port), 5)
 
     assert asyncio.run(scenario()) == "127.0.0.1"
+
+
+def test_a_lookup_that_never_answers_is_an_infrastructure_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(egress_module, "RESOLVE_TIMEOUT", 0.05)
+
+    async def scenario() -> tuple[list[object], EgressGate, str]:
+        async with loopback_servers() as servers:
+            egress, resolver = app_egress(servers.port, {APP: ["127.0.0.1"]})
+            resolver.stalled = True
+            # Bounded: without its own deadline, the gate would wait forever.
+            failures = await asyncio.wait_for(
+                asyncio.gather(
+                    egress.connect(APP, servers.port, "request"),
+                    egress.connect(APP, servers.port, "request"),
+                    return_exceptions=True,
+                ),
+                5,
+            )
+            resolver.stalled = False
+            return list(failures), egress, await reached(egress, APP, servers.port)
+
+    failures, egress, address = asyncio.run(scenario())
+
+    assert [type(failure) for failure in failures] == [EgressUpstreamError] * 2
+    assert [event.host for event in egress.infrastructure_events] == [APP, APP]
+    assert egress.refusals == []
+    # Nothing was pinned while DNS stalled: once it answers, the name connects.
+    assert address == "127.0.0.1"
 
 
 @pytest.mark.parametrize(
