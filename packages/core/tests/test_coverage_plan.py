@@ -192,8 +192,17 @@ def test_an_expectation_has_checks_or_is_unsupported_never_both_nor_neither(
 
 
 def test_an_expectation_lists_each_check_once() -> None:
-    with pytest.raises(ValidationError, match="twice"):
+    with pytest.raises(ValidationError) as error:
         expectation(checks=[PAY_BUTTON, PAY_BUTTON])
+
+    assert [detail["loc"] for detail in error.value.errors()] == [("checks",)]
+
+
+def test_an_expectation_index_is_never_negative() -> None:
+    with pytest.raises(ValidationError) as error:
+        expectation(expect_index=-1, checks=[PAY_BUTTON])
+
+    assert [detail["loc"] for detail in error.value.errors()] == [("expect_index",)]
 
 
 @pytest.mark.parametrize("needs", ["pixel_diff", "contrast_min", "model_verify", None])
@@ -211,8 +220,12 @@ def test_an_unsupported_expectation_says_what_it_needs(needs: str | None) -> Non
 def test_an_unsupported_expectation_needs_an_m2_check_or_nothing_named(
     needs: str,
 ) -> None:
-    with pytest.raises(ValidationError, match="needs"):
+    with pytest.raises(ValidationError) as error:
         expectation(unsupported={"reason": "no check", "needs": needs})
+
+    assert [detail["loc"] for detail in error.value.errors()] == [
+        ("unsupported", "needs")
+    ]
 
 
 def plan(**fields: Any) -> CoveragePlan:
@@ -233,8 +246,10 @@ def plan(**fields: Any) -> CoveragePlan:
 
 
 def test_a_plan_covers_at_least_one_expectation() -> None:
-    with pytest.raises(ValidationError, match="at least 1"):
+    with pytest.raises(ValidationError) as error:
         plan(expectations=[])
+
+    assert [detail["loc"] for detail in error.value.errors()] == [("expectations",)]
 
 
 def test_a_plans_conditions_have_distinct_ids() -> None:
@@ -311,8 +326,10 @@ def test_a_plan_cannot_change_once_made() -> None:
     # what the run uses.
     made = plan()
 
-    with pytest.raises(ValidationError, match="frozen"):
+    with pytest.raises(ValidationError) as error:
         made.expectations[0].checks[0].target_meaning = "the pay button"
+
+    assert [detail["type"] for detail in error.value.errors()] == ["frozen_instance"]
 
 
 def test_a_plan_read_back_from_its_json_has_the_same_hash() -> None:
@@ -432,3 +449,11 @@ def test_each_uncovered_expectation_is_named_with_its_reason_and_need(
     assert lines[0].startswith('expect[2] "The Pay button keeps its brand colour"')
     assert named in lines[0]
     assert "the claim is about a colour" in lines[0]
+
+
+def test_uncovered_refuses_a_plan_that_does_not_fit_its_spec() -> None:
+    # An entry past the spec's last expectation names no expectation text.
+    beyond = entry(3, unsupported={"reason": "a colour"})
+
+    with pytest.raises(ValueError, match="doesn't fit its spec"):
+        uncovered(checkout_plan(*COVERED, beyond), CHECKOUT)
