@@ -49,22 +49,36 @@ class WithoutTheSwitches:
 
 
 # Each test runs as `launch` launches, then as the control.
-LAUNCHES = ["as-launch-does", "control-without-the-switches"]
+AS_LAUNCHED_AND_CONTROL = pytest.mark.parametrize(
+    "switched", [True, False], ids=["as-launch-does", "control-without-the-switches"]
+)
 
-# Each switch the browser process must run with, written as Chromium reads
-# it: QUIC off, WebRTC's UDP only through a proxy, no lookups of its own, and
-# the launch-level proxy (Playwright passes `proxy` as these two switches).
+
+def chromium_for(chromium: BrowserType, *, switched: bool) -> Chromium:
+    """Playwright's Chromium as `launch` launches it, or the control."""
+    return chromium if switched else WithoutTheSwitches(chromium)
+
+
+# Each argument the browser process must run with, written out here rather
+# than read from the sandbox module, so a change to what `launch` passes
+# fails this test until it is made on purpose. Playwright passes `proxy` as
+# the last two.
 EXPECTED_SWITCHES = [
-    "--disable-quic",
     "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+    "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+    "--disable-quic",
     "--host-resolver-rules=MAP * ^NOTFOUND, EXCLUDE 127.0.0.1",
     "--proxy-server=http://launch-proxy.invalid:1",
     "--proxy-bypass-list=<-loopback>",
 ]
 
 
-def chromium_for(launched: str, chromium: BrowserType) -> Chromium:
-    return chromium if launched == "as-launch-does" else WithoutTheSwitches(chromium)
+def arguments_in(command: str, expected: list[str]) -> list[str]:
+    """Each of `expected` that `command` holds as a whole argument. Linux
+    separates a command line's arguments with NUL and macOS's ps with a
+    space; no expected argument ends in either."""
+    padded = f" {command.replace('\x00', ' ').strip()} "
+    return [argument for argument in expected if f" {argument} " in padded]
 
 
 @contextmanager
@@ -108,8 +122,8 @@ GATHER = """async (stun) => {
 }"""
 
 
-@pytest.mark.parametrize("launched", LAUNCHES)
-def test_webrtc_gathers_no_candidate_and_sends_no_udp(launched: str) -> None:
+@AS_LAUNCHED_AND_CONTROL
+def test_webrtc_gathers_no_candidate_and_sends_no_udp(*, switched: bool) -> None:
     with udp_canary() as canary:
         stun = f"stun:127.0.0.1:{canary.getsockname()[1]}"
 
@@ -118,7 +132,7 @@ def test_webrtc_gathers_no_candidate_and_sends_no_udp(launched: str) -> None:
                 async_playwright() as playwright,
                 egress_proxy() as egress,
                 open_browser_session(
-                    chromium_for(launched, playwright.chromium), egress=egress
+                    chromium_for(playwright.chromium, switched=switched), egress=egress
                 ) as session,
             ):
                 candidates: list[str] = await session.page.evaluate(GATHER, stun)
@@ -127,7 +141,7 @@ def test_webrtc_gathers_no_candidate_and_sends_no_udp(launched: str) -> None:
         candidates = asyncio.run(scenario())
         sent = datagrams(canary)
 
-    if launched == "as-launch-does":
+    if switched:
         assert (candidates, sent) == ([], 0)
     else:
         # Without the switch, WebRTC gathers host candidates and its STUN
@@ -146,14 +160,15 @@ async def load(page: Page, url: str) -> int | str:
     return response.status
 
 
-@pytest.mark.parametrize("launched", LAUNCHES)
-def test_the_browser_resolves_no_name_itself(launched: str) -> None:
-    # Any name the browser looked up itself would leave in a DNS query: DNS
-    # prefetch, a STUN server's name. Every name is the egress proxy's to
-    # resolve. A context that names its proxy by a name, here localhost,
-    # shows the lookup failing. The session's own proxy, at the address
-    # `EgressProxy` listens on, must stay reachable: the rule's exclusion has
-    # to name that address, and this test fails if the two drift apart.
+@AS_LAUNCHED_AND_CONTROL
+def test_the_browser_resolves_no_name_itself(*, switched: bool) -> None:
+    # The resolver rule fails every lookup a context makes: a context that
+    # names its proxy by a name, here localhost, can't reach it. (Chromium
+    # answers localhost itself, so this shows the rule at work, not a query
+    # that would have left; packets are the hostile-page suite's.) The
+    # session's own proxy, at the address `EgressProxy` listens on, must stay
+    # reachable: the rule's exclusion has to name that address, and this test
+    # fails if the two drift apart.
     with serving() as origin:
         start = f"http://127.0.0.1:{origin.port}"
 
@@ -162,7 +177,7 @@ def test_the_browser_resolves_no_name_itself(launched: str) -> None:
                 async_playwright() as playwright,
                 egress_proxy(start) as egress,
                 open_browser_session(
-                    chromium_for(launched, playwright.chromium), egress=egress
+                    chromium_for(playwright.chromium, switched=switched), egress=egress
                 ) as session,
             ):
                 browser = session.page.context.browser
@@ -179,17 +194,24 @@ def test_the_browser_resolves_no_name_itself(launched: str) -> None:
         through_the_address, through_the_name = asyncio.run(scenario())
 
     assert through_the_address == 200
-    if launched == "as-launch-does":
+    if switched:
         assert through_the_name == "net::ERR_PROXY_CONNECTION_FAILED"
         assert len(origin.seen) == 1
     else:
         assert through_the_name == 200
 
 
-@pytest.mark.parametrize("launched", LAUNCHES)
-def test_a_context_without_the_sessions_proxy_has_no_way_out(launched: str) -> None:
+@AS_LAUNCHED_AND_CONTROL
+@pytest.mark.parametrize("playwright_opts_out", [False, True])
+def test_a_context_without_the_sessions_proxy_has_no_way_out(
+    *, switched: bool, playwright_opts_out: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Code that opens a context of its own, outside the session, names no
-    # proxy. The launch-level proxy is the one it gets.
+    # proxy. The launch-level proxy is the one it gets, loopback included,
+    # even where the runner's environment sets the variable that stops
+    # Playwright sending loopback through a proxy.
+    if playwright_opts_out:
+        monkeypatch.setenv("PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK", "1")
     with serving() as origin:
         start = f"http://127.0.0.1:{origin.port}"
 
@@ -198,7 +220,7 @@ def test_a_context_without_the_sessions_proxy_has_no_way_out(launched: str) -> N
                 async_playwright() as playwright,
                 egress_proxy(start) as egress,
                 open_browser_session(
-                    chromium_for(launched, playwright.chromium), egress=egress
+                    chromium_for(playwright.chromium, switched=switched), egress=egress
                 ) as session,
             ):
                 browser = session.page.context.browser
@@ -208,7 +230,7 @@ def test_a_context_without_the_sessions_proxy_has_no_way_out(launched: str) -> N
 
         outcome = asyncio.run(scenario())
 
-    if launched == "as-launch-does":
+    if switched:
         assert outcome == "net::ERR_PROXY_CONNECTION_FAILED"
         assert origin.seen == []
     else:
@@ -217,28 +239,29 @@ def test_a_context_without_the_sessions_proxy_has_no_way_out(launched: str) -> N
         assert len(origin.seen) == 1
 
 
-@pytest.mark.parametrize("launched", LAUNCHES)
-def test_chromium_runs_with_the_transport_switches(launched: str) -> None:
+@AS_LAUNCHED_AND_CONTROL
+def test_chromium_runs_with_the_transport_switches(*, switched: bool) -> None:
     async def scenario() -> tuple[str, list[tuple[Sequence[str], ProxySettings]]]:
         async with async_playwright() as playwright, egress_proxy() as egress:
-            chromium = WithoutTheSwitches(playwright.chromium)
-            used = playwright.chromium if launched == "as-launch-does" else chromium
-            async with open_browser_session(used, egress=egress) as session:
+            chromium = chromium_for(playwright.chromium, switched=switched)
+            async with open_browser_session(chromium, egress=egress) as session:
                 command = command_line_of(await browser_pid(session))
-            return command, chromium.left_out
+            if isinstance(chromium, WithoutTheSwitches):
+                return command, chromium.left_out
+            return command, []
 
     command, left_out = asyncio.run(scenario())
 
-    found = [switch for switch in EXPECTED_SWITCHES if switch in command]
-    if launched == "as-launch-does":
+    found = arguments_in(command, EXPECTED_SWITCHES)
+    if switched:
         assert found == EXPECTED_SWITCHES, command
     else:
-        # The control leaves out exactly what the launch asked for.
         assert found == []
+        # The control leaves out exactly what the launch asked for.
         [(switches, proxy)] = left_out
-        as_switches = [
+        as_arguments = [
             *switches,
             f"--proxy-server={proxy['server']}",
             f"--proxy-bypass-list={proxy.get('bypass')}",
         ]
-        assert sorted(as_switches) == sorted(EXPECTED_SWITCHES)
+        assert sorted(as_arguments) == sorted(EXPECTED_SWITCHES)
