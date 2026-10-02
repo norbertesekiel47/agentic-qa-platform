@@ -1,7 +1,11 @@
 """The coverage plan (ADR-0024; DATA_MODEL §7): for each expectation, its
 subject and the checks that establish its claim, or why none can, plus the
 conditions the goal or the expectations require. It is written from the spec
-alone, before the browser opens, and its hash freezes it for the explore run."""
+alone, before the browser opens, and its hash freezes it for the explore run.
+
+These models are also the response format the navigator's model fills, and
+their docstrings reach it as the format's descriptions: editing one changes
+the plan's request and its cassette (TESTING §4)."""
 
 from collections.abc import Mapping
 from typing import Annotated, Final, Literal, Self
