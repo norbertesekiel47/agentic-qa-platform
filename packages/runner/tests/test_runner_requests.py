@@ -157,6 +157,55 @@ def test_a_runner_request_to_a_non_allowed_origin_is_refused(url: str) -> None:
     assert origin.seen == []
 
 
+@pytest.mark.parametrize(
+    ("allowed", "requested"), [("https", "http"), ("http", "https")]
+)
+def test_a_runner_request_on_another_scheme_than_its_origins_is_refused(
+    allowed: str, requested: str
+) -> None:
+    # An origin is its scheme, host and port: a reset hook allowed over https
+    # never goes out in plaintext on that port, nor the reverse.
+    with serving() as origin:
+        start = f"{allowed}://{APP}:{origin.port}"
+        resolver = Resolver({APP: LOOPBACK})
+        egress = EgressGate(
+            EgressPolicy(
+                allowed_origins=(start,), subresource_hosts=(), private_origins=(start,)
+            ),
+            resolve=resolver,
+        )
+        url = f"{requested}://{APP}:{origin.port}/reset"
+
+        async def scenario() -> EgressRefusedError:
+            with pytest.raises(EgressRefusedError) as refused:
+                await runner_request(egress, "POST", url)
+            return refused.value
+
+        refused = asyncio.run(scenario())
+
+    assert (refused.refusal.host, refused.refusal.port) == (APP, origin.port)
+    assert refused.refusal.kind == "host"
+    assert egress.refusals == [refused.refusal]
+    # Refused before any lookup: nothing was dialled.
+    assert resolver.lookups == Counter()
+    assert origin.seen == []
+    assert egress.infrastructure_events == []
+
+
+def test_a_runner_request_to_its_exact_allowed_origin_passes() -> None:
+    with serving() as origin:
+        # Written as a person might write it; read as every origin is read.
+        start = f"HTTP://{APP.upper()}:{origin.port}/"
+        egress = gate(allowed=(start,), answers={APP: LOOPBACK})
+        url = f"http://{APP}:{origin.port}/reset"
+
+        response = asyncio.run(runner_request(egress, "POST", url))
+
+    assert response.status == HTTPStatus.NO_CONTENT
+    assert [each.path for each in origin.seen] == ["/reset"]
+    assert egress.refusals == []
+
+
 def test_a_runner_request_follows_the_ip_policy() -> None:
     with serving() as origin:
         # Allowed, but not declared private, so it may not resolve to loopback.

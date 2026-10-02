@@ -34,10 +34,11 @@ async def runner_request(gate: EgressGate, method: Method, url: str) -> RunnerRe
     """Send `method` to the absolute http or https `url` through `gate`, and
     read the response. Raises ValueError, before any connection, for a URL
     whose origin isn't one or whose path and query no request line carries;
-    `EgressRefusedError` for an origin the run doesn't allow or an address
-    the IP policy refuses; and `EgressUpstreamError`, an infrastructure
-    error, when the origin can't be reached, its certificate doesn't verify,
-    or its response breaks off. The gate records both.
+    `EgressRefusedError` for an origin, scheme included, the run doesn't
+    allow, or an address the IP policy refuses; and `EgressUpstreamError`,
+    an infrastructure error, when the origin can't be reached, its
+    certificate doesn't verify, or its response breaks off. The gate records
+    both.
 
     It has no deadline of its own past the gate's for connecting, its TLS
     handshake included: a caller bounds it with `asyncio.timeout`."""
@@ -61,6 +62,14 @@ async def runner_request(gate: EgressGate, method: Method, url: str) -> RunnerRe
         raise ValueError(
             f"'{url}': '{target}' is not a request target: {error}"
         ) from error
+    # An origin is its scheme, host and port. The gate judges host and port,
+    # as a tunnel names no scheme; this request names one, so an allowed https
+    # origin's port is never reached in plaintext, nor the reverse. The
+    # gate's check stays as the second layer.
+    if origin not in map(parse_origin, gate.policy.allowed_origins):
+        raise gate.record_refusal(
+            host, port, "host", f"{origin} is not an allowed origin"
+        )
     # https speaks TLS from the first byte, with the certificate checked for
     # the URL's host on the connection to its pinned address: nothing the
     # server sends before the handshake can pass for the response.
