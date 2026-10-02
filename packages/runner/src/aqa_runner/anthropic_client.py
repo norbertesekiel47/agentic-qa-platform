@@ -28,7 +28,7 @@ _COUNTS = ("input_tokens", "output_tokens")
 # 1.7.4: it takes max_tokens from its model profiles, 128,000 for
 # claude-opus-5-5 and a 4096 fallback for claude-sonnet-5-5 (no profile), and
 # passes timeout=None, which the SDK reads as never timing out. 120 s covers
-# 4096 tokens at 40 a second; the SDK still retries twice (LAB_NOTES).
+# 4096 tokens at 40 a second, per try; the SDK still retries twice (LAB_NOTES).
 MAX_OUTPUT_TOKENS = 4096
 REQUEST_TIMEOUT_SECONDS = 120.0
 
