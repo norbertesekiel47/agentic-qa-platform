@@ -35,11 +35,11 @@ SPEC = """\
 id: checkout
 goal: A returning user pays with an expired card and is told why it failed.
 preconditions:
-  start_url: /login
+  start_url: {start_url}
   account: {account}
   reset: {{ http: "{reset}" }}
   probes:
-    orders_count: "GET /test-api/orders/count"
+    orders_count: "{probe}"
 steps:
   - Pay with the saved card
 expect:
@@ -81,6 +81,8 @@ DEFAULTS = {
     "body": "Notes for people.",
     "account": "{ email: returning@example.test, password: { secret: TEST_PASSWORD } }",
     "reset": "POST /test-api/reset?fixture=expired-card",
+    "start_url": "/login",
+    "probe": "GET /test-api/orders/count",
 }
 
 
@@ -158,6 +160,24 @@ def test_the_plan_request_leaves_out_the_account_and_the_reset_hook(
         assert left_out not in sent
     # The rest of the preconditions are still there.
     assert "GET /test-api/orders/count" in sent
+
+
+def test_the_plan_request_leaves_out_the_query_of_each_url(tmp_path: Path) -> None:
+    # A query can carry a token the spec writes out; the path says what the
+    # page or the probe is.
+    spec = checkout(
+        tmp_path / "qa",
+        start_url="/login?token=fake-start-token#fake-fragment",
+        probe="GET /test-api/orders/count?api_key=fake-probe-token",
+    )
+
+    _, human = plan_request(spec)
+
+    preconditions = json.loads(str(human.content))["preconditions"]
+    assert preconditions == {
+        "start_url": "/login",
+        "probes": {"orders_count": "GET /test-api/orders/count"},
+    }
 
 
 def test_the_plan_request_keeps_the_specs_own_characters(tmp_path: Path) -> None:
