@@ -369,9 +369,9 @@ def test_a_start_url_problem_reads_in_full(tmp_path: Path) -> None:
 
     assert problems_for(path) == (
         (
-            f"{path}: preconditions.start_url: 'login' is not a path: start_url is a "
-            "path such as /login, with no empty, . or .. segment, and the origin "
-            "comes from the run (ADR-0026)"
+            f"{path}: preconditions.start_url: 'login' is not a path: write a path "
+            "such as /login, with no empty, . or .. segment; the origin comes from "
+            "the run (ADR-0026)"
         ),
     )
 

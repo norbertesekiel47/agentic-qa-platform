@@ -10,12 +10,14 @@ read through the loader (#46), which first refuses repeated keys:
 validates the same text in JSON mode, where `compiled_at` may be a string."""
 
 import re
+import warnings
 from collections.abc import Container
 from typing import Annotated, Literal, Self
 
 from pydantic import (
     AfterValidator,
     AwareDatetime,
+    BeforeValidator,
     Discriminator,
     Field,
     StrictBool,
@@ -33,9 +35,9 @@ from aqa_core.schema import (
     ListOf,
     NonEmpty,
     SecretName,
+    StartPath,
     StrictModel,
 )
-from aqa_core.spec import StartPath
 from aqa_core.text import normalize
 
 # The roles Playwright 1.63's get_by_role accepts, which are WAI-ARIA's, as
@@ -135,13 +137,14 @@ def _normalized(text: str) -> str:
     normalized = normalize(text)
     if not normalized:
         raise ValueError(
-            f"{text!r} compares as empty: it holds only private-use glyphs and "
-            "whitespace, which comparing strips"
+            f"{text!r} compares as empty: comparing strips private-use glyphs, "
+            "soft hyphens and zero-width spaces, and collapses whitespace"
         )
     if text != normalized:
         raise ValueError(
-            f"{text!r} is not normalized: it is compared with private-use glyphs "
-            f"stripped and whitespace collapsed, so write {normalized!r}"
+            f"{text!r} is not normalized: comparing strips private-use glyphs, "
+            "soft hyphens and zero-width spaces, and collapses whitespace, so "
+            f"write {normalized!r}"
         )
     return text
 
@@ -151,19 +154,41 @@ _Normalized = Annotated[NonEmpty, AfterValidator(_normalized)]
 
 
 def _regex(pattern: str) -> str:
-    try:
-        re.compile(pattern)
     # Beyond re.error, re.compile raises OverflowError for a huge repeat count
-    # (a{4294967296}) and RecursionError for deep nesting; pydantic would let
-    # either escape as a raw exception instead of a validation error.
-    except (re.error, OverflowError, RecursionError) as error:
-        raise ValueError(f"{pattern!r} is not a Python regex: {error}") from None
+    # (a{4294967296}) and RecursionError for deep nesting, and only warns
+    # (FutureWarning) for a pattern whose meaning Python will change, such as
+    # [[:digit:]]. Pydantic would let any of them escape raw.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        try:
+            re.compile(pattern)
+        except (re.error, OverflowError, RecursionError, FutureWarning) as error:
+            raise ValueError(f"{pattern!r} is not a Python regex: {error}") from None
     return pattern
 
 
 # A Python regex, used with re.search and only the flags it writes inline,
 # such as (?i) (ADR-0025).
 _Regex = Annotated[NonEmpty, AfterValidator(_regex)]
+
+
+def _one_selector(css: str) -> str:
+    # Playwright chains selectors at >>
+    # (https://playwright.dev/python/docs/other-locators#chaining-selectors),
+    # even after css=: on 1.63, css= chained into xpath= and into an engine
+    # that enters frames. CSS itself never uses >>.
+    if not css.strip():
+        raise ValueError("a css value is a selector, not only whitespace")
+    if ">>" in css:
+        raise ValueError(
+            f"{css!r} isn't one CSS selector: Playwright reads >> as a chain "
+            r"into another selector engine; inside an attribute value, write \>\>"
+        )
+    return css
+
+
+# One CSS selector, which the executor sends to Playwright as css=<value>.
+_OneSelector = Annotated[NonEmpty, AfterValidator(_one_selector)]
 
 
 class _Locator(StrictModel):
@@ -196,21 +221,8 @@ class ByTestId(_Locator):
     testid: NonEmpty
 
 
-def _one_selector(css: str) -> str:
-    # Playwright chains selectors at >>
-    # (https://playwright.dev/python/docs/other-locators#chaining-selectors),
-    # even after css=: on 1.63, css= chained into xpath= and into an engine
-    # that enters frames. CSS itself never uses >>.
-    if ">>" in css:
-        raise ValueError(
-            f"{css!r} isn't one CSS selector: Playwright reads >> as a chain "
-            "into another selector engine"
-        )
-    return css
-
-
 class ByCss(_Locator):
-    css: Annotated[NonEmpty, AfterValidator(_one_selector)]
+    css: _OneSelector
 
 
 _KINDS = ("role", "label", "placeholder", "testid", "css")
@@ -440,20 +452,21 @@ class ProbeBaseline(StrictModel):
     json_path: NonEmpty
 
 
-def _every_setting(settings: BrowserSettings) -> BrowserSettings:
+def _every_setting(settings: object) -> object:
     # Replay uses the settings the script was explored under (ADR-0025), so a
-    # missing one must not quietly become the pinned default. Read from the
-    # model, so a setting added later is required here too.
-    missing = [
-        name
-        for name in BrowserSettings.model_fields
-        if name not in settings.model_fields_set
-    ]
-    if missing:
-        raise ValueError(
-            f"records no {', '.join(missing)}: a compiled script records every "
-            "browser setting it was explored under"
-        )
+    # setting a file leaves out must not quietly become the pinned default.
+    # Checked on the file's object, not on a BrowserSettings built in Python,
+    # which always holds every setting. Read from the model, so a setting added
+    # later is required here too.
+    if isinstance(settings, dict):
+        missing = [
+            name for name in BrowserSettings.model_fields if name not in settings
+        ]
+        if missing:
+            raise ValueError(
+                f"records no {', '.join(missing)}: a compiled script records every "
+                "browser setting it was explored under"
+            )
     return settings
 
 
@@ -480,7 +493,7 @@ class CompiledScript(StrictModel):
     compiled_at: AwareDatetime
     compiled_by: CompiledBy
     confirmed: StrictBool
-    browser: Annotated[BrowserSettings, AfterValidator(_every_setting)]
+    browser: Annotated[BrowserSettings, BeforeValidator(_every_setting)]
     coverage: Coverage
     targets: dict[NonEmpty, Target]
     probe_baselines: dict[NonEmpty, ProbeBaseline]

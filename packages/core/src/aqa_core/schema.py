@@ -1,5 +1,6 @@
-"""What the spec and project-config models share: a strict model base, and the
-origins, hosts and names they are written with (DATA_MODEL §6, §9; ADR-0026)."""
+"""What the spec, project-config and compiled-script models share: a strict
+model base, and the origins, hosts, paths and names they are written with
+(DATA_MODEL §6, §7, §9; ADR-0026)."""
 
 import ipaddress
 import re
@@ -152,3 +153,31 @@ def _secret_name(name: str) -> str:
 
 
 SecretName = Annotated[StrictStr, AfterValidator(_secret_name)]
+
+
+# One leading slash, then no whitespace, control character or backslash:
+# browsers read `/\host` and `/<tab>/host` as `//host`, another origin.
+_PATH = re.compile(r"/(?![/\\])[^\s\x00-\x1f\x7f\\]*")
+
+
+def _start_path(text: str) -> str:
+    # The path's segments as a browser resolves them, where %2e is a dot: an
+    # empty, `.` or `..` segment can leave a path that starts `//`, such as
+    # /..//evil.test.
+    path = re.split(r"[?#]", text, maxsplit=1)[0]
+    segments = path.lower().replace("%2e", ".").split("/")[1:]
+    if (
+        not _PATH.fullmatch(text)
+        or "" in segments[:-1]
+        or not {".", ".."}.isdisjoint(segments)
+    ):
+        raise ValueError(
+            f"'{text}' is not a path: write a path such as /login, with no empty, . "
+            "or .. segment; the origin comes from the run (ADR-0026)"
+        )
+    return text
+
+
+# A path on the start origin: a spec's start_url, and a compiled navigate
+# step's url (DATA_MODEL §6, §7).
+StartPath = Annotated[StrictStr, AfterValidator(_start_path)]

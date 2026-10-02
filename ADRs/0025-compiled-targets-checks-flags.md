@@ -108,3 +108,22 @@ The heal-patch validator also forbids changes to `browser` and `coverage`.
 - **Sign-in clicks become side-effect steps**, because they POST. Heals get more conservative, and M6's continuation rebuild must handle skipped side-effect steps (#28).
 - **Compiled-script diffs explain themselves.** Each assertion traces to a claim, and each side-effect flag to its basis.
 - **The compiler owns locator generation**, so its rules are tested on the five real pilot pages (TESTING §2), not synthetic ones.
+
+## Amendment (2026-10-02): reading a compiled script (schema version 1)
+
+Building the strict reader (#45) and its reviews raised choices this ADR left open. DATA_MODEL §7, "Reading a compiled script", holds the rules; this records why.
+
+- **Normalizing also strips soft hyphens and zero-width spaces.** Playwright 1.63 drops U+00AD and U+200B from accessible names, and rendered text keeps them, so `Pay&shy;ment` would otherwise miss a `text` of "Payment". A `name` or `text` is written already normalized. One that isn't could never match, so it is a format error, not drift later.
+- **A locator names exactly one kind.**
+  - *Options:* six optional fields with a rule, or one class per kind (`ByRole`, `ByLabel`, `ByPlaceholder`, `ByTestId`, `ByCss`) chosen by the kind the JSON names.
+  - *Chosen:* one class per kind. `name` then exists only beside `role`, and the executor and the compiler dispatch on the class with nothing left optional. The JSON is the same either way.
+- **A `css` value has no `>>`.**
+  - *Options:* refuse it, escape it, or parse CSS to allow it inside quoted attribute values.
+  - *Chosen:* refuse it. Playwright chains selectors at `>>` even after `css=`. On 1.63 a value chained into XPath and into an engine that enters frames. Escaping would hide the author's mistake, and an attribute value can write `\>\>`. The executor always sends the value as `css=<value>`, so no other engine is reachable.
+- **`side_effect_basis` goes only with a true flag.**
+  - *Options:* refuse it on a false flag, or allow it.
+  - *Chosen:* refuse it. A person who lowers a flag removes its basis in the same edit, so the pull request shows both.
+- **A navigate stores a path on the start origin,** held to `start_url`'s rules, and the executor joins it as the start URL is joined (#89). Schema version 1 records no navigate to another allowed origin, because nothing needs one yet. One that does adds absolute URLs with the allowed-origin check.
+- **Only the checks with fields are in schema version 1:** those §7 gives fields to, plus `not_visible` and `network_seen`. The rest are refused by name until their fields are defined: `probe_equals` in #48; `pixel_diff`, `contrast_min` and `model_verify` in M2. Adding a check is additive, so no committed script breaks and `schema_version` stays 1.
+- **`browser` records every setting.** A missing one is an error, never the pinned default, because replay uses what the script records.
+- **The loader, not the format, checks the parts against each other:** names that must exist or be unique, and repeated JSON keys. A repeated key matters because pydantic keeps the last one, so a hidden `"side_effect": false` would win (#46).
