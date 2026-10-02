@@ -119,7 +119,7 @@ Building the strict reader (#45) and its reviews raised choices this ADR left op
   - *Chosen:* one class per kind. `name` then exists only beside `role`, and the executor and the compiler dispatch on the class with nothing left optional. The JSON is the same either way.
 - **A `css` value has no `>>`.**
   - *Options:* refuse it, escape it, or parse CSS to allow it inside quoted attribute values.
-  - *Chosen:* refuse it. Playwright chains selectors at `>>` even after `css=`. On 1.63 a value chained into XPath and into an engine that enters frames. Escaping would hide the author's mistake, and an attribute value can write `\>\>`. A value must also leave no quote or escape open by Playwright's count, which includes quotes inside CSS comments: an open quote swallowed the separator Playwright puts before a scoped locator, and the inner locator chained into a frame (LAB_NOTES, 2026-10-02). Resolution must send the value as `css=<value>` (#45), so no other engine is reachable. Playwright's own CSS extensions, such as `:has-text()`, still work inside it, and the compiler doesn't write them (#52).
+  - *Chosen:* refuse it. Playwright chains selectors at `>>` even after `css=`. On 1.63 a value chained into XPath and into an engine that enters frames. Escaping would hide the author's mistake, and an attribute value can write `\>\>`. A value must also leave no quote or escape open by Playwright's count, which includes quotes inside CSS comments: an open quote swallowed the separator Playwright puts before a scoped locator, and the inner locator chained into a frame (LAB_NOTES, 2026-10-02). Resolution must send the value as `css=<value>` (#45), so no other engine is reachable. Playwright's own pseudo-classes, such as `:has-text()`, would still work inside it, so the format refuses those too (amendment below, "generating locators", #52).
 - **`side_effect_basis` goes only with a true flag.**
   - *Options:* refuse it on a false flag, or allow it.
   - *Chosen:* refuse it. A person who lowers a flag removes its basis in the same edit, so the pull request shows both.
@@ -170,10 +170,46 @@ Building resolution (#45) settled three choices that "Resolution per use" left o
   3. *Accept canonical names only.* It needs a list of canonical names, so it needs option 2's data or a vendored list, and it refuses names Chromium accepts.
 - **Chosen: option 2.** `tzdata` is pinned in `aqa-core` and in `uv.lock`, so one version of the list is the answer everywhere, and Renovate moves it (TECH_STACK §1). PyPI's `2026.4` is the release the IANA calls 2026d. Measured 2026-10-02 with `uv run --no-project --with tzdata==2026.4 python`, reading `importlib.resources.files("tzdata").joinpath("zones")`: 598 names, the same set as the maintainer's Mac gives from `zoneinfo.available_timezones()` (the issue's triage comment), with `Asia/Calcutta`, `America/Buenos_Aires` and `US/Pacific` in it and `localtime` out.
 - **The list is the package's `zones` file, read directly (`aqa_core.browser.time_zones`),** not `zoneinfo.available_timezones()`, which adds the host's zone files (LAB_NOTES, 2026-10-02). A missing package is an error, not a fallback to the host's list.
-- **Every accepted zone opens in Chromium.** `uv run pytest packages/runner/tests/test_time_zones.py` passes at `2614f7c`, on macOS with Playwright 1.63.0's Chromium 153.0.8010.12 and tzdata 2026.4, for all 598 names, `Factory` and the aliases included. The test sets each zone on one page with CDP's `Emulation.setTimezoneOverride`, clearing the override first because of a Chromium quirk (LAB_NOTES, 2026-10-02). The full list took 1.10 s (`--durations=2`, same command and SHA). A context per zone, as `open_browser_session` opens one, took 18.7 to 23.2 s: one `launch`, then `new_context(timezone_id=zone)`, `new_page()` and `close()` per zone, timed with `time.perf_counter` at `44049ef`; that script isn't kept.
+- **Every accepted zone opens in Chromium.** `uv run pytest packages/runner/tests/test_time_zones.py` passes at `f36f74f`, on macOS with Playwright 1.63.0's Chromium 153.0.8010.12 and tzdata 2026.4, for all 598 names, `Factory` and the aliases included. The test sets each zone on one page with CDP's `Emulation.setTimezoneOverride`, clearing the override first because of a Chromium quirk (LAB_NOTES, 2026-10-02). The full list took 0.71 to 2.15 s over four runs, the first the slowest (`--durations=2`, same command and SHA, on 2026-10-02 with other test suites running). A context per zone, as `open_browser_session` opens one, took 18.7 to 23.2 s: one `launch`, then `new_context(timezone_id=zone)`, `new_page()` and `close()` per zone, timed with `time.perf_counter` at `44049ef`; that script isn't kept.
 - **The shortcut is held to what a run does.** A second test sends every 30th zone, plus `UTC`, `Asia/Calcutta` and `Factory` (23 names today), and three refused names (`Mars/Phobos`, `utc`, `localtime`) through both the override and `new_context(timezone_id=…)`, and requires the same refusals and the same page reports.
 - **Consequences:**
   - *A tzdata bump runs the whole-list test.* Renovate's weekly pull request (ADR-0031, where a minor bump joins the grouped one) turns red if the new list has a zone this Chromium refuses, which no one would otherwise notice until a spec named it.
   - *A bump can drop a name.* A spec or compiled script that names a removed zone then fails to load, as an unknown zone, and the pull request's tests don't read anyone's specs.
   - *Aliases are accepted and passed to Chromium as written.* A page may report the zone under another name (`Asia/Kolkata` as `Asia/Calcutta`, LAB_NOTES, 2026-10-01), so compare what a page renders, never the name.
   - *Nothing in the packages reads the host's zone list any more.*
+
+## Amendment (2026-10-02): generating locators (#52)
+
+Building the compiler's locator generation (#52) settled choices that "Locator grammar" and "Resolution per use" left open. DATA_MODEL §7 holds the rules; this records why.
+
+- **The five pilot pages.** "The five real pilot pages" in Consequences are the pages the five pilot specs visit, on the clean Conduit app, whose cases are all on the dev split (TESTING §5):
+  - the login page, signed out, with its form filled in;
+  - the home page, signed in;
+  - an article page as a signed-in reader, before and after favoriting it and reloading;
+  - an article page as a signed-out visitor;
+  - the editor, filled in.
+
+  The tests use saved renderings of them. These are kept with the runner's tests, not in the vendored app (ADR-0021).
+- **A css value refuses Playwright's own pseudo-classes.**
+  - *Options:*
+    - leave them to the compiler, which doesn't write them;
+    - refuse the names as written;
+    - refuse them as Playwright reads them.
+  - *Chosen:* the third.
+    - Playwright 1.63 reads a `css=` value with its own CSS tokenizer, which decodes escapes and drops comments. Its parser then lowercases a pseudo-class name before checking it against its list. So `:HAS-TEXT(`, `:has\2d text(` and `:/**/visible` all reach its own engines, and the browser can parse none of them (LAB_NOTES, 2026-10-02).
+    - Under the first option, a person's edit or a heal could locate by text, position or layout, which the grammar forbids. The second misses those spellings.
+    - The format reads a value as that tokenizer does, so a name inside a quoted attribute value, a comment or an escaped colon is no pseudo-class.
+  - The list is Playwright's `customCSSNames` less the five standard names it also parses: `not`, `is`, `where`, `has` and `scope`.
+    - One test reads the installed driver's list and checks it against the names the browser itself can't parse. A Playwright upgrade that adds a name fails until the format refuses it too.
+    - Another test checks that each tricky value the format accepts matches as many elements under Playwright as under the browser's own `querySelectorAll`.
+- **Standard positional pseudo-classes stay readable.** `:nth-child()` and its kin are CSS, so the format reads them, and a person may write one in a reviewed edit. The grammar forbids them, so the generator (#52) must not write one. M2's heal-patch validator should refuse a heal that writes one, because a heal is the model's edit, not a person's.
+- **A negative check's target must be scoped.**
+  - *Options:*
+    1. In resolution: an unscoped locator's zero matches never establishes absence, so the check is drift.
+    2. At load: the loader refuses a `not_visible` whose target has an unscoped locator.
+    3. No rule: an unscoped locator's scope is the page.
+  - *Chosen:* the second.
+    - Under the third, an unscoped negative check finds its target absent on any page with no match, an error page included, so it passes when the app is broken.
+    - An unscoped negative check is a structural error in the script, found when the script is read. That makes it a spec error (exit 5), as the loader's other checks are.
+    - The first would make it drift, which M2 routes to heal as though the UI had moved.
+  - The loader's check is #46's, and the generator (#52) must scope every negative-check target it writes. Resolution is unchanged, because a loaded script never gives it an unscoped negative check.
