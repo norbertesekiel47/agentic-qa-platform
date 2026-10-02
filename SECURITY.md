@@ -118,7 +118,7 @@ The agent reads arbitrary page content. A malicious or compromised page may say 
     - DNS rebinding and service-worker registration attempts;
     - documents reached by clicks, redirects, `location` changes and popups, and frames from other origins.
 
-    The tests observe traffic at the packet level.
+    The tests observe traffic at the packet level, on Linux as CI runs them, in a network namespace of their own (ADR-0026 amendment, 2026-10-02).
 - Per-org limits: concurrent runs, runs/hour, steps/run, minutes/run, tokens/run.
 - The public demo can only target our own benchmark apps.
 
