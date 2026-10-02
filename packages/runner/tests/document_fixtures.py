@@ -161,6 +161,25 @@ def page(sites: Sites, path: str, query: dict[str, list[str]]) -> str | None:
             addEventListener("focus", () => card.focus());
             card.addEventListener("keydown", () => fetch("/typed"));
         </script>""",
+        # A field beside a frame from the subresource host that takes the
+        # focus whenever it loses it, and reports what its own field gets as
+        # /typed.
+        "/steal": f"""<label>Name <input></label>
+            <iframe src="{sites.cdn}/stealing"></iframe>""",
+        "/stealing": """<label>Card <input id="card"></label><script>
+            const grab = () => card.focus();
+            grab();
+            addEventListener("blur", () => setTimeout(grab, 0));
+            setInterval(() => { if (!document.hasFocus()) grab(); }, 1);
+            card.addEventListener("input", () => fetch("/typed"));
+        </script>""",
+        # Fields of each kind fill takes, and a button, which takes none.
+        "/fields": """<label>Notes <textarea>old</textarea></label>
+            <div role="textbox" aria-label="Story" contenteditable>old</div>
+            <label>Day <input type="date"></label>
+            <label>Count <input type="number"></label>
+            <label>Name <input value="old"></label>
+            <button>Plain</button>""",
         # A form, and a link to where `to` names.
         "/form": f"""<a href="{attribute}">Go</a>
             <label>Name <input></label>

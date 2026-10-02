@@ -474,3 +474,74 @@ def test_press_refuses_a_focused_element_around_a_frame_off_the_allowed_origins(
     refused = asyncio.run(scenario())
 
     assert refused.event == PolicyEvent("frame", f"{sites.cdn}/doc", sites.cdn)
+
+
+def test_fill_puts_the_value_into_the_element_even_when_another_frame_takes_the_focus(
+    sites: Sites,
+) -> None:
+    async def scenario() -> tuple[str, str]:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/steal")
+            [card] = [
+                f for f in session.page.frames if f.url == f"{sites.cdn}/stealing"
+            ]
+            await card.wait_for_function("document.hasFocus()")
+            name = await session.locate(
+                ref_for(await session.snapshot(), "textbox", "Name")
+            )
+            await session.fill(name, "Ada")
+            return (
+                await session.page.get_by_label("Name").input_value(),
+                await card.locator("#card").input_value(),
+            )
+
+    assert asyncio.run(scenario()) == ("Ada", "")
+    assert not sites.saw(CDN, "/typed", within=0.5)
+
+
+@pytest.mark.parametrize(
+    ("role", "name", "value", "reads"),
+    [
+        ("textbox", "Notes", "new", "new"),
+        ("textbox", "Story", "new", "new"),
+        ("textbox", "Day", "2026-10-02", "2026-10-02"),
+        ("textbox", "Name", "", ""),
+        ("spinbutton", "Count", "12", "12"),
+    ],
+)
+def test_fill_fills_each_kind_of_field(
+    sites: Sites, role: str, name: str, value: str, reads: str
+) -> None:
+    async def scenario() -> str:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/fields")
+            field = await session.locate(ref_for(await session.snapshot(), role, name))
+            await session.fill(field, value)
+            return str(
+                await field.evaluate(
+                    "(e) => e.isContentEditable ? e.textContent : e.value"
+                )
+            )
+
+    assert asyncio.run(scenario()) == reads
+
+
+@pytest.mark.parametrize(
+    ("role", "name"), [("spinbutton", "Count"), ("button", "Plain")]
+)
+def test_fill_refuses_an_element_that_takes_no_such_value(
+    sites: Sites, role: str, name: str
+) -> None:
+    async def scenario() -> Error:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/fields")
+            element = await session.locate(
+                ref_for(await session.snapshot(), role, name)
+            )
+            with pytest.raises(Error) as refused:
+                await session.fill(element, "not a number")
+            return refused.value
+
+    message = asyncio.run(scenario()).message
+    assert "didn't take the value" in message
+    assert "not a number" not in message

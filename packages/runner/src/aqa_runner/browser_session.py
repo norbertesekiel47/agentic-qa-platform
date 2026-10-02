@@ -77,6 +77,42 @@ CONTAINS = """(element, owner) => {
     return false;
 }"""
 
+# Fills a field with a value inside its own document, never through the
+# page's keyboard, and says whether it then holds the value. Like
+# Playwright's fill (1.63's injected script): text goes into the text kinds
+# of <input>, <textarea> and contenteditable elements, replacing what they
+# hold, as typing would (execCommand's insertText, which fires the input
+# events typing does); the date-like kinds of <input> take the value as set.
+FILL = """(element, value) => {
+    const set = ["color", "date", "time", "datetime-local", "month", "range", "week"];
+    const typed = ["", "email", "number", "password", "search", "tel", "text", "url"];
+    if (element instanceof HTMLInputElement && set.includes(element.type)) {
+        element.focus();
+        element.value = value;
+        element.dispatchEvent(new Event("input", {bubbles: true, composed: true}));
+        element.dispatchEvent(new Event("change", {bubbles: true}));
+        return element.value === value;
+    }
+    if (element instanceof HTMLInputElement && typed.includes(element.type)) {
+        element.focus();
+        element.select();
+    } else if (element instanceof HTMLTextAreaElement) {
+        element.focus();
+        element.select();
+    } else if (element.isContentEditable) {
+        element.focus();
+        const all = document.createRange();
+        all.selectNodeContents(element);
+        getSelection().removeAllRanges();
+        getSelection().addRange(all);
+    } else {
+        return false;
+    }
+    if (value === "") document.execCommand("delete");
+    else document.execCommand("insertText", false, value);
+    return (element.isContentEditable ? element.textContent : element.value) === value;
+}"""
+
 # Whether an element with the focus stands for nothing focused: the body, or
 # the document's root.
 NOTHING_FOCUSED = """(element) =>
@@ -249,11 +285,20 @@ class BrowserSession:
 
     async def fill(self, element: ElementHandle, value: str) -> None:
         """Fill `element` with `value`, once the page and the element's frame
-        are checked."""
+        are checked. The value goes in inside the element's own document, in
+        one script, and is read back; Playwright's `Error` (whose message
+        never holds the value) says the element didn't take it.
+
+        Not Playwright's own fill: it focuses the field, then inserts the
+        text with the page's keyboard in a second call, into whichever frame
+        has the focus by then, and another origin's frame can take it."""
         async with self._turn:
             await self._require_actionable(element)
-            # https://playwright.dev/python/docs/api/class-elementhandle#element-handle-fill
-            await element.fill(value)
+            if not await element.evaluate(FILL, value):
+                raise Error(
+                    "fill: the element didn't take the value: it takes no text, "
+                    "or its page changed the value"
+                )
 
     async def select(self, element: ElementHandle, option: str) -> None:
         """Select the option of `element` whose value or label is `option`,
