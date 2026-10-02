@@ -598,6 +598,68 @@ def scan(project: Path) -> list[str]:
     ]
 
 
+# --- diff: the floor's moves since a base -------------------------------------------
+
+
+def git(project: Path, *args: str) -> str:
+    return os.fsdecode(
+        subprocess.run(
+            ["git", "-C", str(project), *args],
+            capture_output=True,
+            check=True,
+            timeout=20,
+        ).stdout
+    )
+
+
+def changed_files(project: Path, merge_base: str) -> list[tuple[str, str]]:
+    """(status, path) per file the working tree changes since `merge_base`:
+    git's A, M, D or T for tracked files, committed or not, and ? for untracked."""
+    # -z ends each field with a NUL, so the last item of the split is empty.
+    fields = git(
+        project, "diff", "--name-status", "--no-renames", "-z", merge_base
+    ).split("\0")[:-1]
+    untracked = git(project, "ls-files", "-z", "--others", "--exclude-standard")
+    return list(zip(fields[0::2], fields[1::2], strict=True)) + [
+        ("?", rel) for rel in untracked.split("\0")[:-1]
+    ]
+
+
+def diff_verdicts(project: Path, base: str) -> list[Verdict]:
+    """A verdict per file the working tree changes since `base`'s merge base."""
+    commit = git(
+        project, "rev-parse", "--verify", "--end-of-options", f"{base}^{{commit}}"
+    )
+    merge_base = git(project, "merge-base", commit.strip(), "HEAD").strip()
+    verdicts = []
+    for status, rel in changed_files(project, merge_base):
+        before = (
+            ""
+            if status in {"A", "?"}
+            else git(project, "cat-file", "blob", f"{merge_base}:{rel}")
+        )
+        after = "" if status == "D" else read_text(project / rel)
+        verdicts.append(judge_change(rel, before, after, project))
+    return verdicts
+
+
+def diff_cli(base: str, project: Path) -> int:
+    """Exit 0 when clean, 1 on findings and 2 when the diff can't be taken."""
+    try:
+        verdicts = diff_verdicts(project, base)
+    except subprocess.CalledProcessError as error:
+        reason = os.fsdecode(error.stderr).strip() or f"exit {error.returncode}"
+        sys.stderr.write(f"policy_guard --diff {base}: git {error.cmd[3]}: {reason}\n")
+        return 2
+    except (OSError, subprocess.SubprocessError) as error:
+        sys.stderr.write(f"policy_guard --diff {base}: {error}\n")
+        return 2
+    refused = [v for v in verdicts if v.findings or v.secrets]
+    for verdict in refused:
+        sys.stdout.write(render(verdict))
+    return 1 if refused else 0
+
+
 # --- entry points -------------------------------------------------------------------
 
 
@@ -641,12 +703,21 @@ def scan_cli(project: Path) -> int:
     return 1 if problems else 0
 
 
+def command_line(mode: str, args: list[str]) -> int:
+    """--scan and --diff: run by hand or in CI, so the hooks' off switch doesn't apply."""
+    project = project_dir(str(Path.cwd()))
+    if mode == "--scan":
+        return scan_cli(Path(args[0]).resolve() if args else project)
+    if not args:
+        sys.stderr.write("usage: policy_guard.py --diff <base>\n")
+        return 2
+    return diff_cli(args[0], project)
+
+
 def main(argv: list[str]) -> int:
     mode = argv[1] if len(argv) > 1 else "--pre-tool-use"
-    if mode == "--scan":
-        return scan_cli(
-            Path(argv[2]).resolve() if len(argv) > 2 else project_dir(str(Path.cwd()))
-        )
+    if mode in {"--scan", "--diff"}:
+        return command_line(mode, argv[2:])
     if os.environ.get("AQA_POLICY_GUARD", "").lower() == "off":
         return 0
     try:
