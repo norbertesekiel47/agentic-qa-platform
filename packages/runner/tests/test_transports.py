@@ -68,6 +68,14 @@ EXPECTED_SWITCHES = [
     "--webrtc-ip-handling-policy=disable_non_proxied_udp",
     "--disable-quic",
     "--host-resolver-rules=MAP * ^NOTFOUND, EXCLUDE 127.0.0.1",
+    (
+        "--disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,"
+        "DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,"
+        "HttpsUpgrades,LensOverlay,MediaRouter,PaintHolding,"
+        "ThirdPartyStoragePartitioning,BlockOriginHeaderModificationOnRedirect,"
+        "Translate,AutoDeElevate,OptimizationHints,msForceBrowserSignIn,"
+        "msEdgeUpdateLaunchServicesPreferredVersion,WebRtcHideLocalIpsWithMdns"
+    ),
     "--proxy-server=http://launch-proxy.invalid:1",
     "--proxy-bypass-list=<-loopback>",
 ]
@@ -265,3 +273,28 @@ def test_chromium_runs_with_the_transport_switches(*, switched: bool) -> None:
             f"--proxy-bypass-list={proxy.get('bypass')}",
         ]
         assert sorted(as_arguments) == sorted(EXPECTED_SWITCHES)
+
+
+def test_the_last_disabled_features_are_playwrights_and_webrtcs_mdns() -> None:
+    # Chromium honours only the last --disable-features switch, and Playwright
+    # passes its own list first, so the launch's switch repeats it with
+    # WebRTC's mDNS responder added. A Playwright upgrade that changes its
+    # list fails here until the launch's list follows.
+    async def scenario() -> str:
+        async with (
+            async_playwright() as playwright,
+            egress_proxy() as egress,
+            open_browser_session(playwright.chromium, egress=egress) as session,
+        ):
+            return command_line_of(await browser_pid(session))
+
+    command = asyncio.run(scenario())
+
+    switches = [
+        argument.removeprefix("--disable-features=")
+        for argument in command.replace("\x00", " ").split()
+        if argument.startswith("--disable-features=")
+    ]
+    assert len(switches) == 2, command
+    playwrights, launchs = switches
+    assert launchs == f"{playwrights},WebRtcHideLocalIpsWithMdns"
