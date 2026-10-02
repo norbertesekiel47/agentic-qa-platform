@@ -30,10 +30,12 @@ from aqa_runner.document_origins import (
 )
 from aqa_runner.egress import EgressPolicy
 from aqa_runner.egress_proxy import EgressProxy
-from aqa_runner.locators import Absent, Resolved, Unresolved, Use
+from aqa_runner.locators import Absent, Resolved, Unresolved, Use, rendered_text
 from aqa_runner.locators import resolve as resolve_target
 from aqa_runner.routing import install_routes
 from aqa_runner.sandbox import Chromium, launch
+from aqa_runner.settling import DOM_CHANGED, Settled, Traffic, Window
+from aqa_runner.settling import settle as settle_window
 
 # The settings every run uses unless the caller passes its own (ADR-0025).
 PINNED_SETTINGS = BrowserSettings()
@@ -187,6 +189,9 @@ class BrowserSession:
     opens is recorded in `popups` and closed, and is a policy event too when
     it isn't on one of them.
 
+    Each action returns the settle window of the requests it starts, which
+    `settle` waits on (`aqa_runner.settling`).
+
     `page` is public until #53 makes it private. No production code outside
     this module may use it: it observes and acts without the checks."""
 
@@ -207,6 +212,9 @@ class BrowserSession:
         # Every page opened in the context from now on, popups of popups
         # included (https://playwright.dev/python/docs/api/class-browsercontext#browser-context-event-page).
         page.context.on("page", self._close_popup)
+        # Before the page's first navigation: `open_browser_session` hands
+        # over a blank page.
+        self._traffic = Traffic(page)
 
     async def snapshot(self) -> str:
         """The page's accessibility snapshot in Playwright's AI mode
@@ -286,42 +294,51 @@ class BrowserSession:
             await self._require_allowed(frame, "frame")
         return found
 
-    async def navigate(self, url: str) -> None:
+    async def navigate(self, url: str) -> Window:
         """Load `url`, an absolute URL on one of the run's allowed origins. Any
         other is a policy event (kind `navigation`), refused before anything
         is requested. The current page needn't be on an allowed origin:
         navigating is the way back after a policy event. The page it lands
         on, after any redirects, is checked as every page is. A network
         failure raises Playwright's `Error` as it is; the egress gate's
-        records tell an egress block from an infrastructure failure."""
+        records tell an egress block from an infrastructure failure.
+
+        Returns the settle window of the requests it starts, as every action
+        does: a refused action starts none."""
         async with self._turn:
             origin = navigable_origin(url)
             if origin not in self._policy.allowed_origins:
                 raise self._refuse(PolicyEvent("navigation", url, origin))
+            window = self._traffic.next_window()
             # https://playwright.dev/python/docs/api/class-page#page-goto
             await self.page.goto(url)
             await self._require_allowed_page()
+            return window
 
-    async def reload(self) -> None:
+    async def reload(self) -> Window:
         """Reload the page, which must be on one of the run's allowed origins,
         and check the page it lands on."""
         async with self._turn:
             await self._require_allowed_page()
+            window = self._traffic.next_window()
             # https://playwright.dev/python/docs/api/class-page#page-reload
             await self.page.reload()
             await self._require_allowed_page()
+            return window
 
-    async def click(self, element: ElementHandle) -> None:
+    async def click(self, element: ElementHandle) -> Window:
         """Click `element`, from `locate` or `resolve`, once the page and the
         element's frame are checked, and Playwright will check what its click
         hits."""
         async with self._turn:
             await self._require_actionable(element)
             await self._require_hit_check(element)
+            window = self._traffic.next_window()
             # https://playwright.dev/python/docs/api/class-elementhandle#element-handle-click
             await element.click()
+            return window
 
-    async def fill(self, element: ElementHandle, value: str) -> None:
+    async def fill(self, element: ElementHandle, value: str) -> Window:
         """Fill `element` with `value`, once the page and the element's frame
         are checked. The value goes in inside the element's own document, in
         one script, and is read back; Playwright's `Error` (whose message
@@ -332,22 +349,26 @@ class BrowserSession:
         has the focus by then, and another origin's frame can take it."""
         async with self._turn:
             await self._require_actionable(element)
+            window = self._traffic.next_window()
             if not await element.evaluate(FILL, value):
                 raise Error(
                     "fill: the element didn't take the value: it takes no text, "
                     "or its page changed the value"
                 )
+            return window
 
-    async def select(self, element: ElementHandle, option: str) -> None:
+    async def select(self, element: ElementHandle, option: str) -> Window:
         """Select the option of `element` whose value or label is `option`,
         once the page and the element's frame are checked."""
         async with self._turn:
             await self._require_actionable(element)
+            window = self._traffic.next_window()
             # A string matches an option's value or its label:
             # https://playwright.dev/python/docs/api/class-elementhandle#element-handle-select-option
             await element.select_option(option)
+            return window
 
-    async def press(self, key: str) -> None:
+    async def press(self, key: str) -> Window:
         """Press `key` on the keyboard, once the page, the frame whose document
         has the focus, where the key goes, and the element with the focus are
         checked: the element mustn't contain a frame off the allowed origins,
@@ -385,8 +406,19 @@ class BrowserSession:
                 finally:
                     if focused is not None:
                         await focused.dispose()
+            window = self._traffic.next_window()
             # https://playwright.dev/python/docs/api/class-keyboard#keyboard-press
             await self.page.keyboard.press(key)
+            return window
+
+    async def settle(self, window: Window) -> Settled:
+        """Wait until the action whose settle window is `window` has settled
+        (`aqa_runner.settling.settle`): `"idle"` once its requests have
+        finished and the page has been quiet, `"timeout"` after 10 s. Each
+        look at the page is an observation, so a page off the allowed
+        origins raises `PolicyEventError`; nothing else the session raises
+        is caught, and a navigation meanwhile counts as the page changing."""
+        return await settle_window(window, self._dom_changed)
 
     @overload
     async def resolve(
@@ -417,6 +449,41 @@ class BrowserSession:
                 raise DocumentChangedError
             return found
 
+    async def text_of(self, element: ElementHandle) -> str:
+        """`element`'s rendered text (`aqa_runner.locators.rendered_text`),
+        once the page and the element's frame are checked: an observation,
+        as `text_in_target` makes it. The element is held, so it can't read
+        a document that replaced its own."""
+        async with self._turn:
+            await self._require_allowed_element(element)
+            return await rendered_text(element)
+
+    async def visible_text(self) -> str:
+        """The page's rendered text, as `text_visible` reads it: its body's,
+        as `text_of` reads an element's, empty when the page has no body.
+        Only the page's own document: rendered text never enters a frame,
+        an allowed origin's included.
+
+        An observation, so the page is checked first. If any frame
+        navigated or was removed meanwhile, the text may be another
+        document's, so it is discarded and `DocumentChangedError` raised,
+        as `resolve` does."""
+        async with self._turn:
+            changes = self._frame_changes
+            await self._require_allowed_page()
+            # https://playwright.dev/python/docs/api/class-page#page-query-selector
+            body = await self.page.query_selector("body")
+            if body is None:
+                text = ""
+            else:
+                try:
+                    text = await rendered_text(body)
+                finally:
+                    await body.dispose()
+            if self._frame_changes != changes:
+                raise DocumentChangedError
+            return text
+
     async def url(self) -> str:
         """The page's URL, once the page is checked: an observation, as
         `url_matches` makes it."""
@@ -446,6 +513,24 @@ class BrowserSession:
                 left_out.add(ref)
         return left_out
 
+    async def _dom_changed(self) -> bool:
+        """Whether the page's document changed since the last look, which
+        runs a script in the page, once the page is checked. The script runs
+        in the page's world, so the answer is the page's word."""
+        async with self._turn:
+            await self._require_allowed_page()
+            try:
+                return bool(await self.page.evaluate(DOM_CHANGED))
+            except Error:
+                # Playwright's general error type: here, a navigation replaced
+                # the document mid-look, or the page's own scripts broke the
+                # look. Either is the page's doing, and whether it changed
+                # can't be told, so it counts as changing. A closed page is
+                # not.
+                if self.page.is_closed():
+                    raise
+                return True
+
     def _count_frame_change(self, _: Frame) -> None:
         self._frame_changes += 1
 
@@ -473,12 +558,19 @@ class BrowserSession:
         Playwright's hit check accepts the element or any descendant, and
         every point over a frame hits the frame's element, so a click on an
         element around another origin's frame lands in that frame."""
+        frame = await self._require_allowed_element(element)
+        await self._require_no_foreign_frame(element, frame)
+
+    async def _require_allowed_element(self, element: ElementHandle) -> Frame:
+        """Record and raise a policy event unless the page, and the frame of
+        `element`, are on the run's allowed origins; that frame otherwise.
+        An element in no frame is on none."""
         await self._require_allowed_page()
         frame = await element.owner_frame()
         if frame is None:
             raise self._refuse(PolicyEvent("frame", "", None))
         await self._require_allowed(frame, "frame")
-        await self._require_no_foreign_frame(element, frame)
+        return frame
 
     async def _require_hit_check(self, element: ElementHandle) -> None:
         """Record and raise a policy event if Playwright's click on `element`
