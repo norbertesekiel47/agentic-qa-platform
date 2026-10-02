@@ -153,7 +153,10 @@ def page(sites: Sites, path: str, query: dict[str, list[str]]) -> str | None:
         # gives it to its card field, which reports each key to the site as
         # /typed; and a field in a frame of the start origin.
         "/focus": f"""<iframe src="{sites.cdn}/typing"></iframe>
-            <iframe srcdoc="<label>Inner <input></label>"></iframe>""",
+            <iframe srcdoc="<label>Inner <input></label>"></iframe>
+            <div role="group" aria-label="Wrapper" tabindex="0">
+                <iframe src="{sites.cdn}/doc"></iframe>
+            </div>""",
         "/typing": """<label>Card <input id="card"></label><script>
             addEventListener("focus", () => card.focus());
             card.addEventListener("keydown", () => fetch("/typed"));

@@ -19,7 +19,7 @@ from playwright.async_api import Frame
 type PolicyEventKind = Literal["document", "frame", "popup", "navigation"]
 
 # What each kind of policy event refused, as its message says it.
-REFUSED: dict[PolicyEventKind, str] = {
+REFUSED_BY_KIND: dict[PolicyEventKind, str] = {
     "document": "the page is",
     "frame": "the element's frame is",
     "popup": "a popup is",
@@ -41,9 +41,11 @@ RECORD_LIMIT = 100
 @dataclass(frozen=True)
 class PolicyEvent:
     """A document from an origin the run doesn't allow, which the session
-    found and never observed or acted on (ADR-0026). `url` is as Chromium
-    reports it; `origin` is None when the document has none a run could
-    allow, such as Chromium's error page. What it does to the run is #47's."""
+    found and never observed or acted on, or a URL `navigate` refused
+    (ADR-0026). `url` is the document's as Chromium reports it, the URL
+    `navigate` was given, or empty for an element in no frame. `origin` is
+    None when there is none a run could allow, as for Chromium's error page.
+    What it does to the run is #47's."""
 
     kind: PolicyEventKind
     url: str
@@ -68,11 +70,13 @@ class PolicyEventError(Exception):
     path and query the page chose."""
 
     def __init__(self, event: PolicyEvent) -> None:
-        where = "no origin" if event.origin is None else event.origin
+        if event.origin is None:
+            where = "on no origin a run could allow"
+        else:
+            where = f"on {event.origin}, which isn't one of the run's allowed origins"
         super().__init__(
-            f"{REFUSED[event.kind]} on {where}, which isn't one of the run's allowed "
-            "origins: nothing there is observed or acted on; navigate to an allowed "
-            "origin, or restart"
+            f"{REFUSED_BY_KIND[event.kind]} {where}: nothing there is observed or acted on; "
+            "navigate to an allowed origin, or restart"
         )
         self.event = event
 
