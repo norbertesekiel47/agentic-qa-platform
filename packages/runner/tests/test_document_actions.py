@@ -4,19 +4,24 @@ SECURITY.md §7; the seam with #46's executor). The browser tests launch real
 Chromium on the OS that runs them: Linux in CI, macOS locally."""
 
 import asyncio
+import re
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from aqa_core.compiled import ByRole, Target
+from aqa_runner import browser_session
 from aqa_runner.document_origins import (
     PolicyEvent,
     PolicyEventError,
     navigable_origin,
 )
 from aqa_runner.egress import Refusal
-from playwright.async_api import Error
+from aqa_runner.locators import Resolved, Use, resolve
+from playwright.async_api import Error, Page
 
 from packages.runner.tests.document_fixtures import (
+    CDN,
     Sites,
     browsing,
     ref_for,
@@ -255,3 +260,152 @@ def test_nothing_is_acted_on_in_an_off_origin_document(sites: Sites) -> None:
     # The reload never left, and no click reached the planted document.
     assert sites.seen[before:].count(("cdn.example.test", "/doc")) == 1
     assert ("cdn.example.test", "/clicked") not in sites.seen
+
+
+def around(snapshot: str, element: str) -> str:
+    """The ref of an element of /wrapped that contains a frame from the
+    subresource host: the page's root, a region around one, a region whose
+    open shadow root holds one, or a frame of the start origin with one
+    nested inside it."""
+    if element == "root":
+        first = re.search(r"\[ref=(e\d+)\]", snapshot)
+        assert first is not None, snapshot
+        return first[1]
+    if element in ("region", "shadow"):
+        return ref_for(
+            snapshot, "region", "Offers" if element == "region" else "Shadow"
+        )
+    *_, nested = re.findall(r"- iframe \[ref=(e\d+)\]", snapshot)
+    return str(nested)
+
+
+@pytest.mark.parametrize("element", ["root", "region", "shadow", "nested frame"])
+def test_acting_on_an_element_around_a_frame_off_the_allowed_origins_is_refused(
+    sites: Sites, element: str
+) -> None:
+    async def scenario() -> list[PolicyEventError]:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/wrapped")
+            snapshot = await session.snapshot()
+            target = await session.locate(around(snapshot, element))
+            refused = []
+            for attempt in [
+                session.click(target),
+                session.fill(target, "Ada"),
+                session.select(target, "M"),
+            ]:
+                with pytest.raises(PolicyEventError) as refusal:
+                    await attempt
+                refused.append(refusal.value)
+            # Controls: an element around no such frame, and one inside the
+            # start origin's frame, beside the one nested there.
+            for name in ["Plain", "Nested"]:
+                await session.click(
+                    await session.locate(ref_for(snapshot, "button", name))
+                )
+            return refused
+
+    refused = asyncio.run(scenario())
+
+    event = PolicyEvent("frame", f"{sites.cdn}/doc", sites.cdn)
+    assert [error.event for error in refused] == [event] * 3
+    assert ("cdn.example.test", "/clicked") not in sites.seen
+
+
+def test_a_click_on_an_element_around_a_frame_lands_in_the_frame(sites: Sites) -> None:
+    # The control for the test above: Playwright's own click, unchecked,
+    # lands in the subresource host's frame inside the region.
+    async def scenario() -> bool:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/wrapped")
+            region = await session.locate(
+                ref_for(await session.snapshot(), "region", "Offers")
+            )
+            await region.click()
+            return await asyncio.to_thread(sites.saw, CDN, "/clicked", within=5)
+
+    assert asyncio.run(scenario()), "the click didn't reach the frame"
+
+
+def test_actions_refuse_an_element_of_no_frame(sites: Sites) -> None:
+    async def scenario() -> PolicyEventError:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/kept")
+            orphan = await session.page.evaluate_handle(
+                "document.implementation.createHTMLDocument('').createElement('button')"
+            )
+            element = orphan.as_element()
+            assert element is not None
+            with pytest.raises(PolicyEventError) as refused:
+                await session.click(element)
+            return refused.value
+
+    assert asyncio.run(scenario()).event == PolicyEvent("frame", "", None)
+
+
+def test_resolve_finds_a_target_on_an_allowed_page(sites: Sites) -> None:
+    other = Target(semantic="the other button", locators=(ByRole(role="button"),))
+
+    async def scenario() -> str:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/kept")
+            found = await session.resolve(other, "action")
+            assert isinstance(found, Resolved)
+            return await found.element.inner_text()
+
+    assert asyncio.run(scenario()) == "Other"
+
+
+def test_resolve_refuses_a_page_that_navigated_while_it_looked(
+    sites: Sites, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other = Target(semantic="the other button", locators=(ByRole(role="button"),))
+    landed = f"{sites.cdn}/doc"
+
+    async def scenario() -> PolicyEventError:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/kept")
+
+            # The page moves to the subresource host after the lookup.
+            async def then_moves(page: Page, target: Target, use: Use) -> Any:
+                found = await resolve(page, target, use)
+                await page.goto(landed)
+                return found
+
+            monkeypatch.setattr(browser_session, "resolve_target", then_moves)
+            with pytest.raises(PolicyEventError) as refused:
+                await session.resolve(other, "action")
+            return refused.value
+
+    refused = asyncio.run(scenario())
+
+    assert refused.event == PolicyEvent("document", landed, sites.cdn)
+
+
+def test_reload_checks_the_page_it_lands_on(
+    sites: Sites, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    landed = f"{sites.cdn}/doc"
+    reloads = Page.reload
+
+    async def scenario() -> PolicyEventError:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/kept")
+            await session.reload()
+
+            # The next reload lands on the subresource host, as a reload a
+            # server redirects would.
+            async def lands_elsewhere(page: Page, **options: Any) -> Any:
+                await page.goto(landed)
+                return await reloads(page, **options)
+
+            monkeypatch.setattr(Page, "reload", lands_elsewhere)
+            with pytest.raises(PolicyEventError) as refused:
+                await session.reload()
+            return refused.value
+
+    before = len(sites.seen)
+    refused = asyncio.run(scenario())
+
+    assert sites.seen[before:][:2] == [("app.example.test", "/kept")] * 2
+    assert refused.event == PolicyEvent("document", landed, sites.cdn)
