@@ -24,6 +24,13 @@ API_URL = "https://api.anthropic.com"
 # LangChain would repair into something that parses.
 _COMPLETE = "end_turn"
 _COUNTS = ("input_tokens", "output_tokens")
+# Bounds on every request, stated here rather than left to langchain-anthropic
+# 1.7.4: it takes max_tokens from its model profiles, 128,000 for
+# claude-opus-5-5 and a 4096 fallback for claude-sonnet-5-5 (no profile), and
+# passes timeout=None, which the SDK reads as never timing out. 120 s covers
+# 4096 tokens at 40 a second; the SDK still retries twice (LAB_NOTES).
+MAX_OUTPUT_TOKENS = 4096
+REQUEST_TIMEOUT_SECONDS = 120.0
 
 
 def _usage(message: AIMessage) -> Usage:
@@ -61,6 +68,8 @@ class AnthropicClient:
             or os.environ.get("ANTHROPIC_BASE_URL")
             or API_URL,
             "api_key": os.environ.get("ANTHROPIC_API_KEY", ""),
+            "max_tokens": MAX_OUTPUT_TOKENS,
+            "timeout": REQUEST_TIMEOUT_SECONDS,
         }
         if effort is not None:
             settings["effort"] = effort
