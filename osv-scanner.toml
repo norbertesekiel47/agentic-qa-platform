@@ -1,0 +1,6 @@
+# Waivers for the dependency audit (CONSTRAINTS.md, "Dependency audit"; ADR-0029).
+# None yet. A waiver is an [[IgnoredVulns]] entry with an id, a reason and an
+# ignoreUntil date, plus a row in CONSTRAINTS.md's Exceptions; a test holds this
+# file to that rule. The audit passes this file to osv-scanner with --config for
+# every lockfile it scans, so it is the only waiver file osv-scanner reads: one
+# beside a lockfile, such as bench/harness/osv-scanner.toml, does nothing.

@@ -128,9 +128,10 @@ jobs:
           echo "${OSV_SCANNER_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum --check --strict
           chmod +x "$RUNNER_TEMP/osv-scanner"
       # CONSTRAINTS.md's "Dependency audit" row; tests/test_constraints.py
-      # runs the script against a fake scanner.
-      - name: Audit uv.lock
-        run: .github/scripts/audit-lockfile.sh "$RUNNER_TEMP/osv-scanner" uv.lock
+      # runs the script against a fake scanner. The second file is the lock
+      # of the benchmark's checks image (ADR-0029's 2026-10-01 amendment).
+      - name: Audit uv.lock and the checks image's lock
+        run: .github/scripts/audit-lockfile.sh "$RUNNER_TEMP/osv-scanner" uv.lock bench/harness/checks-requirements.txt
 
   secrets:
     name: secrets

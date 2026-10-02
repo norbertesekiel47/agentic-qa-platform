@@ -74,7 +74,7 @@ uv run mypy --platform linux                                                   #
 uv run mypy --strict --no-explicit-package-bases .claude/hooks bench/harness   # types: scripts
 uv run pytest --cov                                                            # every test, and the coverage floor
 # With osv-scanner, gitleaks and fallow at the versions .github/workflows/ci.yml pins:
-.github/scripts/audit-lockfile.sh osv-scanner uv.lock                          # dependency audit: high or critical advisories
+.github/scripts/audit-lockfile.sh osv-scanner uv.lock bench/harness/checks-requirements.txt   # dependency audit: high or critical advisories, in each lockfile
 gitleaks git --no-banner --redact --verbose .                                  # secret scan: every commit
 fallow audit --base "$(git merge-base origin/main HEAD)" --format json --quiet --explain   # fallow: the branch's changes, as in its pull request
 
