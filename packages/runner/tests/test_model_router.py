@@ -7,14 +7,14 @@ from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, cast
 
 import pytest
 from aqa_core.config import Effort, ModelRoleName
 from aqa_core.model_costs import Mode, Usage
 from aqa_core.model_roles import RoutedModel
 from aqa_core.project import load_config
-from aqa_runner.anthropic_client import build_client
+from aqa_runner.anthropic_client import AnthropicClient
 from aqa_runner.chat_client import ChatClient, Reply
 from aqa_runner.model_router import ModelCallError, ModelRouter, Routed
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -314,6 +314,9 @@ def test_constructing_a_router_switches_ambient_tracing_off(
     assert "LANGCHAIN_TRACING" not in os.environ
 
 
+# The cassettes are keyed by this prompt and by `Verdict`'s schema, which
+# test_anthropic_client.py also builds: a test module can't import another's
+# (ADR-0027), so each keeps its own copy.
 VERDICT_PROMPT = "Is the cart empty? Answer with ok and a reason."
 
 
@@ -322,7 +325,7 @@ def refusal_then_fallback_through_the_adapter(tmp_path: Path) -> Routed:
     whose fallback answers. The cassette `refusal_then_fallback` replays it."""
     path = tmp_path / "config.yaml"
     path.write_text(FALLBACK)
-    model_router = ModelRouter.from_config(load_config(path), build_client)
+    model_router = ModelRouter.from_config(load_config(path), AnthropicClient)
     return asyncio.run(
         model_router.call(
             "healer", "heal", [HumanMessage(content=VERDICT_PROMPT)], schema=Verdict
@@ -331,7 +334,7 @@ def refusal_then_fallback_through_the_adapter(tmp_path: Path) -> Routed:
 
 
 def test_a_refusal_through_the_real_adapter_is_recorded_and_the_fallback_answers(
-    tmp_path: Path, cassette: Callable[[str], AbstractContextManager[Any]]
+    tmp_path: Path, cassette: Callable[..., AbstractContextManager[Any]]
 ) -> None:
     with cassette("refusal_then_fallback") as recording:
         result = refusal_then_fallback_through_the_adapter(tmp_path)
@@ -364,22 +367,6 @@ def test_a_refusal_through_the_real_adapter_is_recorded_and_the_fallback_answers
     assert answered.cost_usd == Decimal("0.00148")
 
 
-class Endpoint(Protocol):
-    """The conftest's stand-in for LangSmith's API."""
-
-    url: str
-
-    def exported(self, *, within: float) -> bool: ...
-
-
-def customers_environment(
-    endpoint: Endpoint, monkeypatch: pytest.MonkeyPatch, switch: str
-) -> None:
-    monkeypatch.setenv(switch, "true")
-    monkeypatch.setenv("LANGSMITH_ENDPOINT", endpoint.url)
-    monkeypatch.setenv("LANGSMITH_API_KEY", "fake-key-for-tests")
-
-
 def ask_a_verdict_through(client: ChatClient) -> Reply:
     return asyncio.run(client.call([HumanMessage(content=VERDICT_PROMPT)], [], Verdict))
 
@@ -387,17 +374,17 @@ def ask_a_verdict_through(client: ChatClient) -> Reply:
 @pytest.mark.parametrize("switch", ["LANGSMITH_TRACING", "LANGCHAIN_TRACING_V2"])
 def test_a_call_through_the_real_adapter_exports_no_trace_from_a_router(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    langsmith_endpoint: Endpoint,
-    cassette: Callable[[str], AbstractContextManager[Any]],
+    customers_environment: Callable[[str], None],
+    exported_to_langsmith: Callable[[float], bool],
+    cassette: Callable[..., AbstractContextManager[Any]],
     switch: str,
 ) -> None:
-    customers_environment(langsmith_endpoint, monkeypatch, switch)
+    customers_environment(switch)
     path = tmp_path / "config.yaml"
     path.write_text("")
-    model_router = ModelRouter.from_config(load_config(path), build_client)
+    model_router = ModelRouter.from_config(load_config(path), AnthropicClient)
 
-    with cassette("structured_output"):
+    with cassette("structured_output", replay_only=True):
         result = asyncio.run(
             model_router.call(
                 "navigator",
@@ -409,24 +396,24 @@ def test_a_call_through_the_real_adapter_exports_no_trace_from_a_router(
     wait_for_all_tracers()
 
     assert result.outcome == "ok"
-    assert not langsmith_endpoint.exported(within=1)
+    assert not exported_to_langsmith(1)
 
 
 def test_the_same_call_without_a_router_does_export(
-    monkeypatch: pytest.MonkeyPatch,
-    langsmith_endpoint: Endpoint,
-    cassette: Callable[[str], AbstractContextManager[Any]],
+    customers_environment: Callable[[str], None],
+    exported_to_langsmith: Callable[[float], bool],
+    cassette: Callable[..., AbstractContextManager[Any]],
     sonnet: RoutedModel,
 ) -> None:
     # The control: the stand-in is listening, and only the router's guard keeps
     # the run from reaching it.
-    customers_environment(langsmith_endpoint, monkeypatch, "LANGSMITH_TRACING")
+    customers_environment("LANGSMITH_TRACING")
 
-    with cassette("structured_output"):
-        ask_a_verdict_through(build_client(sonnet, None))
+    with cassette("structured_output", replay_only=True):
+        ask_a_verdict_through(AnthropicClient(sonnet, None))
     wait_for_all_tracers()
 
-    assert langsmith_endpoint.exported(within=5)
+    assert exported_to_langsmith(5)
 
 
 def test_a_fallback_that_gets_no_response_loses_no_billed_record(

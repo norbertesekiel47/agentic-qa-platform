@@ -109,7 +109,7 @@ class ModelRouter:
                     messages, tools, schema
                 )
             except Exception as error:
-                # Narrowest honest handler: it adds what was billed and re-raises.
+                # A fallback's failure must not lose what the refusal cost.
                 if records:
                     raise ModelCallError(records) from error
                 raise

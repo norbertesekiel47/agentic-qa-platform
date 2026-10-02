@@ -1,0 +1,29 @@
+# HAND-WRITTEN RESPONSES. Nothing in this file was recorded from api.anthropic.com
+# (no provider key was available when it was made). The request bodies are what
+# aqa_runner.anthropic_client sent, through langchain-anthropic, to a local stub; the
+# responses were written by hand in the Messages API's shape. A re-recording with a
+# key replaces this file (TESTING.md section 4, Cassettes).
+interactions:
+- request:
+    body: '{"max_tokens":4096,"messages":[{"role":"user","content":"Say hello in one
+      word."}],"model":"claude-sonnet-5-5","output_config":{"effort":"high"}}'
+    headers:
+      anthropic-version:
+      - '2023-06-01'
+      content-type:
+      - application/json
+    method: POST
+    uri: https://api.anthropic.com/v1/messages
+  response:
+    body:
+      string: '{"id": "msg_handwritten_09", "type": "message", "role": "assistant",
+        "model": "claude-sonnet-5-5", "content": [{"type": "text", "text": "Hello."}],
+        "stop_reason": "end_turn", "stop_sequence": null, "usage": {"cache_creation_input_tokens":
+        0, "cache_read_input_tokens": 0, "input_tokens": 14, "output_tokens": 5}}'
+    headers:
+      content-type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+version: 1
