@@ -212,3 +212,25 @@ Building the compiler's locator generation (#52) settled choices that "Locator g
     - An unscoped negative check is a structural error in the script, found when the script is read. That makes it a spec error (exit 5), as the loader's other checks are.
     - The first would make it drift, which M2 routes to heal as though the UI had moved.
   - The loader's check is #46's, and the generator (#52) must scope every negative-check target it writes. Resolution is unchanged, because a loaded script never gives it an unscoped negative check.
+- **The generator takes an element, not only a ref.**
+  - The snapshot gives a ref to what it shows as a node, and folds an inline element's text into its parent's. The favorites count, an inline span inside the favorite button, has no ref.
+  - Whether an element gets one depends on its styling. The banner date has a ref with Conduit's CSS, which makes it a block, and had none in a probe without it (LAB_NOTES, 2026-10-02).
+  - So `generate` takes the element a use put the target to, with the role and name its ref's line gives when it has one. How the agent points at an element with no ref is the navigator's (#53).
+- **Only a control's name locates it.**
+  - *Options:* name any role the snapshot names, or only controls.
+  - *Chosen:* controls. A heading, paragraph or list item takes its name from its text, so locating one by name is a text locator for a container, which the grammar forbids.
+- **What counts as stable.**
+  - *Options:* an allowlist of known-good class names, or a rule that refuses what tools generate.
+  - *Chosen:* the rule. An allowlist would be per app.
+  - A token is one plain CSS identifier, so it needs no escaping and can't carry `>>`, a quote, a colon or a trimmed character. It has no generated prefix and no hash-like part, and it is no state class.
+  - An id with any other character is left out, never escaped.
+  - Attributes are `name` and `type` only. Other attributes are often text (`title`) or per item (`href`).
+- **The scope is the nearest ancestor that makes the locator unique.**
+  - *Options:* the nearest such ancestor, a list of landmarks, or nested scopes.
+  - *Chosen:* the nearest, one level deep.
+    - On the pilot it is the banner (`div.banner`) for everything the article page renders twice.
+    - `html` and `body` never count, because every page has them.
+- **Every locator is resolved before it is kept.**
+  - The element's facts (tag, id, classes, attributes, labels and ancestors) are read in the page's own world, so they are the page's word.
+  - Each candidate is resolved alone, for the use, on the live page, and kept only if it finds that element.
+  - A page can make the generator build fewer or odder locators, but never one that finds another element. One that lies about an id gets the locator dropped (`test_a_locator_that_finds_another_element_is_dropped`).

@@ -60,6 +60,7 @@ Written test-first (red → green → refactor): replay engine (including M1's c
   - *Tracing:* an ambient `LANGSMITH_TRACING`, `LANGCHAIN_TRACING_V2` or `LANGCHAIN_TRACING` exports nothing once a router exists; `test_tracing.py` sets each against a local stand-in for LangSmith's API, and shows that without the guard the run does reach it.
   - *Pages that change between runs:* a page whose content differs from run to run, such as one with a random slug, can't be replayed from a cassette. The pilot's full explores are live, recorded runs whose evidence cites the SHA.
 - **Fake model:** scripted chat model for graph-transition tests (e.g., "heal returns `expectation_violated`" → assert finding created, no patch).
+- **Pilot pages:** saved renderings of the pages the five pilot specs visit, from the clean local Conduit stack, in `packages/runner/tests/pilot_renderings/`. `capture.py` there captures them again, and `packages/runner/tests/pilot_pages.py` loads one with Conduit's own stylesheets. The locator generator's rules are tested on them (§2, ADR-0025).
 - **Fixture pages:** small static apps under `tests/fixtures/pages/` for each drift type (moved element, renamed label, removed element, new modal, canvas widget) and each hostile behavior (§1 Egress & secrets).
 
 ## 5. Benchmark
