@@ -24,7 +24,7 @@ A version followed by an HTML comment, `renovate: NAME`, is tracked: it is the e
 | DB access | SQLAlchemy 2.1.1 + psycopg 3.3.6 | — | Async, typed; raw SQL for RLS policies |
 | Migrations | Alembic | 1.20.0 | Versioned schema, RLS policies in migrations |
 | CLI | Typer 0.27.2<!-- renovate: typer --> + Rich 15.0.0<!-- renovate: rich --> | — | Ergonomic CLI and terminal output |
-| Tracing | OpenTelemetry SDK 1.45.0 + LangSmith (locked through LangChain; its version is in `uv.lock`) | — | Portable traces; LangSmith for LLM debugging |
+| Tracing | OpenTelemetry SDK 1.45.0 + LangSmith 0.14.1<!-- renovate: langsmith --> | — | Portable traces; LangSmith for LLM debugging. The runner imports `langsmith` itself, to switch export off (SECURITY §10), so it is pinned |
 | Logging | structlog | 26.1.0<!-- renovate: structlog --> | JSON logs with redaction processors |
 | JWT verification | PyJWT | 2.15.0 | Clerk JWKS + run tokens |
 | AWS SDK | boto3 | 1.43.x | KMS, SQS, S3, Lambda invoke |
