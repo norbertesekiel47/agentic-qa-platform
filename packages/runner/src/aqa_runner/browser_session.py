@@ -17,6 +17,7 @@ from aqa_core.browser import BrowserSettings
 from aqa_core.compiled import Target
 from playwright.async_api import ElementHandle, Error, Frame, Page
 
+from aqa_runner import settling
 from aqa_runner.document_origins import (
     DocumentChangedError,
     PolicyEvent,
@@ -34,8 +35,7 @@ from aqa_runner.locators import Absent, Resolved, Unresolved, Use, rendered_text
 from aqa_runner.locators import resolve as resolve_target
 from aqa_runner.routing import install_routes
 from aqa_runner.sandbox import Chromium, launch
-from aqa_runner.settling import DOM_CHANGED, Settled, Traffic, Window
-from aqa_runner.settling import settle as settle_window
+from aqa_runner.settling import Settled, Traffic, Window
 
 # The settings every run uses unless the caller passes its own (ADR-0025).
 PINNED_SETTINGS = BrowserSettings()
@@ -414,11 +414,12 @@ class BrowserSession:
     async def settle(self, window: Window) -> Settled:
         """Wait until the action whose settle window is `window` has settled
         (`aqa_runner.settling.settle`): `"idle"` once its requests have
-        finished and the page has been quiet, `"timeout"` after 10 s. Each
-        look at the page is an observation, so a page off the allowed
-        origins raises `PolicyEventError`; nothing else the session raises
-        is caught, and a navigation meanwhile counts as the page changing."""
-        return await settle_window(window, self._dom_changed)
+        finished and the page has been quiet, `"timeout"` once
+        `settling.SETTLE_SECONDS` have passed. Each look at the page is an
+        observation, so a page off the allowed origins raises
+        `PolicyEventError`; nothing else the session raises is caught, and a
+        navigation meanwhile counts as the page changing."""
+        return await settling.settle(window, self._dom_changed)
 
     @overload
     async def resolve(
@@ -520,7 +521,7 @@ class BrowserSession:
         async with self._turn:
             await self._require_allowed_page()
             try:
-                return bool(await self.page.evaluate(DOM_CHANGED))
+                return bool(await self.page.evaluate(settling.DOM_CHANGED))
             except Error:
                 # Playwright's general error type: here, a navigation replaced
                 # the document mid-look, or the page's own scripts broke the
