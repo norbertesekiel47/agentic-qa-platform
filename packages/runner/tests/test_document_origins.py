@@ -405,3 +405,28 @@ def test_a_popup_off_the_allowed_origins_is_a_policy_event(
     assert popups == [Popup(landed, opener)]
     assert events == [PolicyEvent("popup", landed, origin)]
     assert 'button "Go"' in snapshot, snapshot
+
+
+def test_a_frame_removed_during_a_snapshot_is_left_out(
+    sites: Sites, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    taken_by_playwright = Page.aria_snapshot
+
+    # Removing a frame is no navigation, so nothing discards the snapshot: its
+    # iframe no longer has a frame, which the session reads as no origin.
+    async def frame_removed_after(page: Page, **options: Any) -> str:
+        text = await taken_by_playwright(page, **options)
+        await page.locator("iframe").evaluate("(frame) => frame.remove()")
+        return text
+
+    monkeypatch.setattr(Page, "aria_snapshot", frame_removed_after)
+
+    async def scenario() -> str:
+        async with browsing(sites) as session:
+            await session.page.goto(f"{sites.app}/flip")
+            return await session.snapshot()
+
+    snapshot = asyncio.run(scenario())
+
+    assert "Planted" not in snapshot, snapshot
+    assert snapshot.count(LEFT_OUT) == 1, snapshot
