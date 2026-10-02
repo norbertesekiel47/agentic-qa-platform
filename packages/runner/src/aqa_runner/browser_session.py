@@ -164,9 +164,11 @@ class BrowserSession:
     every accessibility snapshot of the page goes through `snapshot`, and
     snapshots and lookups take turns.
 
-    Each observation first checks that the page is on one of the run's
-    allowed origins, from `policy`; otherwise it records a policy event in
-    `policy_events` and raises `PolicyEventError`. A snapshot leaves out the
+    Every observation and action first checks that the page is on one of
+    the run's allowed origins, from `policy`, and an action that the frame
+    it acts in is too; otherwise it records a policy event in
+    `policy_events` and raises `PolicyEventError`. `navigate` checks the URL
+    it goes to instead, so it is the way back. A snapshot leaves out the
     content of every frame that isn't on one of them. Every page another page
     opens is recorded in `popups` and closed, and is a policy event too when
     it isn't on one of them.
