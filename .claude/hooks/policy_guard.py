@@ -672,7 +672,8 @@ def diff_cli(base: str, project: Path) -> int:
         verdicts = diff_verdicts(project, base)
     except subprocess.CalledProcessError as error:
         reason = os.fsdecode(error.stderr).strip() or f"exit {error.returncode}"
-        sys.stderr.write(f"policy_guard --diff {base}: git {error.cmd[3]}: {reason}\n")
+        subcommand = error.cmd[3]  # git -C <project> <subcommand> ...
+        sys.stderr.write(f"policy_guard --diff {base}: git {subcommand}: {reason}\n")
         return 2
     except (OSError, subprocess.SubprocessError) as error:
         sys.stderr.write(f"policy_guard --diff {base}: {error}\n")
