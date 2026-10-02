@@ -33,7 +33,7 @@ type Miss = Literal["no scope", "no match", "ambiguous", "not actionable"]
 class Resolved:
     """The element found, and the index of the locator that found it."""
 
-    locator: int
+    locator_index: int
     element: ElementHandle
 
 
@@ -42,7 +42,7 @@ class Absent:
     """A negative check's result: the locator at this index found its scope
     and nothing inside it, and no locator found the element."""
 
-    locator: int
+    locator_index: int
 
 
 @dataclass(frozen=True)
@@ -54,13 +54,15 @@ class Unresolved:
 
 
 # A private-use glyph that Chromium puts into an accessible name, from an
-# icon font's CSS ::before (LAB_NOTES, 2026-09-29). Only the Basic
-# Multilingual Plane's range: Playwright hands the pattern to JavaScript
-# without the u flag, where an astral range can't be written. A name holding
-# an astral glyph then matches nothing, which is drift, never a wrong match.
-_GLYPHS = "[\\ue000-\\uf8ff]*"
-_SPACE = "[\\s\\ue000-\\uf8ff]*\\s[\\s\\ue000-\\uf8ff]*"
-_ENDS = "[\\s\\ue000-\\uf8ff]*"
+# icon font's CSS ::before (LAB_NOTES, 2026-09-29): the Basic Multilingual
+# Plane's range, or one of planes 15 and 16 as a surrogate pair. Playwright
+# hands the pattern to JavaScript without the u flag, where a range above
+# U+FFFF can't be written, so the pair matches code units (LAB_NOTES,
+# 2026-10-02).
+_GLYPH = "(?:[\\ue000-\\uf8ff]|[\\udb80-\\udbff][\\udc00-\\udfff])"
+_GLYPHS = f"{_GLYPH}*"
+_SPACE = f"(?:\\s|{_GLYPH})*\\s(?:\\s|{_GLYPH})*"
+_ENDS = f"(?:\\s|{_GLYPH})*"
 
 
 def _escaped(char: str) -> str:
@@ -96,9 +98,8 @@ def _query(root: Page | PlaywrightLocator, locator: Locator) -> PlaywrightLocato
         case ByRole(role=role, name=name):
             # A compiled pattern, which Playwright matches against the name
             # with its whitespace already collapsed; None means any name.
-            return root.get_by_role(
-                role, name=None if name is None else _compiled(name)
-            )
+            pattern = None if name is None else re.compile(_name_pattern(name))
+            return root.get_by_role(role, name=pattern)
         case ByLabel(label=label):
             return root.get_by_label(label, exact=True)
         case ByPlaceholder(placeholder=placeholder):
@@ -110,10 +111,6 @@ def _query(root: Page | PlaywrightLocator, locator: Locator) -> PlaywrightLocato
             # error, never a match, and the format refuses >> (ADR-0025,
             # 2026-10-02 amendment).
             return root.locator(f"css={css}")
-
-
-def _compiled(name: str) -> re.Pattern[str]:
-    return re.compile(_name_pattern(name))
 
 
 async def _scoped(page: Page, locator: Locator) -> PlaywrightLocator | None:
@@ -149,7 +146,8 @@ _RECEIVES_POINTER = """(element) => {
 
 async def _actionable(element: ElementHandle) -> bool:
     """Visible, enabled and receiving pointer events at its center, judged
-    now (ADR-0025, Q2): the same for every step that targets an element."""
+    now (ADR-0025, "resolving a target per use"): the same for every step
+    that targets an element."""
     return (
         await element.is_visible()
         and await element.is_enabled()
@@ -184,6 +182,9 @@ async def resolve(
     - A negative check resolves to the first unique match too. Only when no
       locator finds one, none finds several, and at least one found its scope
       with nothing inside is the element absent; otherwise it is drift.
+
+    A css value that isn't valid CSS raises Playwright's Error: the script is
+    broken, which is not drift.
     """
     misses: list[Miss] = []
     for index, locator in enumerate(target.locators):
