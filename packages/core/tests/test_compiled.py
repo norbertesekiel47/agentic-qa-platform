@@ -680,6 +680,8 @@ def test_a_pattern_python_warns_about_is_refused_even_when_cached() -> None:
         # a1 checks the literal "card has expired".
         (0, "Sorry, your card has expired.", True),
         (0, "Your card expired", False),
+        # A literal ignores case, which a pattern without (?i) doesn't.
+        (0, "CARD HAS EXPIRED", True),
         # a4 checks the pattern Classic Hoodie.*\bM\b, case-sensitively.
         (3, "Classic Hoodie\n  size M", True),
         (3, "classic hoodie size M", False),
@@ -692,3 +694,36 @@ def test_a_text_check_matches_rendered_text(
     assert isinstance(check, TextVisible | TextInTarget)
 
     assert check.matches(rendered) is found
+
+
+@pytest.mark.parametrize(
+    "css",
+    [
+        # A quote CSS ignores, inside a comment, still opens one for
+        # Playwright's selector splitter, which would then read whatever is
+        # chained after this value as part of it.
+        'iframe /* "',
+        "iframe /* '",
+        "iframe /* `",
+        # A last backslash escapes whatever is chained after it.
+        "button\\",
+    ],
+)
+def test_a_css_value_leaves_no_quote_open(css: str) -> None:
+    script = example()
+    script["targets"]["pay_button"]["locators"][1] = {"css": css}
+
+    [(location, _, message)] = errors(script)
+
+    assert location == ("targets", "pay_button", "locators", 1, "css", "css")
+    assert "leaves a quote or escape open" in message
+
+
+@pytest.mark.parametrize(
+    "css", ['[href^="/*"]', "a[title='it\\'s']", '[data-x="a\\"b"]', "a::after"]
+)
+def test_a_css_value_with_closed_quotes_is_accepted(css: str) -> None:
+    script = example()
+    script["targets"]["pay_button"]["locators"][1] = {"css": css}
+
+    assert CompiledScript.model_validate_json(json.dumps(script))

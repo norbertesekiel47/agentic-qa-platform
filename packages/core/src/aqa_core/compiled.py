@@ -181,17 +181,46 @@ def _regex(pattern: str) -> str:
 _Regex = Annotated[NonEmpty, AfterValidator(_regex)]
 
 
+def _left_open(css: str) -> bool:
+    """Whether Playwright's selector splitter ends `css` inside a quote or an
+    escape, as its parseSelectorString scans (Playwright 1.63): a backslash
+    takes the next character, and ", ' or ` opens a quote only the same
+    character closes. Whatever Playwright chains after such a value, such as
+    a scoped locator, would be read as part of it."""
+    quote = None
+    index = 0
+    while index < len(css):
+        char = css[index]
+        if char == "\\":
+            if index + 1 == len(css):
+                return True
+            index += 2
+            continue
+        if char == quote:
+            quote = None
+        elif quote is None and char in "\"'`":
+            quote = char
+        index += 1
+    return quote is not None
+
+
 def _one_selector(css: str) -> str:
     # Playwright chains selectors at >>
     # (https://playwright.dev/python/docs/other-locators#chaining-selectors),
     # even after css=: on 1.63, css= chained into xpath= and into an engine
-    # that enters frames. CSS itself never uses >>.
+    # that enters frames. CSS itself never uses >>, and a quote CSS ignores,
+    # inside a comment, still counts for Playwright's splitter.
     if not css.strip():
         raise ValueError("a css value is a selector, not only whitespace")
     if ">>" in css:
         raise ValueError(
             f"{css!r} isn't one CSS selector: Playwright reads >> as a chain "
             r"into another selector engine; inside an attribute value, write \>\>"
+        )
+    if _left_open(css):
+        raise ValueError(
+            f"{css!r} leaves a quote or escape open, so Playwright would read "
+            "what follows it as part of it: close every quote, even in a comment"
         )
     return css
 

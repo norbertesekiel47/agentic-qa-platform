@@ -6,7 +6,7 @@ the run's `resolve_seconds`, is the executor's loop around it (#46)."""
 
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, overload
 
 from aqa_core.compiled import (
     ByCss,
@@ -17,7 +17,7 @@ from aqa_core.compiled import (
     Locator,
     Target,
 )
-from playwright.async_api import ElementHandle, Page
+from playwright.async_api import ElementHandle, Error, Page
 from playwright.async_api import Locator as PlaywrightLocator
 
 # What the target is for: an element a step acts on, an element an
@@ -91,15 +91,19 @@ def _name_pattern(name: str) -> str:
     return f"^{_ENDS}{''.join(parts)}{_ENDS}$"
 
 
-def _query(root: Page | PlaywrightLocator, locator: Locator) -> PlaywrightLocator:
+def _query(
+    root: Page | PlaywrightLocator, locator: Locator, *, hidden: bool
+) -> PlaywrightLocator:
     """Playwright's locator for one of ours, under `root`.
-    https://playwright.dev/python/docs/locators (Playwright 1.63)."""
+    https://playwright.dev/python/docs/locators (Playwright 1.63). `hidden`
+    lets a role locator see elements the accessibility tree leaves out, as the
+    other kinds always do."""
     match locator:
         case ByRole(role=role, name=name):
             # A compiled pattern, which Playwright matches against the name
             # with its whitespace already collapsed; None means any name.
             pattern = None if name is None else re.compile(_name_pattern(name))
-            return root.get_by_role(role, name=pattern)
+            return root.get_by_role(role, name=pattern, include_hidden=hidden)
         case ByLabel(label=label):
             return root.get_by_label(label, exact=True)
         case ByPlaceholder(placeholder=placeholder):
@@ -108,80 +112,118 @@ def _query(root: Page | PlaywrightLocator, locator: Locator) -> PlaywrightLocato
             return root.get_by_test_id(testid)
         case ByCss(css=css):
             # Always the css engine: another engine's syntax is a parse
-            # error, never a match, and the format refuses >> (ADR-0025,
-            # 2026-10-02 amendment).
+            # error, never a match, and the format refuses >> and any quote
+            # left open (ADR-0025, "reading a compiled script").
             return root.locator(f"css={css}")
 
 
-async def _scoped(page: Page, locator: Locator) -> PlaywrightLocator | None:
+async def _scoped(
+    page: Page, locator: Locator, *, hidden: bool = False
+) -> PlaywrightLocator | None:
     """`locator`'s query inside its scope, or None when the scope doesn't
-    resolve to exactly one element on the page."""
+    resolve to exactly one element on the page. A scope is judged as an
+    assertion's target is, so it never sees hidden elements by role."""
     if locator.scope is None:
-        return _query(page, locator)
+        return _query(page, locator, hidden=hidden)
     scope = await _scoped(page, locator.scope)
     if scope is None or await scope.count() != 1:
         return None
-    return _query(scope, locator)
+    return _query(scope, locator, hidden=hidden)
 
 
-# Whether the element receives pointer events at its center, as a click
-# would: scrolled into view first if its center is outside the viewport, then
-# hit-tested. An element under another, or in a shadow root or frame the
-# document's hit test can't see into, fails, which is drift, never a wrong
-# action.
+# Whether the element receives pointer events, as a click would: a hit test
+# at the center of its first piece (a wrapped link has several), through its
+# own root, so an open shadow root's element is seen. If that misses, the
+# element is scrolled into view at once, ignoring smooth scrolling, and tested
+# again. The test runs in the page's own world, so it is the page's word, not
+# a control: a page can make it pass or fail, but not choose the element.
 _RECEIVES_POINTER = """(element) => {
-    const center = () => {
-        const box = element.getBoundingClientRect();
-        return [box.left + box.width / 2, box.top + box.height / 2];
+    const hits = () => {
+        const piece = [...element.getClientRects()].find(
+            (rect) => rect.width > 0 && rect.height > 0
+        );
+        if (piece === undefined) return false;
+        const hit = element.getRootNode().elementFromPoint(
+            piece.left + piece.width / 2, piece.top + piece.height / 2
+        );
+        return hit !== null && element.contains(hit);
     };
-    let [x, y] = center();
-    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) {
-        element.scrollIntoView({ block: "center", inline: "center" });
-        [x, y] = center();
-    }
-    const hit = document.elementFromPoint(x, y);
-    return hit !== null && element.contains(hit);
+    if (hits()) return true;
+    element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+    return hits();
 }"""
 
 
-async def _actionable(element: ElementHandle) -> bool:
-    """Visible, enabled and receiving pointer events at its center, judged
-    now (ADR-0025, "resolving a target per use"): the same for every step
-    that targets an element."""
-    return (
-        await element.is_visible()
-        and await element.is_enabled()
-        and bool(await element.evaluate(_RECEIVES_POINTER))
-    )
+async def _actionable(page: Page, element: ElementHandle) -> bool:
+    """Visible, enabled and receiving pointer events, judged now (ADR-0025,
+    "resolving a target per use"): the same for every step that targets an
+    element."""
+    try:
+        return (
+            await element.is_visible()
+            and await element.is_enabled()
+            and bool(await element.evaluate(_RECEIVES_POINTER))
+        )
+    except Error:
+        # Playwright's general error type: here the element left the page
+        # between two checks, a navigation replaced the document, or the
+        # page's scripts broke the hit test. Each is the page's doing, so it
+        # is drift. A closed page is not.
+        if page.is_closed():
+            raise
+        return False
+
+
+def _miss(count: int) -> Miss:
+    return "no match" if count == 0 else "ambiguous"
 
 
 async def _match(page: Page, locator: Locator, use: Use) -> ElementHandle | Miss:
     """The one element `locator` finds for `use`, or why it doesn't."""
-    query = await _scoped(page, locator)
+    query = await _scoped(page, locator, hidden=use == "negative_check")
     if query is None:
         return "no scope"
+    # Counted first, so a broad locator costs one call, not one per match.
+    count = await query.count()
+    if count != 1:
+        return _miss(count)
     found = await query.element_handles()
     if len(found) != 1:
+        # The page changed between the two calls.
         for element in found:
             await element.dispose()
-        return "no match" if not found else "ambiguous"
+        return _miss(len(found))
     [element] = found
-    if use == "action" and not await _actionable(element):
+    if use == "action" and not await _actionable(page, element):
         await element.dispose()
         return "not actionable"
     return element
 
 
+@overload
+async def resolve(
+    page: Page, target: Target, use: Literal["action", "assertion"]
+) -> Resolved | Unresolved: ...
+
+
+@overload
+async def resolve(
+    page: Page, target: Target, use: Literal["negative_check"]
+) -> Resolved | Absent | Unresolved: ...
+
+
 async def resolve(
     page: Page, target: Target, use: Use
 ) -> Resolved | Absent | Unresolved:
-    """`target`'s element for `use`, from its locators in order.
+    """`target`'s element for `use`, from its locators in order. The caller
+    owns a resolved element's handle and disposes of it.
 
     - An action needs the first unique match that is actionable.
     - An assertion needs the first unique match; being attached is enough.
-    - A negative check resolves to the first unique match too. Only when no
-      locator finds one, none finds several, and at least one found its scope
-      with nothing inside is the element absent; otherwise it is drift.
+    - A negative check resolves to the first unique match too, hidden or not.
+      Only when no locator finds one, none finds several, and at least one
+      finds its scope empty is the element absent; otherwise it is drift. An
+      unscoped locator's scope is the page.
 
     A css value that isn't valid CSS raises Playwright's Error: the script is
     broken, which is not drift.
