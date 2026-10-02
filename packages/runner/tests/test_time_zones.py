@@ -21,30 +21,26 @@ REPORT = """() => ({
 REFUSED = {"Mars/Phobos", "utc", "localtime"}
 
 
-async def override_accepts(session: CDPSession, name: str) -> bool:
+async def cdp_accepts(cdp: CDPSession, name: str) -> bool:
     """Whether Chromium applies `name` as the page's time zone through CDP's
-    Emulation.setTimezoneOverride, what Playwright's `timezone_id` does for each
-    page of a context. One page and one command per zone take about a second for
-    the whole list, where a context per zone takes about twenty.
+    Emulation.setTimezoneOverride, which is what Playwright's `timezone_id` does
+    for each page of a context, without opening a context per zone.
 
-    Chromium checks the id only while no override is in effect: with one set, an
-    invalid id is accepted and ignored (LAB_NOTES, 2026-10-02). An empty id
-    clears the override, so each name is checked as if on a fresh page
-    (https://chromedevtools.github.io/devtools-protocol/tot/Emulation/#method-setTimezoneOverride)."""
+    An empty id clears the override first
+    (https://chromedevtools.github.io/devtools-protocol/tot/Emulation/#method-setTimezoneOverride),
+    because Chromium accepts any id while an override is in effect (LAB_NOTES,
+    2026-10-02)."""
     try:
-        await session.send("Emulation.setTimezoneOverride", {"timezoneId": ""})
-        await session.send("Emulation.setTimezoneOverride", {"timezoneId": name})
+        await cdp.send("Emulation.setTimezoneOverride", {"timezoneId": ""})
+        await cdp.send("Emulation.setTimezoneOverride", {"timezoneId": name})
     except Error:
         return False
     return True
 
 
-async def report_with_override(page: Page, session: CDPSession, name: str) -> Any:
-    """The page's report after the override sets `name`, or None when Chromium
-    refuses it."""
-    return (
-        await page.evaluate(REPORT) if await override_accepts(session, name) else None
-    )
+async def report_with_cdp(page: Page, cdp: CDPSession, name: str) -> Any:
+    """The page's report after CDP sets `name`, or None when Chromium refuses it."""
+    return await page.evaluate(REPORT) if await cdp_accepts(cdp, name) else None
 
 
 async def report_with_timezone_id(browser: Browser, name: str) -> Any:
@@ -69,25 +65,26 @@ def test_every_time_zone_the_check_accepts_opens_in_chromium() -> None:
             browser = await launch(playwright.chromium)
             try:
                 context = await browser.new_context()
-                session = await context.new_cdp_session(await context.new_page())
+                cdp = await context.new_cdp_session(await context.new_page())
                 return [
                     zone
                     for zone in zones
-                    if not await override_accepts(
-                        session, BrowserSettings(timezone=zone).timezone
+                    if not await cdp_accepts(
+                        cdp, BrowserSettings(timezone=zone).timezone
                     )
                 ]
             finally:
                 await browser.close()
 
-    # The issue measured 598 zones; the floor only keeps the loop from passing empty.
+    # #90 measured 598 zones; the floor and the aliases keep the loop from passing empty.
     assert len(zones) > 500
+    assert {"Asia/Kolkata", "Asia/Calcutta"} <= set(zones)
     assert asyncio.run(scenario()) == []
 
 
-def test_the_override_refuses_and_reports_what_timezone_id_does_on_a_sample() -> None:
-    # Every 30th zone, then the refused names: set after a valid override is in
-    # effect, which is where Chromium stops checking an id.
+def test_cdp_refuses_and_reports_what_timezone_id_does_on_a_sample() -> None:
+    # Every 30th zone, then the refused names. They follow valid zones, so only
+    # the clear in `cdp_accepts` lets CDP refuse them as `timezone_id` does.
     names = [*sorted(time_zones())[::30], *sorted(REFUSED)]
 
     async def scenario() -> tuple[dict[str, Any], dict[str, Any]]:
@@ -96,21 +93,20 @@ def test_the_override_refuses_and_reports_what_timezone_id_does_on_a_sample() ->
             try:
                 context = await browser.new_context()
                 page = await context.new_page()
-                session = await context.new_cdp_session(page)
-                via_override = {
-                    name: await report_with_override(page, session, name)
-                    for name in names
+                cdp = await context.new_cdp_session(page)
+                via_cdp = {
+                    name: await report_with_cdp(page, cdp, name) for name in names
                 }
                 via_timezone_id = {
                     name: await report_with_timezone_id(browser, name) for name in names
                 }
-                return via_override, via_timezone_id
+                return via_cdp, via_timezone_id
             finally:
                 await browser.close()
 
-    via_override, via_timezone_id = asyncio.run(scenario())
+    via_cdp, via_timezone_id = asyncio.run(scenario())
 
-    assert via_override == via_timezone_id
+    assert via_cdp == via_timezone_id
     assert {name for name, report in via_timezone_id.items() if report is None} == (
         REFUSED
     )

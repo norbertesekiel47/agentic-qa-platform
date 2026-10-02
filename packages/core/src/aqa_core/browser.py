@@ -28,15 +28,12 @@ _LANGUAGE_TAG = re.compile(
 
 def time_zones() -> frozenset[str]:
     """The time zones a setting may name: the names in the tzdata package's own
-    list, aliases such as Asia/Calcutta included, so every machine gives the
-    same answer (ADR-0025, 2026-10-02 amendment).
+    `zones` file, one per line, aliases such as Asia/Calcutta included, so every
+    machine gives the same answer (ADR-0025, 2026-10-02 amendment).
 
-    Never `zoneinfo.available_timezones()`: it starts from this list and adds
-    every zone file on the host's search path, such as Ubuntu's `localtime`
+    Never `zoneinfo.available_timezones()`, which adds the host's zone files
     (LAB_NOTES, 2026-10-02). A missing package raises, with no fallback to the
-    host's list. The package is a dependency, as the zoneinfo docs advise
-    (https://docs.python.org/3/library/zoneinfo.html#data-sources), and its
-    `zones` file lists one name per line."""
+    host's list."""
     zones = resources.files("tzdata").joinpath("zones").read_text(encoding="utf-8")
     return frozenset(zones.splitlines())
 
