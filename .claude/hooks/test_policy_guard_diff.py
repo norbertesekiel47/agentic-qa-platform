@@ -536,6 +536,14 @@ class LinkTests(DiffTestCase):
         self.assertIn("symbolic link", output)
         self.assertNotIn("OUTSIDE-THE-REPOSITORY", output)
 
+    def test_a_links_target_content_is_never_read(self) -> None:
+        # The target holds a suppression already at the merge base; read
+        # through the link, it would count as new in the link.
+        self.on_main({"packages/core/real.py": "x = f()  # type: ignore\n"})
+        self.link("packages/core/alias.py", "real.py")
+        output = self.assert_needs_approval("packages/core/alias.py")
+        self.assertNotIn("BLOCKED", output)
+
 
 class CommandLineTests(DiffTestCase):
     def test_scan_takes_an_explicit_path(self) -> None:
