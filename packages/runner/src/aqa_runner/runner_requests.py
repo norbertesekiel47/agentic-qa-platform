@@ -32,8 +32,8 @@ class RunnerResponse:
 
 async def runner_request(gate: EgressGate, method: Method, url: str) -> RunnerResponse:
     """Send `method` to the absolute http or https `url` through `gate`, and
-    read the response. Raises ValueError for a URL whose origin isn't one,
-    before any connection; `EgressRefusedError` for an origin the run doesn't
+    read the response. Raises ValueError, before any connection, for a URL
+    whose origin isn't one or whose path and query no request line carries; `EgressRefusedError` for an origin the run doesn't
     allow or an address the IP policy refuses; and `EgressUpstreamError`, an
     infrastructure error, when the origin can't be reached, its certificate
     doesn't verify, or its response breaks off. The gate records both.
@@ -44,6 +44,8 @@ async def runner_request(gate: EgressGate, method: Method, url: str) -> RunnerRe
     origin = parse_origin(f"{parts.scheme}://{parts.netloc}")
     host, port = authority(origin)
     target = parts.path or "/"
+    if parts.query:
+        target = f"{target}?{parts.query}"
     headers = [
         # The origin's authority, without its scheme's default port.
         ("host", origin.partition("://")[2]),
@@ -51,12 +53,13 @@ async def runner_request(gate: EgressGate, method: Method, url: str) -> RunnerRe
     ]
     if method == "POST":
         headers.append(("content-length", "0"))
-    # Built before connecting, so a target h11 refuses is never sent.
-    request = h11.Request(
-        method=method,
-        target=f"{target}?{parts.query}" if parts.query else target,
-        headers=headers,
-    )
+    try:
+        # Built before connecting, so a target h11 refuses is never sent.
+        request = h11.Request(method=method, target=target, headers=headers)
+    except (h11.LocalProtocolError, UnicodeEncodeError) as error:
+        raise ValueError(
+            f"'{url}': '{target}' is not a request target: {error}"
+        ) from error
     reader, writer = await gate.connect(host, port, "runner")
     upstream = Upstream(h11.Connection(h11.CLIENT), reader, writer, gate, host, port)
     try:
