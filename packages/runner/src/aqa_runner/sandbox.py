@@ -157,14 +157,18 @@ type Environment = dict[str, str | float | bool]
 TRANSPORT_SWITCHES = (
     # WebRTC "should only use TCP to contact peers or servers unless the proxy
     # server supports UDP" (Chromium's kWebRTCIPHandlingDisableNonProxiedUdp),
-    # and an HTTP proxy carries no UDP.
+    # and an HTTP proxy carries no UDP. The headless shell, which Playwright
+    # runs headless, reads the first switch (headless_web_contents_impl.cc);
+    # full Chromium, which it runs headed (PWDEBUG) or by channel, reads the
+    # second into its preference (chrome_command_line_pref_store.cc).
     "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+    "--webrtc-ip-handling-policy=disable_non_proxied_udp",
     # "Disables the QUIC protocol" (Chromium's network_switch_list.h). QUIC
     # runs over UDP, which an HTTP proxy doesn't carry.
     "--disable-quic",
-    # The browser resolves no name itself, so nothing it does (DNS prefetch,
-    # a STUN server's name) can send a DNS query: every name is the egress
-    # proxy's to resolve and pin. `^NOTFOUND` fails a lookup with
+    # The browser resolves no name itself, so nothing it looks up (DNS
+    # prefetch, a STUN server's name) sends a DNS query: every name is the
+    # egress proxy's to resolve and pin. `^NOTFOUND` fails a lookup with
     # ERR_NAME_NOT_RESOLVED (Chromium's net/dns/mapped_host_resolver.cc; any
     # other host, `~NOTFOUND` included, would be looked up). The rule maps
     # address literals too, so it spares the one the egress proxy listens on
@@ -174,9 +178,10 @@ TRANSPORT_SWITCHES = (
 
 # The proxy of every browser context that names none of its own, such as one
 # opened outside the browser session: one that can't be reached, so such a
-# context has no way out (ERR_PROXY_CONNECTION_FAILED). `.invalid` never
-# resolves (RFC 6761), and the resolver rule above stops the lookup before any
-# query leaves. Loopback goes to it too, as through the session's own proxy.
+# context's pages have no way out (ERR_PROXY_CONNECTION_FAILED). `.invalid`
+# never resolves (RFC 6761), and the resolver rule above stops Chromium's
+# lookup before any query leaves. Loopback goes to it too, as through the
+# session's own proxy.
 # https://playwright.dev/python/docs/api/class-browsertype#browser-type-launch-option-proxy
 FAIL_CLOSED_PROXY: ProxySettings = {
     "server": "http://launch-proxy.invalid:1",
