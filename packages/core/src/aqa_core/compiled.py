@@ -16,7 +16,7 @@ evaluates checks through `aqa_runner.text_search`, which bounds each search."""
 import re
 import threading
 import warnings
-from collections.abc import Container
+from collections.abc import Container, Iterator
 from typing import Annotated, Literal, Self, cast
 
 from pydantic import (
@@ -208,6 +208,112 @@ def _left_open(css: str) -> bool:
     return quote is not None
 
 
+# The pseudo-classes Playwright's css engine evaluates itself, not the
+# browser: Playwright 1.63's customCSSNames (driver/package/lib/coreBundle.js)
+# less the standard not, is, where, has and scope. They match by text,
+# position or layout (https://playwright.dev/python/docs/other-locators), so a
+# compiled css value refuses them; test_locators.py pins the list.
+PLAYWRIGHT_PSEUDO_CLASSES = frozenset(
+    {
+        "above",
+        "below",
+        "has-text",
+        "left-of",
+        "light",
+        "near",
+        "nth-match",
+        "right-of",
+        "text",
+        "text-is",
+        "text-matches",
+        "visible",
+    }
+)
+
+
+# A CSS name character (https://www.w3.org/TR/css-syntax-3/#ident-code-point)
+# and a hex escape's digits (#consume-escaped-code-point).
+_NAME_CHAR = re.compile(r"[A-Za-z0-9_\-\u0080-\U0010ffff]")
+_HEX = re.compile(r"[0-9A-Fa-f]{1,6}")
+
+
+def _escape(css: str, index: int) -> tuple[str, int]:
+    """The character the escape whose backslash is at `index` stands for,
+    and where the escape ends: up to six hex digits and one whitespace
+    character after them, or the next character as itself."""
+    start = index + 1
+    digits = _HEX.match(css, start)
+    if digits is None:
+        return (css[start], start + 1) if start < len(css) else ("\ufffd", start)
+    end = digits.end()
+    if css[end : end + 1] in (" ", "\t", "\n"):
+        end += 1
+    value = int(digits[0], 16)
+    usable = 0 < value <= 0x10FFFF and not 0xD800 <= value <= 0xDFFF
+    return (chr(value) if usable else "\ufffd"), end
+
+
+def _escapes(css: str, index: int) -> bool:
+    """Whether a backslash at `index` starts an escape: not before a newline."""
+    return css[index] == "\\" and css[index + 1 : index + 2] != "\n"
+
+
+def _after_comments(css: str, index: int) -> int:
+    while css.startswith("/*", index):
+        end = css.find("*/", index + 2)
+        index = len(css) if end == -1 else end + 2
+    return index
+
+
+def _after_string(css: str, index: int) -> int:
+    """Where the string opened by the quote at `index` ends: at the same
+    quote, or before a newline, which ends a string unclosed."""
+    quote, index = css[index], index + 1
+    while index < len(css) and css[index] not in (quote, "\n"):
+        index = _escape(css, index)[1] if css[index] == "\\" else index + 1
+    if css[index : index + 1] == quote:
+        index += 1
+    return index
+
+
+def _name(css: str, index: int) -> tuple[str, int]:
+    """The name starting at `index`, with its escapes decoded, and its end."""
+    chars: list[str] = []
+    while index < len(css):
+        if _NAME_CHAR.match(css, index):
+            chars.append(css[index])
+            index += 1
+        elif _escapes(css, index):
+            char, index = _escape(css, index)
+            chars.append(char)
+        else:
+            break
+    return "".join(chars), index
+
+
+def _pseudo_classes(css: str) -> Iterator[str]:
+    """Each pseudo-class name in `css`, lowercased, as Playwright reads a css
+    value: its CSS tokenizer (cssTokenizer.ts, a port of CSS Syntax Level 3,
+    https://www.w3.org/TR/css-syntax-3/#tokenization) drops comments, reads
+    strings whole and decodes escapes, and its parser lowercases the name
+    after a colon. A backslash outside a string escapes a colon or a quote
+    too, so neither is read as one."""
+    css = re.sub(r"\r\n?|\f", "\n", css)
+    index = 0
+    while index < len(css):
+        if css.startswith("/*", index):
+            index = _after_comments(css, index)
+        elif css[index] in "\"'":
+            index = _after_string(css, index)
+        elif _escapes(css, index):
+            index = _escape(css, index)[1]
+        elif css[index] == ":":
+            name, index = _name(css, _after_comments(css, index + 1))
+            yield name.lower()
+        else:
+            index += 1
+
+
 def _one_selector(css: str) -> str:
     # Playwright chains selectors at >>
     # (https://playwright.dev/python/docs/other-locators#chaining-selectors),
@@ -226,6 +332,12 @@ def _one_selector(css: str) -> str:
             f"{css!r} leaves a quote or escape open, so Playwright would read "
             "what follows it as part of it: close every quote, even in a comment"
         )
+    for name in _pseudo_classes(css):
+        if name in PLAYWRIGHT_PSEUDO_CLASSES:
+            raise ValueError(
+                f"{css!r} uses Playwright's own pseudo-class :{name}, which "
+                "Playwright evaluates instead of CSS: a css value is CSS only"
+            )
     return css
 
 

@@ -3,12 +3,16 @@ Resolution per use; ADR-0025 and its amendments). These tests load fixture
 pages into real Chromium through the browser session."""
 
 import asyncio
+import json
+import re
 import typing
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
+import playwright
 import pytest
-from aqa_core.compiled import AriaRole, Target
+from aqa_core.compiled import PLAYWRIGHT_PSEUDO_CLASSES, AriaRole, ByCss, Target
 from aqa_core.text import has_pattern, has_text
 from aqa_runner.browser_session import open_browser_session
 from aqa_runner.locators import (
@@ -348,6 +352,103 @@ def test_the_roles_are_playwrights() -> None:
     playwrights = typing.get_type_hints(Page.get_by_role)["role"]
 
     assert set(typing.get_args(AriaRole)) == set(typing.get_args(playwrights))
+
+
+def custom_css_names() -> list[str]:
+    """The pseudo-class names Playwright's css engine handles itself, as the
+    installed driver's selector parser lists them (customCSSNames)."""
+    bundle = Path(playwright.__file__).parent / "driver/package/lib/coreBundle.js"
+    found = re.search(
+        r"customCSSNames = /\* @__PURE__ \*/ new Set\((\[[^\]]*\])\)",
+        bundle.read_text(),
+    )
+    assert found is not None, "Playwright's driver no longer lists customCSSNames"
+    names: list[str] = json.loads(found[1])
+    return names
+
+
+def test_the_css_extensions_are_playwrights() -> None:
+    # Playwright's list holds the standard pseudo-classes it parses itself,
+    # such as :is(), and its own. Its own are the names the browser can't
+    # read, which the format refuses (ADR-0025, 2026-10-02 amendment,
+    # "generating locators").
+    names = custom_css_names()
+
+    async def scenario(page: Page) -> list[str]:
+        unread: list[str] = await page.evaluate(
+            """(names) => names.filter((name) => [`:${name}`, `:${name}(*)`].every(
+                (selector) => {
+                    try { document.querySelector(selector); return false; }
+                    catch { return true; }
+                }))""",
+            names,
+        )
+        return unread
+
+    unread = on_page(scenario)
+
+    assert set(unread) == PLAYWRIGHT_PSEUDO_CLASSES
+    assert set(names) - set(unread) == {"not", "is", "where", "has", "scope"}
+
+
+CSS_PAGE = """<form>
+<button class="pay" title=":has-text(Pay)" data-note="a /* b">Pay</button>
+<button class="a:visible text visible">Buy</button>
+</form><ul><li class="tag">x</li><li>y</li></ul>"""
+
+
+@pytest.mark.parametrize(
+    "css",
+    [
+        '[title=":has-text(Pay)"]',
+        "button /* :visible */",
+        ".a\\:visible",
+        ".text.visible",
+        '[data-note="a /* b"]:not(.x)',
+        "button:not(.pay)",
+        "li:nth-child(2)",
+        ":scope > body",
+    ],
+)
+def test_a_css_value_the_format_accepts_means_what_css_means(css: str) -> None:
+    # Playwright's css engine and the browser's own querySelectorAll agree
+    # on it, so no pseudo-class of Playwright's own got through.
+    accepted = target({"css": css})
+
+    async def scenario(page: Page) -> tuple[int, int]:
+        native: int = await page.evaluate(
+            "(css) => document.querySelectorAll(css).length", css
+        )
+        return await page.locator(f"css={css}").count(), native
+
+    playwrights, browsers = on_page(scenario, CSS_PAGE)
+
+    assert accepted.locators[0] == ByCss(css=css)
+    assert browsers > 0
+    assert playwrights == browsers
+
+
+@pytest.mark.parametrize(
+    "css",
+    ['button:HAS-TEXT("Pay")', 'button:has\\2d text("Pay")', "button:/**/visible"],
+)
+def test_a_refused_css_value_is_one_only_playwright_reads(css: str) -> None:
+    # The control: Playwright reads each spelling as its own pseudo-class,
+    # and the browser can't read it at all.
+    with pytest.raises(ValidationError, match="Playwright's own pseudo-class"):
+        target({"css": css})
+
+    async def scenario(page: Page) -> tuple[bool, bool]:
+        native: bool = await page.evaluate(
+            """(css) => {
+                try { document.querySelectorAll(css); return true; }
+                catch { return false; }
+            }""",
+            css,
+        )
+        return await page.locator(f"css={css}").count() > 0, native
+
+    assert on_page(scenario, CSS_PAGE) == (True, False)
 
 
 # Layouts where a click works, each with one button marked "b": the hit test

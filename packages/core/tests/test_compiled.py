@@ -720,6 +720,111 @@ def test_a_css_value_leaves_no_quote_open(css: str) -> None:
     assert "leaves a quote or escape open" in message
 
 
+# One use of each of Playwright 1.63's own CSS pseudo-classes, which its css
+# engine evaluates itself rather than the browser
+# (https://playwright.dev/python/docs/other-locators#css-locator).
+PLAYWRIGHTS_OWN = {
+    "has-text": 'button:has-text("Pay")',
+    "text": 'button:text("Pay")',
+    "text-is": 'button:text-is("Pay")',
+    "text-matches": 'button:text-matches("Pay")',
+    "visible": "button:visible",
+    "light": "app-cart :light(button)",
+    "nth-match": ":nth-match(button, 2)",
+    "above": "button:above(.total)",
+    "below": "button:below(.total)",
+    "left-of": "button:left-of(.total)",
+    "right-of": "button:right-of(.total)",
+    "near": "button:near(.total)",
+}
+
+
+@pytest.mark.parametrize(
+    ("name", "css"), PLAYWRIGHTS_OWN.items(), ids=PLAYWRIGHTS_OWN.keys()
+)
+def test_a_css_value_refuses_playwrights_own_pseudo_classes(
+    name: str, css: str
+) -> None:
+    # They would match by text, by position or by layout, through Playwright
+    # rather than CSS, so a css locator would stop being a structural one
+    # (ADR-0025, 2026-10-02 amendment, "generating locators").
+    script = example()
+    script["targets"]["pay_button"]["locators"][1] = {"css": css}
+
+    [(location, _, message)] = errors(script)
+
+    assert location == ("targets", "pay_button", "locators", 1, "css", "css")
+    assert f"Playwright's own pseudo-class :{name}" in message
+
+
+@pytest.mark.parametrize(
+    ("css", "name"),
+    [
+        # Playwright lowercases the name, and its CSS tokenizer decodes
+        # escapes and drops comments before it reads one (LAB_NOTES,
+        # 2026-10-02).
+        ('button:HAS-TEXT("Pay")', "has-text"),
+        ("button:Visible", "visible"),
+        ('button:has\\-text("Pay")', "has-text"),
+        ('button:has\\2d text("Pay")', "has-text"),
+        ('button:\\000068as-text("Pay")', "has-text"),
+        ('button:has\\2d\r\ntext("Pay")', "has-text"),
+        ("button:v\\isible", "visible"),
+        ('button:/* a comment */has-text("Pay")', "has-text"),
+        ("button:/**//**/visible", "visible"),
+        # Inside a standard pseudo-class, Playwright still reads its own.
+        ('button:is(:has-text("Pay"))', "has-text"),
+        ("button:not(:visible)", "visible"),
+        # A quote inside a comment opens no string, and a newline ends one,
+        # by CSS's reading.
+        ("/* ' */ button:visible /* ' */", "visible"),
+        ('[title="x\n:visible"]', "visible"),
+    ],
+)
+def test_playwrights_own_pseudo_classes_are_refused_however_they_are_written(
+    css: str, name: str
+) -> None:
+    script = example()
+    script["targets"]["pay_button"]["locators"][1] = {"css": css}
+
+    [(_, _, message)] = errors(script)
+
+    assert f"Playwright's own pseudo-class :{name}" in message
+
+
+@pytest.mark.parametrize(
+    "css",
+    [
+        # Standard CSS, which the browser evaluates. The generator never
+        # writes a positional one, and the format still reads it (ADR-0025,
+        # 2026-10-02 amendment, "generating locators").
+        "button:not(.pay)",
+        "button:is(.pay, .buy)",
+        "li:where(.tag)",
+        "form:has(input)",
+        ":scope > button",
+        "button:hover",
+        "li:nth-child(2)",
+        # Playwright's names where CSS reads no pseudo-class: in a string, in
+        # a comment, escaped, and as plain class or attribute names.
+        '[title=":has-text(Pay)"]',
+        "[title=':visible']",
+        "button /* :visible */",
+        '[data-note="a /* b"]:not(.x)',
+        ".a\\:visible",
+        ".text.visible",
+        "input[name=text]",
+    ],
+)
+def test_css_that_uses_none_of_playwrights_own_pseudo_classes_is_accepted(
+    css: str,
+) -> None:
+    script = example()
+    script["targets"]["pay_button"]["locators"][1] = {"css": css}
+
+    assert CompiledScript.model_validate_json(json.dumps(script))
+
+
 @pytest.mark.parametrize(
     "css", ['[href^="/*"]', "a[title='it\\'s']", '[data-x="a\\"b"]', "a::after"]
 )
