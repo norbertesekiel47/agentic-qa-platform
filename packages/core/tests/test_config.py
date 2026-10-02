@@ -24,7 +24,7 @@ egress:                       # ADR-0026
 secrets:                      # bindings only; values come from AQA_SECRET_<NAME>
   TEST_PASSWORD: { origins: [ start ], field: password }
   API_TOKEN: { origins: [ start ], field: { role: textbox, name: "API token" } }
-models:                       # only for models missing from the pinned price map (ADR-0007 amendment)
+models:                       # a model the pinned price map lacks, or a replacement for its entry (ADR-0007 amendment)
   "example-provider/example-model": { capabilities: [tools, structured_output], input_usd_per_mtok: 0.50, output_usd_per_mtok: 1.50 }
 budgets:                      # per explore run (ADR-0024)
   attempts: 3

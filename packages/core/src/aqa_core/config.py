@@ -41,8 +41,9 @@ ModelRoleName = Literal["navigator", "verifier", "healer", "vision_fallback"]
 
 
 class ModelOverride(StrictModel):
-    """A model missing from the pinned price map: what it can do and what it
-    costs (ADR-0007 amendment)."""
+    """What a project says about a model: what it can do and what it costs, for
+    one the pinned price map lacks or to replace the map's entry for it
+    (ADR-0007 amendment)."""
 
     capabilities: Annotated[DistinctListOf[Capability], AtLeastOne]
     input_usd_per_mtok: _Price

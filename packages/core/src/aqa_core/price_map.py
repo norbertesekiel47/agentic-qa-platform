@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
@@ -43,15 +44,21 @@ Capability = Literal["tools", "structured_output", "vision"]
 PriceSource = Literal["map", "config"]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class ModelInfo:
-    """What a model can do and what it costs, in US dollars per million tokens."""
+    """What a model can do and what it costs, in US dollars per million tokens.
+    `provider` is the map's `litellm_provider` (None for a model a project
+    declares, or an entry that names none), and `tiered` says the map also
+    prices the model per token above a token threshold, which cost records don't
+    apply."""
 
     capabilities: frozenset[Capability]
     input_usd_per_mtok: Decimal
     output_usd_per_mtok: Decimal
     cached_input_usd_per_mtok: Decimal
     source: PriceSource
+    provider: str | None = None
+    tiered: bool = False
 
 
 @dataclass(frozen=True)
@@ -93,58 +100,65 @@ _FLAGS: Mapping[str, Capability] = {
     "supports_response_schema": "structured_output",
     "supports_vision": "vision",
 }
+# A price per token that changes above a token threshold, such as
+# input_cost_per_token_above_200k_tokens. "above_1hr" is a cache lifetime.
+_TIERS = re.compile(
+    r"(input_cost_per_token|output_cost_per_token|cache_read_input_token_cost)"
+    r"_above_\d+k_tokens"
+)
 
 
-def _rate(
-    source: str, name: str, entry: Mapping[str, object], field: str
-) -> Decimal | None:
+class _FieldError(ValueError):
+    """A price or flag in an entry is not what LiteLLM documents."""
+
+
+def _rate(entry: Mapping[str, object], field: str) -> Decimal | None:
     """`entry`'s `field`, a price per token, as dollars per million tokens; None
     if the entry has no such field. LiteLLM writes a price as a float such as
     2e-06 (or 0), read here as an exact decimal."""
     if field not in entry:
         return None
     value = entry[field]
-    number = (
-        Decimal(value)
-        if isinstance(value, int | Decimal) and not isinstance(value, bool)
-        else None
-    )
-    if number is None or not number.is_finite() or number < 0:
-        raise PriceMapError(
-            f"{source}: '{name}': {field} must be a finite number, 0 or more"
-        )
-    return plain(number.scaleb(6))
+    if isinstance(value, bool) or not isinstance(value, int | Decimal) or value < 0:
+        raise _FieldError(f"{field} must be a finite number, 0 or more")
+    return plain(Decimal(value).scaleb(6))
 
 
-def _capabilities(
-    source: str, name: str, entry: Mapping[str, object]
-) -> frozenset[Capability]:
+def _capabilities(entry: Mapping[str, object]) -> frozenset[Capability]:
     capabilities: set[Capability] = set()
     for flag, capability in _FLAGS.items():
-        if flag not in entry:
-            continue
-        if not isinstance(entry[flag], bool):
-            raise PriceMapError(f"{source}: '{name}': {flag} must be true or false")
-        if entry[flag]:
+        value = entry.get(flag, False)
+        if not isinstance(value, bool):
+            raise _FieldError(f"{flag} must be true or false")
+        if value:
             capabilities.add(capability)
     return frozenset(capabilities)
 
 
-def _model(source: str, name: str, entry: Mapping[str, object]) -> ModelInfo | None:
+def _provider(entry: Mapping[str, object]) -> str | None:
+    if "litellm_provider" not in entry:
+        return None
+    value = entry["litellm_provider"]
+    if not isinstance(value, str):
+        raise _FieldError("litellm_provider must be text")
+    return value
+
+
+def _model(entry: Mapping[str, object]) -> ModelInfo | None:
     """The model `entry` describes, or None if it has no token prices: an
     image, audio or embedding model is not one we can charge per token."""
-    capabilities = _capabilities(source, name, entry)
-    input_rate, output_rate, cache_rate = (
-        _rate(source, name, entry, field) for field in _PRICES
-    )
+    capabilities = _capabilities(entry)
+    input_rate, output_rate, cache_rate = (_rate(entry, field) for field in _PRICES)
     if input_rate is None or output_rate is None:
         return None
     return ModelInfo(
-        capabilities,
-        input_rate,
-        output_rate,
-        input_rate if cache_rate is None else cache_rate,
-        "map",
+        capabilities=capabilities,
+        input_usd_per_mtok=input_rate,
+        output_usd_per_mtok=output_rate,
+        cached_input_usd_per_mtok=input_rate if cache_rate is None else cache_rate,
+        source="map",
+        provider=_provider(entry),
+        tiered=any(_TIERS.fullmatch(key) for key in entry),
     )
 
 
@@ -165,7 +179,11 @@ def parse_models(data: bytes, source: str) -> dict[str, ModelInfo]:
             continue
         if not isinstance(entry, dict):
             raise PriceMapError(f"{source}: '{name}' is not an object")
-        if (model := _model(source, name, entry)) is not None:
+        try:
+            model = _model(entry)
+        except _FieldError as error:
+            raise PriceMapError(f"{source}: '{name}': {error}") from None
+        if model is not None:
             models[name] = model
     return models
 

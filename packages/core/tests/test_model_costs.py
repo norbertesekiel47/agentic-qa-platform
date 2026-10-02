@@ -2,10 +2,18 @@
 the pinned price map or the config's own rates (ADR-0007 amendment; #40)."""
 
 from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
-from aqa_core.model_costs import AppliedPrices, CostRecord, Status, Usage, cost_record
+from aqa_core.model_costs import (
+    AppliedPrices,
+    CostRecord,
+    Mode,
+    Status,
+    Usage,
+    cost_record,
+)
 from aqa_core.model_roles import RoutedModel, resolve_roles
 from aqa_core.price_map import ModelInfo, PriceSource, vendored
 from aqa_core.project import load_config
@@ -19,13 +27,15 @@ def routed(
     source: PriceSource, input_rate: str, output_rate: str, cached_rate: str
 ) -> RoutedModel:
     info = ModelInfo(
-        frozenset({"tools"}),
-        Decimal(input_rate),
-        Decimal(output_rate),
-        Decimal(cached_rate),
-        source,
+        capabilities=frozenset({"tools"}),
+        input_usd_per_mtok=Decimal(input_rate),
+        output_usd_per_mtok=Decimal(output_rate),
+        cached_input_usd_per_mtok=Decimal(cached_rate),
+        source=source,
     )
-    return RoutedModel("anthropic", "model-x", info, VERSION)
+    return RoutedModel(
+        provider="anthropic", name="model-x", info=info, price_map_version=VERSION
+    )
 
 
 def record_of(
@@ -162,3 +172,64 @@ def test_the_default_model_costs_what_tech_stack_says(tmp_path: Path) -> None:
         model, Usage(input_tokens=0, cached_input_tokens=0, output_tokens=1_000_000)
     ).cost_usd == Decimal(10)
     assert model.price_map_version == vendored().version
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"input_tokens": 1, "cached_input_tokens": 5},
+        {"cost_usd": Decimal(-1)},
+        {
+            "applied_prices": {
+                "input_usd_per_mtok": Decimal(-1),
+                "output_usd_per_mtok": Decimal(1),
+                "cached_input_usd_per_mtok": Decimal(1),
+            }
+        },
+        {"latency_ms": -1},
+    ],
+    ids=["cached-above-input", "negative-cost", "negative-rate", "negative-latency"],
+)
+def test_a_record_that_cannot_be_true_is_rejected(change: dict[str, object]) -> None:
+    good = record_of(routed("map", "2", "10", "0.2"))
+
+    with pytest.raises(ValidationError):
+        CostRecord.model_validate({**good.model_dump(), **change})
+
+
+@pytest.mark.parametrize("mode", ["explore", "heal", "verified"])
+def test_a_record_accepts_the_modes_of_data_model_2(mode: Mode) -> None:
+    model = routed("map", "2", "10", "0.2")
+
+    record = cost_record(
+        role="healer",
+        mode=mode,
+        model=model,
+        usage=USAGE,
+        latency_ms=1,
+        status="ok",
+    )
+
+    assert record.mode == mode
+
+
+def test_a_record_refuses_strict_mode_which_makes_no_model_calls() -> None:
+    good = record_of(routed("map", "2", "10", "0.2"))
+
+    with pytest.raises(ValidationError):
+        CostRecord.model_validate({**good.model_dump(), "mode": "strict"})
+
+
+def test_cost_stays_exact_past_28_significant_digits() -> None:
+    usage = Usage(
+        input_tokens=123456789012345678, cached_input_tokens=0, output_tokens=0
+    )
+    model = routed("config", "7.123456789012345", "1", "7.123456789012345")
+
+    record = record_of(model, usage)
+
+    # The product as integers: 123456789012345678 tokens at 7.123456789012345
+    # dollars per million, to the last digit.
+    assert Fraction(record.cost_usd) == Fraction(
+        123456789012345678 * 7123456789012345, 10**21
+    )
