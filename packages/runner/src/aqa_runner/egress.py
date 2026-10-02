@@ -269,7 +269,7 @@ class EgressGate:
                 # address may pass depends on the port as well as the host.
                 self._pins[host] = self._checked(host, port, answer)
         except TimeoutError as error:
-            raise self.fail(
+            raise self.record_failure(
                 host, port, f"{host} doesn't resolve within {RESOLVE_TIMEOUT} s"
             ) from error
         return answer
@@ -278,9 +278,11 @@ class EgressGate:
         try:
             answer = tuple(await self._resolve(host))
         except OSError as error:  # socket.gaierror: the name doesn't resolve
-            raise self.fail(host, port, f"{host} doesn't resolve: {error}") from error
+            raise self.record_failure(
+                host, port, f"{host} doesn't resolve: {error}"
+            ) from error
         if not answer:
-            raise self.fail(host, port, f"{host} resolves to no address")
+            raise self.record_failure(host, port, f"{host} resolves to no address")
         return answer
 
     def _checked(
@@ -311,7 +313,7 @@ class EgressGate:
             # Refused or unreachable, or TimeoutError, an OSError since 3.11.
             except OSError as error:
                 problems.append(f"{address}: {str(error) or type(error).__name__}")
-        raise self.fail(host, port, "; ".join(problems))
+        raise self.record_failure(host, port, "; ".join(problems))
 
     def _refuse(
         self, host: str, port: int, kind: RefusalKind, detail: str
@@ -320,7 +322,7 @@ class EgressGate:
         self.refusals.append(refusal)
         return EgressRefusedError(refusal)
 
-    def fail(self, host: str, port: int, cause: str) -> EgressUpstreamError:
+    def record_failure(self, host: str, port: int, cause: str) -> EgressUpstreamError:
         """Record that a connection to `host` and `port` failed upstream, and
         the error to raise for it: the gate's own failures, and the egress
         proxy's when a response breaks off."""
