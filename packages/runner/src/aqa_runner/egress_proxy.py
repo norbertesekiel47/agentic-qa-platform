@@ -163,10 +163,16 @@ class EgressProxy:
     def _accept(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
-        """Serve a new browser connection in a task the proxy can end."""
+        """Serve a new browser connection in a task the proxy can end, unless
+        the proxy is already closing."""
+        if self._server is None:
+            writer.close()
+            return
         handler = asyncio.create_task(self._serve(reader, writer))
         self._handlers.add(handler)
         handler.add_done_callback(self._handlers.discard)
+        # Closed even if the handler is cancelled before it starts.
+        handler.add_done_callback(lambda _: writer.close())
 
     async def _serve(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -256,10 +262,12 @@ def _plain_target(target: bytes) -> tuple[str, int, str]:
     scheme, separator, rest = target.decode("ascii").partition("://")
     if scheme != "http" or not separator:
         raise h11.RemoteProtocolError("a plain request names an http URL")
-    netloc, slash, path = rest.partition("/")
-    host, port = _host_and_port(netloc, default_port=DEFAULT_PORTS["http"])
+    # The authority ends where urlsplit ends it: at the first /, ? or #.
+    end = min((at for at in map(rest.find, "/?#") if at >= 0), default=len(rest))
+    host, port = _host_and_port(rest[:end], default_port=DEFAULT_PORTS["http"])
     # Never rewritten: the app's URL reaches it as the page wrote it.
-    return host, port, f"/{path}" if slash else "/"
+    remainder = rest[end:]
+    return host, port, remainder if remainder.startswith("/") else f"/{remainder}"
 
 
 def _host_and_port(authority: str, *, default_port: int | None) -> tuple[str, int]:
@@ -278,6 +286,10 @@ def _host_and_port(authority: str, *, default_port: int | None) -> tuple[str, in
             raise h11.RemoteProtocolError("CONNECT names a host and a port")
         port = default_port
     host = parts.hostname
+    # Brackets hold an IPv6 address only: urlsplit drops them from any other
+    # host, such as [v1.app.test], leaving a different one.
+    if ("[" in authority) != (":" in host):
+        raise h11.RemoteProtocolError(f"'{authority}' brackets a host that isn't IPv6")
     return (f"[{host}]" if ":" in host else host), port
 
 
@@ -302,12 +314,14 @@ def _end_to_end(headers: Iterable[tuple[bytes, bytes]]) -> list[tuple[bytes, byt
     """`headers` without Host, the hop-by-hop ones, and any the Connection
     header names."""
     pairs = [(name.lower(), value) for name, value in headers]
+    # Framing headers stay whatever Connection names: h11 framed the
+    # message from them.
     named = {
         token.strip().lower()
         for name, value in pairs
         if name == b"connection"
         for token in value.split(b",")
-    }
+    } - {b"content-length", b"transfer-encoding"}
     dropped = HOP_BY_HOP | named | {b"host"}
     return [(name, value) for name, value in pairs if name not in dropped]
 
