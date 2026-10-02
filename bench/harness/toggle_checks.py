@@ -218,8 +218,11 @@ def main(argv: list[str]) -> int:
     password = os.environ["BENCH_FIXTURE_PASSWORD"]
     with sync_playwright() as playwright:
         # The sandbox stays on (AGENTS.md §6): a launch that can't sandbox fails
-        # instead of silently running without it.
-        browser = playwright.chromium.launch(chromium_sandbox=True)
+        # instead of silently running without it. The browser gets an empty
+        # environment, so BENCH_FIXTURE_PASSWORD and the container's other
+        # variables stay out of it. This launch can't go through the sandbox
+        # check; ADR-0023's 2026-10-01 amendment (#77) says why.
+        browser = playwright.chromium.launch(chromium_sandbox=True, env={})
         session = Session(playwright, browser, password)
         for case_id in argv:
             result: dict[str, str] = {"case": case_id}

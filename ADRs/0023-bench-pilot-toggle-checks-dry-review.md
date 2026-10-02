@@ -53,3 +53,15 @@ CI's `python` job installs the workspace from `uv.lock` (ADR-0029), which includ
 ## Amendment (2026-10-01): toggle.py runs under uv
 
 `toggle.py` imports the manifest validator, which now reads specs with `aqa_core`'s parser (ADR-0030), so it is no longer standard library only and runs as `uv run python bench/harness/toggle.py` (bench/README.md). `toggle_checks.py` is unchanged: it imports neither and still runs in the checks image.
+
+## Amendment (2026-10-01): the checks' browser skips the sandbox check and gets an empty environment (#77)
+
+A test now refuses any Chromium launch in `packages/` outside `aqa_runner.sandbox.launch`, which runs the sandbox check (ADR-0026's 2026-10-01 amendment, #77). `toggle_checks.py` still launches Chromium itself.
+
+- **Why not through `launch`.** Installing `aqa_runner` in the checks image doesn't fit. Measured at `a631995`:
+  - The image's Python is 3.12.3 (`python3 --version` in `mcr.microsoft.com/playwright/python:v1.63.0-noble`), while `aqa-runner` and `aqa-core` require Python 3.14 or later (`requires-python` in their `pyproject.toml`).
+  - `aqa-runner` brings 52 third-party packages (`uv export --package aqa-runner --no-dev --no-hashes --frozen`), the model SDKs, LangChain and LangGraph among them. All of them would join the hash-locked `checks-requirements.txt`, which holds 4.
+  - `launch` is async, and the checks use Playwright's sync API throughout.
+- **Why the exemption is acceptable.** The checks aren't the system under test, and no run executes them. They run in a throwaway container as `pwuser` under Playwright's seccomp profile, and `chromium_sandbox=True` makes a launch that can't sandbox fail (the 2026-09-28 amendment). What remains: no sandbox check proves that the sandbox is on there.
+- **An empty environment.** The launch passes `env={}`, as `launch` does (ADR-0026's 2026-10-01 amendment, #36). `BENCH_FIXTURE_PASSWORD` and the container's other variables stay out of the browser, while the checks' Python still reads the password to sign in through the API.
+- **Not enforced.** The test scans `packages/*/src` only, so review keeps this launch's `chromium_sandbox=True` and `env={}`.
