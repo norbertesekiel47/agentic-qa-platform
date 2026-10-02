@@ -211,7 +211,7 @@ async def system_resolve(host: str) -> list[IPAddress]:
     infos = await asyncio.get_running_loop().getaddrinfo(
         host, None, type=socket.SOCK_STREAM
     )
-    return list(dict.fromkeys(ip_address(str(info[4][0])) for info in infos))
+    return [ip_address(str(info[4][0])) for info in infos]
 
 
 def _ip_literal(host: str) -> IPAddress | None:
@@ -290,7 +290,8 @@ class EgressGate:
         doesn't refuses the connection, and the answer isn't pinned."""
         private_allowed = self.policy.may_be_private(host, port)
         for address in answer:
-            if problem := address_refusal(address, private_allowed=private_allowed):
+            problem = address_refusal(address, private_allowed=private_allowed)
+            if problem is not None:
                 raise self._refuse(host, port, "address", problem)
         return answer
 
