@@ -27,7 +27,12 @@ from urllib.parse import urlsplit
 import h11
 from aqa_core.schema import DEFAULT_PORTS
 
-from aqa_runner.egress import EgressGate, EgressRefusedError, EgressUpstreamError
+from aqa_runner.egress import (
+    EgressGate,
+    EgressPolicy,
+    EgressRefusedError,
+    EgressUpstreamError,
+)
 from aqa_runner.egress_peers import Peer, Upstream
 
 # Headers that describe one hop and are never forwarded, with any header the
@@ -79,6 +84,12 @@ class EgressProxy:
         # which waits for every accepted connection, returns.
         await asyncio.gather(*self._handlers, return_exceptions=True)
         await server.wait_closed()
+
+    @property
+    def policy(self) -> EgressPolicy:
+        """The run's policy. The browser session checks every document it
+        observes against its allowed origins (#44)."""
+        return self._gate.policy
 
     @property
     def url(self) -> str:
