@@ -398,6 +398,7 @@ budgets:                      # per explore run (ADR-0024)
 
 **Test secrets (ADR-0026).** A spec may reference only secrets declared here.
 - `origins` lists where the browser may fill the secret. `start` is the run's start origin, which comes from the invocation (`aqa explore --url`). Any other entry is an origin, and must also be one of the run's allowed origins, because a secret's destinations are the intersection of its binding and the run's allowed origins. A run checks each secret its spec references once its start origin is known, and a bound origin the run doesn't allow is an error, never dropped.
+- `load_spec` and `load_project` give each spec the bindings of exactly the secrets it references, from the config they read it with (`Spec.secret_bindings`). `aqa_core.project.secret_destinations(spec, start)` gives each one's destinations in a run; `fill_secret` (#49) calls it and never reads `Spec.secret_bindings`, where `start` is unresolved (ADR-0026's secret bindings amendment).
 - `field` is either `password`, meaning an `<input type="password">`, or a role and accessible name.
 - Values come from `AQA_SECRET_<NAME>` environment variables, locally and in CI, so a name is capital letters, digits and underscores, starting with a letter. Hosted runs use the test-secrets API (API.md §3).
 - Which revision of this file a CI run trusts, the base branch or the pull request, is decided at M5 (#27).
