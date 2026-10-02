@@ -12,7 +12,7 @@ import re
 import typing
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Literal, TypedDict, cast
+from typing import Annotated, Literal, TypedDict
 
 from aqa_core.compiled import (
     AriaRole,
@@ -25,7 +25,8 @@ from aqa_core.compiled import (
     Target,
 )
 from aqa_core.text import normalize
-from playwright.async_api import ElementHandle, Page
+from playwright.async_api import ElementHandle, Error, Page
+from pydantic import Field, StrictStr, TypeAdapter, ValidationError
 
 from aqa_runner.browser_session import ELEMENT_REF, LINE, BrowserSession
 from aqa_runner.locators import Resolved, resolve
@@ -91,7 +92,7 @@ _STATE_CLASSES = frozenset(
 type GeneratedUse = Literal["action"]
 
 # The meaning of the one-locator targets each candidate is resolved as.
-_CANDIDATE = "the element a use put a target to"
+_CANDIDATE_MEANING = "the element a use put a target to"
 
 # The element's facts and its ancestors', nearest first, up to but not
 # including <body>. Read in the page's own world, so they are the page's
@@ -119,19 +120,23 @@ _FACTS = """(element) => {
 }"""
 
 
+# The facts' shape, checked strictly: they come from the page's own world.
 class _Node(TypedDict):
-    tag: str
-    id: str | None
-    classes: list[str]
-    name: str | None
-    type: str | None
+    tag: StrictStr
+    id: StrictStr | None
+    classes: Annotated[list[StrictStr], Field(max_length=256)]
+    name: StrictStr | None
+    type: StrictStr | None
 
 
 class _Element(_Node):
-    placeholder: str | None
-    testid: str | None
-    labels: list[str]
-    ancestors: list[_Node]
+    placeholder: StrictStr | None
+    testid: StrictStr | None
+    labels: Annotated[list[StrictStr], Field(max_length=64)]
+    ancestors: Annotated[list[_Node], Field(max_length=1024)]
+
+
+_ELEMENT = TypeAdapter(_Element)
 
 
 @dataclass(frozen=True)
@@ -170,7 +175,7 @@ def snapshot_elements(snapshot: str) -> dict[str, tuple[str, str | None]]:
     return elements
 
 
-async def seen(session: BrowserSession, snapshot: str, ref: str) -> Seen:
+async def seen_element(session: BrowserSession, snapshot: str, ref: str) -> Seen:
     """The element `ref` names in the session's current snapshot, whose text
     is `snapshot`, with the role and name the snapshot gives it."""
     element = await session.locate(ref)
@@ -210,12 +215,15 @@ def _structures(node: _Node) -> list[str]:
 
 def _scopes(element: _Element) -> Iterator[str]:
     """CSS for each ancestor that could pick out one place on the page,
-    nearest first: its stable id, its custom-element tag, or its tag with one
-    stable class. Never <html> or <body>, which every page has."""
+    nearest first: its stable id, its custom-element tag, or its tag with a
+    stable attribute or one stable class. Never <html> or <body>, which every
+    page has."""
     for node in element["ancestors"]:
         if _stable(node["id"]):
             yield f"#{node['id']}"
         for structure in _structures(node):
+            # A bare tag names every element of its kind, unless it is a
+            # custom element's.
             if structure != node["tag"] or "-" in structure:
                 yield structure
 
@@ -239,7 +247,9 @@ def _structural(element: _Element) -> Iterator[ByCss]:
 
 async def _finds(page: Page, locator: Locator, used: Seen, use: GeneratedUse) -> bool:
     """Whether `locator`, alone, resolves for `use` to the element used."""
-    found = await resolve(page, Target(semantic=_CANDIDATE, locators=(locator,)), use)
+    found = await resolve(
+        page, Target(semantic=_CANDIDATE_MEANING, locators=(locator,)), use
+    )
     if not isinstance(found, Resolved):
         return False
     try:
@@ -251,7 +261,7 @@ async def _finds(page: Page, locator: Locator, used: Seen, use: GeneratedUse) ->
         await found.element.dispose()
 
 
-async def _working(
+async def _scoped_as_needed(
     page: Page, locator: Locator, used: Seen, use: GeneratedUse, element: _Element
 ) -> Locator | None:
     """`locator` if it finds the element alone, else `locator` scoped under
@@ -283,15 +293,30 @@ def _candidates(used: Seen, element: _Element) -> list[list[Locator]]:
     ]
 
 
+async def _facts(page: Page, element: ElementHandle) -> _Element:
+    """The element's facts, as the page gives them. A page that breaks the
+    reading or gives them in a form no element has gets no locator."""
+    try:
+        return _ELEMENT.validate_python(await element.evaluate(_FACTS), strict=True)
+    except Error:
+        # Playwright's general error type: here the page's own scripts broke
+        # the reading, which is the page's doing. A closed page is not.
+        if page.is_closed():
+            raise
+        raise LocatorError("the page broke the reading of the element") from None
+    except ValidationError:
+        raise LocatorError("the page described the element as no element is") from None
+
+
 async def generate(page: Page, used: Seen, use: GeneratedUse) -> tuple[Locator, ...]:
     """The locators that find the element `used` for `use`, one of each kind
     the grammar lists for it, in order, each resolved alone to that element
     on the page as it is now. Raises `LocatorError` when no locator does."""
-    element = cast(_Element, await used.element.evaluate(_FACTS))
+    element = await _facts(page, used.element)
     found: list[Locator] = []
     for kind in _candidates(used, element):
         for candidate in kind:
-            working = await _working(page, candidate, used, use, element)
+            working = await _scoped_as_needed(page, candidate, used, use, element)
             if working is not None:
                 found.append(working)
                 break
