@@ -298,3 +298,34 @@ The Decision's check before every observation and action lives in the browser se
   - The check trusts that Playwright reports a frame's navigation before the result of a snapshot taken in its new document, which holds for 1.63's protocol order.
   - A popup whose first navigation never commits (its server accepts the request and withholds the response) isn't reported by Playwright, so it stays open and unrecorded until it commits. It is never observed, but a page can open many. Closing popups as their targets appear, through the browser's CDP target events, is a follow-up.
   - The reach check trusts the parent's world, which the allowed page's own scripts, a subresource host's script it loads among them, already control.
+
+## Amendment (2026-10-02): routing, service workers and popups (#43)
+
+The browser session's second layer, behind the egress proxy and the launch's switches (the 2026-10-02 amendment on the launch). `open_browser_session` blocks service workers and installs routing on its context before the first page exists. `aqa_runner.routing` holds the routing.
+
+- **Routing aborts and records; the proxy stays the enforcer.** `install_routes` adds `context.route("**/*")` and `context.route_web_socket("**/*")` ([route](https://playwright.dev/python/docs/api/class-browsercontext#browser-context-route), [route_web_socket](https://playwright.dev/python/docs/api/class-browsercontext#browser-context-route-web-socket)). Each request and socket is judged by `refused_attempt` against the run's `EgressPolicy`, which `EgressProxy.policy` exposes read-only, so the allowlist is never copied.
+  - *Read as the proxy reads it:* the host and port come from `aqa_core.schema.authority`. A plain `http` request is the proxy's `request` requester; `https`, `ws` and `wss` are `tunnel`, since Chromium tunnels all three through `CONNECT`. A URL's user part is ignored, because Chromium leaves it out of the request line (`HttpUtil::SpecForRequest`). Any other scheme is refused, since the proxy carries nothing for it.
+  - *A refused request* is aborted (`blockedbyclient`, so the page sees `net::ERR_BLOCKED_BY_CLIENT`) and recorded. Any other request goes on to the proxy, which judges it again, every redirect hop included.
+  - *A refused socket* is closed and recorded. Any other socket is connected through the page, so it reaches the proxy too.
+  - *Options:*
+    1. aborting and recording (chosen by the maintainer, 2026-10-02): the defense in depth SECURITY §7 names;
+    2. recording only, with every request passed on to the proxy (rejected): one enforcer, which keeps every browser test showing the proxy's own refusal, but not the second layer SECURITY §7 and this ADR describe;
+    3. passive request and WebSocket events instead of routes (rejected): this keeps the HTTP cache and even sees redirect hops, but enforces nothing and isn't the routing SECURITY §7 names.
+- **Records.**
+  - `BlockedAttempt` keeps Playwright's resource type (`websocket` for a socket), the scheme, the host and the port. It never keeps the path, the query or the user part, which is where an exfiltration's data travels.
+  - `BlockedAttempts` keeps the first 1000 attempts and counts them all, so a page that loops can't grow it without bound. It lives on the run's egress proxy (`EgressProxy.blocked_attempts`), beside the gate's `refusals`, which remain the egress blocks (#47).
+  - Persisting both in the run's record is #46's and #53's.
+- **Consequences.**
+  - *No HTTP cache.* Playwright 1.63 turns Chromium's cache off whenever routing intercepts requests (it sends `Network.setCacheDisabled`). So every session runs without one, and a repeat fetch reaches the server. `test_two_sessions_share_no_profile_storage_or_cache` now asserts that (approved by the maintainer, 2026-10-02).
+  - *Every request costs a round trip* to the runner's route handler before it leaves.
+  - *A socket routing blocks closes cleanly:* the page sees `close` (code 0, or 1006 if one is passed, with `wasClean` true either way) and never `error`. A refused connection otherwise fires `error`, then `close` with 1006 and `wasClean` false. No Playwright 1.63 API fires `error` from a route, so app code that handles only `onerror` behaves differently under routing than under a proxy refusal. This was measured.
+  - *`route_web_socket` doesn't cover dedicated workers.* Playwright's WebSocket routing runs in frames, so the proxy is a worker's sockets' only layer. Measured: a worker's socket to a disallowed host reaches the proxy, which refuses it.
+  - *Two proxy-session tests now show the proxy's own refusal where routing can't act* (approved by the maintainer, 2026-10-02):
+    - The loopback test reaches `127.0.0.1` and `localhost` through redirect hops, and its direct loads are aborted and recorded by routing.
+    - The WebSocket test opens the disallowed socket from a dedicated worker, and the page's own socket is aborted and recorded.
+- **Service workers.**
+  - *Playwright's own block isn't enough.* `service_workers="block"` ([option](https://playwright.dev/python/docs/api/class-browser#browser-new-context-option-service-workers)) is an init script that replaces only the instance's `navigator.serviceWorker.register`, with one that resolves. Measured: calling the prototype's method, deleting the replacement, and registering from a same-origin iframe each registered a worker anyway.
+  - *The session adds a lock.* `SERVICE_WORKERS_REFUSED`, a context init script, defines `register` on `ServiceWorkerContainer.prototype` and on the instance as non-writable and non-configurable, rejecting with `SecurityError`. All six ways the test tries are refused, nothing is registered, and the worker script is never requested; a control context that allows service workers registers one. A dedicated worker has no `navigator.serviceWorker` in Chromium 153 (measured).
+  - *Residual:* a realm whose scripts run before Chromium injects init scripts. A worker registered that way would still send every request through the context's proxy.
+- **Popups** meet the context's routes and its proxy while they are open: a popup sent straight to a disallowed host is aborted and recorded by routing, and one that gets there by a redirect is refused by the proxy. The session records and closes every popup (the amendment above, #44).
+- **Still to come in #43:** the hostile-page suite, observed at the packet level.
