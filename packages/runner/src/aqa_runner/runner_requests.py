@@ -33,10 +33,11 @@ class RunnerResponse:
 async def runner_request(gate: EgressGate, method: Method, url: str) -> RunnerResponse:
     """Send `method` to the absolute http or https `url` through `gate`, and
     read the response. Raises ValueError, before any connection, for a URL
-    whose origin isn't one or whose path and query no request line carries; `EgressRefusedError` for an origin the run doesn't
-    allow or an address the IP policy refuses; and `EgressUpstreamError`, an
-    infrastructure error, when the origin can't be reached, its certificate
-    doesn't verify, or its response breaks off. The gate records both.
+    whose origin isn't one or whose path and query no request line carries;
+    `EgressRefusedError` for an origin the run doesn't allow or an address
+    the IP policy refuses; and `EgressUpstreamError`, an infrastructure
+    error, when the origin can't be reached, its certificate doesn't verify,
+    or its response breaks off. The gate records both.
 
     It has no deadline of its own past the gate's for connecting, its TLS
     handshake included: a caller bounds it with `asyncio.timeout`."""
