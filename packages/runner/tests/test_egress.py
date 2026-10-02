@@ -139,7 +139,7 @@ POLICY = EgressPolicy(
     ("host", "port"),
     [("127.0.0.1", 4100), ("pay.example.test", 443), ("[::1]", 8080)],
 )
-@pytest.mark.parametrize("requester", ["request", "tunnel"])
+@pytest.mark.parametrize("requester", ["request", "tunnel", "runner"])
 def test_allowed_origins_pass_on_their_own_port(
     host: str, port: int, requester: Requester
 ) -> None:
@@ -159,7 +159,7 @@ def test_allowed_origins_pass_on_their_own_port(
         ("staging.example.test", 8080),
     ],
 )
-@pytest.mark.parametrize("requester", ["request", "tunnel"])
+@pytest.mark.parametrize("requester", ["request", "tunnel", "runner"])
 def test_other_hosts_and_ports_are_refused(
     host: str, port: int, requester: Requester
 ) -> None:
@@ -175,6 +175,16 @@ def test_subresource_hosts_pass_only_on_their_schemes_default_port(host: str) ->
     assert not POLICY.allows(host, 443, "request")
     assert not POLICY.allows(host, 80, "tunnel")
     assert not POLICY.allows(host, 8443, "tunnel")
+
+
+@pytest.mark.parametrize("host", ["fonts.example.test", "[2001:db8::5]"])
+@pytest.mark.parametrize("port", [80, 443])
+def test_subresource_hosts_never_pass_for_runner_side_requests(
+    host: str, port: int
+) -> None:
+    # The runner's own requests, the reset hook's and probes', reach allowed
+    # origins only.
+    assert not POLICY.allows(host, port, "runner")
 
 
 def test_only_the_start_and_declared_private_origins_may_be_private() -> None:

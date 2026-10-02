@@ -6,6 +6,7 @@ Imported by its path, as pytest names the runner's test modules."""
 import asyncio
 import contextlib
 import socket
+import ssl
 import struct
 import threading
 import time
@@ -47,6 +48,7 @@ class Seen:
     path: str
     upgrade: str | None = None
     body: bytes = b""
+    cookie: str | None = None
 
 
 @dataclass
@@ -62,14 +64,22 @@ class Origin:
 
 class _Handler(BaseHTTPRequestHandler):
     """Serves a page naming its host and path, `/redirect?to=<url>` (302),
-    `/drop` (a response cut short) and anything else as a
-    page. A WebSocket upgrade is recorded and answered 400."""
+    `/drop` (a response cut short), `/set-cookie` (a page that sets one) and
+    anything else as a page. A WebSocket upgrade is recorded and answered
+    400. Each request's Cookie header is recorded."""
 
     seen: list[Seen]
 
     def do_POST(self) -> None:
         body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
-        self.seen.append(Seen(self.headers.get("Host", ""), self.path, body=body))
+        self.seen.append(
+            Seen(
+                self.headers.get("Host", ""),
+                self.path,
+                body=body,
+                cookie=self.headers.get("Cookie"),
+            )
+        )
         if self.path == "/boom":
             return  # a server that crashed mid-request: no response at all
         self.send_response(HTTPStatus.NO_CONTENT)
@@ -77,7 +87,12 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         self.seen.append(
-            Seen(self.headers.get("Host", ""), self.path, self.headers.get("Upgrade"))
+            Seen(
+                self.headers.get("Host", ""),
+                self.path,
+                self.headers.get("Upgrade"),
+                cookie=self.headers.get("Cookie"),
+            )
         )
         target = urlsplit(self.path)
         if target.path == "/redirect":
@@ -118,6 +133,8 @@ class _Handler(BaseHTTPRequestHandler):
             return
         body = f"<!doctype html><title>{self.headers.get('Host')}{self.path}</title>"
         self.send_response(HTTPStatus.OK)
+        if target.path == "/set-cookie":
+            self.send_header("Set-Cookie", "session=1; Path=/")
         self.send_header("Content-Type", "text/html")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -129,12 +146,18 @@ class _IPv6Server(ThreadingHTTPServer):
 
 
 @contextmanager
-def serving(host: str = "127.0.0.1", port: int = 0) -> Iterator[Origin]:
-    """A fixture server on `host` and `port` (any free port by default)."""
+def serving(
+    host: str = "127.0.0.1", port: int = 0, *, tls: ssl.SSLContext | None = None
+) -> Iterator[Origin]:
+    """A fixture server on `host` and `port` (any free port by default),
+    speaking https with `tls`'s certificate when given."""
     seen: list[Seen] = []
     handler = type("Handler", (_Handler,), {"seen": seen})
     server_type = _IPv6Server if ":" in host else ThreadingHTTPServer
     server = server_type((host, port), handler)
+    if tls is not None:
+        # https://docs.python.org/3.14/library/ssl.html#ssl.SSLContext.wrap_socket
+        server.socket = tls.wrap_socket(server.socket, server_side=True)
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     try:
