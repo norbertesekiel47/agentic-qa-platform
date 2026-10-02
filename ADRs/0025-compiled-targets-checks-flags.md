@@ -127,3 +127,28 @@ Building the strict reader (#45) and its reviews raised choices this ADR left op
 - **Only the checks with fields are in schema version 1:** those §7 gives fields to, plus `not_visible` and `network_seen`. The rest are refused by name until their fields are defined: `probe_equals` in #48; `pixel_diff`, `contrast_min` and `model_verify` in M2. Adding a check is additive, so no committed script breaks and `schema_version` stays 1.
 - **`browser` records every setting.** A missing one is an error, never the pinned default, because replay uses what the script records.
 - **The loader, not the format, checks the parts against each other:** names that must exist or be unique, and repeated JSON keys. A repeated key matters because pydantic keeps the last one, so a hidden `"side_effect": false` would win (#46).
+
+## Amendment (2026-10-02): resolving a target per use
+
+Building resolution (#45) settled three choices that "Resolution per use" left open. DATA_MODEL §7 holds the rules.
+
+- **A negative check's absence must be unanimous (Q1).**
+  - *Options:*
+    - A: the first locator whose scope resolves decides, so its zero matches is absence;
+    - B: absence only when no locator finds the element.
+  - *Chosen:* B.
+    - Under A, a button relabeled from "Delete" to "Remove" finds nothing by role and name. A `not_visible` check would then pass in strict replay while the structural fallback still sees the button: a weaker check than the claim.
+    - Under B, any unique match resolves the element. Several matches are drift. The element is absent only when no locator finds one, none finds several, and at least one finds its scope empty.
+- **Actionable is one look at the page (Q2).**
+  - *Options:*
+    - J: visible, enabled, and a hit test at the element's center finds it, after scrolling it into view if needed;
+    - P: Playwright's trial click with a timeout, which also waits for stability.
+  - *Chosen:* J.
+    - Resolution stays a single judgement, and the executor's loop owns waiting within `resolve_seconds`. A trial click would wait inside every locator's turn, so the waits would add up across fallbacks.
+    - The rule is the same for every targeted step, `fill` and `select` included. That is stricter than Playwright's own fill, which skips the hit test, because a person can't fill a field under an overlay either.
+    - An element in a shadow root or a frame fails the document's hit test, which is drift, never a wrong action.
+- **`pattern` searches the normalized rendered text (Q3),** the same text `text` matches, so a pattern spans line items without `(?s)`. `url_matches` searches the URL as it is.
+- **Role names are matched by Playwright's own role engine.**
+  - The name is matched with an anchored pattern built from the normalized name. The pattern lets private-use glyphs sit anywhere and lets a space be any run of whitespace and glyphs.
+  - Each non-alphanumeric character is written `\uXXXX`, which Python and JavaScript read alike, so no character of a name becomes selector syntax.
+  - Only the Basic Multilingual Plane's private-use range is allowed. Playwright passes the pattern to JavaScript without the `u` flag, so a name holding an astral glyph doesn't match, which is drift.

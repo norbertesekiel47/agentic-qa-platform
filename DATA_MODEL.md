@@ -249,7 +249,7 @@ Free-form notes for humans. The agent never reads the body; anything that affect
 - **Check types:** `text_visible`, `text_in_target`, `not_visible`, `url_matches`, `network_none` / `network_seen` (method + URL pattern + status class, from the browser's own traffic), `probe_equals_baseline` / `probe_equals` (read-only GET to a declared probe on an allowed origin), deterministic visual checks — `visible_unoccluded` (hit-test at the element's center returns the element or a descendant; in viewport; minimum size), `pixel_diff` (region vs committed baseline image, threshold), `contrast_min` — and `model_verify` (only for `visual: model`; rejected in `strict` mode; explore rejects `visual: model` expectations as a spec error until M2 defines how they confirm).
 - **Text parameters (ADR-0025).**
   - `text` is a literal. It matches case-insensitively, at word boundaries, against the element's normalized rendered text: private-use glyphs, soft hyphens and zero-width spaces stripped, whitespace collapsed (ADR-0025, 2026-10-02 amendment).
-  - `pattern` is a Python regex (`re.search`, flags written out) for claims that need one.
+  - `pattern` is a Python regex (`re.search`, flags written out) for claims that need one. It searches the same normalized rendered text; `url_matches` searches the page's URL as it is (ADR-0025, "resolving a target per use").
 
   The compiler prefers `text`. A claim that depends on case uses a `pattern` without `(?i)`.
 - **Meanings (ADR-0025).** A target's `semantic` says what the element is for and where it sits, never its current label. If an expectation claims a label, the label belongs in an assertion.
@@ -260,11 +260,16 @@ Free-form notes for humans. The agent never reads the body; anything that affect
   - *Assertion targets are never located by what their claim says.*
   - *Validation:* every locator must resolve to the element the agent used, at every use, both at compile time and on the confirmation replay. A target that can't do that at every use is split into separate targets.
 - **Resolution per use.** Locators are tried in order, and what counts as a match depends on the use:
-  - an action target needs the first unique, actionable match;
+  - an action target needs the first unique, actionable match. *Actionable* means visible, enabled and receiving pointer events: a hit test at the element's center, after scrolling it into view if needed, finds the element or a descendant. It is the same for every step that targets an element, `fill` and `select` included;
   - an assertion's target needs a unique match attached to the page, and doesn't have to receive pointer events;
-  - a negative check (`not_visible`) resolves its scope, and zero matches inside it is a result.
+  - a negative check (`not_visible`) resolves its scope, and zero matches inside it is a result. Absence must be unanimous: any locator's unique match resolves the element instead, so a relabeled element a fallback still finds is seen. If no locator finds one element, none finds several and at least one finds its scope empty, the element is absent; otherwise it is drift.
 
-  The replay records which locator resolved each target.
+  The replay records which locator resolved each target. Details (`aqa_runner.locators`, ADR-0025's 2026-10-02 amendments):
+  - *A scope* must match exactly one element on the page, and the locator is unique inside it.
+  - *One look:* resolution judges the page once. Waiting within `resolve_seconds` (§9) is the executor's loop around it.
+  - *Role and name:* Playwright computes the role and the accessible name. The name matches when it normalizes to the locator's `name`, glyphs anywhere and whitespace runs included.
+  - *Other kinds:* `label` and `placeholder` match exactly. `testid` matches `data-testid`. `css` is sent as `css=<value>`, so another engine's syntax is an error, never a match.
+  - *An unresolved target* gives each locator's reason, in order: no scope, no match, ambiguous or not actionable.
 - **Every step carries `side_effect`:** `true` for a step that changes app state (submit, purchase, delete), `false` for a **replay-safe** step (navigation, reads, idempotent fills). The flag is required and never defaulted — a missing flag fails validation, because a default of `false` would let a continuation re-execute a purchase (ADR-0006 amendment).
   - *Inference (ADR-0025):* `false` needs positive evidence. The step's settle window must end in idle, with no write request to any host and no WebSocket message sent, and the model must agree. A write that arrives before the next action counts against the step.
   - *Otherwise* the flag is `true`, and `side_effect_basis` says why. A step whose flag is `false` has no `side_effect_basis`.
