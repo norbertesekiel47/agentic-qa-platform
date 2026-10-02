@@ -2,7 +2,9 @@
 browser launched through the sandbox check, with an empty environment, the
 run's browser settings and all its traffic through the run's egress proxy, and
 an accessibility snapshot whose element refs the agent's tools act on
-(ADR-0025, ADR-0026 and its 2026-10-01 amendments)."""
+(ADR-0025, ADR-0026 and its 2026-10-01 amendments). It observes and acts only
+on documents from the run's allowed origins (#44, ADR-0026's amendment on
+document origins)."""
 
 import asyncio
 import re
@@ -10,8 +12,15 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from aqa_core.browser import BrowserSettings
-from playwright.async_api import ElementHandle, Error, Page
+from playwright.async_api import ElementHandle, Error, Frame, Page
 
+from aqa_runner.document_origins import (
+    PolicyEvent,
+    PolicyEventError,
+    Records,
+    document_origin,
+)
+from aqa_runner.egress import EgressPolicy
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.sandbox import Chromium, launch
 
@@ -49,13 +58,22 @@ class BrowserSession:
     never gives again and resolves only the current snapshot's. Playwright
     resolves a ref against the latest accessibility snapshot of its frame, so
     every accessibility snapshot of the page goes through `snapshot`, and
-    snapshots and lookups take turns."""
+    snapshots and lookups take turns.
 
-    def __init__(self, page: Page) -> None:
+    Each observation first checks that the page is on one of the run's
+    allowed origins, from `policy`; otherwise it records a policy event in
+    `policy_events` and raises `PolicyEventError`.
+
+    `page` is public until #53 makes it private. No production code outside
+    this module may use it: it observes and acts without the checks."""
+
+    def __init__(self, page: Page, policy: EgressPolicy) -> None:
         self.page = page
+        self._policy = policy
         self._refs_given = 0
         self._current: dict[str, str] = {}
         self._turn = asyncio.Lock()
+        self.policy_events: Records[PolicyEvent] = Records()
 
     async def snapshot(self) -> str:
         """The page's accessibility snapshot in Playwright's AI mode
@@ -66,6 +84,7 @@ class BrowserSession:
             # Retired before the call: Playwright may store this snapshot, and
             # resolve refs against it, even if the call never returns.
             self._current = {}
+            self._require_allowed_page()
             text, self._current = renumber(
                 await self.page.aria_snapshot(mode="ai"), first=self._refs_given + 1
             )
@@ -78,6 +97,7 @@ class BrowserSession:
         page. Any other ref raises `RefError`, so no string but a current ref
         reaches a selector."""
         async with self._turn:
+            self._require_allowed_page()
             playwright_ref = self._current.get(ref)
             if playwright_ref is None:
                 given = SESSION_REF.fullmatch(ref)
@@ -103,6 +123,25 @@ class BrowserSession:
         if found is None:
             raise gone
         return found
+
+    def _require_allowed_page(self) -> None:
+        """Record and raise a policy event unless the session's page is on one
+        of the run's allowed origins."""
+        url = self.page.url
+        origin = origin_of(self.page.main_frame)
+        if origin not in self._policy.allowed_origins:
+            event = PolicyEvent("document", url, origin)
+            self.policy_events.add(event)
+            raise PolicyEventError(event)
+
+
+def origin_of(frame: Frame) -> str | None:
+    """The origin of `frame`'s document, from the URL Chromium reports for it
+    (https://playwright.dev/python/docs/api/class-frame#frame-url), which the
+    page's scripts can't forge. about:blank and about:srcdoc inherit their
+    parent frame's."""
+    parent = frame.parent_frame
+    return document_origin(frame.url, None if parent is None else origin_of(parent))
 
 
 def renumber(snapshot: str, *, first: int) -> tuple[str, dict[str, str]]:
@@ -163,6 +202,6 @@ async def open_browser_session(
             # https://playwright.dev/python/docs/api/class-browser#browser-new-context-option-proxy
             proxy={"server": proxy, "bypass": "<-loopback>"},
         )
-        yield BrowserSession(await context.new_page())
+        yield BrowserSession(await context.new_page(), egress.policy)
     finally:
         await browser.close()
