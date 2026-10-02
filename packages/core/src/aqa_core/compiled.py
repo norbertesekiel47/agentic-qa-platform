@@ -196,7 +196,7 @@ def _one_selector(css: str) -> str:
     return css
 
 
-# One CSS selector, which the executor sends to Playwright as css=<value>.
+# One CSS selector, which resolution must send to Playwright as css=<value>.
 _OneSelector = Annotated[NonEmpty, AfterValidator(_one_selector)]
 
 

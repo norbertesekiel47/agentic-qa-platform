@@ -283,7 +283,7 @@ A compiled script is read as strictly as a spec (§6): an unknown field is an er
   - `name` goes only with `role`, and is optional there;
   - `role` is a WAI-ARIA role that Playwright's `get_by_role` accepts;
   - a `name` is written normalized (no private-use glyphs, soft hyphens or zero-width spaces, single spaces, none at either end), because it is compared normalized;
-  - a `css` value is one CSS selector, not only whitespace and with no `>>`. The executor sends it to Playwright as `css=<value>`, and Playwright still reads a `>>` as a chain into other selector engines. Inside an attribute value, write `\>\>`;
+  - a `css` value is one CSS selector, not only whitespace and with no `>>`. Resolution must send it to Playwright as `css=<value>` (#45), and Playwright still reads a `>>` as a chain into other selector engines there. Inside an attribute value, write `\>\>`;
   - `scope` is optional, and is itself a locator;
   - a target lists at least one locator, and none twice.
 - **Steps:** each has `seq` (1 or more), `side_effect`, `side_effect_basis` exactly when `side_effect` is `true`, and optionally `satisfies`. The other fields depend on the action:
