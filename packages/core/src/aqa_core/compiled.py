@@ -253,7 +253,7 @@ def _escape(css: str, index: int) -> tuple[str, int]:
     return (chr(value) if usable else "\ufffd"), end
 
 
-def _escapes(css: str, index: int) -> bool:
+def _starts_escape(css: str, index: int) -> bool:
     """Whether a backslash at `index` starts an escape: not before a newline."""
     return css[index] == "\\" and css[index + 1 : index + 2] != "\n"
 
@@ -283,7 +283,7 @@ def _name(css: str, index: int) -> tuple[str, int]:
         if _NAME_CHAR.match(css, index):
             chars.append(css[index])
             index += 1
-        elif _escapes(css, index):
+        elif _starts_escape(css, index):
             char, index = _escape(css, index)
             chars.append(char)
         else:
@@ -305,7 +305,7 @@ def _pseudo_classes(css: str) -> Iterator[str]:
             index = _after_comments(css, index)
         elif css[index] in "\"'":
             index = _after_string(css, index)
-        elif _escapes(css, index):
+        elif _starts_escape(css, index):
             index = _escape(css, index)[1]
         elif css[index] == ":":
             name, index = _name(css, _after_comments(css, index + 1))
