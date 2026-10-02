@@ -10,6 +10,7 @@ read through the loader (#46), which first refuses repeated keys:
 validates the same text in JSON mode, where `compiled_at` may be a string."""
 
 import re
+import threading
 import warnings
 from collections.abc import Container
 from typing import Annotated, Literal, Self
@@ -153,13 +154,21 @@ def _normalized(text: str) -> str:
 _Normalized = Annotated[NonEmpty, AfterValidator(_normalized)]
 
 
+# warnings.catch_warnings swaps the process-wide warning filters, so checks
+# take turns rather than restore each other's filters out of order.
+_REGEX_CHECK = threading.Lock()
+
+
 def _regex(pattern: str) -> str:
     # Beyond re.error, re.compile raises OverflowError for a huge repeat count
     # (a{4294967296}) and RecursionError for deep nesting, and only warns
     # (FutureWarning) for a pattern whose meaning Python will change, such as
-    # [[:digit:]]. Pydantic would let any of them escape raw.
-    with warnings.catch_warnings():
+    # [[:digit:]]. Pydantic would let any of them escape raw. The filters are
+    # global, so for this short check another thread's FutureWarning raises too.
+    with _REGEX_CHECK, warnings.catch_warnings():
         warnings.simplefilter("error", FutureWarning)
+        # A cached pattern comes back without the warning.
+        re.purge()
         try:
             re.compile(pattern)
         except (re.error, OverflowError, RecursionError, FutureWarning) as error:
