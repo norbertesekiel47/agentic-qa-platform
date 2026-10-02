@@ -20,20 +20,20 @@ STUN = ("203.0.113.7", 3478)
 NAME = "canary.example.test"
 
 
-async def stray_datagram_and_lookup() -> str:
+async def stray_datagram_and_lookup() -> dict[str, object]:
     """A datagram to an address nothing routes, and a name looked up the way
-    the system resolver does it."""
+    the system resolver does it. Returns where the datagram went."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as stray:
         stray.sendto(b"stray", STRAY)
     with contextlib.suppress(socket.gaierror):  # nothing answers it, by design
         await asyncio.get_running_loop().getaddrinfo(NAME, 80)
-    return "sent"
+    return {"stray": list(STRAY)}
 
 
-async def webrtc_without_the_switches() -> list[str]:
+async def webrtc_without_the_switches() -> dict[str, object]:
     """ICE gathering, with a STUN server, in a session launched without the
     transport switches and the launch-level proxy (`test_transports.py`'s
-    control)."""
+    control). Returns the STUN server and the candidates gathered."""
     async with (
         async_playwright() as playwright,
         egress_proxy() as egress,
@@ -44,4 +44,4 @@ async def webrtc_without_the_switches() -> list[str]:
         candidates: list[str] = await session.page.evaluate(
             GATHER, f"stun:{STUN[0]}:{STUN[1]}"
         )
-        return candidates
+        return {"stun": list(STUN), "candidates": candidates}

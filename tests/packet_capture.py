@@ -86,6 +86,27 @@ PACKET_OUTGOING = 4
 ETHERTYPES = {0x0800: socket.AF_INET, 0x86DD: socket.AF_INET6}
 PROTOCOLS = {1: "icmp", 6: "tcp", 17: "udp", 58: "icmp"}
 
+# Where a frame's fields sit: the Ethernet header (`lo`'s frames have one
+# too), then, per address family, the protocol number, the source and
+# destination addresses, and the header's length (IPv4's is in its first
+# byte, in 32-bit words) (RFC 791 §3.1, RFC 8200 §3).
+ETHERNET_HEADER = 14
+ETHERTYPE_AT = 12
+
+
+@dataclass(frozen=True)
+class Layout:
+    """Where an IP header keeps its protocol number and its addresses."""
+
+    protocol: int
+    source: slice
+    destination: slice
+
+
+IPV4 = Layout(9, slice(12, 16), slice(16, 20))
+IPV6 = Layout(6, slice(8, 24), slice(24, 40))
+IPV6_HEADER = 40
+
 
 @dataclass(frozen=True)
 class Flow:
@@ -277,28 +298,27 @@ def capturing(capture: socket.socket) -> Iterator[list[bytes]]:
 
 
 def flow_of(frame: bytes) -> Flow | None:
-    """The flow an Ethernet frame belongs to (`lo` frames have an Ethernet
-    header too), or None for a frame that carries neither IPv4 nor IPv6."""
-    (ethertype,) = struct.unpack_from("!H", frame, 12)
+    """The flow an Ethernet frame belongs to, or None for a frame that
+    carries neither IPv4 nor IPv6, such as ARP."""
+    (ethertype,) = struct.unpack_from("!H", frame, ETHERTYPE_AT)
     family = ETHERTYPES.get(ethertype)
     if family is None:
         return None
-    packet = frame[14:]
+    packet = frame[ETHERNET_HEADER:]
     if family == socket.AF_INET:
-        header = (packet[0] & 0x0F) * 4
-        number, source, destination = packet[9], packet[12:16], packet[16:20]
+        fields, header = IPV4, (packet[0] & 0x0F) * 4
     else:
-        header = 40
-        number, source, destination = packet[6], packet[8:24], packet[24:40]
+        fields, header = IPV6, IPV6_HEADER
+    number = packet[fields.protocol]
     protocol = PROTOCOLS.get(number, str(number))
     ports: tuple[int | None, int | None] = (None, None)
     if protocol in ("tcp", "udp"):
         ports = struct.unpack_from("!HH", packet, header)
     return Flow(
         protocol,
-        socket.inet_ntop(family, source),
+        socket.inet_ntop(family, packet[fields.source]),
         ports[0],
-        socket.inet_ntop(family, destination),
+        socket.inet_ntop(family, packet[fields.destination]),
         ports[1],
     )
 
@@ -309,6 +329,7 @@ def flows_of(frames: list[bytes]) -> list[Flow]:
 
 
 def load(scenario: Path, name: str) -> Callable[[], Awaitable[object]]:
+    """The async function `name` in the file `scenario`."""
     spec = importlib.util.spec_from_file_location("capture_scenario", scenario)
     if spec is None or spec.loader is None:
         raise ImportError(f"no scenario module at {scenario}")
@@ -319,6 +340,8 @@ def load(scenario: Path, name: str) -> Callable[[], Awaitable[object]]:
 
 
 def main(scenario: Path, name: str) -> None:
+    """The child: run the scenario, captured on Linux, and print a JSON report
+    of what it returned and the flows seen as the last line of its output."""
     # Before anything starts a thread: unshare refuses a threaded process.
     capture = enter_own_network() if sys.platform == "linux" else None
     sys.path.insert(0, str(ROOT))
