@@ -42,3 +42,21 @@ Each role declares required capabilities (tool calling, structured output, visio
 **Refusals** (`stop_reason: "refusal"`) are recorded as their own outcome. The role's configured fallback model is used if there is one.
 
 "The live price map" in AGENTS.md §6 and TECH_STACK now means this pinned copy.
+
+## Amendment (2026-10-01): where the pinned price map lives, how it is checked and how it is refreshed
+
+#40 builds the map's home in `aqa_core` (`price_map.py`, `price_map_refresh.py` and `price_map_data/`), ahead of the role validation and the router that read it. Each choice had real alternatives.
+
+**The copy is verbatim, and in `aqa_core`.**
+- *Verbatim, not trimmed to the providers we support:* a trimmed file could not be compared with upstream. As it stands, `git show <commit>:model_prices_and_context_window.json | sha256sum` in LiteLLM's repository must print the sha256 in `pin.json`. The cost is a 3.0 MB file (79,607 lines) in git, and about that much again for each refresh.
+- *In core, not the runner:* the map is data with no LangChain dependency, and config load (`aqa_core`, DATA_MODEL §9) has to read it to validate roles. The API and the dashboard can price a call later without importing the runner.
+
+**The pin is `pin.json`: the upstream repository, a commit and the sha256 of the copy.** The file's name is a constant in the code, so the pin names no path.
+
+**`load_price_map` checks the sha256 each time the map loads.** A hand-edited price, an edited pin, a pin that is malformed, or a file that isn't a JSON object is rejected with an error that names both hashes and the pinned commit. Prices load as exact `Decimal`s, so cost math is exact (LiteLLM writes them as floats such as `2e-06`), and the file's `sample_spec` entry, which documents the keys, is not a model.
+- *What this does not prove:* the commit's content. The pin ties the copy to a hash and a commit, and the reviewed pull request that changes them is where a person checks the diff.
+
+**The refresh is `uv run python -m aqa_core.price_map_refresh [ref]`.**
+- It resolves `ref` (default `main`; a commit, branch or tag without a slash) to a commit through GitHub's API, downloads that commit's file over HTTPS from `raw.githubusercontent.com`, and pins the commit with the download's sha256. The commit is the one `ref` named at that moment, not the last commit that touched the file; the sha256 is what ties the content.
+- The two files are written only after the pair loads, so a bad download leaves the old pair in place.
+- *Considered and left for later:* a scheduled CI job that opens refresh pull requests. It needs a workflow and a token, and a refresh is a deliberate event today.

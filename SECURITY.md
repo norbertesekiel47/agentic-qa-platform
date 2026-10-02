@@ -142,7 +142,7 @@ Enforced by Postgres RLS ([DATA_MODEL §3](DATA_MODEL.md#3-row-level-security)):
 
 Lockfiles committed; Dependabot/Renovate; a dependency audit in CI: osv-scanner on `uv.lock`, failing on high or critical advisories (ADR-0029), and `pnpm audit` for the dashboard from M7; container image scanned (Trivy) and built reproducibly; SBOM (CycloneDX) per release; GitHub Actions pinned by commit SHA; deploys via GitHub OIDC → AWS role (no long-lived AWS keys).
 
-- **Model prices** come from a vendored copy of LiteLLM's price map, pinned by commit and sha256, not from the `litellm` package. That package's PyPI releases 1.82.7 and 1.82.8 were malicious in March 2026, and the runner holds provider keys (ADR-0007 amendment).
+- **Model prices** come from a vendored copy of LiteLLM's price map, pinned by commit and sha256 (checked every time the map loads, so a hand-edited copy is rejected), not from the `litellm` package. That package's PyPI releases 1.82.7 and 1.82.8 were malicious in March 2026, and the runner holds provider keys (ADR-0007 amendment).
 - **Trivy** was compromised the same month. M8 decides how the image scanner is pinned and verified (#30).
 
 ## 12. Incident response (lightweight)
