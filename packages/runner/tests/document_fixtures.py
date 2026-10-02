@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 import pytest
 from aqa_runner.browser_session import BrowserSession, open_browser_session
-from aqa_runner.egress import Connection
+from aqa_runner.egress import Connection, EgressGate
 from aqa_runner.egress_proxy import EgressProxy
 from playwright.async_api import Frame, Page, async_playwright
 
@@ -175,20 +175,27 @@ def serving_sites(monkeypatch: pytest.MonkeyPatch) -> Iterator[Sites]:
         server.server_close()
 
 
-@asynccontextmanager
-async def browsing(sites: Sites) -> AsyncIterator[BrowserSession]:
-    """A session of a run that starts at `sites.app`, also allows
+def run_gate(sites: Sites) -> EgressGate:
+    """The gate of a run that starts at `sites.app`, also allows
     `sites.other`, and lets pages load resources from `CDN`."""
-    egress = gate(
+    return gate(
         allowed=(sites.app, sites.other),
         subresource=(CDN,),
         # Declared private only so they may resolve to loopback here.
         private=(sites.other, sites.cdn),
         answers={APP: LOOPBACK, OTHER: LOOPBACK, CDN: LOOPBACK},
     )
+
+
+@asynccontextmanager
+async def browsing(
+    sites: Sites, egress: EgressGate | None = None
+) -> AsyncIterator[BrowserSession]:
+    """A session of the run `run_gate` describes, through `egress` when a
+    test reads the gate's records."""
     async with (
         async_playwright() as playwright,
-        EgressProxy(egress) as proxy,
+        EgressProxy(egress or run_gate(sites)) as proxy,
         open_browser_session(playwright.chromium, egress=proxy) as session,
     ):
         yield session

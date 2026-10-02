@@ -5,6 +5,7 @@ resource load, so the session checks the origin of every document it observes
 or acts on, and a subresource host that becomes a document gains no
 authority."""
 
+import re
 from dataclasses import dataclass, field
 from typing import Literal
 from urllib.parse import urlsplit
@@ -13,8 +14,23 @@ from aqa_core.schema import parse_origin
 from playwright.async_api import Frame
 
 # Where a document on no allowed origin was found: the session's top-level
-# page, the frame of an element the session was about to give out, or a popup.
-type PolicyEventKind = Literal["document", "frame", "popup"]
+# page, the frame of an element the session was about to give out or act on,
+# or a popup; or a URL navigate refused before it left.
+type PolicyEventKind = Literal["document", "frame", "popup", "navigation"]
+
+# What each kind of policy event refused, as its message says it.
+REFUSED: dict[PolicyEventKind, str] = {
+    "document": "the page is",
+    "frame": "the element's frame is",
+    "popup": "a popup is",
+    "navigation": "the URL to navigate to is",
+}
+
+# Characters a browser drops or reads differently from Python's urlsplit,
+# which no URL to navigate to needs as themselves: whitespace and control
+# characters, which WHATWG URL parsing strips, and a backslash, which it
+# reads as a slash after an http(s) scheme.
+UNREAD = re.compile(r"[\s\x00-\x1f\x7f\\]")
 
 # How many of each record a session keeps; it counts them all. A page can
 # open popups in a loop (Playwright launches Chromium with popup blocking
@@ -54,8 +70,8 @@ class PolicyEventError(Exception):
     def __init__(self, event: PolicyEvent) -> None:
         where = "no origin" if event.origin is None else event.origin
         super().__init__(
-            f"the page is on {where}, which isn't one of the run's allowed origins: "
-            "nothing on it is observed or acted on; navigate back to an allowed "
+            f"{REFUSED[event.kind]} on {where}, which isn't one of the run's allowed "
+            "origins: nothing there is observed or acted on; navigate to an allowed "
             "origin, or restart"
         )
         self.event = event
@@ -157,3 +173,17 @@ async def reaches(frame: Frame) -> bool:
         return bool(await owner.evaluate("(owner) => owner.contentDocument != null"))
     finally:
         await owner.dispose()
+
+
+def navigable_origin(url: str) -> str | None:
+    """The origin `navigate` would go to at `url`: an absolute http(s) URL's,
+    written as an origin writes it; None for any other URL, and for one with
+    whitespace, a control character or a backslash anywhere, which a browser
+    reads differently from Python's parser."""
+    if UNREAD.search(url):
+        return None
+    try:
+        scheme = urlsplit(url).scheme
+    except ValueError:  # brackets that don't close
+        return None
+    return document_origin(url, None) if scheme in ("http", "https") else None
