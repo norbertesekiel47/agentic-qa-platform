@@ -36,8 +36,8 @@ An optional endpoint a spec declares to put the app in the spec's starting state
 The origin a run starts at: the invocation's `--url`, or the project config's base URL when the invocation gives none. Never the spec's.
 
 **Start URL**:
-Where a run's first navigation goes: its start origin followed by the spec's `start_url` path as written.
-_Avoid_: calling the spec's `start_url`, which is only a path, the start URL
+Where a run's first navigation goes: its start origin followed by the spec's `start_url` path.
+_Avoid_: "start URL" for the spec's `start_url`, which is only a path
 
 **Allowed origins**:
 The origins a run may navigate to and act on: the run's start origin plus any the spec lists. Test secrets can be bound only to allowed origins.
