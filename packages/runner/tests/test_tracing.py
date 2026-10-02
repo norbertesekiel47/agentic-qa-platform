@@ -23,7 +23,12 @@ class Endpoint(Protocol):
 
 
 # Every spelling of "tracing on" that LangChain and LangSmith read.
-SWITCHES = ["LANGSMITH_TRACING", "LANGCHAIN_TRACING_V2", "LANGCHAIN_TRACING"]
+SWITCHES = [
+    "LANGSMITH_TRACING",
+    "LANGSMITH_TRACING_V2",
+    "LANGCHAIN_TRACING_V2",
+    "LANGCHAIN_TRACING",
+]
 
 
 def customers_environment(

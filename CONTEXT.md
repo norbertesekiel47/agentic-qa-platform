@@ -219,7 +219,7 @@ The job a model does in a run: navigator, verifier, healer or vision fallback. E
 The runner's one way to call a model: it picks the model for a role, calls it through its provider's client, returns a cost record for every response, and calls the role's fallback when a model refuses. A run that makes no model call builds no client.
 
 **Cassette**:
-A recorded exchange with a model provider that tests replay, matched by a hash of the prompt, so a changed prompt fails the test until someone re-records it with a key. The first ones are hand-written.
+A recorded exchange with a model provider that tests replay, matched by a hash of the prompt, so a changed prompt fails the test until someone re-records it with a key.
 
 **Cost record**:
 What one model call leaves behind: its role, mode, model, token counts, latency and cost, the price map version in force and the rates it applied (the map's or the config's), and its status (DATA_MODEL §2). A billed response is always recorded, whatever became of it.

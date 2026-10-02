@@ -94,23 +94,23 @@ CASSETTES = Path(__file__).parent / "cassettes"
 RECORD = "AQA_RECORD_CASSETTES"
 # Not a credential, and named so (AGENTS.md rule 9).
 FAKE_KEY = "fake-key-for-tests"
-RE_RECORD = (
-    f"to re-record every cassette deliberately, put your provider key in a "
-    f"gitignored .scratch/provider.env as ANTHROPIC_API_KEY=..., then run "
-    f"`set -a; . .scratch/provider.env; set +a; {RECORD}=1 uv run pytest "
-    f"packages/runner/tests/test_anthropic_wire.py packages/runner/tests/test_anthropic_client.py "
-    f"packages/runner/tests/test_model_router.py`"
-)
+# The command is TESTING.md §4's to own; a failing test points there.
+RE_RECORD = "to re-record deliberately, follow TESTING.md §4 (Cassettes)"
+# Scenarios a live API won't produce on demand (a refusal, an answer that
+# doesn't validate), so they stay hand-written whatever AQA_RECORD_CASSETTES says.
+NOT_RE_RECORDABLE = {"refusal", "structured_invalid", "refusal_then_fallback"}
 
 
 @dataclass
 class Recording:
     """What a cassette saw, filled in when the `with` block ends: the body of
-    every request the adapter sent. Replay matches a request by its prompt hash,
-    so the recorded request each response was played for is the one that was
-    sent."""
+    every request the adapter sent and of every response it got. Replay matches a
+    request by its prompt hash, so the recorded request each response was played
+    for is the one that was sent."""
 
     sent: list[dict[str, Any]] = field(default_factory=list)
+    # The bodies of the responses played, in the same order.
+    responses: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _canonical(body: bytes | str | None) -> str:
@@ -153,7 +153,7 @@ def cassette(
     @contextmanager
     def use(name: str) -> Iterator[Recording]:
         recording = Recording()
-        recording_now = os.environ.get(RECORD) == "1"
+        recording_now = os.environ.get(RECORD) == "1" and name not in NOT_RE_RECORDABLE
         path = CASSETTES / f"{name}.yaml"
         if recording_now:
             if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -187,6 +187,9 @@ def cassette(
             match_on=["method", "uri", "prompt_hash"],
             before_record_request=before_record_request,
             before_record_response=before_record_response,
+            # A compressed answer is kept as the text it was, not as bytes that
+            # replay can't decode.
+            decode_compressed_response=True,
             # LangSmith's stand-in in the tracing tests is on localhost.
             ignore_localhost=True,
         )
@@ -202,6 +205,9 @@ def cassette(
                 ) from error
             raise
         recording.sent = [json.loads(request.body) for request in played.requests]
+        recording.responses = [
+            json.loads(response["body"]["string"]) for response in played.responses
+        ]
         if not recording_now and not played.all_played:
             raise AssertionError(
                 f"cassettes/{name}.yaml has a recorded response that was never "

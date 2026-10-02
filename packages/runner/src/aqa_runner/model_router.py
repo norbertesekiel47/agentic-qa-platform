@@ -32,12 +32,18 @@ class Routed:
 
 
 def _status(reply: Reply, schema: type[BaseModel] | None) -> Status:
+    """How a response counts: a refusal, an answer that should have parsed
+    against `schema` and didn't (`invalid`), or `ok`."""
     if reply.refused:
         return "refusal"
     return "invalid" if schema is not None and reply.parsed is None else "ok"
 
 
 class ModelRouter:
+    """The model for each role, called one role at a time. Build one per run:
+    constructing it switches ambient LangChain tracing off for the process, and
+    a LangChain or LangGraph run must start after it (SECURITY §10)."""
+
     def __init__(
         self, roles: Mapping[ModelRoleName, ResolvedRole], client_factory: ClientFactory
     ) -> None:
@@ -74,10 +80,11 @@ class ModelRouter:
         against `schema` is recorded as `invalid` and returned, not retried. A
         call that gets no response raises and records nothing."""
         resolved = self._roles[role]
+        models = [resolved.model]
+        if resolved.fallback is not None:
+            models.append(resolved.fallback)
         records: list[CostRecord] = []
-        for model in (resolved.model, resolved.fallback):
-            if model is None:
-                break
+        for model in models:
             started = time.perf_counter()
             reply = await self._client(model, resolved.effort).call(
                 messages, tools, schema

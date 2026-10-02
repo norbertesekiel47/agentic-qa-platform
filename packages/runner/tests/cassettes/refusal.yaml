@@ -1,11 +1,8 @@
-# HAND-WRITTEN RESPONSES. Nothing in this file was recorded from api.anthropic.com
-# (no provider key was available when it was made). The request bodies are what
+# HAND-WRITTEN RESPONSES, BY DESIGN. Nothing in this file was recorded from
+# api.anthropic.com: a live API won't produce this scenario on demand, so it is not
+# re-recorded (the cassette fixture never records it). The request bodies are what
 # aqa_runner.anthropic_client sent, through langchain-anthropic, to a local stub; the
-# responses were written by hand in the Messages API's shape. To replace this file
-# with a real recording, run the tests with AQA_RECORD_CASSETTES=1 and a key:
-#   set -a; . .scratch/provider.env; set +a; AQA_RECORD_CASSETTES=1 \
-#     uv run pytest packages/runner/tests/test_anthropic_wire.py \
-#     packages/runner/tests/test_anthropic_client.py packages/runner/tests/test_model_router.py
+# responses were written by hand in the Messages API's shape (TESTING.md section 4).
 interactions:
 - request:
     body: '{"max_tokens":4096,"messages":[{"role":"user","content":"Is the cart empty?

@@ -7,7 +7,7 @@ from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import pytest
 from aqa_core.config import Effort, ModelRoleName
@@ -19,6 +19,7 @@ from aqa_runner.chat_client import ChatClient, Reply
 from aqa_runner.model_router import ModelRouter, Routed
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
+from langchain_core.tracers.langchain import wait_for_all_tracers
 from langsmith.utils import tracing_is_enabled
 from pydantic import BaseModel
 
@@ -85,24 +86,24 @@ def router(tmp_path: Path, config: str, factory: Factory) -> ModelRouter:
 
 
 def call(
-    routed: ModelRouter,
+    model_router: ModelRouter,
     *,
     role: ModelRoleName = "navigator",
     mode: Mode = "explore",
     schema: type[BaseModel] | None = None,
 ) -> Routed:
     return asyncio.run(
-        routed.call(role, mode, [HumanMessage(content="go")], schema=schema)
+        model_router.call(role, mode, [HumanMessage(content="go")], schema=schema)
     )
 
 
 def test_a_router_builds_no_client_until_a_call(tmp_path: Path) -> None:
     factory = Factory(**{"claude-sonnet-5-5": FakeClient(reply())})
 
-    routed = router(tmp_path, "", factory)
+    model_router = router(tmp_path, "", factory)
 
     assert factory.built == []
-    call(routed)
+    call(model_router)
     assert factory.built == [("anthropic", "claude-sonnet-5-5", None)]
 
 
@@ -110,9 +111,9 @@ def test_a_response_yields_a_cost_record_with_the_llm_calls_fields(
     tmp_path: Path,
 ) -> None:
     sonnet = FakeClient(reply("hello"), delay=0.05)
-    routed = router(tmp_path, "", Factory(**{"claude-sonnet-5-5": sonnet}))
+    model_router = router(tmp_path, "", Factory(**{"claude-sonnet-5-5": sonnet}))
 
-    result = call(routed, role="healer", mode="heal")
+    result = call(model_router, role="healer", mode="heal")
 
     assert (result.outcome, result.message.content) == ("ok", "hello")
     (record,) = result.calls
@@ -142,13 +143,13 @@ def test_a_refusal_is_recorded_as_a_refusal_and_the_fallback_model_is_called(
 ) -> None:
     sonnet = FakeClient(reply("I can't help", refused=True))
     opus = FakeClient(reply("here you go"))
-    routed = router(
+    model_router = router(
         tmp_path,
         FALLBACK,
         Factory(**{"claude-sonnet-5-5": sonnet, "claude-opus-5-5": opus}),
     )
 
-    result = call(routed, role="healer", mode="heal")
+    result = call(model_router, role="healer", mode="heal")
 
     assert (result.outcome, result.message.content) == ("ok", "here you go")
     refused, answered = result.calls
@@ -163,9 +164,11 @@ def test_a_refusal_is_recorded_as_a_refusal_and_the_fallback_model_is_called(
 
 def test_a_refusal_with_no_fallback_is_the_outcome(tmp_path: Path) -> None:
     refusal = reply("I can't help", refused=True)
-    routed = router(tmp_path, "", Factory(**{"claude-sonnet-5-5": FakeClient(refusal)}))
+    model_router = router(
+        tmp_path, "", Factory(**{"claude-sonnet-5-5": FakeClient(refusal)})
+    )
 
-    result = call(routed)
+    result = call(model_router)
 
     assert result.outcome == "refusal"
     assert result.message.content == "I can't help"
@@ -197,9 +200,9 @@ def test_the_fallback_is_left_alone_when_the_first_model_answers(
     factory = Factory(
         **{"claude-sonnet-5-5": FakeClient(reply()), "claude-opus-5-5": opus}
     )
-    routed = router(tmp_path, FALLBACK, factory)
+    model_router = router(tmp_path, FALLBACK, factory)
 
-    result = call(routed, role="healer")
+    result = call(model_router, role="healer")
 
     assert [record.model for record in result.calls] == ["claude-sonnet-5-5"]
     assert opus.calls == []
@@ -228,9 +231,9 @@ def test_a_schema_answer_that_parses_is_returned_parsed(tmp_path: Path) -> None:
     sonnet = FakeClient(
         reply('{"ok": true}', parsed=Verdict(ok=True, reason="cart empty"))
     )
-    routed = router(tmp_path, "", Factory(**{"claude-sonnet-5-5": sonnet}))
+    model_router = router(tmp_path, "", Factory(**{"claude-sonnet-5-5": sonnet}))
 
-    result = call(routed, schema=Verdict)
+    result = call(model_router, schema=Verdict)
 
     assert (result.outcome, result.parsed) == (
         "ok",
@@ -243,10 +246,10 @@ def test_a_call_that_gets_no_response_records_nothing_and_raises(
     tmp_path: Path,
 ) -> None:
     sonnet = FakeClient(ConnectionError("the network is down"))
-    routed = router(tmp_path, "", Factory(**{"claude-sonnet-5-5": sonnet}))
+    model_router = router(tmp_path, "", Factory(**{"claude-sonnet-5-5": sonnet}))
 
     with pytest.raises(ConnectionError, match="the network is down"):
-        call(routed)
+        call(model_router)
 
 
 @pytest.mark.parametrize("mode", ["explore", "heal", "verified"])
@@ -266,11 +269,11 @@ def test_the_calls_mode_is_on_every_record(tmp_path: Path, mode: Mode) -> None:
 def test_a_client_is_built_once_per_model_and_effort(tmp_path: Path) -> None:
     sonnet = FakeClient(reply(), reply(), reply())
     factory = Factory(**{"claude-sonnet-5-5": sonnet})
-    routed = router(tmp_path, "roles: { verifier: { effort: high } }\n", factory)
+    model_router = router(tmp_path, "roles: { verifier: { effort: high } }\n", factory)
 
-    call(routed, role="navigator")
-    call(routed, role="navigator")
-    call(routed, role="verifier")
+    call(model_router, role="navigator")
+    call(model_router, role="navigator")
+    call(model_router, role="verifier")
 
     assert factory.built == [
         ("anthropic", "claude-sonnet-5-5", None),
@@ -297,10 +300,10 @@ def test_a_roles_effort_reaches_its_client_and_its_fallbacks(tmp_path: Path) -> 
 
 def test_every_role_routes_to_the_model_its_config_names(tmp_path: Path) -> None:
     sonnet = FakeClient(reply(), reply(), reply(), reply())
-    routed = router(tmp_path, "", Factory(**{"claude-sonnet-5-5": sonnet}))
+    model_router = router(tmp_path, "", Factory(**{"claude-sonnet-5-5": sonnet}))
 
     roles: list[ModelRoleName] = ["navigator", "verifier", "healer", "vision_fallback"]
-    results = [call(routed, role=role) for role in roles]
+    results = [call(model_router, role=role) for role in roles]
 
     assert [r.calls[0].role for r in results] == roles
 
@@ -326,9 +329,9 @@ def refusal_then_fallback_through_the_adapter(tmp_path: Path) -> Routed:
     whose fallback answers. The cassette `refusal_then_fallback` replays it."""
     path = tmp_path / "config.yaml"
     path.write_text(FALLBACK)
-    routed = ModelRouter.from_config(load_config(path), build_client)
+    model_router = ModelRouter.from_config(load_config(path), build_client)
     return asyncio.run(
-        routed.call(
+        model_router.call(
             "healer", "heal", [HumanMessage(content=VERDICT_PROMPT)], schema=Verdict
         )
     )
@@ -366,3 +369,68 @@ def test_a_refusal_through_the_real_adapter_is_recorded_and_the_fallback_answers
     # 33 out at Opus 5.5's $4 and $20, per million tokens.
     assert refused.cost_usd == Decimal("0.00041")
     assert answered.cost_usd == Decimal("0.00148")
+
+
+class Endpoint(Protocol):
+    """The conftest's stand-in for LangSmith's API."""
+
+    url: str
+
+    def exported(self, *, within: float) -> bool: ...
+
+
+def customers_environment(
+    endpoint: Endpoint, monkeypatch: pytest.MonkeyPatch, switch: str
+) -> None:
+    monkeypatch.setenv(switch, "true")
+    monkeypatch.setenv("LANGSMITH_ENDPOINT", endpoint.url)
+    monkeypatch.setenv("LANGSMITH_API_KEY", "fake-key-for-tests")
+
+
+def ask_a_verdict_through(client: ChatClient) -> Reply:
+    return asyncio.run(client.call([HumanMessage(content=VERDICT_PROMPT)], [], Verdict))
+
+
+@pytest.mark.parametrize("switch", ["LANGSMITH_TRACING", "LANGCHAIN_TRACING_V2"])
+def test_a_call_through_the_real_adapter_exports_no_trace_from_a_router(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    langsmith_endpoint: Endpoint,
+    cassette: Callable[[str], AbstractContextManager[Any]],
+    switch: str,
+) -> None:
+    customers_environment(langsmith_endpoint, monkeypatch, switch)
+    path = tmp_path / "config.yaml"
+    path.write_text("")
+    model_router = ModelRouter.from_config(load_config(path), build_client)
+
+    with cassette("structured_output"):
+        result = asyncio.run(
+            model_router.call(
+                "navigator",
+                "explore",
+                [HumanMessage(content=VERDICT_PROMPT)],
+                schema=Verdict,
+            )
+        )
+    wait_for_all_tracers()
+
+    assert result.outcome == "ok"
+    assert not langsmith_endpoint.exported(within=1)
+
+
+def test_the_same_call_without_a_router_does_export(
+    monkeypatch: pytest.MonkeyPatch,
+    langsmith_endpoint: Endpoint,
+    cassette: Callable[[str], AbstractContextManager[Any]],
+    sonnet: RoutedModel,
+) -> None:
+    # The control: the stand-in is listening, and only the router's guard keeps
+    # the run from reaching it.
+    customers_environment(langsmith_endpoint, monkeypatch, "LANGSMITH_TRACING")
+
+    with cassette("structured_output"):
+        ask_a_verdict_through(build_client(sonnet, None))
+    wait_for_all_tracers()
+
+    assert langsmith_endpoint.exported(within=5)

@@ -134,7 +134,7 @@ Enforced by Postgres RLS ([DATA_MODEL §3](DATA_MODEL.md#3-row-level-security)):
 
 ## 10. Data privacy
 
-- Customer production-run traces are **never** sent to LangSmith or other third-party observability by default; only benchmark, demo, and development runs are exported. Export turns on only through an aqa-specific setting. An ambient `LANGSMITH_TRACING` in the environment is ignored, so a customer's other tooling can't switch it on by accident: constructing the model router calls `langsmith.configure(enabled=False)` and drops `LANGCHAIN_TRACING` and `LANGCHAIN_HANDLER` from the environment (with tracing off, either makes langchain_core raise on every call). Nothing turns export on in M1 (ADR-0007 amendment, 2026-10-01).
+- Customer production-run traces are **never** sent to LangSmith or other third-party observability by default; only benchmark, demo, and development runs are exported. Export turns on only through an aqa-specific setting. An ambient `LANGSMITH_TRACING` in the environment is ignored, so a customer's other tooling can't switch it on by accident: constructing the model router calls `ignore_ambient_tracing()` (`langsmith.configure(enabled=False)`, and the version 1 variables dropped from the environment: LAB_NOTES, 2026-10-01). It is process-wide, so a LangChain or LangGraph run must start after its router is built, and a process entry point that runs LangChain without one must call the function first; no such entry exists in M1. Nothing turns export on (ADR-0007 amendment, 2026-10-01).
 - LLM calls use the customer's own provider account (BYOK), so the customer's data-processing terms with their provider apply.
 - Retention defaults and org deletion are defined in [DATA_MODEL §5](DATA_MODEL.md#5-retention).
 
