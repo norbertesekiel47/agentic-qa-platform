@@ -77,6 +77,12 @@ CONTAINS = """(element, owner) => {
     return false;
 }"""
 
+# Whether an element with the focus stands for nothing focused: the body, or
+# the document's root.
+NOTHING_FOCUSED = """(element) =>
+    element === element.ownerDocument.body ||
+    element === element.ownerDocument.documentElement"""
+
 # A ref this session gives.
 SESSION_REF = re.compile(r"e([1-9][0-9]{0,17})")
 
@@ -259,11 +265,21 @@ class BrowserSession:
             await element.select_option(option)
 
     async def press(self, key: str) -> None:
-        """Press `key` on the keyboard, once the page and the frame whose
-        document has the focus, where the key goes, are checked."""
+        """Press `key` on the keyboard, once the page, the frame whose document
+        has the focus, where the key goes, and the element with the focus are
+        checked: the element mustn't contain a frame off the allowed origins,
+        into which Tab would move the focus. With nothing focused (the body
+        or the root has the focus), the key goes to the page."""
         async with self._turn:
             await self._require_allowed_page()
-            await self._require_allowed(await self._focused_frame(), "frame")
+            frame, focused = await self._focus()
+            await self._require_allowed(frame, "frame")
+            if focused is not None:
+                try:
+                    if not await focused.evaluate(NOTHING_FOCUSED):
+                        await self._require_no_foreign_frame(focused, frame)
+                finally:
+                    await focused.dispose()
             # https://playwright.dev/python/docs/api/class-keyboard#keyboard-press
             await self.page.keyboard.press(key)
 
@@ -350,6 +366,13 @@ class BrowserSession:
         if frame is None:
             raise self._refuse(PolicyEvent("frame", "", None))
         await self._require_allowed(frame, "frame")
+        await self._require_no_foreign_frame(element, frame)
+
+    async def _require_no_foreign_frame(
+        self, element: ElementHandle, frame: Frame
+    ) -> None:
+        """Record and raise a policy event if `element`, in `frame`, contains a
+        frame, at any depth, that isn't on one of the run's allowed origins."""
         for child in frame.child_frames:
             foreign = await self._foreign_frame(child)
             if foreign is None:
@@ -373,9 +396,10 @@ class BrowserSession:
                 return foreign
         return None
 
-    async def _focused_frame(self) -> Frame:
-        """The frame where a key would go, asking only documents on the run's
-        allowed origins, from the page down.
+    async def _focus(self) -> tuple[Frame, ElementHandle | None]:
+        """Where a key would go, asking only documents on the run's allowed
+        origins, from the page down: the frame, and its focused element when
+        that is no frame's element.
 
         It descends into the allowed child frame whose document has the
         focus (`document.hasFocus()`). Where none has, the focus is in the
@@ -388,9 +412,14 @@ class BrowserSession:
             frame = child
         focused = await frame.evaluate_handle("document.activeElement")
         element = focused.as_element()
-        child = None if element is None else await element.content_frame()
-        await focused.dispose()
-        return frame if child is None else child
+        if element is None:
+            await focused.dispose()
+            return frame, None
+        child = await element.content_frame()
+        if child is None:
+            return frame, element
+        await element.dispose()
+        return child, None
 
     async def _focused_child(self, frame: Frame) -> Frame | None:
         """The child frame of `frame` on an allowed origin whose document has

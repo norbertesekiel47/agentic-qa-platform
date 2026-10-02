@@ -6,14 +6,16 @@ Chromium on the OS that runs them: Linux in CI, macOS locally."""
 import asyncio
 import re
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 from aqa_core.compiled import ByRole, Target
 from aqa_runner import browser_session
 from aqa_runner.document_origins import (
+    REFUSED_BY_KIND,
     PolicyEvent,
     PolicyEventError,
+    PolicyEventKind,
     navigable_origin,
 )
 from aqa_runner.egress import Refusal
@@ -37,6 +39,16 @@ START = "http://app.example.test:8080"
 def sites(monkeypatch: pytest.MonkeyPatch) -> Iterator[Sites]:
     with serving_sites(monkeypatch) as served:
         yield served
+
+
+def test_each_kind_of_policy_event_says_what_it_refused() -> None:
+    assert set(REFUSED_BY_KIND) == set(get_args(PolicyEventKind.__value__))
+    url, origin = "javascript:void(0)", None
+    message = str(PolicyEventError(PolicyEvent("navigation", url, origin)))
+    assert message.startswith(
+        "the URL to navigate to is on no origin a run could allow:"
+    )
+    assert url not in message
 
 
 @pytest.mark.parametrize(
@@ -441,3 +453,24 @@ def test_keys_are_never_pressed_into_a_frame_off_the_allowed_origins(
 
     assert refused.event == PolicyEvent("frame", f"{sites.cdn}/typing", sites.cdn)
     assert values == ["", "x", "b"]
+
+
+def test_press_refuses_a_focused_element_around_a_frame_off_the_allowed_origins(
+    sites: Sites,
+) -> None:
+    async def scenario() -> PolicyEventError:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/focus")
+            # With nothing focused, a key goes to the page, whatever frames
+            # it holds.
+            await session.press("Shift")
+            # The page focuses an element around a subresource host's frame,
+            # from which Tab would move the focus into the frame.
+            await session.page.get_by_label("Wrapper").focus()
+            with pytest.raises(PolicyEventError) as refused:
+                await session.press("Tab")
+            return refused.value
+
+    refused = asyncio.run(scenario())
+
+    assert refused.event == PolicyEvent("frame", f"{sites.cdn}/doc", sites.cdn)

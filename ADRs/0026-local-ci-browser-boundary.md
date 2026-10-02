@@ -377,6 +377,7 @@ The second change of #44 gives the browser session the surface that #46's execut
   - An element with another origin's frame drawn over it, but not inside it, is refused by Playwright's own hit check.
 - **`press(key)`** checks the frame where the key would go, asking only documents on allowed origins.
   - From the page down, it descends into the allowed child frame whose document has the focus (`document.hasFocus()`). Where none has, the key goes to the frame itself, unless that frame's focused element is a frame's element: then to that frame, which is on no allowed origin and is refused.
+  - It also refuses when the focused element contains a frame on no allowed origin, since Tab would move the focus into it. The body and the document's root are exempt: they have the focus when nothing else has, and they contain every frame. A key goes to the focused element, never into a frame inside it, so this is the only way a key reaches such a frame.
   - *Why not `activeElement` alone:* Chromium can leave a document's `activeElement` on a frame that lost the focus to a sibling (LAB_NOTES, 2026-10-02). That reading wrongly refused typing into the app's own frame once a subresource host's frame had had the focus.
   - *Rejected:* asking each frame, the subresource host's included, whether it has the focus. That frame's own scripts answer.
 - **Residual risk.**
