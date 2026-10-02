@@ -5,16 +5,20 @@ import hashlib
 import json
 import re
 import subprocess
+from dataclasses import FrozenInstanceError
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 import pytest
 from aqa_core.price_map import (
     MAP_FILE,
     PIN_FILE,
     VENDORED,
+    ModelInfo,
     PriceMapError,
     load_price_map,
+    vendored,
 )
 
 COMMIT = "6a8e0a270a8a119874c41fa2f479d3dfc965fd9f"
@@ -34,9 +38,22 @@ def write_map(directory: Path, content: str | bytes) -> None:
 
 
 SMALL_MAP = """{
-  "sample_spec": {"input_cost_per_token": 0.0, "litellm_provider": "one of ..."},
-  "model-a": {"input_cost_per_token": 2e-06, "supports_vision": true}
+  "sample_spec": {
+    "input_cost_per_token": 0.0, "output_cost_per_token": 0.0,
+    "supports_function_calling": true, "litellm_provider": "one of ..."
+  },
+  "model-a": {
+    "input_cost_per_token": 2e-06, "output_cost_per_token": 1e-05,
+    "cache_read_input_token_cost": 1.1e-07,
+    "supports_vision": true, "supports_function_calling": true
+  },
+  "image-model": {"mode": "image_generation", "input_cost_per_token": 1e-06}
 }"""
+
+
+def entry(**fields: object) -> str:
+    """A map of one model, `model-a`, with these fields, as JSON."""
+    return json.dumps({"model-a": fields})
 
 
 def test_a_map_that_matches_its_pin_loads_and_cites_the_pinned_commit(
@@ -47,7 +64,7 @@ def test_a_map_that_matches_its_pin_loads_and_cites_the_pinned_commit(
     price_map = load_price_map(tmp_path)
 
     assert price_map.version == COMMIT
-    assert price_map.models["model-a"]["supports_vision"] is True
+    assert price_map.models["model-a"].capabilities == {"vision", "tools"}
 
 
 def test_sample_spec_is_documentation_not_a_model(tmp_path: Path) -> None:
@@ -56,13 +73,17 @@ def test_sample_spec_is_documentation_not_a_model(tmp_path: Path) -> None:
     assert set(load_price_map(tmp_path).models) == {"model-a"}
 
 
-def test_prices_load_as_exact_decimals(tmp_path: Path) -> None:
+def test_prices_load_as_exact_decimals_per_million_tokens(tmp_path: Path) -> None:
     write_map(tmp_path, SMALL_MAP)
 
-    price = load_price_map(tmp_path).models["model-a"]["input_cost_per_token"]
+    info = load_price_map(tmp_path).models["model-a"]
 
-    assert price == Decimal("0.000002")
-    assert isinstance(price, Decimal)
+    assert info.input_usd_per_mtok == Decimal(2)
+    assert info.output_usd_per_mtok == Decimal(10)
+    # 1.1e-07 per token as a float times a million is 0.10999999999999999.
+    assert info.cached_input_usd_per_mtok == Decimal("0.11")
+    assert str(info.cached_input_usd_per_mtok) == "0.11"
+    assert info.source == "map"
 
 
 def test_a_modified_price_map_is_rejected(tmp_path: Path) -> None:
@@ -223,3 +244,125 @@ def test_git_checks_the_vendored_map_out_byte_for_byte() -> None:
     )
 
     assert run.stdout.strip().endswith("text: unset")
+
+
+def test_a_model_with_a_price_but_no_other_is_not_a_priced_model(
+    tmp_path: Path,
+) -> None:
+    write_map(tmp_path, SMALL_MAP)
+
+    assert "image-model" not in load_price_map(tmp_path).models
+
+
+def test_a_model_with_no_cache_read_price_charges_cached_input_at_the_input_rate(
+    tmp_path: Path,
+) -> None:
+    write_map(
+        tmp_path,
+        entry(input_cost_per_token=3e-06, output_cost_per_token=1.5e-05),
+    )
+
+    info = load_price_map(tmp_path).models["model-a"]
+
+    assert info.cached_input_usd_per_mtok == info.input_usd_per_mtok == Decimal(3)
+
+
+def test_a_price_of_zero_is_a_price(tmp_path: Path) -> None:
+    write_map(tmp_path, entry(input_cost_per_token=0, output_cost_per_token=0.0))
+
+    info = load_price_map(tmp_path).models["model-a"]
+
+    assert (info.input_usd_per_mtok, info.output_usd_per_mtok) == (
+        Decimal(0),
+        Decimal(0),
+    )
+    # Written out, not 0E+6.
+    assert str(info.input_usd_per_mtok) == "0"
+
+
+@pytest.mark.parametrize(
+    ("flags", "capabilities"),
+    [
+        ({}, set()),
+        ({"supports_function_calling": True}, {"tools"}),
+        ({"supports_response_schema": True}, {"structured_output"}),
+        ({"supports_vision": True}, {"vision"}),
+        ({"supports_vision": False, "supports_function_calling": True}, {"tools"}),
+        (
+            {
+                "supports_function_calling": True,
+                "supports_response_schema": True,
+                "supports_vision": True,
+            },
+            {"tools", "structured_output", "vision"},
+        ),
+    ],
+    ids=["none", "tools", "structured-output", "vision", "false-flag", "all"],
+)
+def test_the_maps_flags_become_capabilities(
+    tmp_path: Path, flags: dict[str, bool], capabilities: set[str]
+) -> None:
+    write_map(
+        tmp_path,
+        entry(input_cost_per_token=1e-06, output_cost_per_token=2e-06, **flags),
+    )
+
+    assert load_price_map(tmp_path).models["model-a"].capabilities == capabilities
+
+
+@pytest.mark.parametrize(
+    "price",
+    [-1e-06, float("nan"), float("inf"), "0.000002", True, None],
+    ids=["negative", "nan", "infinity", "string", "boolean", "null"],
+)
+@pytest.mark.parametrize(
+    "field",
+    ["input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"],
+)
+def test_a_price_that_is_not_a_finite_number_of_zero_or_more_is_rejected_by_name(
+    tmp_path: Path, field: str, price: object
+) -> None:
+    fields: dict[str, object] = {
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 2e-06,
+        "cache_read_input_token_cost": 1e-07,
+    }
+    write_map(tmp_path, entry(**{**fields, field: price}))
+
+    with pytest.raises(PriceMapError) as raised:
+        load_price_map(tmp_path)
+
+    assert f"'model-a': {field}" in str(raised.value)
+
+
+@pytest.mark.parametrize("flag", ["supports_vision", "supports_function_calling"])
+@pytest.mark.parametrize("value", ["yes", 1, None], ids=["string", "number", "null"])
+def test_a_capability_flag_that_is_not_true_or_false_is_rejected_by_name(
+    tmp_path: Path, flag: str, value: object
+) -> None:
+    write_map(
+        tmp_path,
+        entry(input_cost_per_token=1e-06, output_cost_per_token=2e-06, **{flag: value}),
+    )
+
+    with pytest.raises(PriceMapError) as raised:
+        load_price_map(tmp_path)
+
+    assert f"'model-a': {flag}" in str(raised.value)
+
+
+def test_a_loaded_map_cannot_be_changed(tmp_path: Path) -> None:
+    write_map(tmp_path, SMALL_MAP)
+    models = load_price_map(tmp_path).models
+    info = models["model-a"]
+    rate = "input_usd_per_mtok"
+
+    with pytest.raises(TypeError):
+        cast(dict[str, ModelInfo], models)["model-b"] = info
+    with pytest.raises(FrozenInstanceError):
+        setattr(info, rate, Decimal(0))
+
+
+def test_the_vendored_map_is_loaded_once() -> None:
+    assert vendored() is vendored()
+    assert vendored().version == load_price_map().version
