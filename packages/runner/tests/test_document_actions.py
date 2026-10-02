@@ -11,6 +11,7 @@ from typing import Any, get_args
 import pytest
 from aqa_core.compiled import ByRole, Target
 from aqa_runner import browser_session
+from aqa_runner.browser_session import held_keys
 from aqa_runner.document_origins import (
     REFUSED_BY_KIND,
     PolicyEvent,
@@ -584,3 +585,41 @@ def test_a_click_that_would_land_in_a_frame_off_the_allowed_origins_is_refused(
 
     assert refused.event == PolicyEvent("frame", f"{sites.cdn}/doc", sites.cdn)
     assert landed, "the unchecked click didn't reach the frame"
+
+
+@pytest.mark.parametrize(
+    ("key", "held"),
+    [
+        ("a", []),
+        ("Enter", []),
+        ("Shift+A", ["Shift"]),
+        ("Control+Shift+T", ["Control", "Shift"]),
+        ("ControlOrMeta+a", ["ControlOrMeta"]),
+        ("+", []),
+        ("Shift++", ["Shift"]),
+        ("Tab+a", ["Tab"]),
+        ("a+b+c", ["a", "b"]),
+    ],
+)
+def test_held_keys(key: str, held: list[str]) -> None:
+    assert held_keys(key) == held
+
+
+@pytest.mark.parametrize("key", ["Tab+a", "a+b", "Enter+Shift"])
+def test_press_refuses_a_key_held_down_that_isnt_a_modifier(
+    sites: Sites, key: str
+) -> None:
+    # Tab held down would move the focus, maybe into another origin's frame,
+    # and the next key would follow it there unchecked.
+    async def scenario() -> str:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/fields")
+            name = await session.locate(
+                ref_for(await session.snapshot(), "textbox", "Name")
+            )
+            await session.click(name)
+            with pytest.raises(ValueError, match="modifier"):
+                await session.press(key)
+            return await session.page.get_by_label("Name").input_value()
+
+    assert asyncio.run(scenario()) == "old"

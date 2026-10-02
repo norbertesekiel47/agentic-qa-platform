@@ -135,6 +135,10 @@ NOTHING_FOCUSED = """(element) =>
     element === element.ownerDocument.body ||
     element === element.ownerDocument.documentElement"""
 
+# The keys `press` may hold down before the key it presses
+# (https://playwright.dev/python/docs/api/class-keyboard#keyboard-press).
+MODIFIERS = frozenset({"Shift", "Control", "Alt", "Meta", "ControlOrMeta"})
+
 # A ref this session gives.
 SESSION_REF = re.compile(r"e([1-9][0-9]{0,17})")
 
@@ -330,7 +334,18 @@ class BrowserSession:
         has the focus, where the key goes, and the element with the focus are
         checked: the element mustn't contain a frame off the allowed origins,
         into which Tab would move the focus. With nothing focused (the body
-        or the root has the focus), the key goes to the page."""
+        or the root has the focus), the key goes to the page.
+
+        `key` is one key, with only modifiers held down before it (`Shift+A`,
+        `ControlOrMeta+a`); anything else raises `ValueError`. A key held
+        down, such as Tab in `Tab+a`, could move the focus, and the next key
+        would follow it unchecked."""
+        held = [name for name in held_keys(key) if name not in MODIFIERS]
+        if held:
+            raise ValueError(
+                f"press takes one key, with only modifiers held before it "
+                f"({', '.join(sorted(MODIFIERS))}), not {held[0][:40]!r}"
+            )
         async with self._turn:
             await self._require_allowed_page()
             frame, focused = await self._focus()
@@ -506,6 +521,18 @@ class BrowserSession:
         """Record `event`, and the error to raise for it."""
         self.policy_events.add(event)
         return PolicyEventError(event)
+
+
+def held_keys(key: str) -> list[str]:
+    """The keys `key`, a Playwright key or chord, holds down before its last:
+    `Shift+A` holds Shift. The key `+` is written `+`, or `Shift++` held."""
+    if key.endswith("++"):
+        rest = key[:-2]
+    elif key == "+":
+        rest = ""
+    else:
+        rest = key.rpartition("+")[0]
+    return rest.split("+") if rest else []
 
 
 def renumber(
