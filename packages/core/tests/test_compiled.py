@@ -143,6 +143,9 @@ def test_an_unknown_field_is_rejected(path: tuple[str | int, ...]) -> None:
     ("locator", "kind"),
     [
         ({}, "locator_kind"),
+        # Not an object at all.
+        ("#pay", "locator_kind"),
+        (None, "locator_kind"),
         ({"role": "button", "label": "Pay"}, "locator_kind"),
         ({"name": "Pay"}, "locator_kind"),
         # A name goes only with a role.
@@ -160,7 +163,7 @@ def test_an_unknown_field_is_rejected(path: tuple[str | int, ...]) -> None:
         ),
     ],
 )
-def test_a_malformed_locator_is_rejected(locator: dict[str, Any], kind: str) -> None:
+def test_a_malformed_locator_is_rejected(locator: object, kind: str) -> None:
     script = example()
     script["targets"]["pay_button"]["locators"][0] = locator
 
