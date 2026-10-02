@@ -16,6 +16,7 @@ from aqa_core.browser import BrowserSettings
 from playwright.async_api import ElementHandle, Error, Frame, Page
 
 from aqa_runner.document_origins import (
+    DocumentChangedError,
     PolicyEvent,
     PolicyEventError,
     Records,
@@ -80,6 +81,10 @@ class BrowserSession:
         self._current: dict[str, str] = {}
         self._turn = asyncio.Lock()
         self.policy_events: Records[PolicyEvent] = Records()
+        # Every navigation of any of the page's frames, same-document ones
+        # included (https://playwright.dev/python/docs/api/class-page#page-event-frame-navigated).
+        self._navigations = 0
+        page.on("framenavigated", self._count_navigation)
 
     async def snapshot(self) -> str:
         """The page's accessibility snapshot in Playwright's AI mode
@@ -87,17 +92,25 @@ class BrowserSession:
         with this session's refs, unredacted. It retires every earlier
         snapshot's refs, and page text that imitates a ref reads `(ref=…`.
         A frame on an origin the run doesn't allow shows only its iframe's
-        line, with no ref (`LEFT_OUT`)."""
+        line, with no ref (`LEFT_OUT`).
+
+        If any frame navigates between the page's check and the last frame's,
+        the snapshot could hold a document no check saw, so it is discarded
+        and `DocumentChangedError` raised: the caller takes another."""
         async with self._turn:
             # Retired before the call: Playwright may store this snapshot, and
             # resolve refs against it, even if the call never returns.
             self._current = {}
             self._require_allowed_page()
+            navigations = self._navigations
             taken = await self.page.aria_snapshot(mode="ai")
+            left_out = await self._frames_left_out(taken)
+            # Playwright reports a navigation before the result of anything
+            # that ran in the new document, so a snapshot of it shows here.
+            if self._navigations != navigations:
+                raise DocumentChangedError
             text, self._current = renumber(
-                taken,
-                first=self._refs_given + 1,
-                left_out=await self._frames_left_out(taken),
+                taken, first=self._refs_given + 1, left_out=left_out
             )
             self._refs_given += len(self._current)
             return text
@@ -149,6 +162,9 @@ class BrowserSession:
             if frame is None or origin_of(frame) not in self._policy.allowed_origins:
                 left_out.add(ref)
         return left_out
+
+    def _count_navigation(self, _: Frame) -> None:
+        self._navigations += 1
 
     def _require_allowed_page(self) -> None:
         """Record and raise a policy event unless the session's page is on one
