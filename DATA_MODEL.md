@@ -1,6 +1,6 @@
 # Data Model — Agentic QA Platform
 
-Last updated: 2026-10-02 (model roles and cost records, #40; M1 design decisions, ADR-0024–0026). PostgreSQL 16+ on RDS. Internal IDs are UUIDv7 (time-ordered). External identifiers (Clerk org/user IDs, GitHub IDs) are stored as their native strings/integers and mapped to internal IDs. All timestamps `timestamptz` UTC.
+Last updated: 2026-10-01 (model roles and cost records, #40; M1 design decisions, ADR-0024–0026). PostgreSQL 16+ on RDS. Internal IDs are UUIDv7 (time-ordered). External identifiers (Clerk org/user IDs, GitHub IDs) are stored as their native strings/integers and mapped to internal IDs. All timestamps `timestamptz` UTC.
 
 ## 1. Entity overview
 
@@ -411,7 +411,7 @@ budgets:                      # per explore run (ADR-0024)
 
 **Egress hosts.** `subresource_hosts` and `expected_blocked` list bare host names or IP addresses (an IPv6 address in brackets), with no scheme, port or wildcard. A subresource host is reached only on its scheme's default port: 80 for http, 443 for https and wss, and never over `ws://` (ADR-0026 amendment, 2026-10-01). `private_origins` lists origins; declaring one lets an allowed origin or a subresource host resolve to a private address, and doesn't make it reachable.
 
-**Model roles (ADR-0007 amendment, 2026-10-02).** Each of `navigator`, `verifier`, `healer` and `vision_fallback` defaults to `claude-sonnet-5-5` on `anthropic`, and `roles` overrides a role's `provider`, `model`, `effort` and `fallback`. Config load checks every role and reports all the problems at once, each as `roles.<role>.<field>`:
+**Model roles (ADR-0007 amendment, 2026-10-01).** Each of `navigator`, `verifier`, `healer` and `vision_fallback` defaults to `claude-sonnet-5-5` on `anthropic`, and `roles` overrides a role's `provider`, `model`, `effort` and `fallback`. Config load checks every role and reports every role problem at once, each as `roles.<role>.<field>`, after the file's own shape problems (roles are resolved from a valid file):
 - *Needs:* the model, and the fallback, must have the capabilities the role needs (TECH_STACK §3): `navigator` tools and structured output; `verifier` structured output and vision; `healer` tools, structured output and vision; `vision_fallback` tools and vision.
 - *Priced:* the model must be in the pinned price map or declared under `models`.
 - *Provider:* only `anthropic` has an adapter in M1; another provider is an error that says so. `fallback` names a model of the same provider.

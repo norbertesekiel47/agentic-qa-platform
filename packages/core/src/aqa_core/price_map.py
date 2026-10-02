@@ -40,6 +40,7 @@ class Pin(StrictModel):
 
 
 Capability = Literal["tools", "structured_output", "vision"]
+PriceSource = Literal["map", "config"]
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,7 @@ class ModelInfo:
     input_usd_per_mtok: Decimal
     output_usd_per_mtok: Decimal
     cached_input_usd_per_mtok: Decimal
-    source: Literal["map", "config"]
+    source: PriceSource
 
 
 @dataclass(frozen=True)
@@ -74,7 +75,11 @@ def _problem(detail: ErrorDetails) -> str:
 
 
 def plain(number: Decimal) -> Decimal:
-    """`number` written without an exponent or trailing zeros: 2, 0.11, 1000."""
+    """`number` with no trailing zeros and no positive exponent (1000, not 1E+3),
+    and a zero without a sign. A tiny number still prints as 2E-7: only the
+    value is exact."""
+    if not number:
+        return Decimal(0)
     return Decimal(format(number.normalize(), "f"))
 
 

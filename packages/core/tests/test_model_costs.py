@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from aqa_core.model_costs import AppliedPrices, CostRecord, Status, Usage, cost_record
 from aqa_core.model_roles import RoutedModel, resolve_roles
-from aqa_core.price_map import ModelInfo, vendored
+from aqa_core.price_map import ModelInfo, PriceSource, vendored
 from aqa_core.project import load_config
 from pydantic import ValidationError
 
@@ -16,14 +16,14 @@ USAGE = Usage(input_tokens=1000, cached_input_tokens=400, output_tokens=200)
 
 
 def routed(
-    source: str, input_rate: str, output_rate: str, cached_rate: str
+    source: PriceSource, input_rate: str, output_rate: str, cached_rate: str
 ) -> RoutedModel:
     info = ModelInfo(
         frozenset({"tools"}),
         Decimal(input_rate),
         Decimal(output_rate),
         Decimal(cached_rate),
-        "map" if source == "map" else "config",
+        source,
     )
     return RoutedModel("anthropic", "model-x", info, VERSION)
 

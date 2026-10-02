@@ -90,9 +90,8 @@ def _validate[M: BaseModel](
         raise SpecError(list(_problems(error, path))) from None
 
 
-def load_config(path: Path) -> ProjectConfig:
-    """The project config at `path`. The directory that holds it is the
-    project's spec root (DATA_MODEL §9)."""
+def _read_config(path: Path) -> ProjectConfig:
+    """The project config at `path`, as the file's shape allows."""
     try:
         text = _read_text(path)
     except FileNotFoundError:
@@ -109,13 +108,25 @@ def load_config(path: Path) -> ProjectConfig:
         data = {}
     if not isinstance(data, dict):
         raise SpecError([f"{path}: the project config must be a mapping of keys"])
-    config = _validate(ProjectConfig, data, path)
+    return _validate(ProjectConfig, data, path)
+
+
+def _role_problems(config: ProjectConfig, path: Path) -> list[str]:
+    """Why a role in `config` can't be routed, if one can't (ADR-0007)."""
     try:
         resolve_roles(config, vendored())
     except RoleError as error:
-        raise SpecError(
-            [f"{path}: {key}: {problem}" for key, problem in error.problems]
-        ) from None
+        return [f"{path}: {key}: {problem}" for key, problem in error.problems]
+    return []
+
+
+def load_config(path: Path) -> ProjectConfig:
+    """The project config at `path`. The directory that holds it is the
+    project's spec root (DATA_MODEL §9). Every role must be routable: its model
+    priced, with the capabilities the role needs."""
+    config = _read_config(path)
+    if problems := _role_problems(config, path):
+        raise SpecError(problems)
     return config
 
 
@@ -175,11 +186,17 @@ def load_project(spec_root: Path) -> Project:
     read: every problem in every file is reported together. Each spec carries
     the config's bindings of exactly the test secrets it references."""
     problems: list[str] = []
+    config_path = spec_root / "config.yaml"
+    config: ProjectConfig | None
     try:
-        config: ProjectConfig | None = load_config(spec_root / "config.yaml")
+        config = _read_config(config_path)
     except SpecError as error:
         config = None
         problems.extend(error.problems)
+    if config is not None:
+        # A role that can't be routed leaves the secrets readable, so the specs'
+        # references are still checked.
+        problems.extend(_role_problems(config, config_path))
     # Unknown when the config is invalid, so references aren't checked then.
     declared = None if config is None else frozenset(config.secrets)
     paths: dict[str, Path] = {}
