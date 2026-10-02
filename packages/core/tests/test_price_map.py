@@ -94,11 +94,27 @@ def test_a_pin_that_names_another_sha256_is_rejected(tmp_path: Path) -> None:
     [
         {"commit": "main"},
         {"commit": COMMIT.upper()},
+        {"commit": COMMIT + "0"},
+        {"commit": "zz" + COMMIT + "zz"},
+        {"commit": COMMIT + "\n--- injected"},
         {"sha256": "abc"},
+        {"sha256": "0" * 65},
+        {"sha256": "x" + "0" * 64},
         {"upstream": "someone-else/litellm"},
         {"extra": "key"},
     ],
-    ids=["branch-name", "uppercase-hex", "short-hash", "other-repo", "unknown-key"],
+    ids=[
+        "branch-name",
+        "uppercase-hex",
+        "41-characters",
+        "text-around-the-commit",
+        "text-after-a-newline",
+        "short-hash",
+        "65-characters",
+        "text-before-the-hash",
+        "other-repo",
+        "unknown-key",
+    ],
 )
 def test_a_malformed_pin_is_rejected(tmp_path: Path, change: dict[str, str]) -> None:
     write_map(tmp_path, SMALL_MAP)
@@ -132,3 +148,11 @@ def test_the_vendored_price_map_matches_its_pin_and_prices_the_default_model() -
     )
     # TECH_STACK §3's default for every role.
     assert "claude-sonnet-5-5" in price_map.models
+
+
+def test_a_pin_that_is_not_utf8_is_rejected(tmp_path: Path) -> None:
+    write_map(tmp_path, SMALL_MAP)
+    (tmp_path / PIN_FILE).write_bytes(b'{"commit": "\xff\xfe"}')
+
+    with pytest.raises(PriceMapError, match=PIN_FILE):
+        load_price_map(tmp_path)
