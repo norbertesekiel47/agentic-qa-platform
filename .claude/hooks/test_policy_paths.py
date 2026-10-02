@@ -9,16 +9,22 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 HOOKS = Path(__file__).parent
 HOOK = HOOKS / "policy_guard.py"
 
+TEST_A = "def test_a():\n    assert f(1) == 2\n    assert f(2) == 3\n"
+GATE_SECTIONS = "[tool.coverage.report]\nfail_under = 94\n"
+PACKAGE_JSON = '{\n  "scripts": {\n    "test": "vitest run"\n  }\n}\n'
+WORKFLOW_YML = "on: push\njobs:\n  test:\n    steps:\n      - run: uv run pytest\n"
 
 Result = subprocess.CompletedProcess[str]
 
@@ -81,6 +87,247 @@ class PathTestCase(unittest.TestCase):
         return self.decide(
             "Write", {"file_path": str(self.project / rel), "content": content}
         )
+
+    def assert_bash(self, expected: str, *commands: str) -> None:
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual(self.bash(command), expected)
+
+
+class Added(NamedTuple):
+    """A shape added to one shared definition, an edit that its kind of file
+    is judged on (no `before`: a Write of `new`), and a shell command naming it."""
+
+    definition: str
+    field: str
+    shape: str
+    rel: str
+    before: str | None
+    old: str
+    new: str
+    command: str
+
+
+class SharedDefinitionTests(PathTestCase):
+    ADDED = (
+        Added(
+            "GUARD_NAMES",
+            "files",
+            r"\.claude/zz\.json",
+            ".claude/zz.json",
+            None,
+            "",
+            "{}\n",
+            "rm .claude/zz.json",
+        ),
+        Added(
+            "TEST_NAMES",
+            "files",
+            r"zz_{name}\.py",
+            "pkg/zz_a.py",
+            TEST_A,
+            "    assert f(2) == 3\n",
+            "",
+            "rm pkg/zz_a.py",
+        ),
+        Added(
+            "GATE_WHOLE_NAMES",
+            "files",
+            r"zz-gate\.toml",
+            "zz-gate.toml",
+            None,
+            "",
+            "strict = false\n",
+            "sed -i '' s/a/b/ zz-gate.toml",
+        ),
+        Added(
+            "GATE_SECTION_NAMES",
+            "files",
+            r"zz-sections\.toml",
+            "zz-sections.toml",
+            GATE_SECTIONS,
+            "fail_under = 94",
+            "fail_under = 50",
+            "sed -i '' s/94/50/ zz-sections.toml",
+        ),
+        Added(
+            "PACKAGE_NAMES",
+            "files",
+            r"zz-package\.json",
+            "zz-package.json",
+            PACKAGE_JSON,
+            '"vitest run"',
+            '"true"',
+            "rm zz-package.json",
+        ),
+        Added(
+            "WORKFLOW_NAMES",
+            "dirs",
+            r"\.zz/workflows",
+            ".zz/workflows/ci.yml",
+            WORKFLOW_YML,
+            "uv run pytest",
+            "true",
+            "rm -rf .zz/workflows",
+        ),
+    )
+
+    def guard_with(self, added: Added) -> Path:
+        """A copy of the guard with `added.shape` in its definition."""
+        copies = tempfile.TemporaryDirectory()
+        self.addCleanup(copies.cleanup)
+        copy = Path(copies.name)
+        for module in HOOKS.glob("policy_*.py"):
+            shutil.copy(module, copy / module.name)
+        rules = (copy / "policy_rules.py").read_text()
+        start = f"{added.definition} = NameShapes("
+        self.assertEqual(rules.count(start), 1, start)
+        field = f"{added.field}=("
+        opening = rules.index(field, rules.index(start)) + len(field)
+        rules = rules[:opening] + f'r"{added.shape}", ' + rules[opening:]
+        (copy / "policy_rules.py").write_text(rules)
+        return copy / "policy_guard.py"
+
+    def decisions(self, added: Added) -> tuple[str, str]:
+        """The decisions on the edit and on the shell command."""
+        if added.before is None:
+            edit = self.write(added.rel, added.new)
+        else:
+            self.put(added.rel, added.before)
+            edit = self.edit(added.rel, added.old, added.new)
+        return edit, self.bash(added.command)
+
+    def test_a_name_added_to_a_definition_is_caught_by_an_edit_and_a_shell_command(
+        self,
+    ) -> None:
+        for added in self.ADDED:
+            with self.subTest(definition=added.definition):
+                # Not caught without the new shape, so the copy's catch is its.
+                self.hook = HOOK
+                self.assertEqual(self.decisions(added), ("allow", "allow"))
+                self.hook = self.guard_with(added)
+                self.assertEqual(self.decisions(added), ("ask", "ask"))
+
+
+class ShellNameTests(PathTestCase):
+    def test_shell_writes_to_pytest_config_files_ask(self) -> None:
+        self.assert_bash(
+            "ask",
+            "sed -i '' s/a/b/ pytest.toml",
+            "sed -i '' s/a/b/ .pytest.toml",
+            "sed -i '' s/a/b/ .pytest.ini",
+        )
+
+    def test_shell_test_names_take_any_name_character(self) -> None:
+        self.assert_bash(
+            "ask",
+            "rm packages/a/test_a+b.py",
+            "rm packages/a/test_*.py",
+            "rm 'packages/a/test_[ab].py'",
+            "rm {test_a,test_b}.py",
+        )
+
+    def test_shell_names_a_test_directory(self) -> None:
+        self.assert_bash("ask", "rm -rf apps/web/test", "rm -rf ./test")
+        # A bare `test` that starts a word is the shell's test command.
+        self.assert_bash("allow", "test -f x && rm -f y")
+
+    def test_shell_names_a_gate_directory(self) -> None:
+        self.assert_bash("ask", "rm -rf .github/workflows", "rm -rf .github/scripts")
+
+    def test_doubled_slashes_still_name_a_watched_file(self) -> None:
+        self.assert_bash(
+            "ask",
+            "sed -i '' s/7/11/ .github//scripts/audit-lockfile.sh",
+            "rm .claude//hooks/policy_guard.py",
+        )
+
+    def test_shell_names_may_run_on_past_their_shape(self) -> None:
+        self.assert_bash(
+            "ask",
+            "rm .claude/settings.jsonc",
+            "rm .claude/settings.json5",
+            "rm apps/web/__snapshots__/a.test.ts.snap",
+        )
+
+    def test_shell_keeps_asking_about_names_a_tool_may_read(self) -> None:
+        self.assert_bash(
+            "ask",
+            "rm apps/dashboard/package.json5",
+            "rm packages/a/a_test.pyc",
+            "rm packages/a/conftest.pyc",
+            "rm packages/a/test_a.pyi",
+            "rm .claude/hooks/__pycache__/policy_rules.cpython-314.pyc",
+            "rm .claude/hooks/policy_rules.pyi",
+        )
+
+    def test_shell_skips_inert_near_misses(self) -> None:
+        self.assert_bash(
+            "allow",
+            # A .bak backup, which no tool reads.
+            "cp x .claude/settings.json.bak",
+            "cp pyproject.toml.bak /tmp/",
+            "rm -rf .claude/hooks.bak",
+            # A directory other than the one named.
+            "rm -rf .claude/hooks-old",
+            "rm -rf my.claude/hooks",
+            # A name that another runs into.
+            "rm x.ruff.toml",
+            "rm x.pyproject.toml",
+            "rm base.tsconfig.json",
+        )
+
+    def test_long_commands_are_checked_quickly(self) -> None:
+        for run in ("*", "a*", "/", "test_", "*test_", "x_tes"):
+            with self.subTest(run=run):
+                start = time.perf_counter()
+                self.bash("rm " + run * (100_000 // len(run)))
+                self.assertLess(time.perf_counter() - start, 2.0)
+
+
+class EditNameTests(PathTestCase):
+    def test_renovate_config_changes_ask(self) -> None:
+        # Renovate reads the first of its config files it finds, so a new root
+        # renovate.json would shadow .github/renovate.json.
+        self.put(".github/renovate.json", '{"automerge": false}\n')
+        self.assertEqual(self.edit(".github/renovate.json", "false", "true"), "ask")
+        for rel in ("renovate.json", "renovate.jsonc", ".renovaterc.json5"):
+            with self.subTest(rel=rel):
+                self.assertEqual(self.write(rel, '{"automerge": true}\n'), "ask")
+        self.assert_bash("ask", "mv .github/renovate.json /tmp/")
+
+    def test_gitleaksignore_changes_ask(self) -> None:
+        # An entry there passes the secret scan.
+        entry = "src/a.py:generic-api-key:1\n"
+        self.assertEqual(self.write(".gitleaksignore", entry), "ask")
+        self.assert_bash("ask", f"echo '{entry.strip()}' >> .gitleaksignore")
+
+    def test_nested_ci_scripts_are_gate_config(self) -> None:
+        rel = ".github/scripts/lib/helper.sh"
+        self.put(rel, "#!/usr/bin/env bash\nexit 0\n")
+        self.assertEqual(self.edit(rel, "exit 0", "exit 1"), "ask")
+
+    def test_nested_claude_directories_are_guard_files(self) -> None:
+        self.assertEqual(self.write("apps/x/.claude/settings.json", "{}\n"), "ask")
+        self.assertEqual(self.write("apps/x/.claude/hooks/a.py", "x = 1\n"), "ask")
+
+    def test_a_name_that_runs_on_past_its_shape_is_judged_as_that_kind(self) -> None:
+        self.put("pyproject.toml.orig", GATE_SECTIONS)
+        self.assertEqual(
+            self.edit("pyproject.toml.orig", "fail_under = 94", "fail_under = 50"),
+            "ask",
+        )
+        self.put("apps/dashboard/package.json5", PACKAGE_JSON)
+        self.assertEqual(
+            self.edit("apps/dashboard/package.json5", '"vitest run"', '"true"'),
+            "ask",
+        )
+        self.put("packages/a/test_a.py.orig", TEST_A)
+        self.assertEqual(
+            self.edit("packages/a/test_a.py.orig", "    assert f(2) == 3\n", ""),
+            "ask",
+        )
+        self.assertEqual(self.write(".claude/settings.json.tmp", "{}\n"), "ask")
 
 
 class ScopeTests(PathTestCase):
