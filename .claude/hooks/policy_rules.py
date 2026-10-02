@@ -2,10 +2,11 @@
 
 policy_guard.py holds the checks and the entry points, and its docstring
 describes the rules. This module holds their data: what each rule matches,
-where it applies and what it tells the agent, and the two predicates over the
-scope tables that policy_guard.py and policy_diff.py share. Like the guard, it
-runs on whatever python3 Claude Code finds, so it needs only the standard
-library.
+where it applies and what it tells the agent, the two predicates over the
+scope tables that policy_guard.py and policy_diff.py share, and the builders
+that make the edit check and the shell check for each kind of watched file from
+one definition. Like the guard, it runs on whatever python3 Claude Code finds,
+so it needs only the standard library.
 """
 
 from __future__ import annotations
@@ -34,13 +35,133 @@ DOC_SUFFIXES = frozenset({".md", ".mdx", ".markdown", ".rst", ".txt", ".adoc"})
 
 FILE_TOOLS = frozenset({"Edit", "MultiEdit", "Write", "NotebookEdit"})
 
-# Rule 6: the guard and the settings that load it.
-PROTECTED = re.compile(r"^\.claude/(?:hooks/|settings(?:\.local)?\.json$)")
+# --- watched paths ----------------------------------------------------------------
+# Each kind of file the guard watches is defined once, by the shapes of its
+# names, and both of its checks are built from that one definition:
+# path_pattern() for a project-relative path, as an edit or --diff names it, and
+# shell_pattern() for a shell command that may write one. A name added to a
+# definition is caught by both.
 
-TEST_FILE = re.compile(
-    r"(?:^|/)(?:tests?/.*\.(?:py|[cm]?[jt]sx?)"
-    r"|test_[^/]*\.py|[^/]*_test\.py|conftest\.py"
-    r"|[^/]*\.(?:test|spec)\.[cm]?[jt]sx?)$"
+
+@dataclass(frozen=True)
+class NameShapes:
+    """Files by the shapes of their names: regexes with "/" between path
+    segments and {name} for the characters of one segment.
+
+    `files` match the end of a file's path, in any directory. A name may run on
+    past its shape (`pyproject.toml5`, `test_a.pyc`), since a tool may read such
+    a variant, but not as a `.bak` backup, which none reads. `dirs` are named
+    exactly: their files count when their path below the directory matches
+    `under`. In a shell command a directory stands for every file under it,
+    since one command can move or delete it whole.
+    """
+
+    files: tuple[str, ...] = ()
+    dirs: tuple[str, ...] = ()
+    under: str = ".+"
+
+
+def path_pattern(shapes: NameShapes) -> re.Pattern[str]:
+    """The check for a project-relative path."""
+    names = [rf"(?:{'|'.join(shapes.files)})(?!\.bak$)[^/]*"] if shapes.files else []
+    if shapes.dirs:
+        names.append(f"(?:{'|'.join(shapes.dirs)})/{shapes.under}")
+    body = "|".join(names).replace("{name}", "[^/]*")
+    return re.compile(f"(?:^|/)(?:{body})$")
+
+
+# In a shell command a name also ends at whitespace, a quote or a shell
+# operator, and a {name} part may hold any other character (`test_*.py`), up
+# to a file name's 255.
+_BREAK = r"\s'\"`;&|<>()"
+_SHELL_NAME = rf"[^/{_BREAK}]{{0,255}}"
+# A literal name starts where no word, "." or "-" character runs into it, so
+# not inside `x.ruff.toml`; anything else before it may expand to nothing.
+_NAME_START = r"(?<![\w.-])"
+# A shape that opens with {name} starts only at a segment: the part takes what
+# comes before the literal anyway, and starting after each character of a glob
+# run would scan the run again from each one (LAB_NOTES, 2026-10-02).
+_SEGMENT_START = rf"(?<![^/{_BREAK}])"
+# A bare `test` that starts a word is the shell's test command, not a directory.
+_NOT_TEST_COMMAND = rf"(?:(?<=/)|(?!test(?:[{_BREAK}]|$)))"
+
+
+def shell_pattern(*kinds: NameShapes) -> re.Pattern[str]:
+    """The check for a shell command that names one of `kinds`' files, or a
+    directory that holds them, however many slashes separate its segments."""
+
+    def shell(shape: str) -> str:
+        return shape.replace("/", "/+").replace("{name}", _SHELL_NAME)
+
+    files = [
+        (_SEGMENT_START if shape.startswith("{name}") else _NAME_START)
+        + shell(shape)
+        + r"(?!\.bak(?![\w.-]))"
+        for kind in kinds
+        for shape in kind.files
+    ]
+    dirs = [
+        _NAME_START + _NOT_TEST_COMMAND + shell(d) + r"(?![\w.-])"
+        for kind in kinds
+        for d in kind.dirs
+    ]
+    return re.compile("|".join(files + dirs))
+
+
+# Rule 6: the guard and the settings that load it.
+GUARD_NAMES = NameShapes(
+    files=(r"\.claude/settings(?:\.local)?\.json",),
+    dirs=(r"\.claude/hooks",),
+)
+TEST_NAMES = NameShapes(
+    files=(
+        r"test_{name}\.py",
+        r"{name}_test\.py",
+        r"conftest\.py",
+        r"{name}\.(?:test|spec)\.[cm]?[jt]sx?\b",  # \b: .json isn't .js
+    ),
+    dirs=(r"tests?",),
+    under=r".*\.(?:py|[cm]?[jt]sx?)",
+)
+# Rule 4: quality-gate configs, each kind judged its own way (gate_lines). An
+# entry in .gitleaksignore passes the secret scan, and Renovate reads the first
+# of its config files it finds.
+GATE_WHOLE_NAMES = NameShapes(
+    files=(
+        r"\.?ruff\.toml",
+        r"\.?mypy\.ini",
+        r"\.?pytest\.(?:ini|toml)",
+        r"\.coveragerc",
+        r"pyrightconfig\.json",
+        r"\.pre-commit-config\.ya?ml",
+        r"eslint\.config\.[cm]?[jt]s",
+        r"\.eslintrc(?:\.\w+)?",
+        r"vitest\.(?:config|workspace)\.[cm]?[jt]s",
+        r"tsconfig[\w.-]*\.json",
+        r"\.fallowrc(?:\.jsonc?)?",
+        r"\.?fallow\.toml",
+        r"osv-scanner\.toml",
+        r"CONSTRAINTS\.md",
+        r"\.gitleaksignore",
+        r"renovate\.json[c5]?",
+        r"\.renovaterc(?:\.json[c5]?)?",
+    ),
+    dirs=(r"\.github/scripts",),
+)
+GATE_SECTION_NAMES = NameShapes(files=(r"pyproject\.toml", r"setup\.cfg", r"tox\.ini"))
+PACKAGE_NAMES = NameShapes(files=(r"package\.json",))
+WORKFLOW_NAMES = NameShapes(dirs=(r"\.github/workflows",), under=r"[^/]+\.ya?ml")
+
+PROTECTED = path_pattern(GUARD_NAMES)
+PROTECTED_IN_SHELL = shell_pattern(GUARD_NAMES)
+TEST_FILE = path_pattern(TEST_NAMES)
+TEST_PATH_IN_SHELL = shell_pattern(TEST_NAMES)
+GATE_WHOLE_FILE = path_pattern(GATE_WHOLE_NAMES)
+GATE_SECTION_FILE = path_pattern(GATE_SECTION_NAMES)
+PACKAGE_MANIFEST = path_pattern(PACKAGE_NAMES)
+WORKFLOW = path_pattern(WORKFLOW_NAMES)
+GATE_FILE_IN_SHELL = shell_pattern(
+    GATE_WHOLE_NAMES, GATE_SECTION_NAMES, PACKAGE_NAMES, WORKFLOW_NAMES
 )
 
 # --- rules 1 and 2: content ------------------------------------------------------
@@ -265,13 +386,6 @@ FILE_SECRET_GUIDANCE = (
 
 # --- rule 4: quality-gate configs -------------------------------------------------
 
-GATE_WHOLE_FILE = re.compile(
-    r"(?:^|/)(?:\.?ruff\.toml|\.?mypy\.ini|\.?pytest\.(?:ini|toml)|\.coveragerc|pyrightconfig\.json"
-    r"|\.pre-commit-config\.ya?ml|eslint\.config\.[cm]?[jt]s|\.eslintrc(?:\.\w+)?"
-    r"|vitest\.(?:config|workspace)\.[cm]?[jt]s|tsconfig[\w.-]*\.json|\.github/scripts/[^/]+"
-    r"|\.fallowrc(?:\.jsonc?)?|\.?fallow\.toml|osv-scanner\.toml|CONSTRAINTS\.md)$"
-)
-GATE_SECTION_FILES = frozenset({"pyproject.toml", "setup.cfg", "tox.ini"})
 SECTION_HEADER = re.compile(r"^\[\[?\s*([A-Za-z_][\w.:\s\"-]*?)\s*\]\]?\s*(?:#.*)?$")
 # [tool.uv] holds the litellm ban, which a [tool.uv.sources] entry can override;
 # a workspace member's entry can't, so it doesn't gate.
@@ -284,7 +398,6 @@ PACKAGE_GATE_SCRIPT = re.compile(
     r'^\s*"(?:lint|typecheck|type-check|tsc|test|check|coverage|ci|verify|format:check)'
     r'(?::[\w:.-]+)?"\s*:'
 )
-WORKFLOW = re.compile(r"(?:^|/)\.github/workflows/[^/]+\.ya?ml$")
 # Any workflow line can weaken a gate; only comments and the top-level name
 # can't, unless the name holds a YAML anchor or alias a step could run.
 WORKFLOW_FREE_LINE = re.compile(r"^\s*#|^name\s*:[^&*]*$")
@@ -347,19 +460,6 @@ MESSAGE = re.compile(
     r"""(?m)\\.|\$'(?:\\.|[^'\\])*'|'[^']*'|"(?:\\.|[^"\\])*"|<<-?[ \t]*(['"]?)(\w+)\1([^\n]*\n)(?:[^\n]*\n)*?[ \t]*\2[ \t]*$"""
 )
 ADD_NOQA = re.compile(r"\bruff\b[^;&|\n]*\s--add-noqa\b")
-PROTECTED_IN_SHELL = re.compile(r"\.claude/(?:hooks\b|settings(?:\.local)?\.json\b)")
-GATE_FILE_IN_SHELL = re.compile(
-    r"(?<![\w-])(?:pyproject\.toml|\.?ruff\.toml|\.?mypy\.ini|pytest\.ini|\.coveragerc"
-    r"|setup\.cfg|tox\.ini|pyrightconfig\.json|tsconfig[\w.-]*\.json"
-    r"|eslint\.config\.[cm]?[jt]s|\.eslintrc|vitest\.(?:config|workspace)\.[cm]?[jt]s"
-    r"|\.pre-commit-config\.ya?ml|package\.json|\.github/(?:workflows|scripts)/"
-    r"|\.fallowrc(?:\.jsonc?)?|\.?fallow\.toml|osv-scanner\.toml|CONSTRAINTS\.md)"
-)
-# A test file or directory named in a shell command: TEST_FILE's shapes.
-TEST_PATH_IN_SHELL = re.compile(
-    r"(?<![\w.-])(?:tests?/|tests(?![\w.-])|test_[\w.-]*\.py|[\w.-]*_test\.py"
-    r"|conftest\.py|[\w.-]*\.(?:test|spec)\.[cm]?[jt]sx?(?![\w.-]))"
-)
 
 # --- tree scan ------------------------------------------------------------------------
 

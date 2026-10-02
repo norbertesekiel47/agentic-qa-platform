@@ -467,6 +467,13 @@ class GateTests(DiffTestCase):
         self.put("osv-scanner.toml", '[[IgnoredVulns]]\nid = "GHSA-fake-0000-0000"\n')
         self.assert_needs_approval("osv-scanner.toml")
 
+    def test_a_renovate_config_that_appears_needs_approval(self) -> None:
+        # Renovate reads the first config file it finds: a new root one
+        # shadows .github/renovate.json.
+        self.on_main({".github/renovate.json": '{"automerge": false}\n'})
+        self.put("renovate.json", '{"automerge": true}\n')
+        self.assert_needs_approval("renovate.json")
+
 
 class OutputTests(DiffTestCase):
     # Assembled at runtime, so this file holds no credential-shaped literal.

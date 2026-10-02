@@ -39,8 +39,9 @@ Escalated to the user
 4. Any change to a quality-gate config: ruff / mypy / pytest / coverage /
    pyright settings, ``[tool.uv]`` and ``[tool.uv.sources]`` (the litellm ban),
    CONSTRAINTS.md, tsconfig, eslint, vitest and fallow configs, osv-scanner
-   waivers, pre-commit, gate scripts in package.json, CI workflows (all but
-   comments and the top-level name) and CI scripts. Tightening prompts too: the
+   and gitleaks waivers, Renovate's config, pre-commit, gate scripts in
+   package.json, CI workflows (all but comments and the top-level name) and
+   every file under ``.github/scripts/``. Tightening prompts too: the
    bar moves only with a human in the loop. Creating one of these files prompts
    once, which is how the initial bar gets approved.
 5. A test-file edit that leaves fewer assertions or tests, and a shell
@@ -50,9 +51,9 @@ Escalated to the user
    expectation keeps every assertion, a gate config file that comes or goes
    (the tools read even an empty one), and a symbolic link.
 6. Edits to this guard or the settings that load it (``.claude/hooks/``,
-   ``.claude/settings*.json``), including shell writes that name them and
-   installers that rewrite them without naming them (``fallow hooks install``,
-   ``fallow agent install``; ``--dry-run`` is fine).
+   ``.claude/settings*.json``, in any ``.claude`` directory), including shell
+   writes that name them and installers that rewrite them without naming them
+   (``fallow hooks install``, ``fallow agent install``; ``--dry-run`` is fine).
 
 Excuses
 -------
@@ -77,6 +78,14 @@ and skips the content of lockfiles and binaries. It prints each finding's file
 and reason, never a gate config's changed lines, and cuts every credential it
 recognises short, so a CI log holds none.
 
+Each kind of watched file (rules 4-6) is defined once, by the shapes of its
+names (``NameShapes`` in ``policy_rules.py``), and its edit check and its shell
+check are built from that definition. A name may run on past its shape
+(``pyproject.toml5``, ``test_a.pyc``), but not as a ``.bak`` backup, and a
+directory is named exactly (not ``.claude/hooks-old``). In a shell command a
+name also ends at whitespace, a quote or an operator, its segments may sit
+behind several slashes, and a directory stands for every file under it.
+
 Known gaps, stated rather than hidden
 -------------------------------------
 * A strong assertion swapped for a weaker one (``==`` to ``in``, an exact
@@ -85,10 +94,13 @@ Known gaps, stated rather than hidden
   ``PASSWORD=...`` detection runs on shell commands only.
 * Shell writes are recognised heuristically. The Stop scan backstops rules
   1-3; rules 4-6 have no backstop for a write through an opaque script. A
-  test file deleted by ``find -delete``, a glob or a script goes unseen, as
-  does quoted text in a command that commits. A mutating command that names a
-  test path asks, even a formatter run or test output sent to ``tee``, and a
-  shell write is judged as source (write a test fake's stub with Write).
+  watched file goes unseen when a ``find -delete`` or a script deletes it, a
+  glob stands in its fixed part (``pyproj*.toml``), a ``cd`` comes before its
+  bare name, or its name holds a space; so does a bare ``test`` directory that
+  starts a word (the shell's ``test`` command), and quoted text in a command
+  that commits. A mutating command that names a test path asks, even a
+  formatter run or test output sent to ``tee``, and a shell write is judged as
+  source (write a test fake's stub with Write).
 * This is a guardrail, not a security boundary. Other agents (Codex, Cursor)
   do not run Claude Code hooks. CI's ``--diff`` sees their changes, but runs
   the pull request's own copy of this guard and of its workflow, so a pull
@@ -139,7 +151,7 @@ from policy_rules import (
     FILE_TOOLS,
     GATE_FILE_IN_SHELL,
     GATE_SECTION,
-    GATE_SECTION_FILES,
+    GATE_SECTION_FILE,
     GATE_WHOLE_FILE,
     GENERATED,
     GUIDANCE,
@@ -148,6 +160,7 @@ from policy_rules import (
     MESSAGE,
     NON_SECRET_SUFFIX,
     PACKAGE_GATE_SCRIPT,
+    PACKAGE_MANIFEST,
     PLACEHOLDER,
     PROTECTED,
     PROTECTED_IN_SHELL,
@@ -310,11 +323,10 @@ def find_secrets(command: str) -> list[str]:
 def gate_lines(rel: str, text: str) -> list[str] | None:
     """The quality-gate part of `rel` as comparable lines, or None if it has none."""
     lines = text.splitlines()
-    name = rel.rsplit("/", 1)[-1]
     selected: list[str]
     if GATE_WHOLE_FILE.search(rel):
         selected = lines
-    elif name in GATE_SECTION_FILES:
+    elif GATE_SECTION_FILE.search(rel):
         selected, inside = [], False
         for line in lines:
             header = SECTION_HEADER.match(line)
@@ -322,7 +334,7 @@ def gate_lines(rel: str, text: str) -> list[str] | None:
                 inside = bool(GATE_SECTION.match(header.group(1)))
             if inside and not WORKSPACE_MEMBER.match(line):
                 selected.append(line)
-    elif name == "package.json":
+    elif PACKAGE_MANIFEST.search(rel):
         selected = [line for line in lines if PACKAGE_GATE_SCRIPT.match(line)]
     elif WORKFLOW.search(rel):
         selected = [line for line in lines if not WORKFLOW_FREE_LINE.match(line)]
