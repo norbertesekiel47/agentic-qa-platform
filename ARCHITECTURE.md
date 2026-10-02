@@ -188,7 +188,7 @@ Credentials that arrive before the tenant is known (API keys, OIDC exchanges, Gi
 |---|---|
 | Runner hits the Lambda 15-min limit | Continuation per §3.3 (new lease + token, max 3); non-resumable specs end `errored: non_resumable` |
 | Runner crash mid-step | One retry from the last checkpoint **only if** no `side_effect` step is in flight; otherwise `errored` with logs |
-| LLM provider 429/5xx | Exponential backoff; optional per-role fallback model from org config |
+| LLM provider 429/5xx | The SDK retries with exponential backoff (two retries); the call then raises, and records nothing if no response ever arrived. A role's fallback model answers a refusal, not a provider error (ADR-0007 amendment, 2026-10-01) |
 | Duplicate SQS delivery | Idempotency key on dispatch; runner claims the run atomically |
 | GitHub webhook redelivery | `webhook_events` dedupe by delivery ID |
 | Flaky page load | Bounded, step-scoped waits: the step's own requests finish and the DOM is stable (ADR-0024); flake counted, never silently retried away |
