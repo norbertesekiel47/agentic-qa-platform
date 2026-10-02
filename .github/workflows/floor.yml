@@ -7,11 +7,10 @@
 #   gate config, an edit to the guard) fails it unless the maintainer has put
 #   the floor-change-approved label on the pull request.
 #
-# The label approves the head it was applied to: on a new push (synchronize)
-# the job ignores it, so approval-class findings fail again until the
-# maintainer removes and re-adds the label. Adding or removing a label starts a
-# run of its own, which reads the labels as they are then. This workflow is
-# separate from ci.yml so that a label change runs only this job.
+# AQA_FLOOR_CHANGE_APPROVED below is that approval; ADR-0028's amendment owns
+# when it holds. A label change starts a run of its own, which reads the labels
+# as they are then: this workflow is separate from ci.yml so that a label
+# change runs only this job.
 #
 # Runner, supply-chain and token notes: ci.yml's header (ADR-0019, ADR-0029).
 
@@ -38,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Every branch's history, so origin/main and the merge base resolve.
+          # Every branch's history, so main and the merge base resolve.
           fetch-depth: 0
           persist-credentials: false
       # The guard runs on a bare interpreter, as Claude Code runs it.
@@ -46,4 +45,8 @@ jobs:
         with:
           python-version: "3.14"
       - name: The floor's moves since main
-        run: python .claude/hooks/policy_guard.py --diff origin/main
+        env:
+          # A committed __pycache__ can't stand in for the guard's source.
+          PYTHONPYCACHEPREFIX: ${{ runner.temp }}/pycache
+        # The full ref: a tag named origin/main would win over a short name.
+        run: python .claude/hooks/policy_guard.py --diff refs/remotes/origin/main
