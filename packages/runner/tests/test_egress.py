@@ -82,8 +82,11 @@ ALWAYS_REFUSED = [
         # NAT64's local-use prefix (RFC 8215), whose IPv4 can't be read back
         "64:ff9b:1::a9fe:a9fe",
         "64:ff9b:1::1",
+        "64:ff9b:1:ffff::1",
         "fd00:ec2::254",  # AWS instance metadata over IPv6
+        "fd00:ec2::254%1",  # with a scope
         "fd00:ec2::23",  # EKS Pod Identity's credentials over IPv6
+        "fd00:ec2:ffff::1",  # anywhere in AWS's fd00:ec2::/32
         "fd20:ce::254",  # GCP's metadata server on IPv6-only VMs
         "fd00:c1::a9fe:a9fe",  # OCI's instance metadata over IPv6
         "100.100.100.200",  # Alibaba Cloud metadata
@@ -298,6 +301,18 @@ async def reached(egress: EgressGate, host: str, port: int) -> str:
         await writer.wait_closed()
 
 
+def spy_on_dialling(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Every address the gate dials from now on, none of which answers."""
+    dialled: list[str] = []
+
+    async def dial(host: str, port: int) -> Connection:
+        dialled.append(f"{host} {port}")
+        raise ConnectionRefusedError
+
+    monkeypatch.setattr(asyncio, "open_connection", dial)
+    return dialled
+
+
 def run_policy(
     port: int, *, private: Sequence[str] = (), other: Sequence[str] = ()
 ) -> EgressPolicy:
@@ -336,8 +351,32 @@ def test_a_host_outside_the_allowlist_is_refused_before_any_lookup() -> None:
     assert egress.refusals == [refused.refusal]
     assert (refused.refusal.host, refused.refusal.port) == ("evil.example.test", 443)
     assert refused.refusal.kind == "host"
+    assert "evil.example.test:443" in str(refused)
     assert resolver.lookups == Counter()
     assert egress.infrastructure_events == []
+
+
+def test_the_requester_decides_a_subresource_hosts_port() -> None:
+    # A subresource host passes on 443 for a tunnel only. Its answer is then
+    # judged by the IP policy, which refuses it: proof the allowlist passed.
+    async def scenario() -> list[str]:
+        egress = EgressGate(
+            EgressPolicy(
+                allowed_origins=("http://127.0.0.1:4100",),
+                subresource_hosts=("cdn.example.test",),
+                private_origins=("http://127.0.0.1:4100",),
+            ),
+            resolve=ScriptedResolver({"cdn.example.test": ["169.254.169.254"]}),
+        )
+        kinds: list[str] = []
+        requesters: tuple[Requester, ...] = ("request", "tunnel")
+        for requester in requesters:
+            with pytest.raises(EgressRefusedError) as refused:
+                await egress.connect("cdn.example.test", 443, requester)
+            kinds.append(refused.value.refusal.kind)
+        return kinds
+
+    assert asyncio.run(scenario()) == ["host", "address"]
 
 
 def test_start_origin_on_loopback_and_a_declared_private_origin_are_allowed() -> None:
@@ -377,25 +416,25 @@ def test_start_origin_on_loopback_and_a_declared_private_origin_are_allowed() ->
     ],
 )
 def test_a_private_or_loopback_address_behind_an_allowed_origin_is_refused(
-    origin: str, answers: Answers
+    origin: str, answers: Answers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def scenario() -> tuple[EgressGate, EgressRefusedError, list[str]]:
-        async with loopback_servers() as servers:
-            allowed = origin.format(port=servers.port)
-            egress = EgressGate(
-                run_policy(servers.port, other=[allowed]),
-                resolve=ScriptedResolver(answers),
-            )
-            host, _ = authority(allowed)
-            with pytest.raises(EgressRefusedError) as refused:
-                await egress.connect(host, servers.port, "request")
-            return egress, refused.value, servers.accepted
+    dialled = spy_on_dialling(monkeypatch)
+    allowed = origin.format(port=4200)
+    host, port = authority(allowed)
 
-    egress, refused, accepted = asyncio.run(scenario())
+    async def scenario() -> tuple[EgressGate, EgressRefusedError]:
+        egress = EgressGate(
+            run_policy(4100, other=[allowed]), resolve=ScriptedResolver(answers)
+        )
+        with pytest.raises(EgressRefusedError) as refused:
+            await egress.connect(host, port, "request")
+        return egress, refused.value
+
+    egress, refused = asyncio.run(scenario())
 
     assert refused.refusal.kind == "address"
     assert egress.refusals == [refused.refusal]
-    assert accepted == []
+    assert dialled == []
 
 
 @pytest.mark.parametrize(
@@ -406,13 +445,7 @@ def test_a_private_or_loopback_address_behind_an_allowed_origin_is_refused(
 def test_a_private_origin_resolving_to_metadata_is_refused_without_connecting(
     answer: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    dialled: list[str] = []
-
-    async def dial(host: str, port: int) -> Connection:
-        dialled.append(f"{host} {port}")
-        raise ConnectionRefusedError
-
-    monkeypatch.setattr(asyncio, "open_connection", dial)
+    dialled = spy_on_dialling(monkeypatch)
 
     async def scenario() -> tuple[EgressGate, EgressRefusedError]:
         private = "http://staging.example.test:8080"
@@ -430,6 +463,7 @@ def test_a_private_origin_resolving_to_metadata_is_refused_without_connecting(
     # policy passes.
     assert dialled == []
     assert refused.refusal.kind == "address"
+    assert "169.254.169.254" in refused.refusal.detail
     assert egress.refusals == [refused.refusal]
     assert egress.infrastructure_events == []
 
@@ -598,6 +632,8 @@ def test_an_unresolvable_name_is_an_infrastructure_event(
 
     assert egress.infrastructure_events == [failed.event]
     assert (failed.event.host, failed.event.port) == ("app.example.test", 8080)
+    assert "app.example.test" in failed.event.cause
+    assert "app.example.test:8080" in str(failed)
     assert egress.refusals == []
 
 
@@ -614,6 +650,7 @@ def test_an_unreachable_address_is_an_infrastructure_event() -> None:
 
     assert egress.infrastructure_events == [failed.event]
     assert (failed.event.host, failed.event.port) == ("127.0.0.1", port)
+    assert "127.0.0.1" in failed.event.cause
 
 
 def test_the_system_resolver_answers_by_default() -> None:
