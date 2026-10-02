@@ -4,9 +4,9 @@ policy_guard.py judges each changed file with the check an edit gets, and holds
 the ``--diff`` entry point. This module finds the files the working tree changes
 since the merge base, reads both sides as git stores them, and adds the asks
 that only a whole-file view can raise: a deleted test file, a gate config file
-that comes or goes, a changed file that proves the bar, a symbolic link. Like
-the guard, it runs on whatever python3 Claude Code finds, so it needs only the
-standard library.
+that comes or goes or can't be read, a changed file that proves the bar, a
+symbolic link. Like the guard, it runs on whatever python3 Claude Code finds,
+so it needs only the standard library.
 """
 
 from __future__ import annotations

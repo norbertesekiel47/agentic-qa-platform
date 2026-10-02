@@ -2,7 +2,7 @@
 """Guard for the AGENTS.md rules that get bent under pressure to go green.
 
 Four entry points, one rule set (its tables are in ``policy_rules.py``;
-``--diff``'s reading of git is in ``policy_diff.py``):
+``--diff``'s reading of git and its own asks are in ``policy_diff.py``):
 
 * PreToolUse (default): checks each Bash / Edit / Write / NotebookEdit call
   before it runs. Clear violations are refused; changes that need judgment are
