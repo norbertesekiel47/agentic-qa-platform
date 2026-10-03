@@ -101,15 +101,14 @@ class RunRecord:
         )
 
     def _append(self, line: Mapping[str, object]) -> None:
-        """Append `line`, with the time, to `STEPS` and force it to disk,
-        and the directory too when the file is new. The JSON is made before
-        the file is opened, so a line that can't be written leaves the file
-        as it was."""
-        text = json.dumps(
-            {**line, "at": datetime.now(UTC).isoformat()},
-            sort_keys=True,
-            ensure_ascii=False,
-        )
+        """Append `line`, with the time, to `STEPS` and force it to disk.
+        When the file is new, every directory from the run's up to the spec
+        root, which existed before the run, is forced too: a new entry is on
+        disk only once its directory is. The JSON is made before the file is
+        opened, so a line that can't be written leaves the file as it was,
+        and it is ASCII, so no character of a value, such as U+2028, can end
+        the line for a reader."""
+        text = json.dumps({**line, "at": datetime.now(UTC).isoformat()}, sort_keys=True)
         steps = self.path / STEPS
         new = not steps.exists()
         with steps.open("a", encoding="utf-8") as file:
@@ -118,8 +117,10 @@ class RunRecord:
             # https://docs.python.org/3.14/library/os.html#os.fsync
             os.fsync(file.fileno())
         if new:
-            directory = os.open(self.path, os.O_RDONLY)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+            # The run's directory, `runs`, `.aqa` and the spec root (`create`).
+            for directory in (self.path, *self.path.parents[:3]):
+                handle = os.open(directory, os.O_RDONLY)
+                try:
+                    os.fsync(handle)
+                finally:
+                    os.close(handle)

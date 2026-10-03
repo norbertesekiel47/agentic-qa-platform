@@ -64,6 +64,32 @@ PAGES = {
         });
         fetch("/did/env?" + settings);
     </script>""",
+    # A page that leaves for a host the run doesn't allow 1.5 s after it loads.
+    "leaves": """<script>
+        setTimeout(() => {
+            location = location.origin.replace("127.0.0.1", "localhost") + "/page/form";
+        }, 1500);
+    </script>""",
+    # A popup to such a host 0.8 s after the page loads, and a pay button
+    # that appears 2 s after it.
+    "popup-then-pay": """<script>
+        const elsewhere = location.origin.replace("127.0.0.1", "localhost") + "/page/form";
+        setTimeout(() => window.open(elsewhere), 800);
+        setTimeout(() => {
+            const pay = document.createElement("button");
+            pay.textContent = "Pay";
+            pay.addEventListener("click", () => fetch("/write/pay", {method: "POST"}));
+            document.body.append(pay);
+        }, 2000);
+    </script>""",
+    # A field whose focus handler never returns, and one whose page makes
+    # filling throw a long message with a terminal escape in it.
+    "stall": """<label>Name <input onfocus="for (;;) {}"></label>""",
+    "throws": """<label>Name <input></label><script>
+        document.execCommand = () => {
+            throw new Error("\\x1b[31m" + "x".repeat(100000));
+        };
+    </script>""",
     "form": """<label>Name <input oninput="fetch('/did/fill')"></label>
         <label>Size <select onchange="fetch('/did/select')">
             <option>S</option><option>M</option></select></label>

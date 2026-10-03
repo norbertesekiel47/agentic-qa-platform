@@ -8,7 +8,7 @@ It acts and observes only through the browser session's methods, which check
 every document they touch (ADR-0026's amendments on document origins)."""
 
 import asyncio
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -48,6 +48,16 @@ LOOK_SECONDS = 0.1
 # bounded by the run's `resolve_seconds` instead (ADR-0024's #46 amendment).
 NAVIGATION_SECONDS = 30
 
+# How long past those bounds the executor waits for an action before it stops
+# waiting: Playwright's own error, which says what it waited for, comes
+# first, and this catches what Playwright doesn't time, such as a page script
+# that never returns while a field is filled.
+MARGIN_SECONDS = 1
+
+# The most of a failed step's reason kept: the rest of Playwright's message
+# can hold what the page chose.
+REASON_CHARS = 200
+
 # The checks M1 evaluates; #48 adds the others (DATA_MODEL §7).
 EVALUATED = frozenset({"text_visible", "text_in_target", "not_visible", "url_matches"})
 
@@ -79,13 +89,16 @@ class RunSetup:
 
 
 @dataclass(frozen=True)
-class _Intent:
-    """A step about to be dispatched, as its intent line records it."""
+class _Dispatch:
+    """A step about to be dispatched: what its intent line records, how long
+    its action may take, and the locator that found its target."""
 
     seq: int
     action: dict[str, object]
     side_effect: bool
+    wait: float
     target: str | None = None
+    locator_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -151,50 +164,49 @@ async def replay(
             action_seconds=setup.config.budgets.resolve_seconds,
             navigation_seconds=NAVIGATION_SECONDS,
         )
+
+        def interrupted() -> bool:
+            """Whether the gate couldn't reach an allowed host, or the session
+            met a document off the allowed origins: what a policy event does
+            to a run is #47's, and until then it ends the run errored."""
+            return bool(gate.infrastructure_events) or session.policy_events.total > 0
+
+        # Seq 0 is no compiled step: a compiled script's steps start at 1.
         first = start_url(setup.spec, setup.start)
         path = setup.spec.frontmatter.preconditions.start_url
         steps.append(
             await _dispatched(
                 session,
                 record,
-                _Intent(0, {"action": "navigate", "url": path}, side_effect=False),
+                _Dispatch(
+                    0, {"action": "navigate", "url": path}, False, NAVIGATION_SECONDS
+                ),
                 lambda: session.navigate(first),
             )
         )
         for step in runnable:
-            if _stopped(steps, session, gate):
+            if steps[-1].outcome != "completed" or interrupted():
                 break
-            steps.append(await _run(session, setup, script, step))
-        stopped = steps[-1].seq if _stopped(steps, session, gate) else None
+            result = await _run(session, setup, script, step, interrupted)
+            if result is None:
+                break
+            steps.append(result)
+        stops = steps[-1].outcome != "completed" or interrupted()
+        errored = interrupted() or any(step.outcome == "failed" for step in steps)
         policy_events = tuple(session.policy_events.kept)
     assertions = tuple(
-        AssertionResult(assertion.id, "not_evaluated", stopped)
+        AssertionResult(assertion.id, "not_evaluated", steps[-1].seq if stops else None)
         for assertion in script.assertions
-    )
-    errored = bool(gate.infrastructure_events or policy_events) or any(
-        step.outcome == "failed" for step in steps
     )
     return RunResult(
         record.run_id,
-        _outcome(errored=errored),
+        # A run passes only when every step completed and every assertion
+        # passed, and no assertion is evaluated yet.
+        "errored" if errored else "failed",
         tuple(steps),
         assertions,
         tuple(gate.infrastructure_events),
         policy_events,
-    )
-
-
-def _stopped(
-    steps: Sequence[StepResult], session: BrowserSession, gate: EgressGate
-) -> bool:
-    """Whether the run stops after the last step: it didn't complete, or the
-    gate couldn't reach an allowed host, or the session met a document off
-    the allowed origins (what a policy event does to a run is #47's; until
-    then it ends the run errored)."""
-    return (
-        steps[-1].outcome != "completed"
-        or bool(gate.infrastructure_events)
-        or session.policy_events.total > 0
     )
 
 
@@ -229,29 +241,41 @@ async def _run(
     setup: RunSetup,
     script: CompiledScript,
     step: Targeted | Untargeted,
-) -> StepResult:
+    interrupted: Callable[[], bool],
+) -> StepResult | None:
     """Resolve `step`'s target, if it has one, then record, dispatch and
-    settle it."""
+    settle it. None when the run was `interrupted` while the target was
+    looked for: nothing is dispatched after that."""
+    budget = setup.config.budgets.resolve_seconds
     action = step.model_dump(
         mode="json", exclude={"seq", "side_effect", "side_effect_basis", "satisfies"}
     )
     if isinstance(step, Navigate | Reload | Press):
+        wait = budget if isinstance(step, Press) else NAVIGATION_SECONDS
         return await _dispatched(
             session,
             setup.record,
-            _Intent(step.seq, action, step.side_effect),
+            _Dispatch(step.seq, action, step.side_effect, wait),
             lambda: _untargeted(session, step, setup.start),
         )
-    target = script.targets[step.target]
-    found = await _resolve(session, target, setup.config.budgets.resolve_seconds)
+    try:
+        found = await _resolve(session, script.targets[step.target], budget)
+    except (Error, PolicyEventError) as error:
+        # A look the session refused (a page off the allowed origins), or
+        # Playwright's general error type (a crashed page): nothing was
+        # dispatched, so there is no intent, and the run stops.
+        return StepResult(step.seq, "failed", error=_described(error))
     if not isinstance(found, Resolved):
         return StepResult(step.seq, "drifted", misses=found.misses)
+    if interrupted():
+        return None
     return await _dispatched(
         session,
         setup.record,
-        _Intent(step.seq, action, step.side_effect, step.target),
+        _Dispatch(
+            step.seq, action, step.side_effect, budget, step.target, found.locator_index
+        ),
         lambda: _targeted(session, step, found.element),
-        found.locator_index,
     )
 
 
@@ -306,25 +330,31 @@ async def _resolve(
             if isinstance(found, Resolved):
                 return found
             last = found
-        await asyncio.sleep(LOOK_SECONDS)
+        await asyncio.sleep(min(LOOK_SECONDS, max(0.0, deadline - loop.time())))
     return last
 
 
 async def _dispatched(
     session: BrowserSession,
     record: RunRecord,
-    intent: _Intent,
+    dispatch: _Dispatch,
     act: Callable[[], Awaitable[Window]],
-    locator_index: int | None = None,
 ) -> StepResult:
-    """Record `intent`, then dispatch its step with `act`, settle it, and
-    record its completion with the locator that found its target."""
-    seq = intent.seq
+    """Record `dispatch`'s intent, then dispatch its step with `act`, giving
+    it up to `MARGIN_SECONDS` past its wait, settle it, and record its
+    completion with the locator that found its target."""
+    seq, index = dispatch.seq, dispatch.locator_index
     record.step_intent(
-        seq, intent.action, side_effect=intent.side_effect, target_used=intent.target
+        seq,
+        dispatch.action,
+        side_effect=dispatch.side_effect,
+        target_used=dispatch.target,
     )
+    seconds = dispatch.wait + MARGIN_SECONDS
+    limit = asyncio.timeout(seconds)
     try:
-        window = await act()
+        async with limit:
+            window = await act()
         settled = await session.settle(window)
     except (Error, PolicyEventError) as error:
         # Playwright's general error type (a failed navigation, an action
@@ -332,13 +362,28 @@ async def _dispatched(
         # origins, raised between the intent and the completion: whether
         # the action took effect is unknown, so its intent stays unresolved
         # and the run stops.
-        return StepResult(seq, "failed", error=str(error))
-    record.step_completed(seq, locator_used=locator_index, settled=settled)
-    return StepResult(seq, "completed", window, locator_index, settled)
+        return StepResult(seq, "failed", error=_described(error))
+    except TimeoutError:
+        if not limit.expired():
+            raise  # not the action's own limit
+        return StepResult(
+            seq, "failed", error=f"the action didn't finish within {seconds} s"
+        )
+    record.step_completed(seq, locator_used=index, settled=settled)
+    return StepResult(seq, "completed", window, index, settled)
 
 
-def _outcome(*, errored: bool) -> RunOutcome:
-    """`errored` when told. Otherwise `failed`: a run passes only when every
-    step completed and every assertion passed, and no assertion is
-    evaluated yet."""
-    return "errored" if errored else "failed"
+def _described(error: Error | PolicyEventError) -> str:
+    """What raised, as a failed step's reason: a policy event's message,
+    which names only an origin, or the first line of Playwright's, with
+    what isn't printable escaped, at most `REASON_CHARS` in all. The rest of
+    Playwright's message can hold what the page chose (#49 must keep it
+    from a filled secret)."""
+    if isinstance(error, PolicyEventError):
+        return str(error)
+    line = str(error).split("\n", 1)[0]
+    shown = "".join(
+        char if char.isprintable() else char.encode("unicode_escape").decode("ascii")
+        for char in line
+    )
+    return f"{type(error).__name__}: {shown}"[:REASON_CHARS]

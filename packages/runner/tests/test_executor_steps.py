@@ -477,3 +477,123 @@ def test_a_navigation_waits_up_to_its_own_bound_not_resolve_seconds(
     step = result.steps[1]
     assert step.outcome == "failed"
     assert "Timeout 2000ms exceeded" in (step.error or "")
+
+
+def test_a_lookup_that_meets_a_page_off_the_allowed_origins_stops_the_run_errored(
+    app: App, tmp_path: Path
+) -> None:
+    targets = {
+        "never": {
+            "semantic": "a button that never comes",
+            "locators": [by_role("button", "Never")],
+        }
+    }
+    script = compiled(
+        [{"seq": 1, "action": "click", "target": "never", "side_effect": False}],
+        targets=targets,
+    )
+    spec = a_spec(tmp_path, ProjectConfig(), start_url="/page/leaves")
+
+    done = run(app, tmp_path, script, spec=spec)
+
+    result = done.result
+    # The look itself was refused; nothing was dispatched, so no intent.
+    assert [(step.seq, step.outcome) for step in result.steps] == [
+        (0, "completed"),
+        (1, "failed"),
+    ]
+    assert [line["seq"] for line in read_steps(done.record.path)] == [0, 0]
+    assert result.policy_events == (
+        PolicyEvent("document", "chrome-error://chromewebdata/", None),
+    )
+    assert [(a.outcome, a.stopped_at) for a in result.assertions] == [
+        ("not_evaluated", 1)
+    ]
+    assert result.outcome == "errored"
+
+
+def test_an_event_during_a_lookup_stops_the_run_before_the_step_is_dispatched(
+    app: App, tmp_path: Path
+) -> None:
+    targets = {
+        "pay": {"semantic": "the pay button", "locators": [by_role("button", "Pay")]}
+    }
+    script = compiled(
+        [
+            {
+                "seq": 1,
+                "action": "click",
+                "target": "pay",
+                "side_effect": True,
+                "side_effect_basis": "network: POST /write/pay",
+            }
+        ],
+        targets=targets,
+    )
+    spec = a_spec(tmp_path, ProjectConfig(), start_url="/page/popup-then-pay")
+
+    done = run(app, tmp_path, script, spec=spec)
+
+    result = done.result
+    # The popup came while the run waited for the button; the button came
+    # later, and was never clicked.
+    assert [(step.seq, step.outcome) for step in result.steps] == [(0, "completed")]
+    assert [event.kind for event in result.policy_events] == ["popup"]
+    assert [line["seq"] for line in read_steps(done.record.path)] == [0, 0]
+    assert ("POST", "/write/pay") not in app.seen
+    assert result.outcome == "errored"
+
+
+def test_an_action_the_page_never_lets_finish_ends_with_the_budget(
+    app: App, tmp_path: Path
+) -> None:
+    script = compiled(
+        [
+            {
+                "seq": 1,
+                "action": "fill",
+                "target": "name",
+                "value": "Ada",
+                "side_effect": False,
+            }
+        ],
+        targets=FORM_TARGETS,
+    )
+    config = ProjectConfig.model_validate({"budgets": {"resolve_seconds": 1}})
+    spec = a_spec(tmp_path, config, start_url="/page/stall")
+    started = time.monotonic()
+
+    done = run(app, tmp_path, script, config=config, spec=spec)
+
+    step = done.result.steps[1]
+    assert step.outcome == "failed"
+    assert "didn't finish" in (step.error or "")
+    # Dispatched, with its outcome unknown: the intent stays unresolved.
+    assert [line["seq"] for line in read_steps(done.record.path)] == [0, 0, 1]
+    assert time.monotonic() - started < 20
+
+
+def test_a_failed_steps_reason_holds_only_a_bounded_line_of_what_the_page_said(
+    app: App, tmp_path: Path
+) -> None:
+    script = compiled(
+        [
+            {
+                "seq": 1,
+                "action": "fill",
+                "target": "name",
+                "value": "Ada",
+                "side_effect": False,
+            }
+        ],
+        targets=FORM_TARGETS,
+    )
+    spec = a_spec(tmp_path, ProjectConfig(), start_url="/page/throws")
+
+    step = run(app, tmp_path, script, spec=spec).result.steps[1]
+
+    assert step.outcome == "failed"
+    error = step.error or ""
+    assert error.startswith("Error: ElementHandle.evaluate: Error: ")
+    assert "\x1b" not in error
+    assert len(error) <= 200
