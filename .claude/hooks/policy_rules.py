@@ -45,10 +45,22 @@ FILE_TOOLS = frozenset({"Edit", "MultiEdit", "Write", "NotebookEdit"})
 # Both checks match in any letter case. macOS's filesystem ignores it, so there
 # `.claude/Hooks/x.py` is `.claude/hooks/x.py`, and pytest reads a new
 # `Pytest.toml` as its `pytest.toml` (LAB_NOTES, 2026-10-03). On Linux a case
-# variant is another file, which a macOS checkout reads the same way. What the
-# guard skips, EXEMPT_DIRS and a test file's exemption from the source rules,
-# stays matched as typed.
-ANY_CASE = re.IGNORECASE
+# variant is another file, which a macOS checkout reads the same way. The
+# narrowings inside a check (a `.bak` backup, the shell's `test` command) match
+# in any case with it; what the guard skips outside them, EXEMPT_DIRS and a test
+# file's exemption from the source rules, stays matched as typed.
+
+
+class AnyCase:
+    """A check that matches in any letter case, as macOS's filesystem compares
+    names: it searches the text's full case folding, in which one letter can
+    stand for two (the ligature U+FB06 is `st`)."""
+
+    def __init__(self, pattern: str) -> None:
+        self.regex = re.compile(pattern, re.IGNORECASE)
+
+    def search(self, text: str) -> bool:
+        return self.regex.search(text.casefold()) is not None
 
 
 @dataclass(frozen=True)
@@ -69,7 +81,7 @@ class NameShapes:
     under: str = ".+"
 
 
-def path_pattern(shapes: NameShapes) -> re.Pattern[str]:
+def path_pattern(shapes: NameShapes) -> AnyCase:
     """The check for a project-relative path."""
     names = []
     if shapes.files:
@@ -77,7 +89,7 @@ def path_pattern(shapes: NameShapes) -> re.Pattern[str]:
     if shapes.dirs:
         names.append(f"(?:{'|'.join(shapes.dirs)})/(?:{shapes.under})")
     body = "|".join(names).replace("{name}", "[^/]*")
-    return re.compile(f"(?:^|/)(?:{body})$", ANY_CASE)
+    return AnyCase(f"(?:^|/)(?:{body})$")
 
 
 # In a shell command a name also ends at whitespace, a quote or a shell
@@ -95,7 +107,7 @@ _NOT_A_BACKUP = r"(?![\w.-]{0,255}\.bak(?![\w.-]))"
 _NOT_TEST_COMMAND = rf"(?:(?<=/)|(?!test(?:[{_BREAK}]|$)))"
 
 
-def shell_pattern(*kinds: NameShapes) -> re.Pattern[str]:
+def shell_pattern(*kinds: NameShapes) -> AnyCase:
     """The check for a shell command that names one of `kinds`' files, or a
     directory that holds them, however many slashes separate its segments.
     Search it in `command` and in resolved_paths(command)."""
@@ -120,7 +132,7 @@ def shell_pattern(*kinds: NameShapes) -> re.Pattern[str]:
         for kind in kinds
         for d in kind.dirs
     ]
-    return re.compile("|".join(files + dirs), ANY_CASE)
+    return AnyCase("|".join(files + dirs))
 
 
 # A shell word, quotes and substitutions included, and the quoting the shell
@@ -195,9 +207,10 @@ WORKFLOW_NAMES = NameShapes(dirs=(r"\.github/workflows",), under=r"[^/]+\.ya?ml"
 PROTECTED = path_pattern(GUARD_NAMES)
 PROTECTED_IN_SHELL = shell_pattern(GUARD_NAMES)
 TEST_FILE = path_pattern(TEST_NAMES)
-# pytest matches test names case-sensitively, so it never collects `Test_a.py`:
-# a test name only in another case keeps the source rules too.
-TEST_FILE_AS_TYPED = re.compile(TEST_FILE.pattern)
+# The same names as typed. pytest matches test names case-sensitively, so it
+# never collects `Test_a.py`: a test name only in another case keeps the
+# source rules too.
+TEST_FILE_AS_TYPED = re.compile(TEST_FILE.regex.pattern)
 TEST_PATH_IN_SHELL = shell_pattern(TEST_NAMES)
 GATE_WHOLE_FILE = path_pattern(GATE_WHOLE_NAMES)
 GATE_SECTION_FILE = path_pattern(GATE_SECTION_NAMES)
@@ -459,7 +472,7 @@ TEST_DEF = re.compile(r"^\s*(?:async\s+)?def\s+test|\b(?:it|test)\(", re.MULTILI
 # weakens the bar and keeps every assertion, so --diff asks about any change to
 # an existing file. A new one can't lower the floor. The guard's own tests ask
 # as part of the guard (PROTECTED).
-BAR_TESTS = re.compile(r"^tests/", ANY_CASE)
+BAR_TESTS = AnyCase(r"^tests/")
 
 # --- shell heuristics ---------------------------------------------------------------
 
