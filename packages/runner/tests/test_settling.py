@@ -22,7 +22,7 @@ from aqa_runner import settling
 from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.document_origins import PolicyEvent, PolicyEventError
 from aqa_runner.locators import Resolved
-from aqa_runner.settling import Window
+from aqa_runner.settling import Settled, Window
 from playwright.async_api import ElementHandle, Error, Page, async_playwright
 
 from packages.runner.tests import document_fixtures
@@ -677,3 +677,55 @@ def test_settling_a_crashed_page_raises_playwrights_error(
                 await session.settle(window)
 
     asyncio.run(scenario())
+
+
+def test_settling_never_reports_a_page_that_really_crashed_as_idle(
+    site: Site, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settling, "SETTLE_SECONDS", 2)
+
+    async def scenario() -> Settled | Error:
+        async with browsing(site) as session:
+            window = await session.navigate(f"{site.origin}/page/wait")
+            # Chromium's page that crashes the renderer, which never loads.
+            with pytest.raises(Error):
+                await session.page.goto("chrome://crash")
+            try:
+                return await session.settle(window)
+            except Error as error:
+                return error
+
+    outcome = asyncio.run(scenario())
+
+    # Where Chromium reports the crash, settling raises it; where it never
+    # does, as on CI's Ubuntu 24.04 host, it runs out of time. Never idle.
+    assert outcome == "timeout" or (
+        isinstance(outcome, Error) and "Target crashed" in str(outcome)
+    ), outcome
+
+
+def test_settling_runs_out_of_time_on_a_crashed_page_whose_crash_is_never_reported(
+    site: Site, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settling, "SETTLE_SECONDS", 2)
+    # CI's Ubuntu 24.04 host on any host: the session never hears of the
+    # crash, though the renderer really crashed.
+    listen: Callable[..., object] = Page.on
+
+    def deaf_to_crashes(
+        page: Page, event: str, handler: Callable[[Page], object]
+    ) -> None:
+        if event != "crash":
+            listen(page, event, handler)
+
+    monkeypatch.setattr(Page, "on", deaf_to_crashes)
+
+    async def scenario() -> Settled:
+        async with browsing(site) as session:
+            window = await session.navigate(f"{site.origin}/page/wait")
+            with pytest.raises(Error):
+                await session.page.goto("chrome://crash")
+            return await session.settle(window)
+
+    # Its looks at the page fail or never answer, so it never goes idle.
+    assert asyncio.run(scenario()) == "timeout"
