@@ -175,12 +175,17 @@ PAGES = SHOPS | {
     # Each invariant's own trigger (#47): each fires that invariant and no
     # other. A dedicated worker's 5xx has no console entry, and an image whose
     # 200 response isn't an image fails without one.
-    "console-error": """<script>console.error("console-trigger")</script>""",
+    "console-error": """<script>
+        console.warn("warning");
+        console.log("log");
+        console.error("console-trigger");
+    </script>""",
     "exception": """<script>
         Promise.reject(new Error("rejection-trigger"));
         throw new Error("exception-trigger");
     </script>""",
     "worker-5xx": """<script>new Worker("/worker/fetch-500.js")</script>""",
+    "worker-599": """<script>new Worker("/worker/fetch-599.js")</script>""",
     "broken-image": """<img src="/image/not-an-image">""",
     "broken-data-image": """<img src="data:image/png;base64,AAAA">""",
     # The page's own 5xx and a missing image, each with Chromium's own console
@@ -224,11 +229,62 @@ PAGES = SHOPS | {
     # broken image, straight and through a redirect hop routing can't see,
     # beside a console error of the page's own.
     "refused-symptoms": """<img src="http://analytics.example.test/pixel.png">
-        <img src="/redirect?to=http%3A%2F%2Fanalytics.example.test%2Fhop.png">
+        <img src="/redirect?to=http%3A%2F%2Fanalytics.example.test%2Fhop.png#hop">
         <script>console.error("unrelated")</script>""",
     # A script the run refuses, which the page's next script needs.
     "refused-script": """<script src="http://analytics.example.test/lib.js"></script>
         <script>analytics.track()</script>""",
+    # An image whose first load redirects to a host the run refuses, and
+    # whose load after a reload isn't an image.
+    "once-refused": """<img src="/image/once-refused">""",
+    # More images at a refused host than any record of them keeps.
+    "many-refused-images": """<body><script>
+        for (let i = 0; i < 1001; i++) {
+            const image = new Image();
+            image.src = "http://analytics.example.test/pixel.png?" + i;
+            document.body.append(image);
+        }
+    </script>""",
+    # A CSS image whose load is redirected to a refused host, which no
+    # element reports; then an <img> redirected there; then an <img> at the
+    # CSS image's URL, whose second load isn't an image.
+    "background-then-images": """<body>
+        <div style="width: 1px; height: 1px; background-image: url('/image/once-refused')"></div>
+        <script>
+            const image = (src, after) => setTimeout(() => {
+                const shown = new Image();
+                shown.src = src;
+                document.body.append(shown);
+            }, after);
+            image("/redirect?to=http%3A%2F%2Fanalytics.example.test%2Fimage.png", 500);
+            image("/image/once-refused", 1000);
+        </script>""",
+    # A frame's document, and the page's own after it loads, opened and written
+    # anew with a broken image: opening erases every listener they had.
+    "rewritten-frame": """<iframe></iframe><script>
+        const written = frames[0].document;
+        written.open();
+        written.write("<img src='/image/not-an-image'>");
+        written.close();
+    </script>""",
+    "rewritten-page": """<script>
+        onload = () => {
+            document.open();
+            document.write("<img src='/image/not-an-image'>");
+            document.close();
+        };
+    </script>""",
+    # A page that calls the reporter's binding, which its world doesn't have.
+    "forging-binding": """<script>
+        try {
+            aqaBrokenImage(location.origin + "\\n" + location.origin + "/forged");
+        } catch (error) {}
+    </script>""",
+    # Console calls with no arguments, one naming a refused URL.
+    "zero-arg-console": """<script>
+        console.error();
+        eval("console.error()\\n//# sourceURL=http://analytics.example.test/zero.js");
+    </script>""",
     # A console error of the page's own that says it came from a refused URL.
     "forged-source": """<script>
         eval("console.error('forged')\\n//# sourceURL=http://analytics.example.test/forged.js");
@@ -291,10 +347,11 @@ class App:
 class _Handler(BaseHTTPRequestHandler):
     """Serves `/page/<name>`, `/raw/…` (a page, whatever its path), `/did/…`
     and `/write/…` (204), `/held/<key>` (204 once released), `/status/<code>`
-    (that status, empty), `/image/ok` (a GIF), any other `/image/…` (a page,
-    not an image), `/worker/…` (a worker that fetches `/status/500`) and
-    `/redirect?to=<url>` (302 there), noting the steps record as it stood when
-    each request arrived."""
+    (that status, empty), `/image/ok` (a GIF), `/image/once-refused` (302 to
+    a refused host the first time), any other `/image/…` (a page, not an
+    image), `/worker/fetch-<code>.js` (a worker that fetches `/status/<code>`)
+    and `/redirect?to=<url>` (302 there), noting the steps record as it stood
+    when each request arrived."""
 
     app: App
 
@@ -325,20 +382,24 @@ class _Handler(BaseHTTPRequestHandler):
         elif kind in ("did", "write"):
             self._empty(HTTPStatus.NO_CONTENT)
         elif kind == "status":
-            self._empty(HTTPStatus(int(name)))
-        elif kind == "image" and name == "ok":
-            self._send("image/gif", GIF)
+            self._empty(int(name))
         elif kind == "image":
-            self._page("<p>Not an image</p>")
+            self._image(name)
         elif kind == "worker":
-            self._send("text/javascript", b'fetch("/status/500");')
+            status = name.removeprefix("fetch-").removesuffix(".js")
+            self._send("text/javascript", f'fetch("/status/{status}");'.encode())
         elif kind == "redirect":
-            self.send_response(HTTPStatus.FOUND)
-            self.send_header("Location", parse_qs(urlsplit(self.path).query)["to"][0])
-            self.send_header("Content-Length", "0")
-            self.end_headers()
+            self._redirect(parse_qs(urlsplit(self.path).query)["to"][0])
         else:
             self._empty(HTTPStatus.NOT_FOUND)
+
+    def _image(self, name: str) -> None:
+        if name == "ok":
+            self._send("image/gif", GIF)
+        elif name == "once-refused" and self.app.paths().count(self.path) == 1:
+            self._redirect("http://analytics.example.test/once.png")
+        else:
+            self._page("<p>Not an image</p>")
 
     def _page(self, body: str) -> None:
         self._send("text/html", f"<!doctype html><title>app</title>{body}".encode())
@@ -350,7 +411,13 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _empty(self, status: HTTPStatus) -> None:
+    def _redirect(self, location: str) -> None:
+        self.send_response(HTTPStatus.FOUND)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _empty(self, status: int) -> None:
         self.send_response(status)
         self.send_header("Content-Length", "0")
         self.end_headers()
