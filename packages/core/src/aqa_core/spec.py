@@ -25,6 +25,7 @@ from aqa_core.schema import (
     ListOf,
     NonEmpty,
     Origin,
+    ProbeEndpoint,
     SecretName,
     StartPath,
     StrictModel,
@@ -108,8 +109,8 @@ class Preconditions(StrictModel):
     start_url: StartPath
     account: Account | None = None
     reset: Reset | None = None
-    # Read-only GET endpoints, by name (DATA_MODEL §6).
-    probes: dict[NonEmpty, NonEmpty] = Field(default_factory=dict)
+    # Read-only GET endpoints on the start origin, by name (DATA_MODEL §6).
+    probes: dict[NonEmpty, ProbeEndpoint] = Field(default_factory=dict)
 
 
 class Expectation(StrictModel):

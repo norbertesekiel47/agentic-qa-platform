@@ -93,6 +93,33 @@ def _regex(pattern: str) -> str:
     return pattern
 
 
+# A probe's JSON path (#48): $, then a step for each level, .name for an
+# object's key (ASCII letters, digits, _ or -) or [index] for an array's
+# item, of at most nine digits. Nothing else, so no path reads two ways.
+_JSON_PATH = re.compile(r"\$(?:\.[A-Za-z0-9_-]+|\[(?:0|[1-9][0-9]{0,8})\])*")
+_JSON_STEP = re.compile(r"\.([A-Za-z0-9_-]+)|\[([0-9]+)\]")
+
+
+def _json_path(path: str) -> str:
+    if not _JSON_PATH.fullmatch(path):
+        raise ValueError(
+            f"{path!r} is not a JSON path this format reads: write $, then .name "
+            "(ASCII letters, digits, _ or -) or [index] for each step, such as "
+            "$.count or $.orders[0].total"
+        )
+    return path
+
+
+JsonPath = Annotated[NonEmpty, AfterValidator(_json_path)]
+
+
+def json_path_steps(path: str) -> tuple[str | int, ...]:
+    """The keys (str) and indexes (int) a `JsonPath` steps through, in
+    order; ValueError for any other text."""
+    _json_path(path)
+    return tuple(name or int(index) for name, index in _JSON_STEP.findall(path, pos=1))
+
+
 # A Python regex, used with re.search and only the flags it writes inline,
 # such as (?i) (ADR-0025).
 PythonRegex = Annotated[NonEmpty, AfterValidator(_regex)]
@@ -491,6 +518,16 @@ class NetworkSeen(_NetworkCheck):
     check: Literal["network_seen"]
 
 
+class ProbeEquals(_Assertion):
+    """A probe the spec declares reads `value` at `json_path` (#48)."""
+
+    check: Literal["probe_equals"]
+    probe: NonEmpty
+    json_path: JsonPath
+    # As the planned check's: never true, 2.0 or an empty string.
+    value: StrictInt | NonEmpty
+
+
 class ProbeEqualsBaseline(_Assertion):
     check: Literal["probe_equals_baseline"]
     probe: NonEmpty
@@ -512,6 +549,7 @@ Assertion = Annotated[
     | UrlMatches
     | NetworkNone
     | NetworkSeen
+    | ProbeEquals
     | ProbeEqualsBaseline
     | VisibleUnoccluded,
     Field(discriminator="check"),
@@ -548,7 +586,7 @@ class ProbeBaseline(StrictModel):
     """When a probe's baseline is read, and which value of its JSON."""
 
     capture_before_seq: _Positive
-    json_path: NonEmpty
+    json_path: JsonPath
 
 
 def _every_setting(settings: object) -> object:
