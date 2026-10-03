@@ -34,6 +34,7 @@ from playwright.async_api import (
     Browser,
     BrowserType,
     Page,
+    Playwright,
     ProxySettings,
     async_playwright,
 )
@@ -54,13 +55,13 @@ type Endpoint = tuple[str, int]
 
 
 class AttributedGate(EgressGate):
-    """The run's egress gate, which also records the local address and port
-    of every connection it opens upstream, so a packet can be told to be the
-    egress proxy's: packets don't name the process that sent them."""
+    """The run's egress gate, which also records both ends of every
+    connection it opens upstream, so a packet can be told to be the egress
+    proxy's: packets don't name the process that sent them."""
 
     def __init__(self, policy: EgressPolicy) -> None:
         super().__init__(policy)
-        self.upstreams: list[Endpoint] = []
+        self.upstreams: list[tuple[Endpoint, Endpoint]] = []
 
     async def connect(
         self,
@@ -71,8 +72,9 @@ class AttributedGate(EgressGate):
         tls: ssl.SSLContext | None = None,
     ) -> Connection:
         reader, writer = await super().connect(host, port, requester, tls=tls)
-        address, local_port = writer.get_extra_info("sockname")[:2]
-        self.upstreams.append((address, local_port))
+        local = writer.get_extra_info("sockname")[:2]
+        remote = writer.get_extra_info("peername")[:2]
+        self.upstreams.append(((local[0], local[1]), (remote[0], remote[1])))
         return reader, writer
 
 
@@ -182,12 +184,13 @@ async def listening(targets: dict[str, Target]) -> AsyncIterator[dict[str, Canar
 
 @dataclass
 class Site:
-    """An allowed origin: what it serves, and each request it got, with the
-    address and port it came from."""
+    """An allowed origin: what it serves, where each connection it accepted
+    came from, and each request it got, with where it came from."""
 
     origin: str
     pages: dict[str, tuple[str, str]]
     alt_svc: str | None
+    peers: list[Endpoint] = field(default_factory=list)
     requests: list[tuple[Endpoint, str]] = field(default_factory=list)
 
 
@@ -199,6 +202,11 @@ class _Handler(BaseHTTPRequestHandler):
     GET, and records no peer, which the attribution check needs."""
 
     site: Site
+
+    def setup(self) -> None:
+        # Once per connection, whether or not a request follows.
+        super().setup()
+        self.site.peers.append(self.client_address[:2])
 
     def do_GET(self) -> None:
         self._answer()
@@ -287,8 +295,9 @@ async def run_page(method: str, *, protected: bool = True) -> dict[str, object]:
                 tls = certificate(directory, "127.0.0.1")
                 key = spki_hash_of(directory / "cert.pem")
                 alt_svc = f'h3=":{canaries["http3"].port}"; ma=3600'
-                sites.append(stack.enter_context(hosting({}, tls=tls, alt_svc=alt_svc)))
-                targets["tls"] = sites[0].origin
+                tls_site = stack.enter_context(hosting({}, tls=tls, alt_svc=alt_svc))
+                sites.append(tls_site)
+                targets["tls"] = tls_site.origin
             site = stack.enter_context(hosting({}))
             sites.append(site)
             targets["origin"] = site.origin
@@ -297,19 +306,13 @@ async def run_page(method: str, *, protected: bool = True) -> dict[str, object]:
                 site.pages[path] = ("text/javascript", script)
             gate = gate_for(sites)
             async with async_playwright() as playwright, EgressProxy(gate) as egress:
-                chromium: Chromium
-                if key is not None:
-                    chromium = TrustingTheFixture(
-                        playwright.chromium, key, protected=protected
-                    )
-                elif protected:
-                    chromium = playwright.chromium
-                else:
-                    chromium = WithoutTheSwitches(playwright.chromium)
+                chromium = chromium_for(playwright, key, protected=protected)
                 async with open_browser_session(chromium, egress=egress) as session:
                     tab = session.page if protected else await stray_page(session.page)
                     await tab.goto(f"{site.origin}/")
                     outcomes = await tab.evaluate("window.hostile")
+                    # The document each of the page's frames ended on.
+                    frames = [each.url for each in tab.frames if each != tab.main_frame]
                     # A round trip through the proxy once every attempt has
                     # settled, so a connection an attempt started has
                     # reached it.
@@ -317,7 +320,22 @@ async def run_page(method: str, *, protected: bool = True) -> dict[str, object]:
                         f"{site.origin}/after"
                     )
                     assert after.ok
-                return report(egress, gate, sites, canaries, outcomes)
+                return report(
+                    egress, gate, sites, canaries, outcomes=outcomes, frames=frames
+                )
+
+
+def chromium_for(
+    playwright: Playwright, key: str | None, *, protected: bool
+) -> Chromium:
+    """The session's Chromium: as `launch` launches it, trusting the
+    fixture's key when the page has an https origin (`key`), or, unprotected,
+    the control's."""
+    if key is not None:
+        return TrustingTheFixture(playwright.chromium, key, protected=protected)
+    if protected:
+        return playwright.chromium
+    return WithoutTheSwitches(playwright.chromium)
 
 
 async def direct_and_proxied() -> dict[str, object]:
@@ -333,7 +351,7 @@ async def direct_and_proxied() -> dict[str, object]:
             async with open_browser_session(chromium, egress=egress) as session:
                 await session.page.goto(f"{site.origin}/via-proxy")
                 await (await stray_page(session.page)).goto(f"{site.origin}/direct")
-            return report(egress, gate, [site], {}, {})
+            return report(egress, gate, [site], {}, outcomes={}, frames=[])
 
 
 def gate_for(sites: list[Site]) -> AttributedGate:
@@ -347,7 +365,9 @@ def report(
     gate: AttributedGate,
     sites: list[Site],
     canaries: dict[str, Canary],
+    *,
     outcomes: object,
+    frames: list[str],
 ) -> dict[str, object]:
     """What each party saw, as JSON, while `egress` serves."""
     proxy = urlsplit(egress.url)
@@ -358,6 +378,7 @@ def report(
             for each in sites
         ],
         "upstreams": gate.upstreams,
+        "peers": [peer for each in sites for peer in each.peers],
         "requests": [request for each in sites for request in each.requests],
         "targets": {name: canary.written() for name, canary in canaries.items()},
         "received": {name: canary.received for name, canary in canaries.items()},
@@ -367,6 +388,7 @@ def report(
         ],
         "refused": [[each.host, each.port, each.kind] for each in gate.refusals],
         "outcomes": outcomes,
+        "frames": frames,
     }
 
 
@@ -395,6 +417,10 @@ async def websocket() -> dict[str, object]:
 
 async def webrtc() -> dict[str, object]:
     return await run_page("webrtc")
+
+
+async def webrtc_remote() -> dict[str, object]:
+    return await run_page("webrtc_remote")
 
 
 async def quic() -> dict[str, object]:

@@ -119,7 +119,7 @@ The agent reads arbitrary page content. A malicious or compromised page may say 
     - DNS rebinding and service-worker registration attempts;
     - documents reached by clicks, redirects, `location` changes and popups, and frames from other origins.
 
-    The tests observe traffic at the packet level, on Linux as CI runs them, in a network namespace of their own (ADR-0026 amendment, 2026-10-02). For each exfiltration method a hostile page in a real session tries every way that method has, each aimed at a canary of its own: no canary hears anything, routing or the proxy records each attempt that meets it, and every packet belongs to a connection to the proxy or one the proxy opened, told apart from a browser's own connection to an allowed origin by the proxy's own sockets (ADR-0026 amendment on hostile pages).
+    The tests observe traffic at the packet level, on Linux as CI runs them, in a network namespace of their own (ADR-0026 amendment, 2026-10-02). For each exfiltration method a hostile page in a real session tries the ways ADR-0026's amendment on hostile pages lists, each aimed at a canary of its own: no canary hears anything, routing or the proxy records each attempt that meets it, and every packet belongs to a connection to the proxy or one the proxy opened, told apart from a browser's own connection to an allowed origin by the proxy's own sockets (ADR-0026 amendment on hostile pages).
 - Per-org limits: concurrent runs, runs/hour, steps/run, minutes/run, tokens/run.
 - The public demo can only target our own benchmark apps.
 
