@@ -33,7 +33,7 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | [0025](0025-compiled-targets-checks-flags.md) | Compiled scripts: meanings, locators, checks and step flags | Accepted (amended 2026-10-02) |
 | [0026](0026-local-ci-browser-boundary.md) | The browser boundary for local and CI runs: sandbox, egress and test secrets | Accepted (amended 2026-09-30, 2026-10-01) |
 | [0027](0027-python-workspace.md) | The Python workspace: layout, pins and tool settings | Accepted (amended 2026-09-29, 2026-10-01) |
-| [0028](0028-quality-bar.md) | The quality bar: coverage, complexity, the Ruff rule set and the floor guard | Accepted (amended 2026-09-29, 2026-10-01) |
+| [0028](0028-quality-bar.md) | The quality bar: coverage, complexity, the Ruff rule set and the floor guard | Accepted (amended 2026-09-29, 2026-10-01, 2026-10-02, 2026-10-03) |
 | [0029](0029-ci-on-the-uv-workspace.md) | CI on the uv workspace: jobs, installs, the mypy split and the dependency audit | Accepted (amended 2026-10-01) |
 | [0030](0030-spec-yaml-parsing.md) | Reading specs and the project config: PyYAML narrowed to YAML 1.2's core schema | Accepted |
 | [0031](0031-renovate-weekly-dependency-updates.md) | Renovate for weekly dependency updates, and how a bump keeps TECH_STACK.md true | Accepted |
