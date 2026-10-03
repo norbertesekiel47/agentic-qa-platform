@@ -109,7 +109,7 @@ class TrustingTheFixture:
         )
 
 
-def key_of(certificate: Path) -> str:
+def spki_hash_of(certificate: Path) -> str:
     """The base64 SHA-256 of a certificate's public key (its
     SubjectPublicKeyInfo), as `--ignore-certificate-errors-spki-list` takes
     it. A PEM public key is that structure in base64."""
@@ -194,7 +194,9 @@ class Site:
 class _Handler(BaseHTTPRequestHandler):
     """Serves the site's pages by path, a 307 to any URL at
     `/redirect?to=`, which keeps a POST a POST, and an empty answer to
-    anything else."""
+    anything else. Not `egress_fixtures.serving`'s handler: that one serves
+    no page of a test's own, redirects with a 302, which turns a POST into a
+    GET, and records no peer, which the attribution check needs."""
 
     site: Site
 
@@ -267,7 +269,7 @@ def page_markup(page: HostilePage, targets: dict[str, str]) -> str:
     )
 
 
-async def run(method: str, *, protected: bool = True) -> dict[str, object]:
+async def run_page(method: str, *, protected: bool = True) -> dict[str, object]:
     """Run `method`'s hostile page in a browser session and return what each
     party saw. Unprotected, the page runs in a context with no proxy, in a
     browser launched without the switches and the launch-level proxy: the
@@ -283,7 +285,7 @@ async def run(method: str, *, protected: bool = True) -> dict[str, object]:
             if page.trusts_the_fixture:
                 directory = Path(stack.enter_context(tempfile.TemporaryDirectory()))
                 tls = certificate(directory, "127.0.0.1")
-                key = key_of(directory / "cert.pem")
+                key = spki_hash_of(directory / "cert.pem")
                 alt_svc = f'h3=":{canaries["http3"].port}"; ma=3600'
                 sites.append(stack.enter_context(hosting({}, tls=tls, alt_svc=alt_svc)))
                 targets["tls"] = sites[0].origin
@@ -376,44 +378,44 @@ async def stray_page(page: Page) -> Page:
 
 
 async def fetch() -> dict[str, object]:
-    return await run("fetch")
+    return await run_page("fetch")
 
 
 async def xhr() -> dict[str, object]:
-    return await run("xhr")
+    return await run_page("xhr")
 
 
 async def form_post() -> dict[str, object]:
-    return await run("form_post")
+    return await run_page("form_post")
 
 
 async def websocket() -> dict[str, object]:
-    return await run("websocket")
+    return await run_page("websocket")
 
 
 async def webrtc() -> dict[str, object]:
-    return await run("webrtc")
+    return await run_page("webrtc")
 
 
 async def quic() -> dict[str, object]:
-    return await run("quic")
+    return await run_page("quic")
 
 
 async def quic_unprotected() -> dict[str, object]:
-    return await run("quic", protected=False)
+    return await run_page("quic", protected=False)
 
 
 async def ipv6() -> dict[str, object]:
-    return await run("ipv6")
+    return await run_page("ipv6")
 
 
 async def dns_prefetch() -> dict[str, object]:
-    return await run("dns_prefetch")
+    return await run_page("dns_prefetch")
 
 
 async def service_worker() -> dict[str, object]:
-    return await run("service_worker")
+    return await run_page("service_worker")
 
 
 async def non_http_schemes() -> dict[str, object]:
-    return await run("non_http_schemes")
+    return await run_page("non_http_schemes")
