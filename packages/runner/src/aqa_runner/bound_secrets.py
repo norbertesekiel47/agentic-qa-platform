@@ -6,7 +6,8 @@ browser starts, and hold the values in memory only, behind pydantic's
 `BrowserSession.fill_secret`, never through its environment."""
 
 import os
-from collections.abc import Sequence
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from aqa_core.project import SecretDestination, secret_destinations
@@ -41,6 +42,14 @@ class MissingSecretError(Exception):
         self.problems = tuple(problems)
 
 
+class SecretLoggedError(Exception):
+    """The environment turns on Playwright's protocol logging, which would
+    print a test secret's value as the fill sends it: an infrastructure
+    error, as a missing value is (exit code 12, API.md §7)."""
+
+    exit_code = 12
+
+
 def bound_secrets(spec: Spec, start: str) -> dict[str, BoundSecret]:
     """Each test secret `spec` references, bound for a run whose start origin
     is `start`, by name.
@@ -51,8 +60,18 @@ def bound_secrets(spec: Spec, start: str) -> dict[str, BoundSecret]:
     spec references needs one, whichever the run fills. A variable that is
     unset or empty has none: GitHub Actions gives a secret that isn't set as
     an empty string. Every missing value is reported at once, in a
-    `MissingSecretError`."""
+    `MissingSecretError`.
+
+    Nor are secrets bound where Playwright would log the messages that carry
+    a value (`SecretLoggedError`): `DEBUGP` makes its Python client print
+    every protocol message, and a `DEBUG` that turns on `pw:protocol` makes
+    its driver, which inherits the runner's environment, log them."""
     destinations = secret_destinations(spec, start)
+    if destinations and (logged := _protocol_logging(os.environ)) is not None:
+        raise SecretLoggedError(
+            f"{logged}: Playwright would log every protocol message, a test "
+            "secret's value among them; unset it to run with test secrets"
+        )
     # Where the spec first references each secret, for the message.
     where: dict[str, str] = {}
     for key, name in secret_references(spec.frontmatter):
@@ -78,3 +97,23 @@ def bound_secrets(spec: Spec, start: str) -> dict[str, BoundSecret]:
     if problems:
         raise MissingSecretError(problems)
     return bound
+
+
+def _protocol_logging(environ: Mapping[str, str]) -> str | None:
+    """What in `environ` turns on Playwright's protocol logging, as a refusal
+    says it; None when nothing does. `DEBUGP`, set to anything
+    (`playwright/_impl/_transport.py`); or `DEBUG`, read as the `debug`
+    package reads it: names split at commas and whitespace, `*` matching
+    anything, a name starting `-` turning one off, and an off winning
+    (Playwright 1.63's driver, `debugLogger.isEnabled("protocol")`)."""
+    if "DEBUGP" in environ:
+        return "DEBUGP is set"
+    names = [name for name in re.split(r"[\s,]+", environ.get("DEBUG", "")) if name]
+
+    def names_protocol(name: str) -> bool:
+        pattern = re.escape(name).replace(r"\*", ".*?")
+        return re.fullmatch(pattern, "pw:protocol") is not None
+
+    off = any(names_protocol(name[1:]) for name in names if name.startswith("-"))
+    on = any(names_protocol(name) for name in names if not name.startswith("-"))
+    return "DEBUG turns on pw:protocol" if on and not off else None

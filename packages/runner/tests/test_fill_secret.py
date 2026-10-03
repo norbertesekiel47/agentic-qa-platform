@@ -16,7 +16,7 @@ from aqa_core.project import SecretDestination
 from aqa_runner.bound_secrets import BoundSecret, bound_secrets
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.document_origins import PolicyEvent, PolicyEventError
-from aqa_runner.secret_fields import SecretRefusedError
+from aqa_runner.secret_fields import SecretNotFilledError, SecretRefusedError
 from playwright.async_api import ElementHandle, Error
 from pydantic import SecretStr
 
@@ -342,6 +342,7 @@ def test_a_page_that_throws_the_value_back_gets_it_into_no_error(
 
     error = asyncio.run(scenario())
 
+    assert isinstance(error, SecretNotFilledError)
     assert error.message == NOT_FILLED
     # Nothing of the page's own error is kept, not even as the context.
     assert error.__cause__ is None
@@ -384,6 +385,7 @@ def test_a_value_the_page_throws_back_from_a_check_reaches_no_error(
 
     error = asyncio.run(scenario())
 
+    assert isinstance(error, SecretNotFilledError)
     assert error.message == NOT_FILLED
     assert error.__cause__ is None
     assert error.__context__ is None

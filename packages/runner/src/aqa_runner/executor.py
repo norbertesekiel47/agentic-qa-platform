@@ -67,8 +67,11 @@ MARGIN_SECONDS = 1
 REASON_CHARS = 200
 
 # The call a Playwright error's first line names before its message, such as
-# `ElementHandle.evaluate`: Playwright's own words, never the page's.
-PLAYWRIGHT_CALL = re.compile(r"[A-Z][A-Za-z]*\.[a-z][A-Za-z]*(?=: )")
+# `ElementHandle.evaluate`: Playwright's own words, never the page's, since
+# its client puts every API call's name first (1.63's `wrap_api_call`,
+# `f"{apiName}: {error}"`). Bounded, so even a line that broke that rule
+# could give at most a short name of letters.
+PLAYWRIGHT_CALL = re.compile(r"[A-Z][A-Za-z]{0,40}\.[a-z][A-Za-z]{0,40}(?=: )")
 
 # The steps the executor runs: those that act on a target, and the rest.
 type Targeted = Click | Fill | FillSecret | Select
@@ -115,11 +118,13 @@ class _Replay:
     targets: Mapping[str, Target]
     secrets: Mapping[str, BoundSecret]
 
-    @property
-    def withheld(self) -> bool:
-        """Whether Playwright's messages stay out of the run's reasons: a page
-        handed a test secret can throw it back in any later error."""
-        return bool(self.secrets)
+    def reason(self, error: _Raised) -> str:
+        """`error` as a failed step's or an unevaluated assertion's reason
+        (`_described`). When the script fills a test secret, Playwright's
+        message is withheld for the whole run, the steps before the first
+        fill included: a page handed a value can throw it back in any later
+        error, and the run never needs to know which steps came after it."""
+        return _described(error, withheld=bool(self.secrets))
 
 
 @dataclass(frozen=True)
@@ -196,7 +201,12 @@ async def replay(
 
     Before the browser starts, it binds the test secrets the spec references
     (`aqa_runner.bound_secrets.bound_secrets`): a missing value raises
-    `MissingSecretError`, and a binding the run doesn't allow `SpecError`."""
+    `MissingSecretError`, Playwright's protocol logging `SecretLoggedError`,
+    and a binding the run doesn't allow `SpecError`. When the script fills a
+    test secret, every reason keeps nothing of Playwright's messages, for the
+    whole run (`_Replay.reason`)."""
+    # The script's own problems first, so a spec error wins over a missing
+    # value (exit 5 before 12).
     runnable, checks = _accepted(script, setup.spec)
     bound = bound_secrets(setup.spec, setup.start)
     run = _Replay(
@@ -338,7 +348,7 @@ async def _evaluate_each(
     except (Error, PolicyEventError, DocumentChangedError, _UnansweredError) as error:
         # As below: the page couldn't be looked at, so nothing on it can be
         # evaluated.
-        reason = _described(error, withheld=run.withheld)
+        reason = run.reason(error)
         return tuple(
             AssertionResult(check.id, "not_evaluated", error=reason) for check in checks
         )
@@ -366,7 +376,7 @@ async def _evaluate_each(
                 AssertionResult(
                     check.id,
                     "not_evaluated",
-                    error=_described(error, withheld=run.withheld),
+                    error=run.reason(error),
                 )
             )
     return tuple(results)
@@ -508,9 +518,7 @@ async def _run(
         # A look the session refused (a page off the allowed origins), or
         # Playwright's general error type (a crashed page): nothing was
         # dispatched, so there is no intent, and the run stops.
-        return StepResult(
-            step.seq, "failed", error=_described(error, withheld=run.withheld)
-        )
+        return StepResult(step.seq, "failed", error=run.reason(error))
     if not isinstance(found, Resolved):
         return StepResult(step.seq, "drifted", misses=found.misses)
     if interrupted():
@@ -629,11 +637,15 @@ async def _dispatched(
         settled = await session.settle(window)
     except (Error, PolicyEventError, SecretRefusedError) as error:
         # Playwright's general error type (a failed navigation, an action
-        # the page refused, a crashed page), a document off the allowed
-        # origins, or a fill_secret its binding refused, raised between the
-        # intent and the completion: whether the action took effect is
-        # unknown, so its intent stays unresolved and the run stops.
-        return StepResult(seq, "failed", error=_described(error, withheld=run.withheld))
+        # the page refused, a crashed page) or a document off the allowed
+        # origins, raised between the intent and the completion: whether the
+        # action took effect is unknown, so its intent stays unresolved and
+        # the run stops. A fill_secret its binding refused filled nothing,
+        # but the refusal comes from inside the session's lock, after the
+        # intent; its intent stays unresolved too, as a dispatch's that
+        # failed (DATA_MODEL §7), so a side-effect fill_secret refused makes
+        # the run non-resumable.
+        return StepResult(seq, "failed", error=run.reason(error))
     except TimeoutError:
         if not limit.expired():
             raise  # not the action's own limit
@@ -644,15 +656,17 @@ async def _dispatched(
     return StepResult(seq, "completed", window, index, settled)
 
 
-def _described(
-    error: Error
+# What a step or an assertion's look can raise that becomes its reason.
+type _Raised = (
+    Error
     | PolicyEventError
     | DocumentChangedError
     | _UnansweredError
-    | SecretRefusedError,
-    *,
-    withheld: bool,
-) -> str:
+    | SecretRefusedError
+)
+
+
+def _described(error: _Raised, *, withheld: bool) -> str:
     """What raised, as a failed step's or an unevaluated assertion's reason:
     the executor's or the session's own message (a policy event's names
     only an origin, a fill_secret refusal only the secret, origins and

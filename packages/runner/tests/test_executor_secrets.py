@@ -14,10 +14,11 @@ import pytest
 from aqa_core.compiled import CompiledScript
 from aqa_core.project import SpecError
 from aqa_runner import executor
-from aqa_runner.bound_secrets import MissingSecretError
+from aqa_runner.bound_secrets import MissingSecretError, SecretLoggedError
 from aqa_runner.executor import RunResult
 
 from packages.runner.tests.executor_fixtures import (
+    FORM_TARGETS,
     App,
     by_role,
     compiled,
@@ -28,6 +29,7 @@ from packages.runner.tests.executor_fixtures import (
 from packages.runner.tests.secret_fixtures import (
     BOUND_AT_START,
     FAKE_VALUE,
+    OTHER_FAKE_VALUE,
     copies_found,
     secret_spec,
 )
@@ -112,7 +114,7 @@ def test_a_replay_fills_a_secret_into_its_bound_field(app: App, tmp_path: Path) 
         ("/write/signin", f"password={quote_plus(FAKE_VALUE)}&name=".encode())
     ]
     # The step's intent names the secret, never its value.
-    assert read_steps(done.record.path)[2:4] == [
+    assert [line for line in read_steps(done.record.path) if line["seq"] == 1] == [
         {
             "seq": 1,
             "state": "intent",
@@ -327,14 +329,117 @@ def test_a_value_the_page_throws_back_from_an_assertion_s_look_reaches_nothing_t
     result: RunResult = run(app, tmp_path, script, spec=spec).result
     out, err = capfd.readouterr()
 
-    assert [(a.outcome, a.error) for a in result.assertions] == [
-        (
-            "not_evaluated",
-            (
-                "Error: ElementHandle.evaluate: the rest is withheld, since the page "
-                "was handed a test secret"
-            ),
-        )
-    ]
+    [assertion] = result.assertions
+    assert assertion.outcome == "not_evaluated"
+    # Playwright's error type and call, whichever call the page broke.
+    assert (assertion.error or "").endswith(
+        ": the rest is withheld, since the page was handed a test secret"
+    )
     assert result.outcome == "errored"
     assert no_copy(tmp_path, repr(result), out, err) == []
+
+
+@pytest.mark.usefixtures("with_the_value")
+def test_each_fill_secret_step_fills_the_secret_it_names(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_NAME", OTHER_FAKE_VALUE)
+    script = signing_in(
+        [
+            FILL_PASSWORD,
+            {
+                "seq": 2,
+                "action": "fill_secret",
+                "target": "name",
+                "secret": "TEST_NAME",
+                "side_effect": False,
+            },
+            {
+                "seq": 3,
+                "action": "click",
+                "target": "sign_in",
+                "side_effect": True,
+                "side_effect_basis": "network: POST /write/signin",
+            },
+        ],
+    )
+    spec = secret_spec(
+        tmp_path,
+        f"{BOUND_AT_START}, "
+        "TEST_NAME: { origins: [start], field: { role: textbox, name: Name } }",
+        account="{ email: { secret: TEST_NAME }, password: { secret: TEST_PASSWORD } }",
+        start_url="/page/signin",
+    )
+
+    result = run(app, tmp_path, script, spec=spec).result
+
+    assert result.outcome == "passed"
+    posted = f"password={quote_plus(FAKE_VALUE)}&name={quote_plus(OTHER_FAKE_VALUE)}"
+    assert app.bodies == [("/write/signin", posted.encode())]
+
+
+@pytest.mark.usefixtures("with_the_value")
+def test_a_run_that_fills_no_secret_keeps_playwrights_reasons(
+    app: App, tmp_path: Path
+) -> None:
+    # The spec references a secret, but the script fills none: the page is
+    # never handed a value, so a failed step's reason is as any run's.
+    script = compiled(
+        [
+            {
+                "seq": 1,
+                "action": "fill",
+                "target": "name",
+                "value": "Ada",
+                "side_effect": False,
+            }
+        ],
+        targets=FORM_TARGETS,
+    )
+    spec = secret_spec(tmp_path, start_url="/page/throws")
+
+    step = run(app, tmp_path, script, spec=spec).result.steps[1]
+
+    assert step.outcome == "failed"
+    assert (step.error or "").startswith("Error: ElementHandle.evaluate: Error: ")
+
+
+@pytest.mark.parametrize(
+    ("how", "raised"),
+    [
+        # Playwright would print the value as the fill sends it.
+        ("logged", SecretLoggedError),
+        # The secret is bound to an origin the spec no longer allows.
+        ("unbound", SpecError),
+    ],
+)
+@pytest.mark.usefixtures("with_the_value")
+def test_a_run_that_cant_use_its_secrets_stops_before_the_browser_opens(
+    app: App,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    how: str,
+    raised: type[Exception],
+) -> None:
+    opened: list[object] = []
+
+    def no_browser(*args: object, **options: object) -> None:
+        opened.append((args, options))
+        raise AssertionError("the browser was opened")
+
+    monkeypatch.setattr(executor, "open_browser_session", no_browser)
+    secrets = BOUND_AT_START
+    if how == "logged":
+        monkeypatch.setenv("DEBUGP", "1")
+    else:
+        secrets = (
+            "TEST_PASSWORD: { origins: [start, 'http://other.example.test:1'], "
+            "field: password }"
+        )
+    spec = secret_spec(tmp_path, secrets, start_url="/page/signin")
+
+    with pytest.raises(raised):
+        run(app, tmp_path, signing_in([FILL_PASSWORD]), spec=spec)
+
+    assert opened == []
+    assert app.paths() == []
