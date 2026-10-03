@@ -1,6 +1,6 @@
 # Data Model — Agentic QA Platform
 
-Last updated: 2026-10-02 (the M1 executor's assertion outcomes, #46; the M1 executor's step and run outcomes, and its local steps record, #46; the coverage plan's format and hash, and local run records under the spec root, #41; `ws://` to a subresource host on port 443, corrected, #43; loading a compiled script and bounding its text searches, #46; model roles and cost records, #40; M1 design decisions, ADR-0024–0026). PostgreSQL 16+ on RDS. Internal IDs are UUIDv7 (time-ordered). External identifiers (Clerk org/user IDs, GitHub IDs) are stored as their native strings/integers and mapped to internal IDs. All timestamps `timestamptz` UTC.
+Last updated: 2026-10-03 (probes as `GET <path>`, `probe_equals`'s fields, JSON paths and probe reads, #48; the M1 executor's assertion outcomes, #46; the M1 executor's step and run outcomes, and its local steps record, #46; the coverage plan's format and hash, and local run records under the spec root, #41; `ws://` to a subresource host on port 443, corrected, #43; loading a compiled script and bounding its text searches, #46; model roles and cost records, #40; M1 design decisions, ADR-0024–0026). PostgreSQL 16+ on RDS. Internal IDs are UUIDv7 (time-ordered). External identifiers (Clerk org/user IDs, GitHub IDs) are stored as their native strings/integers and mapped to internal IDs. All timestamps `timestamptz` UTC.
 
 ## 1. Entity overview
 
@@ -132,7 +132,7 @@ preconditions:
   start_url: /                   # a path; the origin comes from the run (`aqa explore --url`), never from the spec
   account: { email: returning@example.test, password: { secret: TEST_PASSWORD } }   # the secret must be declared in the project config (§9)
   reset: { http: "POST /test-api/reset?fixture=returning-user-expired-card" }   # optional; called before every attempt, the first included (ADR-0024)
-  probes:                        # optional read-only GET endpoints on allowed origins, for observing app state
+  probes:                        # optional read-only GETs on the start origin, for observing app state
     orders_count: "GET /test-api/orders/count?email=returning@example.test"
 steps:            # optional hints; the agent may deviate
   - Log in
@@ -181,6 +181,7 @@ Free-form notes for humans. The agent never reads the body; anything that affect
 - *`id`* must equal the file name without `.spec.md`. Spec IDs must be unique across the project, subdirectories of the spec root included; a duplicate is a spec error before anything is written.
 - *`start_url`* is a path: one leading `/`, then no whitespace, control characters or backslashes, and no empty, `.` or `..` segment (`%2e` is a dot). A browser could read any of those as a path starting `//`, another origin. A query and a fragment are allowed.
 - *`account`* takes `email` and `password`, each a string or a secret reference, `{ secret: NAME }`. A reference must name a secret the project config declares (§9).
+- *A probe* is `GET`, one space and a path held to `start_url`'s rules, in ASCII and with no fragment: the runner sends the path as written, so anything else is percent-encoded. A probe only reads, and only from the start origin (#48).
 - *An expectation* is a string, or `{ text, visual }`. `visual: model` is a spec error in M1 (ADR-0024).
 - *`allowed_origins` and `browser`* are checked as §9 checks origins and `browser`.
 
@@ -244,7 +245,7 @@ Free-form notes for humans. The agent never reads the body; anything that affect
 - **Coverage plan first (ADR-0024).** Explore writes the plan from the spec alone, before the browser opens, and keeps it frozen for the run (`aqa_core.coverage_plan`).
   - *As written:* one entry per expectation, in the spec's order, each with its `expect_index`, `subject` and `claim`. Then either `checks`, at least one and none twice, or `unsupported`, with a `reason`, plus `needs` when an M2 check would establish the claim (`pixel_diff`, `contrast_min` or `model_verify`). The plan also lists `requires`, the conditions, each `id` once. A plan fits its spec only with one entry per expectation and only with probes the spec declares.
   - *A planned check* has one of M1's nine check types: *Check types* below, less `pixel_diff`, `contrast_min` and `model_verify`. Its fields are its assertion's, less what compiling adds. It has no `id` or `expect_index`, and no `min_size_px`, `in_viewport` or baseline capture. Instead of a `target`, it has a `target_meaning`: what the element it reads is for and where it sits. That is the expectation's subject, or the part of the subject the check reads when the claim names several elements, such as one of three header links. `probe_equals` takes a `probe` and a `value`, an integer or a string. A `text` is normalized and a `pattern` is a Python regex, as in a compiled script.
-  - *Compiling* turns each planned check into the assertion of the same type (#53), and each `target_meaning` into a target's `semantic` (#52). A plan can name `probe_equals` before its assertion has fields (#48), but can't be compiled until then.
+  - *Compiling* turns each planned check into the assertion of the same type (#53), and each `target_meaning` into a target's `semantic` (#52). Compiling a `probe_equals` adds the `json_path` of the value its probe reads (#48).
 
   The compiled script stores the plan as `coverage`:
   - for each expectation: its subject, its claim and the assertions that establish it;
@@ -257,6 +258,10 @@ Free-form notes for humans. The agent never reads the body; anything that affect
   - `pattern` is a Python regex (`re.search`, flags written out) for claims that need one, such as part of text written without spaces between words. It searches the same normalized rendered text; `url_matches` searches the page's URL as it is (ADR-0025, "resolving a target per use"). The page controls the text, and Python's `re` can't be interrupted, so each search, a `text` literal's included, runs in a child process that gets no environment and is killed after 2 s (`aqa_runner.text_search`). A search that runs out of time is the check's outcome, `check_timed_out` (*Replay outcomes*).
 
   The compiler prefers `text`. A claim that depends on case uses a `pattern` without `(?i)`.
+- **Probe reads (ADR-0024's #48 amendment).** A probe check, and a baseline, reads its probe with runner-side requests (§6, ADR-0026) until two reads in a row, 0.5 s apart, select the same value; the whole read, every request in it, gets 10 s (`aqa_runner.probes`).
+  - *What is read:* only a 200, whose body is one JSON object or array, in UTF-8, with no repeated key, no `NaN` or `Infinity` and no fraction or exponent past a float's range (an integer is read exactly). A body the connection's close ends can be cut short unseen, and an object or array cut short never parses, where a bare `12` cut to `1` would.
+  - *Never still:* when the 10 s pass after two reads or more, none the same as the one before, the value never held still. When they pass before a second read, the probe didn't answer, which is a probe that can't be read, as any other response above is.
+  - *Compared:* `probe_equals` holds when the selected value has its `value`'s JSON type and equals it, so neither `2.0` nor `true` is `2`; `probe_equals_baseline` when the selected value and the baseline are the same canonical JSON (`spec_hash`'s rules).
 - **Meanings (ADR-0025).** A target's `semantic` says what the element is for and where it sits, never its current label. If an expectation claims a label, the label belongs in an assertion.
 - **Locators (ADR-0025).**
   - *Kinds:* `role` + `name` (the name normalized, then matched exactly), `label`, `placeholder`, `testid`, and `css`. A `css` locator uses a stable id, or stable classes, attributes and custom-element tags: never positional, never generated class names.
@@ -323,7 +328,7 @@ A compiled script is read as strictly as a spec (§6): an unknown field is an er
   | `select` | `target`, `option` |
   | `press` | `key`, with no target, as the agent's `press(key)` tool has none (ARCHITECTURE §3.4) |
 
-- **Assertions:** each has an `id` and an `expect_index`. Schema version 1 gives fields to these checks. The other check types above are refused by name until their fields are defined: `probe_equals` in #48, and `pixel_diff`, `contrast_min` and `model_verify` in M2.
+- **Assertions:** each has an `id` and an `expect_index`. Schema version 1 gives fields to these checks. The other check types above are refused by name until their fields are defined: `pixel_diff`, `contrast_min` and `model_verify` in M2.
 
   | Check | Fields |
   |---|---|
@@ -332,10 +337,11 @@ A compiled script is read as strictly as a spec (§6): an unknown field is an er
   | `not_visible` | `target` |
   | `url_matches` | `pattern` |
   | `network_none`, `network_seen` | `method` (`GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE` or `OPTIONS`), `url_pattern`, `status_class` (`1xx` to `5xx`) |
+  | `probe_equals` | `probe`, `json_path`, `value` (an integer or a non-empty string, never `true` or `2.0`) |
   | `probe_equals_baseline` | `probe` |
   | `visible_unoccluded` | `target`, `min_size_px` (width and height, each 1 or more), `in_viewport` |
 
-  A `text` is written normalized, as a `name` is. A `pattern` must compile as a Python regex.
+  A `text` is written normalized, as a `name` is. A `pattern` must compile as a Python regex. A `json_path`, here and in `probe_baselines`, is `$`, then a step for each level: `.name` for an object's key (ASCII letters, digits, `_` or `-`) or `[index]` for an array's item (an integer from 0, no leading zero, at most nine digits), as in `$.count` or `$.orders[0].total`. Nothing else, so no path reads two ways.
 - **Also enforced:** `coverage.expectations` and `assertions` are not empty, and neither is an expectation's `assertions`. An expectation's `assertions` and a step's `satisfies` name each ID once. `compiled_by.mode` is `explore`, and `compiled_by.models` is keyed by model role (navigator, verifier, healer, vision_fallback).
 - **Checked by the loader, not the format** (`aqa_core.project.load_compiled`, #46). Every problem is reported at once, each naming the file and the key, as a spec error (exit 5, API.md §7). Reading the file is as for a spec (§6): a directory, or text that isn't UTF-8, is a spec error, and any other read error, a missing file included, propagates for the caller to handle.
   - that the JSON repeats no key, wherever it is: a reader keeps a key's last value, so a repeat could hide a lowered `side_effect`. Objects and arrays nest at most 256 deep;

@@ -292,3 +292,18 @@ Building the compiler's locator generation (#52) settled choices that "Locator g
 - **Known limits, for the callers (#53, #46):**
   - A class that flips with state, such as Bootstrap's `btn-outline-primary` and `btn-primary`, can't be told from a stable one. A target used before and after such a flip is checked at both uses, so the flip splits it (above).
   - A page can copy a filled secret into a name, a test ID or a placeholder, and a locator built on it would carry the secret. Before a script is written, its caller must drop, never redact, any locator that reveals a secret value.
+
+## Amendment (2026-10-03): `probe_equals` and JSON paths (#48)
+
+The Decision's "only the checks with fields" left `probe_equals` refused until #48. DATA_MODEL §7 holds the rules; this records why.
+
+- **`probe_equals` takes `probe`, `json_path` and `value`.**
+  - *Options:* (1) the planned check's `probe` and `value`, compared with the whole body; (2) those and a `json_path`, as `probe_baselines` has; (3) a path per probe, in a table beside `probe_baselines`.
+  - *Chosen: 2.* A probe answers JSON, such as the pilot's `{"count": 2}`, and a claim is about one value in it. The baseline check already names its value by `json_path`, so both checks read a probe the same way. Compiling adds the path, as it adds a target's locators: the plan names the probe and the value from the spec alone, and only exploring sees the response.
+  - *`value`* is an integer or a non-empty string, as the planned check's is (#41). `true` and `2.0` aren't `2`.
+- **A JSON path is a small grammar, not JSONPath.**
+  - *Options:* (1) RFC 9535 JSONPath, through a library; (2) `$`, then `.name` or `[index]` steps only.
+  - *Chosen: 2.* A path selects one value. Wildcards, filters and slices select sets, and a quoted key's escapes are a second syntax to get right. It needs no dependency, and `aqa_core.compiled.json_path_steps` reads it. An index has at most nine digits: no array is longer, and Python's `int()` refuses a string of more than 4,300.
+  - `probe_baselines.<name>.json_path`, a `NonEmpty` until now, takes the same grammar. The example's `$.count` already fits it.
+  - A key with characters other than ASCII letters, digits, `_` and `-` can't be named yet. A probe that needs one adds a quoted form.
+- **Additive:** a committed script stays valid, and `schema_version` stays 1.
