@@ -13,7 +13,7 @@ from aqa_core.schema import DEFAULT_PORTS, authority
 from playwright.async_api import BrowserContext, Route, WebSocketRoute
 
 from aqa_runner.egress import EgressPolicy, Requester
-from aqa_runner.egress_proxy import MAX_HOST, BlockedAttempt, BlockedAttempts
+from aqa_runner.egress_proxy import BlockedAttempt, BlockedAttempts, named_host
 
 # For each scheme the egress proxy carries: the scheme whose origins its
 # authority is read as, and how the proxy sees the connection. Chromium sends
@@ -55,9 +55,7 @@ def refused_attempt(
         return BlockedAttempt(resource_type, parts.scheme, "", None)
     if policy.allows(host, port, requester):
         return None
-    return BlockedAttempt(
-        resource_type, parts.scheme, host if len(host) <= MAX_HOST else "", port
-    )
+    return BlockedAttempt(resource_type, parts.scheme, named_host(host), port)
 
 
 def refused_sockets(policy: EgressPolicy) -> re.Pattern[str]:

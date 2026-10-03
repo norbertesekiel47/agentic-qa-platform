@@ -70,9 +70,9 @@ type InvariantOutcome = Literal["held", "violated", "disabled"]
 
 @dataclass(frozen=True)
 class InvariantResult:
-    """One invariant once the run is over: its outcome, the first
-    `RECORD_LIMIT` things it saw, each at most `TEXT_CHARS` characters, and
-    how many there were in all."""
+    """One invariant once the run is over: its outcome, the first 100 things
+    it saw (`Records`), each at most `TEXT_CHARS` characters, and how many
+    there were in all."""
 
     name: InvariantName
     outcome: InvariantOutcome
@@ -112,6 +112,8 @@ class Observers:
         # bindings run in the page's world, and call through globals the
         # page's scripts can replace.
         # https://playwright.dev/python/docs/api/class-browsercontext#browser-context-new-cdp-session
+        # Playwright's connection keeps the session, and its listener, until
+        # the page closes, so nothing here needs to hold it.
         session = await page.context.new_cdp_session(page)
         session.on("Runtime.bindingCalled", observers._reported)
         # The CDP methods and their parameters, as Playwright 1.63's

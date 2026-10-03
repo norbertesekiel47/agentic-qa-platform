@@ -423,7 +423,7 @@ browser:                      # settings for every run (ADR-0025); a spec may ov
   viewport: [1280, 800]
 egress:                       # ADR-0026
   subresource_hosts: [ "fonts.cdn.example.test" ]            # pages may load from these; no navigation, no secrets
-  expected_blocked: [ "analytics.example.test" ]             # refused; their direct symptoms don't count against invariants
+  expected_blocked: [ "analytics.example.test" ]             # refused; their blocks don't keep a run from passing
   private_origins: [ "http://staging.internal.test:8080" ]   # local and CI runs only: may resolve to private addresses
 secrets:                      # bindings only; values come from AQA_SECRET_<NAME>
   TEST_PASSWORD: { origins: [ start ], field: password }
