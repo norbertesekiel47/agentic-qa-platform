@@ -29,6 +29,7 @@ from aqa_runner.document_origins import (
     document_origin,
     frame_origin,
     frames_off_origin,
+    isolated_origin,
     navigable_origin,
 )
 from aqa_runner.egress import EgressPolicy
@@ -386,46 +387,30 @@ class BrowserSession:
         """Fill `element` with `secret`'s value, as `fill` fills, once the page
         and the element's frame are checked as for every action, and only
         where its binding allows (ADR-0026, Test secrets; SECURITY §5): the
-        page is on one of its destinations, the element's frame and every
-        frame around it are on the page's own origin, each reached by its
-        parent, and the element is the field the binding names. Otherwise
+        page is on one of its destinations, its document too, not sandboxed
+        onto an opaque origin; the element's frame and every frame around it
+        are on the page's own origin, each reached by its parent; and the
+        element is the field the binding names. Otherwise
         `SecretRefusedError`, before anything is filled.
 
-        A fill that fails raises Playwright's `Error` with a message of ours,
-        and keeps nothing of Playwright's: the page's own scripts can throw
-        back the value they were handed."""
+        Any other failure, of a check or of the fill, raises Playwright's
+        `Error` with a message of ours, and keeps nothing of Playwright's: the
+        page's own scripts can throw back this value, or one filled before."""
         async with self._turn:
-            frame = await self._require_actionable(element)
-            page = await frame_origin(self.page.main_frame)
-            origins = secret.destination.origins
-            if page not in origins:
-                raise SecretRefusedError(
-                    f"fill_secret refused {secret.name}: the page is on {page}, "
-                    f"which isn't one of its destinations: {', '.join(origins)}"
-                )
-            if (outside := await frames_off_origin(frame, page)) is not None:
-                raise SecretRefusedError(
-                    f"fill_secret refused {secret.name}: the field is in {outside}, "
-                    f"not on the page's origin, {page}"
-                )
-            if not await field_matches(frame, element, secret.destination.field):
-                raise SecretRefusedError(
-                    f"fill_secret refused {secret.name}: the field isn't "
-                    f"{describe_field(secret.destination.field)}"
-                )
-            window = self._traffic.next_window()
             try:
-                filled = await element.evaluate(FILL, secret.value.get_secret_value())
+                window = await self._fill_where_bound(element, secret)
             except Error:
-                # Playwright's general error type: the page broke the fill,
-                # or went. Its message can hold what the page's scripts threw,
-                # which can be the value, so it is dropped here, unbound, and
-                # the error below has no context to show it.
-                filled = False
-            if not filled:
+                # Playwright's general error type: the page broke a check or
+                # the fill, or went. Its message can hold what the page's
+                # scripts threw, which can be a secret's value, so it is
+                # dropped here, unbound, and the error below has no context
+                # to show it.
+                window = None
+            if window is None:
                 raise Error(
-                    f"fill_secret: the field didn't take {secret.name}: it takes no "
-                    "text, its page changed the value, or its page broke the fill"
+                    f"fill_secret: {secret.name} wasn't filled: the field takes no "
+                    "text, its page changed the value, or the page broke or closed "
+                    "during the fill or its checks"
                 )
             return window
 
@@ -638,6 +623,38 @@ class BrowserSession:
         if origin not in self._policy.allowed_origins:
             self.policy_events.add(PolicyEvent("popup", url, origin))
         await popup.close()
+
+    async def _fill_where_bound(
+        self, element: ElementHandle, secret: BoundSecret
+    ) -> Window | None:
+        """`fill_secret`'s checks, then its fill: the fill's settle window, or
+        None when the field didn't take the value."""
+        frame = await self._require_actionable(element)
+        page = await frame_origin(self.page.main_frame)
+        origins = secret.destination.origins
+        if page not in origins:
+            raise SecretRefusedError(
+                f"fill_secret refused {secret.name}: the page is on {page}, "
+                f"which isn't one of its destinations: {', '.join(origins)}"
+            )
+        if await isolated_origin(self.page) != page:
+            raise SecretRefusedError(
+                f"fill_secret refused {secret.name}: the page is sandboxed: its URL "
+                f"is on {page}, but its document is on an opaque origin"
+            )
+        if (outside := await frames_off_origin(frame, page)) is not None:
+            raise SecretRefusedError(
+                f"fill_secret refused {secret.name}: the field is in {outside}, "
+                f"not on the page's origin, {page}"
+            )
+        if not await field_matches(frame, element, secret.destination.field):
+            raise SecretRefusedError(
+                f"fill_secret refused {secret.name}: the field isn't "
+                f"{describe_field(secret.destination.field)}"
+            )
+        window = self._traffic.next_window()
+        filled = await element.evaluate(FILL, secret.value.get_secret_value())
+        return window if filled else None
 
     async def _require_actionable(self, element: ElementHandle) -> Frame:
         """Record and raise a policy event unless the page, and the frame of

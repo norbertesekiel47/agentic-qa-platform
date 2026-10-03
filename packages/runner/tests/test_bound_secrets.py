@@ -163,6 +163,26 @@ def test_a_bound_secret_never_shows_its_value(
 
     secret = bound_secrets(secret_spec(tmp_path), START)["TEST_PASSWORD"]
 
+    # Kept, but shown nowhere it is printed.
+    assert secret.value.get_secret_value() == FAKE_VALUE
     for shown in (repr(secret), str(secret), f"{secret.value}", repr(secret.value)):
         assert FAKE_VALUE not in shown
-        assert "**********" in shown
+
+
+def test_a_secret_referenced_twice_is_reported_where_the_spec_first_uses_it(
+    tmp_path: Path,
+) -> None:
+    spec = secret_spec(
+        tmp_path,
+        account="{ email: { secret: TEST_PASSWORD }, password: { secret: TEST_PASSWORD } }",
+    )
+
+    with pytest.raises(MissingSecretError) as missing:
+        bound_secrets(spec, START)
+
+    assert missing.value.problems == (
+        (
+            "AQA_SECRET_TEST_PASSWORD is not set: set it to the value of test secret "
+            f"TEST_PASSWORD, which {spec.path} references at preconditions.account.email"
+        ),
+    )

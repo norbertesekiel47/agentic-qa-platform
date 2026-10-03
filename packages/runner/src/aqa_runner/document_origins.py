@@ -11,7 +11,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from aqa_core.schema import parse_origin
-from playwright.async_api import Frame
+from playwright.async_api import Frame, Page
 
 # Where a document on no allowed origin was found: the session's top-level
 # page, the frame of an element the session was about to give out or act on,
@@ -178,6 +178,39 @@ async def reaches(frame: Frame) -> bool:
         return bool(await owner.evaluate("(owner) => owner.contentDocument != null"))
     finally:
         await owner.dispose()
+
+
+async def isolated_origin(page: Page) -> str | None:
+    """The origin of `page`'s top-level document as the browser holds it,
+    written as an origin writes it: None when it is opaque, as for a
+    document its response sandboxes (`Content-Security-Policy: sandbox`),
+    whatever its URL.
+
+    Read as `self.origin` in an isolated world of its own, where the page's
+    scripts can't answer: CDP's frame tree reports the URL's origin for such
+    a document, and the page's own world can redefine `origin` (both
+    measured by #49's security review).
+    https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-createIsolatedWorld
+    https://chromedevtools.github.io/devtools-protocol/tot/Runtime/#method-evaluate"""
+    cdp = await page.context.new_cdp_session(page)
+    try:
+        tree = await cdp.send("Page.getFrameTree")
+        world = await cdp.send(
+            "Page.createIsolatedWorld",
+            {"frameId": tree["frameTree"]["frame"]["id"], "worldName": "aqa-origin"},
+        )
+        read = await cdp.send(
+            "Runtime.evaluate",
+            {
+                "expression": "self.origin",
+                "contextId": world["executionContextId"],
+                "returnByValue": True,
+            },
+        )
+    finally:
+        await cdp.detach()
+    # An opaque origin serializes as "null", which no URL parse reads as one.
+    return document_origin(str(read["result"]["value"]), None)
 
 
 async def frames_off_origin(frame: Frame, origin: str | None) -> str | None:

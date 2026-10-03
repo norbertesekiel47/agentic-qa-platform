@@ -1,11 +1,12 @@
 """The project config, qa/config.yaml, is read strictly (DATA_MODEL §9, #39)."""
 
+import typing
 from pathlib import Path
 
 import pytest
 from aqa_core.config import RoleField
 from aqa_core.project import SpecError, load_config
-from aqa_core.schema import authority
+from aqa_core.schema import AriaRole, authority
 from pydantic import ValidationError
 
 # DATA_MODEL §9's example, verbatim.
@@ -226,6 +227,11 @@ def test_authority_refuses_what_is_not_an_origin(text: str) -> None:
             "secrets: { A: { origins: [start], field: { role: texbox, name: Key } } }\n",
             "secrets.A.field.role",
             "'texbox' is not an ARIA role",
+        ),
+        (
+            "secrets: { A: { origins: [start], field: { role: 5, name: Key } } }\n",
+            "secrets.A.field.role",
+            "'5' is not an ARIA role",
         ),
         ("secrets: { A: { origins: [start] } }\n", "secrets.A.field", "missing key"),
         # Egress hosts and private origins.
@@ -460,3 +466,9 @@ def test_a_loaded_config_cannot_be_changed(tmp_path: Path) -> None:
 
     with pytest.raises(ValidationError):
         config.base_url = "https://elsewhere.example.test"
+
+
+def test_a_field_binding_takes_every_role_playwright_knows() -> None:
+    roles = typing.get_args(AriaRole)
+
+    assert [RoleField(role=role, name="Key").role for role in roles] == list(roles)
