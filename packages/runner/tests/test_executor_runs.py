@@ -16,6 +16,7 @@ import pytest
 from aqa_core.config import ProjectConfig
 from aqa_runner import settling
 from aqa_runner.anthropic_client import AnthropicClient
+from aqa_runner.invariants import InvariantResult
 from aqa_runner.model_router import ModelRouter
 from aqa_runner.run_record import RunRecord
 from langchain_anthropic import ChatAnthropic
@@ -313,3 +314,42 @@ def test_the_run_uses_the_scripts_browser_settings_not_the_project_or_spec_overr
         "scale": ["2"],
         "scheme": ["dark"],
     }
+
+
+def test_a_disabled_invariant_doesnt_keep_a_run_from_passing(
+    app: App, tmp_path: Path
+) -> None:
+    spec = a_spec(
+        tmp_path,
+        ProjectConfig(),
+        start_url="/page/console-error",
+        extra="invariants: {disable: [console_errors]}\n",
+    )
+
+    result = run(app, tmp_path, compiled([]), spec=spec).result
+
+    assert result.outcome == "passed"
+    assert [assertion.outcome for assertion in result.assertions] == ["pass"]
+    assert result.invariants == (
+        InvariantResult("console_errors", "disabled", ("console-trigger",), 1),
+        InvariantResult("js_exceptions", "held", (), 0),
+        InvariantResult("http_5xx", "held", (), 0),
+        InvariantResult("broken_images", "held", (), 0),
+    )
+
+
+def test_an_invariant_violation_fails_a_run_whose_assertions_pass(
+    app: App, tmp_path: Path
+) -> None:
+    spec = a_spec(tmp_path, ProjectConfig(), start_url="/page/console-error")
+
+    result = run(app, tmp_path, compiled([]), spec=spec).result
+
+    assert [assertion.outcome for assertion in result.assertions] == ["pass"]
+    assert result.invariants == (
+        InvariantResult("console_errors", "violated", ("console-trigger",), 1),
+        InvariantResult("js_exceptions", "held", (), 0),
+        InvariantResult("http_5xx", "held", (), 0),
+        InvariantResult("broken_images", "held", (), 0),
+    )
+    assert result.outcome == "failed"

@@ -42,6 +42,7 @@ from aqa_runner.document_origins import (
 )
 from aqa_runner.egress import EgressGate, InfrastructureEvent
 from aqa_runner.egress_proxy import EgressProxy
+from aqa_runner.invariants import InvariantResult, invariant_results
 from aqa_runner.locators import Absent, Miss, Resolved, Unresolved, Use
 from aqa_runner.run_record import RunRecord
 from aqa_runner.secret_fields import SecretNotFilledError, SecretRefusedError
@@ -184,6 +185,7 @@ class RunResult:
     assertions: tuple[AssertionResult, ...]
     infrastructure_events: tuple[InfrastructureEvent, ...]
     policy_events: tuple[PolicyEvent, ...]
+    invariants: tuple[InvariantResult, ...]
 
 
 async def replay(
@@ -268,14 +270,19 @@ async def replay(
             )
         else:
             assertions = await _evaluate_each(session, checks, run)
+        invariants = invariant_results(
+            session.invariant_observers.seen, setup.spec.frontmatter.invariants
+        )
         errored = (
             interrupted()
             or any(step.outcome == "failed" for step in steps)
             or any(assertion.error is not None for assertion in assertions)
         )
         policy_events = tuple(session.policy_events.kept)
-    passed = all(step.outcome == "completed" for step in steps) and all(
-        assertion.outcome == "pass" for assertion in assertions
+    passed = (
+        all(step.outcome == "completed" for step in steps)
+        and all(assertion.outcome == "pass" for assertion in assertions)
+        and all(invariant.outcome != "violated" for invariant in invariants)
     )
     return RunResult(
         record.run_id,
@@ -284,6 +291,7 @@ async def replay(
         assertions,
         tuple(gate.infrastructure_events),
         policy_events,
+        invariants,
     )
 
 
