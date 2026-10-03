@@ -137,7 +137,6 @@ PAGES = SHOPS | {
     "busy": """<p>Busy</p><script>setTimeout(() => { for (;;) {} }, 200);</script>""",
     # An error in the status area that the page never shows.
     "hidden-error": """<section id="status-area"><p class="error" hidden>Card declined</p></section>""",
-    # The test releases the empty status area while resolving its scope.
     "late-area": """<script>
         addEventListener("show-status-area", () => {
             document.body.insertAdjacentHTML("beforeend", '<section id="status-area"></section>');
