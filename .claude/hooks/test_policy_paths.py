@@ -644,6 +644,9 @@ class CaseVariantTests(PathTestCase):
             "cp x pyte\ufb06.toml",
             "rm tscon\ufb01g.json",
             "rm -rf apps/web/te\ufb06s",
+            # A 128-letter name that folds to three times as many.
+            "rm packages/a/test_" + "\u0390" * 120 + ".py",
+            "rm tsconfig" + "\u0390" * 110 + ".json",
         )
 
     def test_case_variant_near_misses_stay_inert(self) -> None:
