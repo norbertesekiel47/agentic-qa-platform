@@ -637,10 +637,10 @@ class BrowserSession:
                 f"fill_secret refused {secret.name}: the page is on {page}, "
                 f"which isn't one of its destinations: {', '.join(origins)}"
             )
-        if await isolated_origin(self.page) != page:
+        if (document := await isolated_origin(self.page)) != page:
             raise SecretRefusedError(
-                f"fill_secret refused {secret.name}: the page is sandboxed: its URL "
-                f"is on {page}, but its document is on an opaque origin"
+                f"fill_secret refused {secret.name}: the page's document is on "
+                f"{document or 'an opaque origin (sandboxed)'}, though its URL is on {page}"
             )
         if (outside := await frames_off_origin(frame, page)) is not None:
             raise SecretRefusedError(
