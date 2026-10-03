@@ -659,20 +659,22 @@ class TargetUses:
     async def add_negative_check(self, page: Page) -> int:
         """The index in `targets` of the target a negative check of the
         meaning, on the page now, gets. The caller calls
-        `see_for_negative_check` first, while the element is on screen. Of
-        each kind, the first locator seen there whose scope is on this page
-        decides: with nothing visible in that scope it is kept, for a new
-        target; with something visible, the element is still shown, and the
-        check fails by name. The current target, if every locator is scoped
-        and finds nothing visible, serves the check instead."""
+        `see_for_negative_check` first, while the element is on screen, and
+        every negative check is judged against the latest sighting: any
+        locator seen there that finds something visible in its scope fails
+        the check by name, since the element is still shown. The current
+        target serves the check if every one of its locators is scoped and
+        finds nothing visible; otherwise a new target keeps, of each kind,
+        the first locator seen whose scope is on the page with nothing
+        visible in it."""
         with self._named():
+            if not self._seen:
+                raise LocatorError("it wasn't seen before its negative check")
             kept = await _first_absent(page, self._seen)
             joins = bool(self._targets) and await self._holds(
                 "negative_check", lambda locator: _absent(page, locator)
             )
             if not joins:
-                if not self._seen:
-                    raise LocatorError("it wasn't seen before its negative check")
                 if not kept:
                     raise LocatorError("no scope it was seen under is on the page")
                 self._targets.append(Target(semantic=self.meaning, locators=kept))
@@ -713,14 +715,14 @@ class TargetUses:
 
 
 # What a locator, alone, finds at a negative check: its scope with nothing
-# visible in it, something visible there (one match or several), or no scope.
-type _Look = Literal["absent", "shown", "no scope"]
+# visible in it, something visible there (one match or several), no scope,
+# or nothing known, because the page broke the look.
+type _Look = Literal["absent", "shown", "no scope", "broken"]
 
 
 async def _look(page: Page, locator: Locator) -> _Look:
     """What `locator`, alone, finds on the page now, as a negative check
-    counts. A page that breaks the look shows no scope: it established
-    nothing."""
+    counts."""
 
     async def look() -> _Look:
         target = Target(semantic=_CANDIDATE_MEANING, locators=(locator,))
@@ -732,7 +734,7 @@ async def _look(page: Page, locator: Locator) -> _Look:
             return "shown"
         return "no scope" if found.misses == ("no scope",) else "shown"
 
-    return await _unless_the_page_breaks(page, look(), "no scope")
+    return await _unless_the_page_breaks(page, look(), "broken")
 
 
 async def _absent(page: Page, locator: Locator) -> bool:
@@ -740,11 +742,13 @@ async def _absent(page: Page, locator: Locator) -> bool:
 
 
 async def _first_absent(page: Page, seen: _ByKind) -> tuple[Locator, ...]:
-    """Of each kind, the first locator seen whose scope is on the page, when
-    nothing is visible in that scope. Raises `LocatorError` when something
-    is: the element is still shown."""
+    """Of each kind, the first locator seen whose scope is on the page with
+    nothing visible in it. Every locator seen is looked at, the broader ones
+    too: one that finds something visible in its scope raises `LocatorError`,
+    as the element is still shown, and so does a look the page breaks."""
     kept: list[Locator] = []
     for found in seen:
+        first: Locator | None = None
         for locator in found:
             look = await _look(page, locator)
             if look == "shown":
@@ -752,7 +756,10 @@ async def _first_absent(page: Page, seen: _ByKind) -> tuple[Locator, ...]:
                     "it is still shown: a locator it was seen by finds "
                     "something visible in its scope"
                 )
-            if look == "absent":
-                kept.append(locator)
-                break
+            if look == "broken":
+                raise LocatorError("the page broke the look at its negative check")
+            if look == "absent" and first is None:
+                first = locator
+        if first is not None:
+            kept.append(first)
     return tuple(kept)
