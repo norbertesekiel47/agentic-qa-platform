@@ -363,8 +363,8 @@ def test_fill_secret_refuses_a_page_sandboxed_onto_an_opaque_origin(
             )
 
     assert str(asyncio.run(scenario())) == (
-        f"fill_secret refused TEST_PASSWORD: the page is sandboxed: its URL is on "
-        f"{sites.app}, but its document is on an opaque origin"
+        "fill_secret refused TEST_PASSWORD: the page's document is on an opaque "
+        f"origin (sandboxed), though its URL is on {sites.app}"
     )
 
 
