@@ -253,7 +253,11 @@ def hosting(
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     scheme = "http"
     if tls is not None:
-        server.socket = tls.wrap_socket(server.socket, server_side=True)
+        # The handshake in the handler's thread, after `setup` has recorded
+        # the peer, not in the serve loop, which drops a failed one unseen.
+        server.socket = tls.wrap_socket(
+            server.socket, server_side=True, do_handshake_on_connect=False
+        )
         scheme = "https"
     site = Site(f"{scheme}://127.0.0.1:{server.server_port}", pages, alt_svc)
     server.RequestHandlerClass = type("Handler", (_Handler,), {"site": site})
@@ -378,7 +382,12 @@ def report(
             for each in sites
         ],
         "upstreams": gate.upstreams,
-        "peers": [peer for each in sites for peer in each.peers],
+        # Each accepted connection's peer, with the origin it reached.
+        "peers": [
+            [peer, [urlsplit(each.origin).hostname, urlsplit(each.origin).port]]
+            for each in sites
+            for peer in each.peers
+        ],
         "requests": [request for each in sites for request in each.requests],
         "targets": {name: canary.written() for name, canary in canaries.items()},
         "received": {name: canary.received for name, canary in canaries.items()},

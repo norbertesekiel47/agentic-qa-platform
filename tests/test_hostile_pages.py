@@ -170,13 +170,15 @@ def packets(observation: Observation) -> list[Flow] | None:
 class Expected:
     """What a hostile page's attempts must come to: those routing aborts and
     records, as (resource type, scheme, attempt); those the egress proxy
-    refuses by host; what the page sees of some; and paths the origin must
-    never be asked for."""
+    refuses by host; what the page sees of some; paths the origin must never
+    be asked for; and how many frames the page made, so a check of their
+    documents can't pass on none."""
 
     routed: frozenset[tuple[str, str, str]] = frozenset()
     refused: frozenset[str] = frozenset()
     outcomes: Mapping[str, object] = field(default_factory=dict)
     never_served: frozenset[str] = frozenset()
+    frames: int = 0
 
 
 FAILED = "failed: TypeError"
@@ -201,6 +203,7 @@ EXPECTED = {
     "form_post": Expected(
         routed=frozenset({("document", "http", "direct")}),
         refused=frozenset({"hop"}),
+        frames=2,
     ),
     # Routing closes the page's socket; a worker's, and a WebSocketStream,
     # which Playwright doesn't wrap, meet only the proxy.
@@ -262,7 +265,9 @@ EXPECTED = {
     "non_http_schemes": Expected(
         outcomes=dict.fromkeys(
             ["ftp", "gopher", "custom", "file", "fileOnAHost", "chrome"], FAILED
-        )
+        ),
+        # Each scheme as a frame's source and by a frame's location.
+        frames=12,
     ),
 }
 
@@ -284,7 +289,7 @@ class Run:
     proxy: Endpoint
     origins: list[Endpoint]
     upstreams: set[Upstream]
-    peers: list[Endpoint]
+    peers: list[Upstream]
     requests: list[tuple[Endpoint, str]]
     targets: dict[str, Endpoint]
     received: dict[str, int]
@@ -303,7 +308,10 @@ class Run:
                 ((local[0], local[1]), (remote[0], remote[1]))
                 for local, remote in report["upstreams"]
             },
-            peers=[(host, port) for host, port in report["peers"]],
+            peers=[
+                ((peer[0], peer[1]), (origin[0], origin[1]))
+                for peer, origin in report["peers"]
+            ],
             requests=[
                 ((host, port), path) for (host, port), path in report["requests"]
             ],
@@ -318,10 +326,11 @@ class Run:
         )
 
     def stray_peers(self) -> list[Endpoint]:
-        """Each connection an allowed origin accepted that the egress proxy
-        didn't open."""
-        opened = {local for local, _ in self.upstreams}
-        return [each for each in self.peers if each not in opened]
+        """Where each connection an allowed origin accepted came from, when
+        the egress proxy didn't open it to that origin."""
+        return [
+            peer for peer, origin in self.peers if (peer, origin) not in self.upstreams
+        ]
 
 
 def recorded(run: Run, routed: frozenset[tuple[str, str, str]]) -> set[object]:
@@ -346,6 +355,7 @@ def test_a_hostile_page_leaves_nothing_outside_the_proxy(method: str) -> None:
     assert run.refused == {(*run.targets[each], "host") for each in expected.refused}
     assert {name: run.outcomes[name] for name in expected.outcomes} == expected.outcomes
     assert not served_paths(run.requests) & expected.never_served
+    assert len(run.frames) == expected.frames
     assert foreign_documents(run.frames, run.origins) == []
     # Every connection the allowed origin accepted is one the proxy opened,
     # and the proxy connected to allowed origins only.
