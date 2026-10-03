@@ -2,6 +2,7 @@
 spec root's `.aqa/runs/`, which tells git to ignore it."""
 
 import json
+import os
 import uuid
 from pathlib import Path
 
@@ -87,3 +88,101 @@ def test_a_document_that_cannot_be_written_leaves_no_file(tmp_path: Path) -> Non
         record.write("plan.json", {"plan": object()})
 
     assert not (record.path / "plan.json").exists()
+
+
+def lines(record: RunRecord) -> list[dict[str, object]]:
+    """The record's step lines, each without its time."""
+    text = (record.path / "steps.jsonl").read_text(encoding="utf-8")
+    return [
+        {key: value for key, value in json.loads(line).items() if key != "at"}
+        for line in text.splitlines()
+    ]
+
+
+def test_a_step_is_recorded_as_an_intent_and_then_its_completion(
+    tmp_path: Path,
+) -> None:
+    record = RunRecord.create(tmp_path)
+
+    record.step_intent(
+        1, {"action": "click", "target": "save"}, side_effect=True, target_used="save"
+    )
+    record.step_completed(1, locator_used=2, settled="idle")
+
+    assert lines(record) == [
+        {
+            "seq": 1,
+            "state": "intent",
+            "action": {"action": "click", "target": "save"},
+            "side_effect": True,
+            "target_used": "save",
+        },
+        {"seq": 1, "state": "completed", "locator_used": 2, "settled": "idle"},
+    ]
+
+
+def test_each_step_line_says_when_in_utc(tmp_path: Path) -> None:
+    record = RunRecord.create(tmp_path)
+
+    record.step_intent(0, {"action": "reload"}, side_effect=False, target_used=None)
+
+    [line] = (record.path / "steps.jsonl").read_text().splitlines()
+    at = json.loads(line)["at"]
+    assert at.endswith("+00:00")
+
+
+def test_an_intent_without_its_completion_stays_unresolved(tmp_path: Path) -> None:
+    record = RunRecord.create(tmp_path)
+
+    record.step_intent(0, {"action": "reload"}, side_effect=False, target_used=None)
+    record.step_completed(0, locator_used=None, settled="timeout")
+    record.step_intent(
+        1, {"action": "click", "target": "pay"}, side_effect=True, target_used="pay"
+    )
+
+    # A record only appends: the last intent has no completion after it.
+    assert [(line["seq"], line["state"]) for line in lines(record)] == [
+        (0, "intent"),
+        (0, "completed"),
+        (1, "intent"),
+    ]
+
+
+def test_each_step_line_is_on_disk_before_the_call_returns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = RunRecord.create(tmp_path)
+    steps = record.path / "steps.jsonl"
+    # What the file held each time something was forced to disk.
+    synced: list[str] = []
+    fsync = os.fsync
+
+    def recording(fd: int) -> None:
+        synced.append(steps.read_text() if steps.exists() else "")
+        fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", recording)
+
+    record.step_intent(0, {"action": "reload"}, side_effect=False, target_used=None)
+    first = list(synced)
+    record.step_completed(0, locator_used=None, settled="idle")
+
+    # The line was written before the file was forced to disk, and the
+    # directory that now holds the file was forced too.
+    assert first
+    assert all('"state": "intent"' in text for text in first)
+    assert len(first) == 2
+    assert len(synced) == 3
+    assert '"state": "completed"' in synced[-1]
+
+
+def test_a_step_line_that_cannot_be_written_leaves_the_file_as_it_was(
+    tmp_path: Path,
+) -> None:
+    record = RunRecord.create(tmp_path)
+    record.step_intent(0, {"action": "reload"}, side_effect=False, target_used=None)
+
+    with pytest.raises(TypeError):
+        record.step_intent(1, {"action": object()}, side_effect=False, target_used=None)
+
+    assert [line["seq"] for line in lines(record)] == [0]
