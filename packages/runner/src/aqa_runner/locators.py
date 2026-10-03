@@ -131,13 +131,11 @@ async def _scoped(
     return _query(scope, locator, hidden=hidden)
 
 
-# Whether the element receives pointer events, as a click would: a hit test
-# at the center of its first piece (a wrapped link has several), through its
-# own root, so an open shadow root's element is seen. If that misses, the
-# element is scrolled into view at once, ignoring smooth scrolling, and tested
-# again. The test runs in the page's own world, so it is the page's word, not
-# a control: a page can make it pass or fail, but not choose the element.
-_RECEIVES_POINTER = """(element) => {
+# A wrapped link's bounding-box center can fall between its pieces, and
+# document.elementFromPoint sees a shadow root's host. Both checks use the
+# first non-empty rect through the element's own root. They run in the page's
+# world, so a page can make the answer pass or fail, but not choose the element.
+_HITS = """
     const hits = () => {
         const piece = [...element.getClientRects()].find(
             (rect) => rect.width > 0 && rect.height > 0
@@ -148,10 +146,29 @@ _RECEIVES_POINTER = """(element) => {
         );
         return hit !== null && element.contains(hit);
     };
+"""
+
+_RECEIVES_POINTER = (
+    "(element) => {"
+    + _HITS
+    + """
     if (hits()) return true;
     element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
     return hits();
 }"""
+)
+
+UNOCCLUDED = (
+    "(element, [minSize, inViewport]) => {"
+    + _HITS
+    + """
+    const box = element.getBoundingClientRect();
+    if (box.width < minSize[0] || box.height < minSize[1]) return false;
+    if (inViewport && (box.left < 0 || box.top < 0 ||
+        box.right > innerWidth || box.bottom > innerHeight)) return false;
+    return hits();
+}"""
+)
 
 
 async def _actionable(page: Page, element: ElementHandle) -> bool:

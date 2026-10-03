@@ -209,3 +209,49 @@ def test_a_search_process_that_fails_is_an_error_not_a_miss() -> None:
     # one gets the child's failure, never "not found".
     with pytest.raises(RuntimeError, match="the search process failed"):
         asyncio.run(url_matches("(", "https://shop.test/("))
+
+
+@pytest.mark.parametrize(
+    ("pattern", "urls", "found"),
+    [
+        ("(?i)/ORDERS$", ("https://app.test/cart", "https://app.test/orders"), True),
+        ("^https://app\\.test/orders", ("https://elsewhere.test/orders",), False),
+        ("a b", ("https://app.test/a%20b",), False),
+        ("a%20b", ("https://app.test/a%20b",), True),
+    ],
+)
+def test_any_url_matches_searches_every_url_within_one_bound(
+    pattern: str, urls: tuple[str, ...], found: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launch = asyncio.create_subprocess_exec
+    processes = 0
+
+    async def start(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        nonlocal processes
+        processes += 1
+        return await launch(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", start)
+
+    assert asyncio.run(text_search.any_url_matches(pattern, urls)) is found
+    assert processes == 1
+
+
+def test_any_url_matches_with_no_urls_starts_no_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unexpected(*_args: Any, **_kwargs: Any) -> asyncio.subprocess.Process:
+        pytest.fail("an empty URL search must not start a process")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", unexpected)
+
+    assert asyncio.run(text_search.any_url_matches("/orders", ())) is False
+
+
+def test_a_url_search_that_runs_out_of_time_raises() -> None:
+    started = time.monotonic()
+    with pytest.raises(SearchTimeoutError):
+        bounded(text_search.any_url_matches(CATASTROPHIC, ("", HOSTILE_TEXT)))
+
+    assert 2 <= time.monotonic() - started < 2.9
+    assert searches_running() == []

@@ -290,6 +290,21 @@ Evaluating the rest of M1's checks (#48) settled what the Decision's "Probes. Re
   - *Residual:* nothing caps a response body's size (ADR-0026's #42 amendment). The bound caps the time to receive it, but not the time `json.loads` then takes, which no timeout can interrupt.
 - **Compared as canonical JSON.** One comparison serves the stable read, `probe_equals` and `probe_equals_baseline`, so `2.0`, `true` and `"2"` never pass for `2` (#48's review folded a separate type-and-value check into it: for an integer or a string they agree).
 
+### Network checks
+
+- **Source.** The existing `settling.Traffic` listener owns the browser's response records. Its `response` handler joins each [response to its request](https://playwright.dev/python/docs/api/class-response#response-request), whose window already accounts for redirects. The separate invariant observers keep their own counts. Runner-side probes produce no browser event.
+  - *Options:* use the invariant observers' response counts, or extend the settle windows that already own request metadata.
+  - *Chosen:* settle windows. They retain method, full URL and status for each kept response, and provide the per-step records that #50 needs. Each window keeps the first 100 and counts all. `BrowserSession.windows()` includes the initial window before any action.
+  - *Ownership:* `Exchange` and everything a returned window holds are plain data. `Window.open` holds integer request identities. `Traffic._open_requests` retains active requests, and `Traffic._response_requests` retains the requests behind kept exchanges for #50. Live Playwright objects cannot be reached through the window. A request's printed representation exposes its URL and method, and the page chooses both, so putting a request on `Exchange` would bypass later redaction.
+- **Matching.** `url_pattern` is a Python regex over the complete browser-reported URL. The compiled and planned fields share the existing `PythonRegex` validator, which preserves the plan's JSON schema. Method and status class select candidates, then one isolated search child searches every candidate under the existing 2 s bound. Literal paths and path-only regexes were rejected because all format patterns should follow one rule.
+- **Overflow.** A kept match decides either check even when another window overflowed. Without a match, overflow raises `WindowsOverflowError` instead of claiming absence. Returning false for `network_seen` or true for `network_none` would claim knowledge of records that were discarded. The error contains only the window index and counts.
+
+### Visible and unoccluded
+
+- **One shared hit test.** Reuse action resolution's center of the first non-empty client rect, through the element's own root, and accept the element or a descendant. A bounding-box center can fall between a wrapped link's pieces, and asking only the document misses shadow-root elements (LAB_NOTES, 2026-10-02).
+- **One observation, no scrolling.** The browser session checks the page and element origins, then reads the bounding-box size, viewport containment and shared hit test in one page-world evaluation. Scrolling would change what later assertions see and let an off-screen element pass. A covered element resolves for assertion use and evaluates false.
+- **Limits.** This is the page's word, as action resolution's hit test is. It does not detect overlays with `pointer-events: none`, transparency, or pixel differences. M1's executor still refuses these check types until #48's executor slice. That slice also refuses `in_viewport: false` before opening the browser, as the approved plan requires.
+
 ## Amendment (2026-10-02): invariant observers (#47)
 
 The Decision's Settling installs invariant observers before the first navigation, collecting for the whole attempt, reloads included. #47 builds them in `aqa_runner.invariants`, which the browser session installs on its page before handing it over (`Observers.watch`), so every run, explore's and replay's, has them. DATA_MODEL §6 holds the rules; this records why. The first #47 pull request adds the observers and judging. The second wires their results into the executor.
