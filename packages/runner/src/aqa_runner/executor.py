@@ -10,7 +10,7 @@ every document they touch (ADR-0026's amendments on document origins)."""
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, overload
 
 from aqa_core.compiled import (
     Click,
@@ -18,10 +18,14 @@ from aqa_core.compiled import (
     Fill,
     FillSecret,
     Navigate,
+    NotVisible,
     Press,
     Reload,
     Select,
     Target,
+    TextInTarget,
+    TextVisible,
+    UrlMatches,
 )
 from aqa_core.config import ProjectConfig
 from aqa_core.project import SpecError, path_on_origin, start_url
@@ -36,9 +40,10 @@ from aqa_runner.document_origins import (
 )
 from aqa_runner.egress import EgressGate, InfrastructureEvent
 from aqa_runner.egress_proxy import EgressProxy
-from aqa_runner.locators import Miss, Resolved, Unresolved
+from aqa_runner.locators import Absent, Miss, Resolved, Unresolved, Use
 from aqa_runner.run_record import RunRecord
 from aqa_runner.settling import Settled, Window
+from aqa_runner.text_search import SearchTimeoutError, text_matches, url_matches
 
 # How often resolution looks again for a target that hasn't resolved.
 LOOK_SECONDS = 0.1
@@ -58,20 +63,26 @@ MARGIN_SECONDS = 1
 # can hold what the page chose.
 REASON_CHARS = 200
 
-# The checks M1 evaluates; #48 adds the others (DATA_MODEL §7).
-EVALUATED = frozenset({"text_visible", "text_in_target", "not_visible", "url_matches"})
-
 # The steps the executor runs: those that act on a target, and the rest.
 type Targeted = Click | Fill | Select
 type Untargeted = Navigate | Reload | Press
+
+# The checks M1 evaluates; #48 adds the others (DATA_MODEL §7).
+type Evaluated = TextVisible | TextInTarget | NotVisible | UrlMatches
 
 # How a step ended: dispatched and settled; its target never resolved, so
 # nothing was dispatched; or dispatching or settling raised, so its outcome
 # is unknown.
 type StepOutcome = Literal["completed", "drifted", "failed"]
 
-# What became of an assertion.
-type AssertionOutcome = Literal["not_evaluated"]
+# What became of an assertion: its check held, or it didn't; no locator gave
+# its target the match its use needs within `resolve_seconds`; its text
+# search ran out of time, which establishes neither (DATA_MODEL §7); or it
+# wasn't evaluated, since a step stopped the run first or a look at the page
+# raised.
+type AssertionOutcome = Literal[
+    "pass", "failed", "binding_unresolved", "check_timed_out", "not_evaluated"
+]
 
 # How the run ended (DATA_MODEL's `runs.status`).
 type RunOutcome = Literal["passed", "failed", "errored"]
@@ -120,12 +131,17 @@ class StepResult:
 
 @dataclass(frozen=True)
 class AssertionResult:
-    """One assertion. `stopped_at` is the step that stopped the run before
-    any assertion was evaluated, if one did."""
+    """One assertion. A `binding_unresolved` one has each locator's miss
+    (none when no look finished). A `not_evaluated` one has `stopped_at`,
+    the step that stopped the run before any assertion was evaluated, or
+    `error`, what a look at the page raised (the rest after it aren't
+    evaluated either)."""
 
     id: str
     outcome: AssertionOutcome
+    misses: tuple[Miss, ...] = ()
     stopped_at: int | None = None
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -154,7 +170,7 @@ async def replay(
     proxy, whose gate is `gate`, recording each step in the setup's record.
     The session uses `script.browser`, never the project's or the spec's
     settings (ADR-0025)."""
-    runnable = _runnable(script)
+    runnable, checks = _accepted(script)
     record = setup.record
     steps: list[StepResult] = []
     async with open_browser_session(
@@ -191,18 +207,25 @@ async def replay(
             if result is None:
                 break
             steps.append(result)
-        stops = steps[-1].outcome != "completed" or interrupted()
-        errored = interrupted() or any(step.outcome == "failed" for step in steps)
+        if steps[-1].outcome != "completed" or interrupted():
+            assertions = tuple(
+                AssertionResult(check.id, "not_evaluated", stopped_at=steps[-1].seq)
+                for check in checks
+            )
+        else:
+            assertions = await _evaluated(session, setup, script, checks)
+        errored = (
+            interrupted()
+            or any(step.outcome == "failed" for step in steps)
+            or any(assertion.error is not None for assertion in assertions)
+        )
         policy_events = tuple(session.policy_events.kept)
-    assertions = tuple(
-        AssertionResult(assertion.id, "not_evaluated", steps[-1].seq if stops else None)
-        for assertion in script.assertions
+    passed = all(step.outcome == "completed" for step in steps) and all(
+        assertion.outcome == "pass" for assertion in assertions
     )
     return RunResult(
         record.run_id,
-        # A run passes only when every step completed and every assertion
-        # passed, and no assertion is evaluated yet.
-        "errored" if errored else "failed",
+        "errored" if errored else "passed" if passed else "failed",
         tuple(steps),
         assertions,
         tuple(gate.infrastructure_events),
@@ -210,10 +233,14 @@ async def replay(
     )
 
 
-def _runnable(script: CompiledScript) -> list[Targeted | Untargeted]:
-    """`script`'s steps, or `SpecError` naming each step and check M1 can't
-    run, before anything is opened (ADR-0024's #46 amendment)."""
+def _accepted(
+    script: CompiledScript,
+) -> tuple[list[Targeted | Untargeted], list[Evaluated]]:
+    """`script`'s steps and assertions, or `SpecError` naming each step and
+    check M1 can't run, before anything is opened (ADR-0024's #46
+    amendment)."""
     runnable: list[Targeted | Untargeted] = []
+    checks: list[Evaluated] = []
     problems: list[str] = []
     for index, step in enumerate(script.steps):
         where = f"steps[{index}] (seq {step.seq})"
@@ -226,14 +253,99 @@ def _runnable(script: CompiledScript) -> list[Targeted | Untargeted]:
             )
         else:
             runnable.append(step)
-    problems.extend(
-        f"assertions[{index}] ({assertion.id}): {assertion.check} is not evaluated until #48"
-        for index, assertion in enumerate(script.assertions)
-        if assertion.check not in EVALUATED
-    )
+    for index, assertion in enumerate(script.assertions):
+        if isinstance(assertion, TextVisible | TextInTarget | NotVisible | UrlMatches):
+            checks.append(assertion)
+        else:
+            problems.append(
+                f"assertions[{index}] ({assertion.id}): {assertion.check} is not "
+                "evaluated until #48"
+            )
     if problems:
         raise SpecError(problems)
-    return runnable
+    return runnable, checks
+
+
+async def _evaluated(
+    session: BrowserSession,
+    setup: RunSetup,
+    script: CompiledScript,
+    checks: list[Evaluated],
+) -> tuple[AssertionResult, ...]:
+    """Every assertion, in order, each evaluated once, as the last step left
+    the page. Once a look at the page raises (it left the allowed origins,
+    or crashed), what remains isn't evaluated."""
+    results: list[AssertionResult] = []
+    for check in checks:
+        if results and results[-1].error is not None:
+            results.append(AssertionResult(check.id, "not_evaluated"))
+            continue
+        try:
+            results.append(await _evaluate(session, setup, script, check))
+        except (Error, PolicyEventError, DocumentChangedError) as error:
+            # Playwright's general error type (a crashed page), a page off
+            # the allowed origins, or one that changed under every read
+            # within the budget: nothing about the check can be said.
+            results.append(
+                AssertionResult(check.id, "not_evaluated", error=_described(error))
+            )
+    return tuple(results)
+
+
+async def _evaluate(
+    session: BrowserSession,
+    setup: RunSetup,
+    script: CompiledScript,
+    check: Evaluated,
+) -> AssertionResult:
+    """`check`'s outcome, through the session's observations and the bounded
+    text search (DATA_MODEL §7, Replay outcomes). A target is looked for
+    within `resolve_seconds` while no locator gives the match its use
+    needs; a `not_visible` target found visible fails at once, since waiting
+    for it to go would pass an error that shows and then fades."""
+    budget = setup.config.budgets.resolve_seconds
+    try:
+        if isinstance(check, TextVisible):
+            held = await text_matches(check, await _read(session, budget))
+        elif isinstance(check, UrlMatches):
+            held = await url_matches(check.pattern, await session.url())
+        elif isinstance(check, TextInTarget):
+            found = await _resolve(
+                session, script.targets[check.target], "assertion", budget
+            )
+            if not isinstance(found, Resolved):
+                return AssertionResult(check.id, "binding_unresolved", found.misses)
+            try:
+                text = await session.text_of(found.element)
+            finally:
+                await found.element.dispose()
+            held = await text_matches(check, text)
+        else:
+            seen = await _resolve(
+                session, script.targets[check.target], "negative_check", budget
+            )
+            if isinstance(seen, Unresolved):
+                return AssertionResult(check.id, "binding_unresolved", seen.misses)
+            if isinstance(seen, Resolved):
+                await seen.element.dispose()
+            held = isinstance(seen, Absent)
+    except SearchTimeoutError:
+        return AssertionResult(check.id, "check_timed_out")
+    return AssertionResult(check.id, "pass" if held else "failed")
+
+
+async def _read(session: BrowserSession, budget: float) -> str:
+    """The page's visible text, read again while the page changes under the
+    read, up to `budget` seconds; then the last change raises."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + budget
+    while True:
+        try:
+            return await session.visible_text()
+        except DocumentChangedError:
+            if loop.time() >= deadline:
+                raise
+        await asyncio.sleep(LOOK_SECONDS)
 
 
 async def _run(
@@ -259,7 +371,7 @@ async def _run(
             lambda: _untargeted(session, step, setup.start),
         )
     try:
-        found = await _resolve(session, script.targets[step.target], budget)
+        found = await _resolve(session, script.targets[step.target], "action", budget)
     except (Error, PolicyEventError) as error:
         # A look the session refused (a page off the allowed origins), or
         # Playwright's general error type (a crashed page): nothing was
@@ -301,12 +413,30 @@ def _targeted(
     return session.select(element, step.option)
 
 
+@overload
 async def _resolve(
-    session: BrowserSession, target: Target, budget: float
-) -> Resolved | Unresolved:
-    """`target`'s element for an action, looked for every `LOOK_SECONDS`
-    until it resolves or `budget` seconds have passed: then the last look's
-    misses, or none when no look finished.
+    session: BrowserSession,
+    target: Target,
+    use: Literal["action", "assertion"],
+    budget: float,
+) -> Resolved | Unresolved: ...
+
+
+@overload
+async def _resolve(
+    session: BrowserSession,
+    target: Target,
+    use: Literal["negative_check"],
+    budget: float,
+) -> Resolved | Absent | Unresolved: ...
+
+
+async def _resolve(
+    session: BrowserSession, target: Target, use: Use, budget: float
+) -> Resolved | Absent | Unresolved:
+    """`target`'s element for `use`, looked for every `LOOK_SECONDS` while
+    no locator gives the match the use needs, until `budget` seconds have
+    passed: then the last look's misses, or none when no look finished.
 
     Each look is cut off when the budget runs out, so a look that waits for
     good, as `is_enabled` can on an element moved into another document
@@ -319,7 +449,7 @@ async def _resolve(
         limit = asyncio.timeout_at(deadline)
         try:
             async with limit:
-                found = await session.resolve(target, "action")
+                found = await session.resolve(target, use)
         except TimeoutError:
             if not limit.expired():
                 raise  # not the budget's own limit
@@ -327,7 +457,7 @@ async def _resolve(
         except DocumentChangedError:
             pass  # the page changed under the look: look again
         else:
-            if isinstance(found, Resolved):
+            if not isinstance(found, Unresolved):
                 return found
             last = found
         await asyncio.sleep(min(LOOK_SECONDS, max(0.0, deadline - loop.time())))
@@ -373,13 +503,13 @@ async def _dispatched(
     return StepResult(seq, "completed", window, index, settled)
 
 
-def _described(error: Error | PolicyEventError) -> str:
+def _described(error: Error | PolicyEventError | DocumentChangedError) -> str:
     """What raised, as a failed step's reason: a policy event's message,
     which names only an origin, or the first line of Playwright's, with
     what isn't printable escaped, at most `REASON_CHARS` in all. The rest of
     Playwright's message can hold what the page chose (#49 must keep it
     from a filled secret)."""
-    if isinstance(error, PolicyEventError):
+    if isinstance(error, PolicyEventError | DocumentChangedError):
         return str(error)
     line = str(error).split("\n", 1)[0]
     shown = "".join(
