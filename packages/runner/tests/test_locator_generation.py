@@ -35,6 +35,7 @@ from aqa_runner.locator_generation import (
 from aqa_runner.locators import Absent, Resolved, Unresolved, rendered_text, resolve
 from aqa_runner.text_search import text_matches
 from playwright.async_api import ElementHandle, Error, Page, async_playwright
+from playwright.async_api import Locator as PlaywrightLocator
 
 from packages.runner.tests.egress_fixtures import egress_proxy
 from packages.runner.tests.pilot_pages import PAGES, RENDERINGS, in_session, put, show
@@ -1528,12 +1529,18 @@ def test_a_negative_check_fails_by_name_while_any_kind_still_finds_the_element()
         in_session(scenario)
 
 
-def test_a_failed_sighting_forgets_the_one_before() -> None:
+@pytest.mark.parametrize("checked_before", [False, True])
+def test_a_failed_sighting_forgets_the_one_before(checked_before: bool) -> None:
     # The second sighting fails, so a check after it must not use the first
-    # one's locators, which were seen on another page.
+    # one's locators, which were seen on another page, nor join a target the
+    # first one made: every negative check is judged against the latest
+    # sighting.
     async def scenario(session: BrowserSession) -> int:
         uses = TargetUses("the header's Sign in link", checks_text=False)
         await see_header_link(session, uses, "Sign in")
+        if checked_before:
+            await show(session, "home")
+            await uses.add_negative_check(session.page)
         await put(session, "<button>Sign in</button>")
         snapshot = await session.snapshot()
         seen = await seen_element(
@@ -1541,7 +1548,7 @@ def test_a_failed_sighting_forgets_the_one_before() -> None:
         )
         with pytest.raises(LocatorError):
             await uses.see_for_negative_check(session.page, seen)
-        await put(session, "<main><p>Saved</p></main>")
+        await show(session, "editor")
         return await uses.add_negative_check(session.page)
 
     with pytest.raises(LocatorError, match="wasn't seen before its negative check"):
@@ -1571,3 +1578,52 @@ def test_tries_running_out_keep_a_later_kinds_locator() -> None:
         return await generate_for_action(session.page, Seen(element))
 
     assert in_session(scenario) == (ByTestId(testid="mine"),)
+
+
+TOOLBAR = """<div id="toolbar"><button class="save">Save</button></div>
+<main><p>Draft</p></main>"""
+
+
+def test_a_negative_check_fails_by_name_while_a_broader_locator_finds_the_element() -> (
+    None
+):
+    # The page renames the button and its class and keeps it on screen. The
+    # name and button.save find nothing in the toolbar, but the toolbar's one
+    # button is still there, so keeping the first two would pass on a page
+    # that shows it (#52's security re-review).
+    async def scenario(session: BrowserSession) -> int:
+        uses = TargetUses("the toolbar's save button", checks_text=False)
+        await put(session, TOOLBAR)
+        snapshot = await session.snapshot()
+        seen = await seen_element(session, snapshot, ref_of(snapshot, "button", "Save"))
+        await uses.see_for_negative_check(session.page, seen)
+        await seen.element.evaluate(
+            "(button) => { button.className = 'store'; button.textContent = 'Store'; }"
+        )
+        return await uses.add_negative_check(session.page)
+
+    with pytest.raises(
+        LocatorError, match=r"^the toolbar's save button: it is still shown"
+    ):
+        in_session(scenario)
+
+
+def test_a_page_that_breaks_a_negative_check_gets_no_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Every count on the page fails, as when the page navigates mid-look: a
+    # look that established nothing is no evidence of absence.
+    async def broken_count(_self: PlaywrightLocator) -> int:
+        raise Error("the page went away")
+
+    async def scenario(session: BrowserSession) -> int:
+        uses = TargetUses("the header's Sign in link", checks_text=False)
+        await see_header_link(session, uses, "Sign in")
+        await show(session, "home")
+        monkeypatch.setattr(PlaywrightLocator, "count", broken_count)
+        return await uses.add_negative_check(session.page)
+
+    with pytest.raises(
+        LocatorError, match=r"^the header's Sign in link: the page broke the look"
+    ):
+        in_session(scenario)
