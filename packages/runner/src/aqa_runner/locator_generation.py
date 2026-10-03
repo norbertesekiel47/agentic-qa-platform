@@ -35,8 +35,9 @@ from aqa_core.text import normalize
 from playwright.async_api import ElementHandle, Error, Page, Playwright
 from pydantic import Field, StringConstraints, TypeAdapter, ValidationError
 
-from aqa_runner.browser_session import ELEMENT_REF, LINE, BrowserSession
+from aqa_runner.browser_session import BrowserSession
 from aqa_runner.locators import Absent, Resolved, Use, resolve
+from aqa_runner.snapshot_refs import ELEMENT_REF, LINE
 
 # The key of an element's line in a snapshot, up to its ref: its role, its
 # name as JSON if it has one, then attributes such as [level=1].

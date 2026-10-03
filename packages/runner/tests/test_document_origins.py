@@ -9,7 +9,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from aqa_runner.browser_session import LEFT_OUT, BrowserSession, RefError
+from aqa_runner.browser_session import BrowserSession, RefError
 from aqa_runner.document_origins import (
     DocumentChangedError,
     PolicyEvent,
@@ -18,6 +18,7 @@ from aqa_runner.document_origins import (
     Records,
     document_origin,
 )
+from aqa_runner.snapshot_refs import LEFT_OUT
 from playwright.async_api import ElementHandle, Error, Frame, Page
 
 from packages.runner.tests.document_fixtures import (
