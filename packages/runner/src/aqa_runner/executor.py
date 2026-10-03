@@ -10,7 +10,7 @@ every document they touch (ADR-0026's amendments on document origins)."""
 import asyncio
 import re
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, assert_never, overload
 
 from aqa_core.compiled import (
@@ -41,7 +41,7 @@ from aqa_runner.document_origins import (
     PolicyEventError,
 )
 from aqa_runner.egress import EgressGate, InfrastructureEvent
-from aqa_runner.egress_proxy import EgressProxy
+from aqa_runner.egress_proxy import EgressBlocks, EgressProxy
 from aqa_runner.invariants import InvariantResult, invariant_results
 from aqa_runner.locators import Absent, Miss, Resolved, Unresolved, Use
 from aqa_runner.run_record import RunRecord
@@ -97,6 +97,7 @@ type AssertionOutcome = Literal[
 
 # How the run ended (DATA_MODEL's `runs.status`).
 type RunOutcome = Literal["passed", "failed", "errored"]
+type ErrorCode = Literal["egress_blocked"]
 
 
 @dataclass(frozen=True)
@@ -119,13 +120,17 @@ class _Replay:
     targets: Mapping[str, Target]
     secrets: Mapping[str, BoundSecret]
 
+    @property
+    def withheld(self) -> bool:
+        return bool(self.secrets)
+
     def reason(self, error: _Raised) -> str:
         """`error` as a failed step's or an unevaluated assertion's reason
         (`_described`). When the script fills a test secret, Playwright's
         message is withheld for the whole run, the steps before the first
         fill included: a page handed a value can throw it back in any later
         error, and the run never needs to know which steps came after it."""
-        return _described(error, withheld=bool(self.secrets))
+        return _described(error, withheld=self.withheld)
 
 
 @dataclass(frozen=True)
@@ -177,7 +182,9 @@ class AssertionResult:
 class RunResult:
     """A replay: every step that ran and every assertion, each with its
     outcome, and the run's; the egress gate's infrastructure events and the
-    session's policy events (the first 100)."""
+    session's policy events (the first 100). Invariants are judged for every
+    run, errored ones included. Egress blocks keep hosts in memory until
+    #50 redacts what #53 prints or saves."""
 
     run_id: str
     outcome: RunOutcome
@@ -186,6 +193,8 @@ class RunResult:
     infrastructure_events: tuple[InfrastructureEvent, ...]
     policy_events: tuple[PolicyEvent, ...]
     invariants: tuple[InvariantResult, ...]
+    egress_blocks: EgressBlocks
+    error_code: ErrorCode | None
 
 
 async def replay(
@@ -229,18 +238,16 @@ async def replay(
             action_seconds=setup.config.budgets.resolve_seconds,
             navigation_seconds=NAVIGATION_SECONDS,
         )
+        expected = setup.config.egress.expected_blocked
 
         def interrupted() -> bool:
-            """Whether the gate couldn't reach an allowed host, the session
-            met a document off the allowed origins, or the page hit an egress
-            block (routing refused a request, or the gate did). What policy
-            events and egress blocks do to a run is #47's; until then each
-            ends the run errored, so an egress block never lets it pass."""
+            """A block or infrastructure event stops the run. A popup's
+            policy event alone does not, since the session closes it and
+            its requests face the same egress checks. Every other policy
+            event raises where the session observes or acts."""
             return (
                 bool(gate.infrastructure_events)
-                or session.policy_events.total > 0
-                or proxy.blocked_attempts.total > 0
-                or bool(gate.refusals)
+                or proxy.egress_blocks(expected).blocked
             )
 
         # Seq 0 is no compiled step: a compiled script's steps start at 1.
@@ -273,8 +280,12 @@ async def replay(
         invariants = invariant_results(
             session.invariant_observers.seen, setup.spec.frontmatter.invariants
         )
+        if run.withheld:
+            invariants = tuple(replace(result, seen=()) for result in invariants)
+        blocks = proxy.egress_blocks(expected)
         errored = (
-            interrupted()
+            blocks.blocked
+            or bool(gate.infrastructure_events)
             or any(step.outcome == "failed" for step in steps)
             or any(assertion.error is not None for assertion in assertions)
         )
@@ -284,6 +295,8 @@ async def replay(
         and all(assertion.outcome == "pass" for assertion in assertions)
         and all(invariant.outcome != "violated" for invariant in invariants)
     )
+    if blocks.blocked:
+        record.write("egress.json", _egress_record(blocks, withheld=run.withheld))
     return RunResult(
         record.run_id,
         "errored" if errored else "passed" if passed else "failed",
@@ -292,6 +305,8 @@ async def replay(
         tuple(gate.infrastructure_events),
         policy_events,
         invariants,
+        blocks,
+        "egress_blocked" if blocks.blocked else None,
     )
 
 
@@ -708,3 +723,21 @@ def _described(error: _Raised, *, withheld: bool) -> str:
         for char in line
     )
     return f"{type(error).__name__}: {shown}"[:REASON_CHARS]
+
+
+def _egress_record(blocks: EgressBlocks, *, withheld: bool) -> dict[str, object]:
+    if withheld:
+        return {
+            "error_code": "egress_blocked",
+            "refused_count": len(blocks.refused),
+            "overflowed": blocks.overflowed,
+            "hosts_and_ports_withheld": True,
+        }
+    return {
+        "error_code": "egress_blocked",
+        "refused": [
+            {"host": refused.host, "port": refused.port} for refused in blocks.refused
+        ],
+        "overflowed": blocks.overflowed,
+        "hosts_and_ports_withheld": False,
+    }
