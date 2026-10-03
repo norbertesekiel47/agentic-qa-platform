@@ -88,6 +88,13 @@ short option or a variable (``-o.claude/...``, ``$D.ruff.toml``), its segments
 may sit behind quotes, several slashes or ``.`` and ``..`` steps, and a
 directory stands for every file under it.
 
+Watched names match in any letter case, since macOS's filesystem ignores it:
+there ``.claude/Hooks/x.py`` is the guard, and pytest reads a new
+``Pytest.toml``. What the guard skips is matched as typed: the exempt
+directories, and a test file's exemption from the source rules, so a name that
+is a test's only in another case (``Test_a.py``, which pytest never collects)
+gets both the test and the source rules.
+
 Known gaps, stated rather than hidden
 -------------------------------------
 * A strong assertion swapped for a weaker one (``==`` to ``in``, an exact
