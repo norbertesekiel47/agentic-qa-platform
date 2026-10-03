@@ -180,6 +180,27 @@ async def reaches(frame: Frame) -> bool:
         await owner.dispose()
 
 
+async def frames_off_origin(frame: Frame, origin: str | None) -> str | None:
+    """Which of `frame` and the frames around it, up to the top-level page,
+    isn't on `origin`, as a refusal says it; None when all are. Each must
+    also be one its parent reaches: a frame at a URL on `origin` is on an
+    opaque origin when it is sandboxed, by its frame's attribute or its
+    response's CSP, which is where an app puts content it doesn't trust. The
+    origins are checked first, so only documents on `origin` are asked
+    whether they reach."""
+    frames = []
+    while frame.parent_frame is not None:
+        frames.append(frame)
+        frame = frame.parent_frame
+    for framed in frames:
+        if (here := await frame_origin(framed)) != origin:
+            return f"a frame on {here or 'no origin a run could allow'}"
+    for framed in frames:
+        if not await reaches(framed):
+            return "a frame the page can't reach"
+    return None
+
+
 def navigable_origin(url: str) -> str | None:
     """The origin `navigate` would go to at `url`: an absolute http(s) URL's,
     written as an origin writes it; None for any other URL, and for one with
