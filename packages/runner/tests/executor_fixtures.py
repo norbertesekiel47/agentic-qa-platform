@@ -227,10 +227,11 @@ PAGES = SHOPS | {
         onload = () => ok.dispatchEvent(new Event("error"));
     </script>""",
     # What a request the run refuses leaves behind: its console entry and a
-    # broken image, straight and through a redirect hop routing can't see,
-    # beside a console error of the page's own.
+    # broken image, straight and through one or two redirect hops routing
+    # can't see, beside a console error of the page's own.
     "refused-symptoms": """<img src="http://analytics.example.test/pixel.png">
         <img src="/redirect?to=http%3A%2F%2Fanalytics.example.test%2Fhop.png#hop">
+        <img src="/redirect?to=%2Fredirect%3Fto%3Dhttp%253A%252F%252Fanalytics.example.test%252Ftwo.png">
         <script>console.error("unrelated")</script>""",
     # A script the run refuses, which the page's next script needs.
     "refused-script": """<script src="http://analytics.example.test/lib.js"></script>
@@ -238,6 +239,12 @@ PAGES = SHOPS | {
     # An image whose first load redirects to a host the run refuses, and
     # whose load after a reload isn't an image.
     "once-refused": """<img src="/image/once-refused">""",
+    # Three images of one URL redirected to a refused host: Blink loads it
+    # once for all three.
+    "same-image-refused": """
+        <img src="/redirect?to=http%3A%2F%2Fanalytics.example.test%2Fsame.png">
+        <img src="/redirect?to=http%3A%2F%2Fanalytics.example.test%2Fsame.png">
+        <img src="/redirect?to=http%3A%2F%2Fanalytics.example.test%2Fsame.png">""",
     # More images at a refused host than any record of them keeps.
     "many-refused-images": """<body><script>
         for (let i = 0; i < 1001; i++) {

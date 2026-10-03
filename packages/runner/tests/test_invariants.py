@@ -235,26 +235,33 @@ def test_more_refused_images_than_any_record_keeps_dont_count(app: App) -> None:
 
 
 @pytest.mark.parametrize(
-    ("bound", "value"),
+    "bounds",
     [
-        # Room for one URL's notes: the <img>'s note pushes the CSS image's out.
-        ("PENDING_LOADS", 1),
-        # Notes that wait half a second: the CSS image's is a second old when
-        # the later failure comes.
-        ("NOTE_SECONDS", 0.5),
+        {},
+        # Room for one URL: the <img>'s refused load pushes the CSS image's out.
+        {"PENDING_LOADS": 1},
     ],
 )
 def test_a_refused_load_no_image_reports_excuses_nothing_later(
-    app: App, monkeypatch: pytest.MonkeyPatch, bound: str, value: float
+    app: App, monkeypatch: pytest.MonkeyPatch, bounds: dict[str, int]
 ) -> None:
-    # The CSS image's load is refused at a redirect hop, and no error ever
-    # takes its note. The <img> refused next finds its own, and a later
-    # failure at the CSS image's URL counts.
-    monkeypatch.setattr(invariants, bound, value)
+    # The CSS image's load is refused at a redirect hop, and no image reports
+    # its error. The <img> refused next is left out, and a later <img> at the
+    # CSS image's URL is a newer load, whose failure counts.
+    for bound, value in bounds.items():
+        monkeypatch.setattr(invariants, bound, value)
 
     seen = observe(app, "/page/background-then-images")
 
     assert violated(seen) == {"broken_images": [f"{app.origin}/image/once-refused"]}
+
+
+def test_every_image_that_shares_a_refused_load_is_left_out(app: App) -> None:
+    # Blink loads one URL once for all the images that want it, so one
+    # refused load fails three images.
+    seen = observe(app, "/page/same-image-refused")
+
+    assert violated(seen) == {}
 
 
 def test_a_script_that_throws_because_a_refused_script_never_loaded_counts(
