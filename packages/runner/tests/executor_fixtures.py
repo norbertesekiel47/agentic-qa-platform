@@ -1,7 +1,8 @@
-"""Fixtures the executor's tests share (#46): a fixture app whose requests
-note the steps record as it stood when each arrived, hand-written compiled
-scripts, and a replay against the app. Imported by its path, as pytest
-names the runner's test modules (TESTING.md §1, Shared egress fixtures)."""
+"""Fixtures the executor's tests share (#46), and the invariants' (#47): a
+fixture app whose requests note the steps record as it stood when each
+arrived, hand-written compiled scripts, and a replay against the app.
+Imported by its path, as pytest names the runner's test modules (TESTING.md
+§1, Shared egress fixtures)."""
 
 import asyncio
 import json
@@ -13,7 +14,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from aqa_core.compiled import CompiledScript
 from aqa_core.config import ProjectConfig
@@ -171,7 +172,82 @@ PAGES = SHOPS | {
                 if (event.key === "Enter") fetch("/did/press");
             });
         </script>""",
+    # Each invariant's own trigger (#47): each fires that invariant and no
+    # other. A dedicated worker's 5xx has no console entry, and an image whose
+    # 200 response isn't an image fails without one.
+    "console-error": """<script>console.error("console-trigger")</script>""",
+    "exception": """<script>
+        Promise.reject(new Error("rejection-trigger"));
+        throw new Error("exception-trigger");
+    </script>""",
+    "worker-5xx": """<script>new Worker("/worker/fetch-500.js")</script>""",
+    "broken-image": """<img src="/image/not-an-image">""",
+    "broken-data-image": """<img src="data:image/png;base64,AAAA">""",
+    # The page's own 5xx and a missing image, each with Chromium's own console
+    # entry for the failed load.
+    "page-5xx": """<script>fetch("/status/500")</script>""",
+    "missing-image": """<img src="/status/404">""",
+    # A load that fails without reaching any network: a revoked blob.
+    "revoked-blob": """<script>
+        const blob = URL.createObjectURL(new Blob(["gone"]));
+        URL.revokeObjectURL(blob);
+        fetch(blob).catch(() => {});
+    </script>""",
+    # More console errors than an invariant keeps, each longer than it keeps.
+    "many-console-errors": """<script>
+        for (let i = 0; i < 150; i++) console.error(i + ":" + "x".repeat(1000));
+    </script>""",
+    # Every trigger, telling a first load from a reload.
+    "every-trigger": """<img src="/image/not-an-image"><script>
+        const load = performance.getEntriesByType("navigation")[0].type;
+        new Worker("/worker/fetch-500.js");
+        console.error("console-" + load);
+        throw new Error("thrown-" + load);
+    </script>""",
+    # A page that tries each way its scripts have to stop a broken image's
+    # report, then breaks an image.
+    "tampering": """<script>
+        delete globalThis.__playwright__binding__;
+        globalThis.__playwright__binding__ = () => {};
+        globalThis.__playwright__binding__controller__ = undefined;
+        globalThis.aqaBrokenImage = () => {};
+        JSON.stringify = () => "";
+        Map.prototype.get = () => undefined;
+        Object.defineProperty(HTMLImageElement.prototype, "currentSrc", {get: () => "/lie"});
+        addEventListener("error", (event) => event.stopImmediatePropagation(), true);
+    </script><img src="/image/not-an-image">""",
+    # An image that loads, then an error event the page makes up for it.
+    "synthetic-error": """<img id="ok" src="/image/ok"><script>
+        onload = () => ok.dispatchEvent(new Event("error"));
+    </script>""",
+    # What a request the run refuses leaves behind: its console entry and a
+    # broken image, straight and through a redirect hop routing can't see,
+    # beside a console error of the page's own.
+    "refused-symptoms": """<img src="http://analytics.example.test/pixel.png">
+        <img src="/redirect?to=http%3A%2F%2Fanalytics.example.test%2Fhop.png">
+        <script>console.error("unrelated")</script>""",
+    # A script the run refuses, which the page's next script needs.
+    "refused-script": """<script src="http://analytics.example.test/lib.js"></script>
+        <script>analytics.track()</script>""",
+    # A console error of the page's own that says it came from a refused URL.
+    "forged-source": """<script>
+        eval("console.error('forged')\\n//# sourceURL=http://analytics.example.test/forged.js");
+    </script>""",
+    # A broken image in a frame on no origin a run could allow (data:), and a
+    # frame at the URL the `to` parameter names.
+    "framed": """<iframe src="data:text/html,<img src='data:image/png;base64,AAAA'>"></iframe>
+        <script>
+            const frame = document.createElement("iframe");
+            frame.src = new URLSearchParams(location.search).get("to");
+            document.body.append(frame);
+        </script>""",
 }
+
+# A 1x1 GIF: an image that loads.
+GIF = bytes.fromhex(
+    "47494638396101000100800000000000ffffff21f90401000000002c000000000100010000020244"
+    "01003b"
+)
 
 # What every hand-written script's settings are unless a test says otherwise.
 PINNED = {
@@ -214,8 +290,11 @@ class App:
 
 class _Handler(BaseHTTPRequestHandler):
     """Serves `/page/<name>`, `/raw/…` (a page, whatever its path), `/did/…`
-    and `/write/…` (204), and `/held/<key>` (204 once released), noting the
-    steps record as it stood when each request arrived."""
+    and `/write/…` (204), `/held/<key>` (204 once released), `/status/<code>`
+    (that status, empty), `/image/ok` (a GIF), any other `/image/…` (a page,
+    not an image), `/worker/…` (a worker that fetches `/status/500`) and
+    `/redirect?to=<url>` (302 there), noting the steps record as it stood when
+    each request arrived."""
 
     app: App
 
@@ -245,13 +324,28 @@ class _Handler(BaseHTTPRequestHandler):
             self._empty(HTTPStatus.NO_CONTENT)
         elif kind in ("did", "write"):
             self._empty(HTTPStatus.NO_CONTENT)
+        elif kind == "status":
+            self._empty(HTTPStatus(int(name)))
+        elif kind == "image" and name == "ok":
+            self._send("image/gif", GIF)
+        elif kind == "image":
+            self._page("<p>Not an image</p>")
+        elif kind == "worker":
+            self._send("text/javascript", b'fetch("/status/500");')
+        elif kind == "redirect":
+            self.send_response(HTTPStatus.FOUND)
+            self.send_header("Location", parse_qs(urlsplit(self.path).query)["to"][0])
+            self.send_header("Content-Length", "0")
+            self.end_headers()
         else:
             self._empty(HTTPStatus.NOT_FOUND)
 
     def _page(self, body: str) -> None:
-        data = f"<!doctype html><title>app</title>{body}".encode()
+        self._send("text/html", f"<!doctype html><title>app</title>{body}".encode())
+
+    def _send(self, content_type: str, data: bytes) -> None:
         self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
