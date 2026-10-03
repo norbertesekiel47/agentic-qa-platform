@@ -43,6 +43,7 @@ from aqa_runner.locators import (
     rendered_text,
 )
 from aqa_runner.locators import resolve as resolve_target
+from aqa_runner.redaction import NO_SECRETS, Redacted, Redactor
 from aqa_runner.routing import install_routes
 from aqa_runner.sandbox import Chromium, launch
 from aqa_runner.secret_fields import (
@@ -219,9 +220,14 @@ class BrowserSession:
     this module may use it: it observes and acts without the checks."""
 
     def __init__(
-        self, page: Page, policy: EgressPolicy, invariant_observers: Observers
+        self,
+        page: Page,
+        policy: EgressPolicy,
+        invariant_observers: Observers,
+        redactor: Redactor,
     ) -> None:
         self.page = page
+        self._redactor = redactor
         self._policy = policy
         # What each invariant saw on the page, from before its first
         # navigation (`aqa_runner.invariants.Observers.watch`).
@@ -247,10 +253,15 @@ class BrowserSession:
         self._crashed = False
         page.on("crash", self._note_crash)
 
-    async def snapshot(self) -> str:
+    @property
+    def redactor(self) -> Redactor:
+        """The scan for all secrets bound to this run."""
+        return self._redactor
+
+    async def snapshot(self) -> Redacted:
         """The page's accessibility snapshot in Playwright's AI mode
         (https://playwright.dev/python/docs/api/class-page#page-aria-snapshot),
-        with this session's refs, unredacted. It retires every earlier
+        with this session's refs and secrets redacted. It retires every earlier
         snapshot's refs, and page text that imitates a ref reads `(ref=…`.
         A frame on an origin the run doesn't allow shows only its iframe's
         line, with no ref (`LEFT_OUT`).
@@ -281,11 +292,16 @@ class BrowserSession:
             # that ran in the new document, so a snapshot of it shows here.
             if self._frame_changes != changes:
                 raise DocumentChangedError
-            text, self._current = snapshot_refs.renumber(
-                taken, first=self._refs_given + 1, left_out=left_out
+            pruned = snapshot_refs.prune_frames(taken, left_out=left_out)
+            text, refs = snapshot_refs.renumber(
+                self.redactor.redact(pruned), first=self._refs_given + 1
             )
-            self._refs_given += len(self._current)
-            return text
+            self._refs_given += len(refs)
+            scanned = self.redactor.redact(text)
+            self._current = {
+                ref: own for ref, own in refs.items() if f"[ref={ref}]" in scanned
+            }
+            return scanned
 
     async def locate(self, ref: str) -> ElementHandle:
         """The element `ref` names in the current snapshot, held: it never
@@ -396,13 +412,18 @@ class BrowserSession:
         onto an opaque origin; the element's frame and every frame around it
         are on the page's own origin, each reached by its parent; and the
         element is the field the binding names. Otherwise
-        `SecretRefusedError`, before anything is filled.
+        `SecretRefusedError`, before anything is filled. The session redactor
+        must cover the name and value too, or this raises `ValueError`.
 
         Any other failure, of a check or of the fill, raises
         `SecretNotFilledError`, Playwright's `Error` type with a message of
         ours, and keeps nothing of Playwright's: the page's own scripts can
         throw back this value, or one filled before."""
         async with self._turn:
+            if not self.redactor.covers(secret):
+                raise ValueError(
+                    f"fill_secret refused {secret.name}: the session redactor does not cover it"
+                )
             try:
                 window = await self._fill_where_bound(element, secret)
             except Error:
@@ -541,7 +562,7 @@ class BrowserSession:
                 )
             return bool(await element.evaluate(UNOCCLUDED, [min_size, in_viewport]))
 
-    async def text_of(self, element: ElementHandle) -> str:
+    async def text_of(self, element: ElementHandle) -> Redacted:
         """`element`'s rendered text, as `text_in_target` reads it, once the
         page and the element's frame are checked: its innerText, or nothing
         for an element the page doesn't render, whose innerText would be its
@@ -552,9 +573,9 @@ class BrowserSession:
         async with self._turn:
             await self._require_allowed_element(element)
             text = await element.evaluate(RENDERED_TEXT)
-            return text if isinstance(text, str) else ""
+            return self.redactor.redact(text if isinstance(text, str) else "")
 
-    async def visible_text(self) -> str:
+    async def visible_text(self) -> Redacted:
         """The page's rendered text, as `text_visible` reads it: its body's,
         as `text_of` reads an element's, empty when the page has no body.
         Only the page's own document: rendered text never enters a frame,
@@ -579,14 +600,14 @@ class BrowserSession:
             await self._require_allowed_page()
             if self._frame_changes != changes:
                 raise DocumentChangedError
-            return text
+            return self.redactor.redact(text)
 
-    async def url(self) -> str:
+    async def url(self) -> Redacted:
         """The page's URL, once the page is checked: an observation, as
         `url_matches` makes it."""
         async with self._turn:
             await self._require_allowed_page()
-            return self.page.url
+            return self.redactor.redact(self.page.url)
 
     async def _frames_left_out(self, snapshot: str) -> set[str]:
         """Playwright's refs of the iframes in `snapshot` whose frame isn't on
@@ -840,6 +861,7 @@ async def open_browser_session(
     *,
     egress: EgressProxy,
     settings: BrowserSettings = PINNED_SETTINGS,
+    redactor: Redactor = NO_SECRETS,
 ) -> AsyncIterator[BrowserSession]:
     """Launch a fresh browser through the sandbox check, open one page with
     `settings`, downloads and service workers refused, and every request
@@ -877,6 +899,6 @@ async def open_browser_session(
         page = await context.new_page()
         # Before the page's first navigation.
         observers = await Observers.watch(page, egress.policy)
-        yield BrowserSession(page, egress.policy, observers)
+        yield BrowserSession(page, egress.policy, observers, redactor)
     finally:
         await browser.close()

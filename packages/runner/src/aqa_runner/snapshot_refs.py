@@ -20,33 +20,39 @@ ELEMENT_REF = re.compile(r"\[ref=((?:f[0-9]+)?e[0-9]+)\]((?: \[cursor=pointer\])
 LEFT_OUT = "(content from an origin the run doesn't allow, not shown)"
 
 
-def renumber(
-    snapshot: str, *, first: int, left_out: AbstractSet[str] = frozenset()
-) -> tuple[str, dict[str, str]]:
-    """`snapshot` with each element's own ref replaced by this session's, from
-    `e{first}` on, and every other `[ref=`, which page text wrote, made
-    `(ref=`. An element whose Playwright ref is in `left_out`, an iframe,
-    keeps its line with `LEFT_OUT` in place of its ref, and loses every line
-    below it: its frame's content. Also returns the session's refs, mapped to
-    Playwright's."""
-    refs: dict[str, str] = {}
+def prune_frames(snapshot: str, *, left_out: AbstractSet[str]) -> str:
+    """Remove forbidden subtrees using raw structural refs, before any scan."""
     lines: list[str] = []
-    # The indentation of the iframe whose content is being left out.
     leaving: int | None = None
     for found in LINE.finditer(snapshot):
         indent = len(found[0]) - len(found[0].lstrip(" "))
         if leaving is not None and indent > leaving:
             continue
         leaving = None
+        quote, inner, own = key_parts(found)
+        if own is not None and own[1] in left_out:
+            lines.append(
+                f"{found['head'] or ''}{quote}{inner[: own.start()]}{LEFT_OUT}{quote}"
+            )
+            leaving = indent
+        else:
+            lines.append(found[0])
+    return "\n".join(lines)
+
+
+def renumber(snapshot: str, *, first: int) -> tuple[str, dict[str, str]]:
+    """Assign session refs to surviving structural refs, and escape imitations.
+
+    The caller must remove forbidden raw subtrees and scan secrets first.
+    Returns the rewritten text and session-to-Playwright ref mapping.
+    """
+    refs: dict[str, str] = {}
+    lines: list[str] = []
+    for found in LINE.finditer(snapshot):
         head, key, rest = found["head"] or "", found["key"], found["rest"]
         quote, inner, own = key_parts(found)
         if own is None:
             lines.append(head + as_text(key) + as_text(rest))
-        elif own[1] in left_out:
-            lines.append(
-                f"{head}{quote}{as_text(inner[: own.start()])}{LEFT_OUT}{quote}"
-            )
-            leaving = indent
         else:
             ref = f"e{first + len(refs)}"
             refs[ref] = own[1]

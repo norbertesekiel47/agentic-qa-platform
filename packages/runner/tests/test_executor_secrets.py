@@ -21,6 +21,7 @@ from aqa_runner.executor import RunResult
 
 from packages.runner.tests.executor_fixtures import (
     FORM_TARGETS,
+    PAGES,
     App,
     by_role,
     compiled,
@@ -525,4 +526,67 @@ def test_a_run_that_cant_use_its_secrets_stops_before_the_browser_opens(
         run(app, tmp_path, signing_in([FILL_PASSWORD]), spec=spec)
 
     assert opened == []
+    assert app.paths() == []
+
+
+@pytest.mark.usefixtures("with_the_value")
+@pytest.mark.parametrize("fill_other", [False, True])
+def test_a_replay_redacts_a_bound_secret_its_script_never_fills(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fill_other: bool
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_NAME", OTHER_FAKE_VALUE)
+    monkeypatch.setitem(
+        PAGES,
+        "reflect",
+        f'<meta charset="utf-8"><p>{FAKE_VALUE}</p><label>Name <input name="name"></label>',
+    )
+    spec = secret_spec(
+        tmp_path,
+        f"{BOUND_AT_START}, TEST_NAME: {{ origins: [start], field: {{ role: textbox, name: Name }} }}",
+        account="{ email: { secret: TEST_NAME }, password: { secret: TEST_PASSWORD } }",
+        start_url="/page/reflect",
+    )
+    steps = (
+        [
+            {
+                "seq": 1,
+                "action": "fill_secret",
+                "target": "name",
+                "secret": "TEST_NAME",
+                "side_effect": False,
+            }
+        ]
+        if fill_other
+        else []
+    )
+    script = signing_in(
+        steps,
+        [
+            {
+                "id": "a1",
+                "expect_index": 0,
+                "check": "text_visible",
+                "text": "[SECRET:TEST_PASSWORD]",
+            }
+        ],
+    )
+    done = run(app, tmp_path, script, spec=spec)
+    assert done.result.outcome == "passed", done.result
+    assert all(step.outcome == "completed" for step in done.result.steps)
+
+
+@pytest.mark.parametrize("value", [" \ufeff", "abc", "éé"])
+def test_an_unusable_value_stops_replay_before_the_browser_opens(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", value)
+
+    def no_browser(*_args: object, **_options: object) -> None:
+        raise AssertionError("the browser was opened")
+
+    monkeypatch.setattr(executor, "open_browser_session", no_browser)
+    spec = secret_spec(tmp_path, start_url="/page/signin")
+    with pytest.raises(MissingSecretError) as refused:
+        run(app, tmp_path, signing_in([FILL_PASSWORD]), spec=spec)
+    assert refused.value.exit_code == 12
     assert app.paths() == []

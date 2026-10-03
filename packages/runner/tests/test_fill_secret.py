@@ -16,6 +16,7 @@ from aqa_core.project import SecretDestination
 from aqa_runner.bound_secrets import BoundSecret, bound_secrets
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.document_origins import PolicyEvent, PolicyEventError
+from aqa_runner.redaction import Redactor
 from aqa_runner.secret_fields import SecretNotFilledError, SecretRefusedError
 from playwright.async_api import ElementHandle, Error
 from pydantic import SecretStr
@@ -59,6 +60,11 @@ def token(*origins: str) -> BoundSecret:
     )
 
 
+@pytest.fixture
+def redactor(sites: Sites) -> Redactor:
+    return Redactor([password(sites.app), token(sites.app)])
+
+
 async def held_value(element: ElementHandle) -> str:
     """What `element`, a field, holds."""
     return str(
@@ -86,10 +92,11 @@ async def refused[E: Exception](
 
 
 def test_fill_secret_fills_a_bound_password_field_on_the_start_origin(
+    redactor: Redactor,
     sites: Sites,
 ) -> None:
     async def scenario() -> tuple[str, str]:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=redactor) as session:
             await session.navigate(f"{sites.app}/signin")
             secret = await field(session, "textbox", "Password")
             await session.fill_secret(secret, password(sites.app))
@@ -100,11 +107,12 @@ def test_fill_secret_fills_a_bound_password_field_on_the_start_origin(
 
 
 def test_a_password_type_written_in_capitals_is_a_password_field(
+    redactor: Redactor,
     sites: Sites,
 ) -> None:
     # HTML reads the type attribute case-insensitively.
     async def scenario() -> str:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=redactor) as session:
             await session.navigate(f"{sites.app}/signin")
             upper = await field(session, "textbox", "Upper")
             await session.fill_secret(upper, password(sites.app))
@@ -114,10 +122,11 @@ def test_a_password_type_written_in_capitals_is_a_password_field(
 
 
 def test_fill_secret_on_a_page_off_the_allowed_origins_is_a_policy_event(
+    redactor: Redactor,
     sites: Sites,
 ) -> None:
     async def scenario() -> PolicyEventError:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=redactor) as session:
             # A redirect lands the page on the subresource host's sign-in
             # page, which navigate reports; the field is taken unchecked, as
             # a stale handle could be.
@@ -136,10 +145,11 @@ def test_fill_secret_on_a_page_off_the_allowed_origins_is_a_policy_event(
 
 
 def test_fill_secret_refuses_an_allowed_origin_that_isnt_in_the_binding(
+    redactor: Redactor,
     sites: Sites,
 ) -> None:
     async def scenario() -> SecretRefusedError:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=redactor) as session:
             # The run allows the second origin; the secret is bound to the
             # start origin only.
             await session.navigate(f"{sites.other}/signin")
@@ -156,12 +166,12 @@ def test_fill_secret_refuses_an_allowed_origin_that_isnt_in_the_binding(
 
 @pytest.mark.parametrize("name", ["Name", "Notes", "Story"])
 def test_fill_secret_refuses_a_field_that_isnt_a_password_input(
-    sites: Sites, name: str
+    redactor: Redactor, sites: Sites, name: str
 ) -> None:
     # A text input, a textarea and a contenteditable textbox, each holding
     # text already.
     async def scenario() -> SecretRefusedError:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=redactor) as session:
             await session.navigate(f"{sites.app}/fields")
             other = await field(session, "textbox", name)
             return await refused(
@@ -174,10 +184,11 @@ def test_fill_secret_refuses_a_field_that_isnt_a_password_input(
 
 
 def test_fill_secret_fills_the_field_whose_role_and_name_match(
+    redactor: Redactor,
     sites: Sites,
 ) -> None:
     async def scenario() -> tuple[str, str, str]:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=redactor) as session:
             await session.navigate(f"{sites.app}/tokens")
             textbox = await field(session, "textbox", "API token")
             await session.fill_secret(textbox, token(sites.app))
@@ -200,10 +211,10 @@ def test_fill_secret_fills_the_field_whose_role_and_name_match(
     ],
 )
 def test_fill_secret_refuses_a_field_whose_role_or_name_doesnt_match(
-    sites: Sites, role: str, name: str
+    redactor: Redactor, sites: Sites, role: str, name: str
 ) -> None:
     async def scenario() -> SecretRefusedError:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=redactor) as session:
             await session.navigate(f"{sites.app}/tokens")
             other = await field(session, role, name)
             return await refused(session, other, token(sites.app), SecretRefusedError)
@@ -214,10 +225,11 @@ def test_fill_secret_refuses_a_field_whose_role_or_name_doesnt_match(
 
 
 def test_fill_secret_refuses_a_field_in_a_frame_from_another_allowed_origin(
+    redactor: Redactor,
     sites: Sites,
 ) -> None:
     async def scenario() -> SecretRefusedError:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=redactor) as session:
             await session.navigate(f"{sites.app}/framed")
             # The second allowed origin's sign-in page, framed by the start
             # origin's, with the secret bound to both: only the page's own
@@ -245,10 +257,10 @@ def test_fill_secret_refuses_a_field_in_a_frame_from_another_allowed_origin(
     ],
 )
 def test_fill_secret_refuses_a_field_whose_frames_are_not_all_the_page_s_origin(
-    sites: Sites, path: str, why: str
+    redactor: Redactor, sites: Sites, path: str, why: str
 ) -> None:
     async def scenario() -> SecretRefusedError:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=redactor) as session:
             await session.navigate(f"{sites.app}{path}")
             framed = await field(session, "textbox", "Password")
             return await refused(
@@ -262,10 +274,11 @@ def test_fill_secret_refuses_a_field_whose_frames_are_not_all_the_page_s_origin(
 
 
 def test_fill_secret_into_a_frame_off_the_allowed_origins_is_a_policy_event(
+    redactor: Redactor,
     sites: Sites,
 ) -> None:
     async def scenario() -> PolicyEventError:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=redactor) as session:
             await session.navigate(f"{sites.app}/framed")
             # The subresource host's frame never shows in a snapshot, so its
             # field is taken unchecked.
@@ -281,10 +294,11 @@ def test_fill_secret_into_a_frame_off_the_allowed_origins_is_a_policy_event(
 
 
 def test_fill_secret_fills_a_field_in_a_frame_of_the_page_s_own_origin(
+    redactor: Redactor,
     sites: Sites,
 ) -> None:
     async def scenario() -> str:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=redactor) as session:
             await session.navigate(f"{sites.app}/framed")
             inner = await field(session, "textbox", "Inner")
             await session.fill_secret(inner, password(sites.app))
@@ -294,7 +308,7 @@ def test_fill_secret_fills_a_field_in_a_frame_of_the_page_s_own_origin(
 
 
 def test_a_spec_edit_cannot_move_a_secret_to_an_origin_it_adds(
-    sites: Sites, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    redactor: Redactor, sites: Sites, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
     # The spec now starts at a path that decoded would name another host,
@@ -307,7 +321,7 @@ def test_a_spec_edit_cannot_move_a_secret_to_an_origin_it_adds(
     secret = bound_secrets(spec, sites.app)["TEST_PASSWORD"]
 
     async def scenario() -> tuple[SecretRefusedError, str]:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=redactor) as session:
             await session.navigate(f"{sites.other}/signin")
             moved = await refused(
                 session,
@@ -330,10 +344,11 @@ def test_a_spec_edit_cannot_move_a_secret_to_an_origin_it_adds(
 
 
 def test_a_page_that_throws_the_value_back_gets_it_into_no_error(
+    redactor: Redactor,
     sites: Sites,
 ) -> None:
     async def scenario() -> Error:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=redactor) as session:
             await session.navigate(f"{sites.app}/throws")
             thrown = await field(session, "textbox", "Password")
             with pytest.raises(Error) as raised:
@@ -351,12 +366,13 @@ def test_a_page_that_throws_the_value_back_gets_it_into_no_error(
 
 
 def test_fill_secret_refuses_a_page_sandboxed_onto_an_opaque_origin(
+    redactor: Redactor,
     sites: Sites,
 ) -> None:
     # The page's URL is on a destination, but its response sandboxes it, as
     # an app does with content it doesn't trust.
     async def scenario() -> SecretRefusedError:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=redactor) as session:
             await session.navigate(f"{sites.app}/ugc")
             sandboxed = await field(session, "textbox", "Password")
             return await refused(
@@ -370,10 +386,11 @@ def test_fill_secret_refuses_a_page_sandboxed_onto_an_opaque_origin(
 
 
 def test_a_value_the_page_throws_back_from_a_check_reaches_no_error(
+    redactor: Redactor,
     sites: Sites,
 ) -> None:
     async def scenario() -> Error:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=redactor) as session:
             await session.navigate(f"{sites.app}/rethrows")
             secret = await field(session, "textbox", "Password")
             await session.fill_secret(secret, password(sites.app))
@@ -393,10 +410,11 @@ def test_a_value_the_page_throws_back_from_a_check_reaches_no_error(
 
 
 def test_fill_secret_returns_the_window_of_the_requests_the_fill_started(
+    redactor: Redactor,
     sites: Sites,
 ) -> None:
     async def scenario() -> list[tuple[str, str]]:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=redactor) as session:
             await session.navigate(f"{sites.app}/reports")
             secret = await field(session, "textbox", "Password")
             window = await session.fill_secret(secret, password(sites.app))
@@ -409,7 +427,9 @@ def test_fill_secret_returns_the_window_of_the_requests_the_fill_started(
     assert asyncio.run(scenario()) == [("GET", "/typed")]
 
 
-def test_a_binding_s_name_is_compared_normalized(sites: Sites) -> None:
+def test_a_binding_s_name_is_compared_normalized(
+    sites: Sites, redactor: Redactor
+) -> None:
     # Written with two spaces, as a config may; the page's name has one.
     spaced = BoundSecret(
         "API_TOKEN",
@@ -418,7 +438,7 @@ def test_a_binding_s_name_is_compared_normalized(sites: Sites) -> None:
     )
 
     async def scenario() -> str:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=redactor) as session:
             await session.navigate(f"{sites.app}/tokens")
             textbox = await field(session, "textbox", "API token")
             await session.fill_secret(textbox, spaced)
@@ -427,7 +447,9 @@ def test_a_binding_s_name_is_compared_normalized(sites: Sites) -> None:
     assert asyncio.run(scenario()) == FAKE_VALUE
 
 
-def test_a_binding_s_name_that_compares_as_empty_names_no_field(sites: Sites) -> None:
+def test_a_binding_s_name_that_compares_as_empty_names_no_field(
+    sites: Sites, redactor: Redactor
+) -> None:
     # A soft hyphen alone, which comparing strips, against a field with no
     # name at all.
     empty = BoundSecret(
@@ -437,7 +459,7 @@ def test_a_binding_s_name_that_compares_as_empty_names_no_field(sites: Sites) ->
     )
 
     async def scenario() -> SecretRefusedError:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=redactor) as session:
             await session.navigate(f"{sites.app}/unnamed")
             found = re.search(r"- textbox \[ref=(e\d+)\]", await session.snapshot())
             assert found is not None
@@ -445,3 +467,38 @@ def test_a_binding_s_name_that_compares_as_empty_names_no_field(sites: Sites) ->
             return await refused(session, unnamed, empty, SecretRefusedError)
 
     assert "the field isn't the textbox named" in str(asyncio.run(scenario()))
+
+
+@pytest.mark.parametrize("coverage", ["absent", "wrong_name", "wrong_value"])
+def test_a_session_fills_no_secret_its_redactor_does_not_cover(
+    sites: Sites, coverage: str
+) -> None:
+    bound = password(sites.app)
+    covered = (
+        []
+        if coverage == "absent"
+        else [
+            BoundSecret(
+                "OTHER_FAKE" if coverage == "wrong_name" else bound.name,
+                SecretStr("another-fake-value")
+                if coverage == "wrong_value"
+                else bound.value,
+                bound.destination,
+            )
+        ]
+    )
+
+    async def scenario() -> None:
+        manager = (
+            browsing(sites)
+            if coverage == "absent"
+            else browsing(sites, redactor=Redactor(covered))
+        )
+        async with manager as session:
+            await session.navigate(f"{sites.app}/signin")
+            element = await field(session, "textbox", "Password")
+            error = await refused(session, element, bound, ValueError)
+            assert "session redactor does not cover" in str(error)
+            assert await held_value(element) == ""
+
+    asyncio.run(scenario())
