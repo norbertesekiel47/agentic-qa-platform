@@ -16,7 +16,7 @@ from aqa_core.compiled import CompiledScript
 from aqa_core.project import SpecError
 from aqa_runner import executor
 from aqa_runner.bound_secrets import MissingSecretError, SecretLoggedError
-from aqa_runner.egress_proxy import EgressBlocks, RefusedHost
+from aqa_runner.egress_proxy import EgressBlocks, EgressProxy, RefusedHost
 from aqa_runner.executor import RunResult
 
 from packages.runner.tests.executor_fixtures import (
@@ -101,10 +101,46 @@ def test_a_secret_filling_runs_egress_record_names_no_host_or_port(
     assert done.result.egress_blocks == EgressBlocks(
         (RefusedHost("undeclared.example.test", 8080),), False
     )
+    observed = {invariant.name: invariant for invariant in done.result.invariants}
+    assert observed["js_exceptions"].outcome == "violated"
+    assert observed["js_exceptions"].total == 1
+    for invariant in done.result.invariants:
+        assert invariant.seen == ()
     assert json.loads((done.record.path / "egress.json").read_text()) == {
         "error_code": "egress_blocked",
         "refused_count": 1,
         "overflowed": False,
+        "hosts_and_ports_withheld": True,
+    }
+
+
+@pytest.mark.usefixtures("with_the_value")
+def test_an_overflow_only_block_keeps_a_secret_runs_egress_record_count_only(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blocks = EgressBlocks((), overflowed=True)
+
+    def overflowed(
+        _proxy: EgressProxy, _expected_blocked: tuple[str, ...]
+    ) -> EgressBlocks:
+        return blocks
+
+    monkeypatch.setattr(EgressProxy, "egress_blocks", overflowed)
+    spec = secret_spec(tmp_path, start_url="/page/signin")
+
+    done = run(app, tmp_path, signing_in([FILL_PASSWORD]), spec=spec)
+
+    assert [step.seq for step in done.result.steps] == [0]
+    assert done.result.outcome == "errored"
+    assert done.result.error_code == "egress_blocked"
+    assert done.result.egress_blocks == blocks
+    assert [assertion.outcome for assertion in done.result.assertions] == [
+        "not_evaluated"
+    ]
+    assert json.loads((done.record.path / "egress.json").read_text()) == {
+        "error_code": "egress_blocked",
+        "refused_count": 0,
+        "overflowed": True,
         "hosts_and_ports_withheld": True,
     }
 

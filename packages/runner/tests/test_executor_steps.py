@@ -19,7 +19,7 @@ from aqa_core.project import SpecError
 from aqa_runner import executor
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.document_origins import DocumentChangedError, PolicyEvent
-from aqa_runner.egress_proxy import EgressBlocks, RefusedHost
+from aqa_runner.egress_proxy import EgressBlocks, EgressProxy, RefusedHost
 from aqa_runner.locators import Unresolved, Use
 from playwright.async_api import ElementHandle
 
@@ -94,6 +94,36 @@ def test_a_request_to_an_undeclared_host_ends_the_run_egress_blocked(
         "error_code": "egress_blocked",
         "refused": [{"host": "undeclared.example.test", "port": 80}],
         "overflowed": False,
+        "hosts_and_ports_withheld": False,
+    }
+
+
+def test_an_overflow_only_block_ends_the_run_and_records_egress_evidence(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blocks = EgressBlocks((), overflowed=True)
+
+    def overflowed(
+        _proxy: EgressProxy, _expected_blocked: tuple[str, ...]
+    ) -> EgressBlocks:
+        return blocks
+
+    monkeypatch.setattr(EgressProxy, "egress_blocks", overflowed)
+    script = compiled([{"seq": 1, "action": "reload", "side_effect": False}])
+
+    done = run(app, tmp_path, script)
+
+    assert [step.seq for step in done.result.steps] == [0]
+    assert done.result.outcome == "errored"
+    assert done.result.error_code == "egress_blocked"
+    assert done.result.egress_blocks == blocks
+    assert [assertion.outcome for assertion in done.result.assertions] == [
+        "not_evaluated"
+    ]
+    assert json.loads((done.record.path / "egress.json").read_text()) == {
+        "error_code": "egress_blocked",
+        "refused": [],
+        "overflowed": True,
         "hosts_and_ports_withheld": False,
     }
 
