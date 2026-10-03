@@ -35,7 +35,14 @@ from aqa_runner.document_origins import (
 from aqa_runner.egress import EgressPolicy
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.invariants import Observers
-from aqa_runner.locators import Absent, Resolved, Unresolved, Use, rendered_text
+from aqa_runner.locators import (
+    UNOCCLUDED,
+    Absent,
+    Resolved,
+    Unresolved,
+    Use,
+    rendered_text,
+)
 from aqa_runner.locators import resolve as resolve_target
 from aqa_runner.routing import install_routes
 from aqa_runner.sandbox import Chromium, launch
@@ -489,6 +496,10 @@ class BrowserSession:
         self.page.set_default_timeout(action_seconds * 1000)
         self.page.set_default_navigation_timeout(navigation_seconds * 1000)
 
+    def windows(self) -> tuple[Window, ...]:
+        """Every settle window in this session, starting before navigation."""
+        return tuple(self._traffic.windows)
+
     async def settle(self, window: Window) -> Settled:
         """Wait until the action whose settle window is `window` has settled
         (`aqa_runner.settling.settle`): `"idle"` once its requests have
@@ -527,6 +538,16 @@ class BrowserSession:
                     await found.element.dispose()
                 raise DocumentChangedError
             return found
+
+    async def unoccluded(
+        self, element: ElementHandle, min_size: tuple[int, int], in_viewport: bool
+    ) -> bool:
+        """Read the size, viewport and first-rect hit test without scrolling.
+        The page and element's frame must be on allowed origins. One evaluation
+        in the page's world makes this the page's word, as the action hit test is."""
+        async with self._turn:
+            await self._require_allowed_element(element)
+            return bool(await element.evaluate(UNOCCLUDED, [min_size, in_viewport]))
 
     async def text_of(self, element: ElementHandle) -> str:
         """`element`'s rendered text, as `text_in_target` reads it, once the

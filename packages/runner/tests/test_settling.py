@@ -11,7 +11,7 @@ import hashlib
 import threading
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
@@ -730,3 +730,152 @@ def test_settling_runs_out_of_time_on_a_crashed_page_whose_crash_is_never_report
 
     # Its looks at the page fail or never answer, so it never goes idle.
     assert asyncio.run(scenario()) == "timeout"
+
+
+def plain_data(value: object) -> bool:
+    if is_dataclass(value) and not isinstance(value, type):
+        return all(plain_data(getattr(value, item.name)) for item in fields(value))
+    if isinstance(value, (tuple, list, set)):
+        return all(plain_data(item) for item in value)
+    return type(value) in (str, int, float, bool, type(None))
+
+
+def test_an_open_window_holds_no_live_playwright_object(site: Site) -> None:
+    async def scenario() -> tuple[bool, int, bool]:
+        async with browsing(site) as session:
+            window = await session.navigate(f"{site.origin}/page/earlier")
+            await arrives(window, 2)
+            plain, opened = plain_data(window), len(window.open)
+            site.release("forever")
+            assert await session.settle(window) == "idle"
+            return plain, opened, plain_data(window)
+
+    plain, opened, ended_plain = asyncio.run(scenario())
+
+    assert opened == 1
+    assert plain, "an open settle window must hold only plain data"
+    assert ended_plain, "a completed settle window must hold only plain data"
+
+
+def response_paths(window: Window) -> list[tuple[str, str, int]]:
+    return [
+        (response.method, urlsplit(response.url).path, response.status)
+        for response in window.responses.kept
+    ]
+
+
+def test_a_response_joins_the_window_of_its_request(site: Site) -> None:
+    async def scenario() -> tuple[Window, Window]:
+        async with browsing(site) as session:
+            await session.navigate(f"{site.origin}/page/load")
+            first = await session.click(
+                await element(session, by_role("button", "Load"))
+            )
+            await arrives(first, 1)
+            following = await session.press("a")
+            site.release("data")
+            assert await session.settle(first) == "idle"
+            return first, following
+
+    first, following = asyncio.run(scenario())
+
+    assert response_paths(first) == [("GET", "/held/data", 204)]
+    assert response_paths(following) == []
+    assert plain_data(first)
+
+
+def test_a_redirect_hops_response_is_its_own_with_its_status(site: Site) -> None:
+    async def scenario() -> tuple[Window, Window]:
+        async with browsing(site) as session:
+            await session.navigate(f"{site.origin}/page/redirect")
+            first = await session.click(await element(session, by_role("button", "Go")))
+            await arrives(first, 1)
+            following = await session.click(
+                await element(session, by_role("button", "Next"))
+            )
+            site.release("hop")
+            assert await session.settle(first) == "idle"
+            assert await session.settle(following) == "idle"
+            return first, following
+
+    first, following = asyncio.run(scenario())
+
+    assert response_paths(first) == [
+        ("GET", "/redirect-held/hop", 302),
+        ("GET", "/did/landed", 204),
+    ]
+    assert response_paths(following) == [("GET", "/did/next", 204)]
+
+
+def test_traffic_keeps_every_window_it_opened(site: Site) -> None:
+    async def scenario() -> tuple[Window, ...]:
+        async with browsing(site) as session:
+            initial = session.windows()
+            assert len(initial) == 1
+            loaded = await session.navigate(f"{site.origin}/page/actions")
+            pressed = await session.press("a")
+            reloaded = await session.reload()
+            assert session.windows() == (*initial, loaded, pressed, reloaded)
+            return session.windows()
+
+    windows = asyncio.run(scenario())
+
+    assert [response_paths(window) for window in windows] == [
+        [],
+        [("GET", "/page/actions", 200)],
+        [],
+        [("GET", "/page/actions", 200)],
+    ]
+    assert plain_data(windows)
+
+
+def test_response_records_keep_the_first_hundred_and_count_all(site: Site) -> None:
+    async def scenario() -> Window:
+        async with browsing(site) as session:
+            await session.navigate(f"{site.origin}/page/actions")
+            window = await session.press("a")
+            await session.page.evaluate("""async () => {
+                for (let index = 0; index < 101; index++) await fetch('/did/' + index);
+            }""")
+            return window
+
+    window = asyncio.run(scenario())
+
+    assert window.responses.total == 101
+    assert len(window.responses.kept) == 100
+    assert response_paths(window)[0] == ("GET", "/did/0", 204)
+    assert response_paths(window)[-1] == ("GET", "/did/99", 204)
+    assert plain_data(window)
+
+
+def test_a_refused_request_is_never_seen_with_a_status(site: Site) -> None:
+    async def scenario() -> Window:
+        async with browsing(site) as session:
+            window = await session.navigate(f"{site.origin}/page/actions")
+            await session.page.evaluate(
+                "fetch('http://refused.test/api/orders').catch(() => null)"
+            )
+            assert await session.settle(window) == "idle"
+            return window
+
+    window = asyncio.run(scenario())
+
+    assert window.requests.total == 2
+    assert window.responses.total == 1
+    assert response_paths(window) == [("GET", "/page/actions", 200)]
+
+
+def test_a_response_keeps_the_pages_chosen_method_as_text(site: Site) -> None:
+    async def scenario() -> Window:
+        async with browsing(site) as session:
+            await session.navigate(f"{site.origin}/page/actions")
+            window = await session.press("a")
+            await session.page.evaluate(
+                "fetch('/did/custom', {method: 'fake-secret-method'})"
+            )
+            return window
+
+    window = asyncio.run(scenario())
+
+    assert response_paths(window) == [("fake-secret-method", "/did/custom", 501)]
+    assert plain_data(window)

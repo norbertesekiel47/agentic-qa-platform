@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
-from playwright.async_api import Page, Request
+from playwright.async_api import Page, Request, Response
 
 from aqa_runner.document_origins import Records
 
@@ -58,15 +58,26 @@ class PageRequest:
     url: str
 
 
+@dataclass(frozen=True)
+class Exchange:
+    """The page-chosen method and URL of a browser response, and its status."""
+
+    method: str
+    url: str
+    status: int
+
+
 @dataclass(eq=False)
 class Window:
     """A settle window: the requests the page sends from one action until the
-    next. `requests` keeps the first `RECORD_LIMIT` and counts all; `open`
-    holds those still open, streams aside; `changed_at` is when one last
-    started or ended (`time.monotonic`)."""
+    next. `requests` and `responses` each keep the first `RECORD_LIMIT` and
+    count all. `open` holds request identities, streams aside. `changed_at`
+    is when one last started or ended (`time.monotonic`). No field retains
+    a live Playwright object."""
 
     requests: Records[PageRequest] = field(default_factory=Records[PageRequest])
-    open: set[Request] = field(default_factory=set[Request])
+    responses: Records[Exchange] = field(default_factory=Records[Exchange])
+    open: set[int] = field(default_factory=set[int])
     changed_at: float = field(default_factory=time.monotonic)
 
 
@@ -80,18 +91,24 @@ class Traffic:
     it never heard start fails loudly rather than leaving a window open."""
 
     def __init__(self, page: Page) -> None:
-        self._window = Window()
-        self._windows: weakref.WeakKeyDictionary[Request, Window] = (
+        self.windows: list[Window] = []
+        self._open_requests: set[Request] = set()
+        self._response_requests: dict[Window, list[Request]] = {}
+        self._request_windows: weakref.WeakKeyDictionary[Request, Window] = (
             weakref.WeakKeyDictionary()
         )
+        self._window = self.next_window()
         # https://playwright.dev/python/docs/api/class-page#page-event-request
         page.on("request", self._started)
+        page.on("response", self._responded)
         page.on("requestfinished", self._ended)
         page.on("requestfailed", self._ended)
 
     def next_window(self) -> Window:
         """A new window, which every request from now on joins."""
         self._window = Window()
+        self.windows.append(self._window)
+        self._response_requests[self._window] = []
         return self._window
 
     def _started(self, request: Request) -> None:
@@ -99,17 +116,27 @@ class Traffic:
         # request, `redirected_from` the hop:
         # https://playwright.dev/python/docs/api/class-request#request-redirected-from
         hop = request.redirected_from
-        window = self._window if hop is None else self._windows[hop]
-        self._windows[request] = window
+        window = self._window if hop is None else self._request_windows[hop]
+        self._request_windows[request] = window
         window.requests.add(PageRequest(request.method, request.url))
         # https://playwright.dev/python/docs/api/class-request#request-resource-type
         if request.resource_type not in STREAMS:
-            window.open.add(request)
+            self._open_requests.add(request)
+            window.open.add(id(request))
         window.changed_at = time.monotonic()
 
+    def _responded(self, response: Response) -> None:
+        # https://playwright.dev/python/docs/api/class-response#response-request
+        request = response.request
+        window = self._request_windows[request]
+        window.responses.add(Exchange(request.method, request.url, response.status))
+        if window.responses.total == len(window.responses.kept):
+            self._response_requests[window].append(request)
+
     def _ended(self, request: Request) -> None:
-        window = self._windows[request]
-        window.open.discard(request)
+        window = self._request_windows[request]
+        self._open_requests.discard(request)
+        window.open.discard(id(request))
         window.changed_at = time.monotonic()
 
 
