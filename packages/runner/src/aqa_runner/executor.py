@@ -241,10 +241,6 @@ async def replay(
         expected = setup.config.egress.expected_blocked
 
         def interrupted() -> bool:
-            """A block or infrastructure event stops the run. A popup's
-            policy event alone does not, since the session closes it and
-            its requests face the same egress checks. Every other policy
-            event raises where the session observes or acts."""
             return (
                 bool(gate.infrastructure_events)
                 or proxy.egress_blocks(expected).blocked
