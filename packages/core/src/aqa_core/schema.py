@@ -183,6 +183,37 @@ def _start_path(text: str) -> str:
 StartPath = Annotated[StrictStr, AfterValidator(_start_path)]
 
 
+def _probe_endpoint(text: str) -> str:
+    method, space, path = text.partition(" ")
+    if method != "GET" or not space:
+        raise ValueError(
+            f"'{text}' is not a probe: write GET and a path, such as GET "
+            "/test-api/orders/count: a probe only reads, from the start origin "
+            "(DATA_MODEL §6)"
+        )
+    try:
+        _start_path(path)
+    except ValueError as error:
+        raise ValueError(f"'{text}' is not a probe: {error}") from None
+    if "#" in path:
+        raise ValueError(
+            f"'{text}' is not a probe: a request carries no fragment, so write the "
+            "path without one"
+        )
+    if not path.isascii():
+        raise ValueError(
+            f"'{text}' is not a probe: the runner sends its path as written, and a "
+            "request line is ASCII, so write it percent-encoded"
+        )
+    return text
+
+
+# A spec's probe: GET and a path on the start origin, held to start_url's
+# rules, so a probe never reads another origin, and ASCII, as the runner
+# sends it (DATA_MODEL §6; #48).
+ProbeEndpoint = Annotated[StrictStr, AfterValidator(_probe_endpoint)]
+
+
 # The roles Playwright 1.63's get_by_role accepts, which are WAI-ARIA's, as
 # its signature lists them
 # (https://playwright.dev/python/docs/api/class-page#page-get-by-role).

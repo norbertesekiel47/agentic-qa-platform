@@ -30,7 +30,7 @@ preconditions:
   start_url: /                   # a path; the origin comes from the run (`aqa explore --url`), never from the spec
   account: { email: returning@example.test, password: { secret: TEST_PASSWORD } }   # the secret must be declared in the project config (§9)
   reset: { http: "POST /test-api/reset?fixture=returning-user-expired-card" }   # optional; called before every attempt, the first included (ADR-0024)
-  probes:                        # optional read-only GET endpoints on allowed origins, for observing app state
+  probes:                        # optional read-only GETs on the start origin, for observing app state
     orders_count: "GET /test-api/orders/count?email=returning@example.test"
 steps:            # optional hints; the agent may deviate
   - Log in
@@ -374,6 +374,68 @@ def test_a_start_url_problem_reads_in_full(tmp_path: Path) -> None:
             "the run (ADR-0026)"
         ),
     )
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "problem"),
+    [
+        # A probe only reads.
+        ("POST /test-api/count", "is not a probe: write GET and a path"),
+        ("get /test-api/count", "is not a probe: write GET and a path"),
+        ("GET", "is not a probe: write GET and a path"),
+        # A path on the start origin, held to start_url's rules: never another
+        # origin, written out or as a path a browser reads as one.
+        ("GET https://evil.test/count", "is not a path"),
+        ("GET //evil.test/count", "is not a path"),
+        ("GET /test-api/../count", "is not a path"),
+        ("GET  /test-api/count", "is not a path"),
+        # The runner sends the path as written, and a request line is ASCII.
+        ("GET /café", "write it percent-encoded"),
+        # A request carries no fragment, so the probe would read another path
+        # than the one written.
+        ("GET /test-api/count#total", "a request carries no fragment"),
+    ],
+)
+def test_a_probe_is_get_and_a_path(tmp_path: Path, endpoint: str, problem: str) -> None:
+    text = LOGIN.replace(
+        "  start_url: /login\n",
+        f'  start_url: /login\n  probes: {{ count: "{endpoint}" }}\n',
+    )
+    path = write(tmp_path, text)
+
+    [line] = problems_for(path)
+
+    assert line.startswith(f"{path}: preconditions.probes.count: '{endpoint}' ")
+    assert problem in line
+
+
+def test_a_probe_problem_reads_in_full(tmp_path: Path) -> None:
+    text = LOGIN.replace(
+        "  start_url: /login\n",
+        '  start_url: /login\n  probes: { count: "POST /test-api/count" }\n',
+    )
+    path = write(tmp_path, text)
+
+    assert problems_for(path) == (
+        (
+            f"{path}: preconditions.probes.count: 'POST /test-api/count' is not a "
+            "probe: write GET and a path, such as GET /test-api/orders/count: a probe "
+            "only reads, from the start origin (DATA_MODEL §6)"
+        ),
+    )
+
+
+def test_a_probe_keeps_its_query(tmp_path: Path) -> None:
+    text = LOGIN.replace(
+        "  start_url: /login\n",
+        '  start_url: /login\n  probes: { count: "GET /test-api/count?email=a%40b.test" }\n',
+    )
+
+    spec = load_spec(write(tmp_path, text), CONFIG)
+
+    assert spec.frontmatter.preconditions.probes == {
+        "count": "GET /test-api/count?email=a%40b.test"
+    }
 
 
 def test_the_id_must_be_the_file_name_without_its_suffix(tmp_path: Path) -> None:
