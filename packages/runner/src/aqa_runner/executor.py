@@ -28,7 +28,7 @@ from aqa_core.project import SpecError, path_on_origin, start_url
 from aqa_core.spec import Spec
 from playwright.async_api import BrowserType, ElementHandle, Error
 
-from aqa_runner.browser_session import BrowserSession, open_browser_session
+from aqa_runner.browser_session import BrowserSession, one_key, open_browser_session
 from aqa_runner.document_origins import (
     DocumentChangedError,
     PolicyEvent,
@@ -204,9 +204,13 @@ def _runnable(script: CompiledScript) -> list[Targeted | Untargeted]:
     runnable: list[Targeted | Untargeted] = []
     problems: list[str] = []
     for index, step in enumerate(script.steps):
+        where = f"steps[{index}] (seq {step.seq})"
         if isinstance(step, FillSecret):
+            problems.append(f"{where}: fill_secret is not run until #49")
+        elif isinstance(step, Press) and not one_key(step.key):
             problems.append(
-                f"steps[{index}] (seq {step.seq}): fill_secret is not run until #49"
+                f"{where}: press takes one key, with only modifiers held before "
+                f"it: {step.key[:40]!r}"
             )
         else:
             runnable.append(step)
@@ -254,6 +258,7 @@ async def _run(
 def _untargeted(
     session: BrowserSession, step: Untargeted, start: str
 ) -> Awaitable[Window]:
+    """`step`'s action, which acts on no target, through the session."""
     if isinstance(step, Navigate):
         return session.navigate(path_on_origin(start, step.url))
     if isinstance(step, Reload):
@@ -264,6 +269,7 @@ def _untargeted(
 def _targeted(
     session: BrowserSession, step: Targeted, element: ElementHandle
 ) -> Awaitable[Window]:
+    """`step`'s action on `element`, its target's, through the session."""
     if isinstance(step, Click):
         return session.click(element)
     if isinstance(step, Fill):
@@ -334,5 +340,5 @@ async def _dispatched(
 def _outcome(*, errored: bool) -> RunOutcome:
     """`errored` when told. Otherwise `failed`: a run passes only when every
     step completed and every assertion passed, and no assertion is
-    evaluated until #46's assertions pull request."""
+    evaluated yet."""
     return "errored" if errored else "failed"

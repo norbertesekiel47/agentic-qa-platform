@@ -449,6 +449,8 @@ def test_unsupported_steps_and_checks_are_refused_by_name_before_the_browser_ope
                 "secret": "TEST_PASSWORD",
                 "side_effect": False,
             },
+            # Tab held down could move the focus before the key goes.
+            {"seq": 3, "action": "press", "key": "Tab+a", "side_effect": False},
         ],
         targets=FORM_TARGETS,
         assertions=[
@@ -498,6 +500,7 @@ def test_unsupported_steps_and_checks_are_refused_by_name_before_the_browser_ope
 
     assert refused.value.problems == (
         "steps[1] (seq 2): fill_secret is not run until #49",
+        "steps[2] (seq 3): press takes one key, with only modifiers held before it: 'Tab+a'",
         "assertions[1] (a2): network_none is not evaluated until #48",
         "assertions[2] (a3): network_seen is not evaluated until #48",
         "assertions[3] (a4): probe_equals_baseline is not evaluated until #48",
@@ -954,6 +957,8 @@ def test_a_crash_between_intent_and_completion_leaves_the_intent_unresolved(
         # the click, between its intent and its completion.
         with app.arrived:
             paid = app.arrived.wait_for(lambda: ("POST", "/held/pay") in app.seen, 60)
+        # The runner's process alone dies, as in a crash. Playwright's driver,
+        # its child, sees its input close and closes the browser.
         child.kill()
         output, _ = child.communicate()
     assert paid, output.decode(errors="replace")
