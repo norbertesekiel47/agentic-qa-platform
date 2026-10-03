@@ -7,7 +7,7 @@ import re
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Self
+from typing import Self
 
 from pydantic import BaseModel, ValidationError
 
@@ -24,7 +24,7 @@ from aqa_core.compiled import (
     TextInTarget,
     VisibleUnoccluded,
 )
-from aqa_core.config import ProjectConfig, RoleField
+from aqa_core.config import ProjectConfig, SecretField
 from aqa_core.model_roles import RoleError, resolve_roles
 from aqa_core.price_map import vendored
 from aqa_core.schema import parse_origin
@@ -513,7 +513,7 @@ class SecretDestination:
     """Where the browser may fill one test secret in this run."""
 
     origins: tuple[str, ...]
-    field: Literal["password"] | RoleField
+    field: SecretField
 
 
 def secret_destinations(spec: Spec, start: str) -> dict[str, SecretDestination]:
