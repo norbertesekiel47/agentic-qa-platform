@@ -457,3 +457,11 @@ def test_uncovered_refuses_a_plan_that_does_not_fit_its_spec() -> None:
 
     with pytest.raises(ValueError, match="doesn't fit its spec"):
         uncovered(checkout_plan(*COVERED, beyond), CHECKOUT)
+
+
+@pytest.mark.parametrize("check", ["network_seen", "network_none"])
+@pytest.mark.parametrize("pattern", ["(", "a{4294967296}", "[[:digit:]]+"])
+def test_a_url_pattern_must_compile_as_a_python_regex(check: str, pattern: str) -> None:
+    fields = {**OF_EACH_TYPE[check], "url_pattern": pattern}
+    with pytest.raises(ValidationError, match="is not a Python regex"):
+        planned(check, **fields)

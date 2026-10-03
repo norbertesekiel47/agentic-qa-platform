@@ -506,7 +506,7 @@ class _NetworkCheck(_Assertion):
     """A request in the browser's own traffic, by method, URL and status."""
 
     method: HttpMethod
-    url_pattern: NonEmpty
+    url_pattern: PythonRegex
     status_class: StatusClass
 
 
