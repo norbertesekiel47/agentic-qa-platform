@@ -22,7 +22,6 @@ from dataclasses import dataclass, field
 from typing import Annotated, Literal, TypedDict
 
 from aqa_core.compiled import (
-    AriaRole,
     ByCss,
     ByLabel,
     ByPlaceholder,
@@ -31,6 +30,7 @@ from aqa_core.compiled import (
     Locator,
     Target,
 )
+from aqa_core.schema import AriaRole
 from aqa_core.text import normalize
 from playwright.async_api import ElementHandle, Error, Page, Playwright
 from pydantic import Field, StringConstraints, TypeAdapter, ValidationError

@@ -221,6 +221,12 @@ def test_authority_refuses_what_is_not_an_origin(text: str) -> None:
             "secrets.A.field.name",
             "missing key",
         ),
+        # A role no field could have would only refuse every fill (#49).
+        (
+            "secrets: { A: { origins: [start], field: { role: texbox, name: Key } } }\n",
+            "secrets.A.field.role",
+            "'texbox' is not an ARIA role",
+        ),
         ("secrets: { A: { origins: [start] } }\n", "secrets.A.field", "missing key"),
         # Egress hosts and private origins.
         (

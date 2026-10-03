@@ -17,7 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from aqa_core.compiled import AriaRole, ByCss, ByRole, Target
+from aqa_core.compiled import ByCss, ByRole, Target
+from aqa_core.schema import AriaRole
 from aqa_runner import settling
 from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.document_origins import PolicyEvent, PolicyEventError
