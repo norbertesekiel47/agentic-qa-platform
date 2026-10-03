@@ -153,12 +153,14 @@ def test_each_step_line_is_on_disk_before_the_call_returns(
 ) -> None:
     record = RunRecord.create(tmp_path)
     steps = record.path / "steps.jsonl"
-    # What the file held each time something was forced to disk.
-    synced: list[str] = []
+    # What was forced to disk, by inode, and what the file held then.
+    synced: list[tuple[int, str]] = []
     fsync = os.fsync
 
     def recording(fd: int) -> None:
-        synced.append(steps.read_text() if steps.exists() else "")
+        synced.append(
+            (os.fstat(fd).st_ino, steps.read_text() if steps.exists() else "")
+        )
         fsync(fd)
 
     monkeypatch.setattr(os, "fsync", recording)
@@ -167,13 +169,36 @@ def test_each_step_line_is_on_disk_before_the_call_returns(
     first = list(synced)
     record.step_completed(0, locator_used=None, settled="idle")
 
-    # The line was written before the file was forced to disk, and the
-    # directory that now holds the file was forced too.
-    assert first
-    assert all('"state": "intent"' in text for text in first)
-    assert len(first) == 2
-    assert len(synced) == 3
-    assert '"state": "completed"' in synced[-1]
+    def inode(path: Path) -> int:
+        return path.stat().st_ino
+
+    # The file, with the intent in it, then every directory from the run's
+    # up to the spec root, which existed before the run: a new entry is on
+    # disk only once its directory is.
+    assert [ino for ino, _ in first] == [
+        inode(steps),
+        inode(record.path),
+        inode(record.path.parent),
+        inode(tmp_path / ".aqa"),
+        inode(tmp_path),
+    ]
+    assert '"state": "intent"' in first[0][1]
+    # Later lines force only the file.
+    assert synced[len(first) :] == [(inode(steps), synced[-1][1])]
+    assert '"state": "completed"' in synced[-1][1]
+
+
+def test_a_value_with_a_line_separator_stays_on_one_line(tmp_path: Path) -> None:
+    record = RunRecord.create(tmp_path)
+    value = "a\u2028b\u2029c\x85d\re"
+
+    record.step_intent(
+        1, {"action": "fill", "value": value}, side_effect=False, target_used="name"
+    )
+
+    # Whatever reader splits the record into lines finds one line per call.
+    [line] = (record.path / "steps.jsonl").read_text(encoding="utf-8").splitlines()
+    assert json.loads(line)["action"]["value"] == value
 
 
 def test_a_step_line_that_cannot_be_written_leaves_the_file_as_it_was(
