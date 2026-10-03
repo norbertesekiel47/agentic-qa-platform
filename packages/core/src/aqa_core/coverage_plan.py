@@ -15,6 +15,7 @@ from pydantic import Field, StrictInt, model_validator
 from aqa_core.compiled import (
     HttpMethod,
     NormalizedText,
+    ProbeValue,
     PythonRegex,
     RequiredCondition,
     StatusClass,
@@ -79,7 +80,7 @@ class PlannedCheck(StrictModel):
     text: NormalizedText | None = None
     pattern: PythonRegex | None = None
     probe: NonEmpty | None = None
-    value: StrictInt | NonEmpty | None = None
+    value: ProbeValue | None = None
     method: HttpMethod | None = None
     url_pattern: NonEmpty | None = None
     status_class: StatusClass | None = None
