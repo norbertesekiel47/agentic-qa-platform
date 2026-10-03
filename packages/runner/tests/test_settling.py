@@ -11,7 +11,7 @@ import hashlib
 import threading
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import FrozenInstanceError, dataclass, field, fields, is_dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from aqa_core.compiled import ByCss, ByRole, Target
 from aqa_core.schema import AriaRole
-from aqa_runner import settling
+from aqa_runner import browser_session, settling
 from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.document_origins import PolicyEvent, PolicyEventError
 from aqa_runner.locators import Resolved
@@ -764,7 +764,34 @@ def response_paths(window: Window) -> list[tuple[str, str, int]]:
     ]
 
 
-def test_a_response_joins_the_window_of_its_request(site: Site) -> None:
+class RetainedTraffic(settling.Traffic):
+    async def responses(self, window: Window) -> list[settling.Exchange]:
+        exchanges = []
+        for request in self._response_requests[window]:
+            response = await request.response()
+            assert response is not None
+            exchanges.append(
+                settling.Exchange(request.method, request.url, response.status)
+            )
+        return exchanges
+
+
+@pytest.fixture
+def retained_traffic(monkeypatch: pytest.MonkeyPatch) -> list[RetainedTraffic]:
+    traffic: list[RetainedTraffic] = []
+
+    def observed(page: Page) -> RetainedTraffic:
+        seen = RetainedTraffic(page)
+        traffic.append(seen)
+        return seen
+
+    monkeypatch.setattr(browser_session, "Traffic", observed)
+    return traffic
+
+
+def test_a_response_joins_the_window_of_its_request(
+    site: Site, retained_traffic: list[RetainedTraffic]
+) -> None:
     async def scenario() -> tuple[Window, Window]:
         async with browsing(site) as session:
             await session.navigate(f"{site.origin}/page/load")
@@ -775,6 +802,8 @@ def test_a_response_joins_the_window_of_its_request(site: Site) -> None:
             following = await session.press("a")
             site.release("data")
             assert await session.settle(first) == "idle"
+            assert await retained_traffic[0].responses(first) == first.responses.kept
+            assert await retained_traffic[0].responses(following) == []
             return first, following
 
     first, following = asyncio.run(scenario())
@@ -829,7 +858,9 @@ def test_traffic_keeps_every_window_it_opened(site: Site) -> None:
     assert plain_data(windows)
 
 
-def test_response_records_keep_the_first_hundred_and_count_all(site: Site) -> None:
+def test_response_records_keep_the_first_hundred_and_count_all(
+    site: Site, retained_traffic: list[RetainedTraffic]
+) -> None:
     async def scenario() -> Window:
         async with browsing(site) as session:
             await session.navigate(f"{site.origin}/page/actions")
@@ -837,6 +868,9 @@ def test_response_records_keep_the_first_hundred_and_count_all(site: Site) -> No
             await session.page.evaluate("""async () => {
                 for (let index = 0; index < 101; index++) await fetch('/did/' + index);
             }""")
+            retained = await retained_traffic[0].responses(window)
+            assert len(retained) == 100
+            assert retained == window.responses.kept
             return window
 
     window = asyncio.run(scenario())
@@ -879,3 +913,23 @@ def test_a_response_keeps_the_pages_chosen_method_as_text(site: Site) -> None:
 
     assert response_paths(window) == [("fake-secret-method", "/did/custom", 501)]
     assert plain_data(window)
+
+
+@pytest.mark.parametrize(
+    ("attribute", "replacement"),
+    [("method", "POST"), ("url", "https://app.example.test/changed"), ("status", 500)],
+    ids=["method", "url", "status"],
+)
+def test_a_recorded_exchange_is_immutable(
+    attribute: str, replacement: str | int
+) -> None:
+    exchange = settling.Exchange("GET", "https://app.example.test/orders", 200)
+    window = Window()
+    window.responses.add(exchange)
+
+    with pytest.raises(FrozenInstanceError):
+        setattr(exchange, attribute, replacement)
+
+    assert window.responses.kept == [
+        settling.Exchange("GET", "https://app.example.test/orders", 200)
+    ]
