@@ -18,6 +18,12 @@ from pydantic import SecretStr
 # a spec from pulling an unrelated variable, such as a cloud key, into a field.
 PREFIX = "AQA_SECRET_"
 
+# Playwright normalizes with JavaScript whitespace, not Python str.isspace.
+VALUE_WHITESPACE = (
+    "\t\n\v\f\r \u00a0\u1680\u2028\u2029\u202f\u205f\u3000\ufeff"
+    + "".join(chr(point) for point in range(0x2000, 0x200B))
+)
+
 # What separates the names in `DEBUG`: commas, and what JavaScript's `\s`
 # matches, U+FEFF included and U+001C to U+001F and U+0085 not, as the
 # driver's `debug` package splits them.
@@ -38,7 +44,7 @@ class BoundSecret:
 
 
 class MissingSecretError(Exception):
-    """A test secret the spec references has no value: an infrastructure
+    """A test secret the spec references has no usable value: an infrastructure
     error, the environment's rather than the spec's (exit code 12, API.md
     §7). Each problem names the variable to set."""
 
@@ -67,7 +73,10 @@ def bound_secrets(spec: Spec, start: str) -> dict[str, BoundSecret]:
     spec references needs one, whichever the run fills. A variable that is
     unset or empty has none: GitHub Actions gives a secret that isn't set as
     an empty string. Every missing value is reported at once, in a
-    `MissingSecretError`.
+    `MissingSecretError`. Whitespace-only values and values shorter than four
+    bytes after JavaScript whitespace trimming in UTF-8 or Latin-1 (when
+    encodable) are refused too: the scan needs four-character base64 cores
+    at every byte alignment.
 
     Nor are secrets bound where Playwright would log the messages that carry
     a value (`SecretLoggedError`): `DEBUGP` makes its Python client print
@@ -88,6 +97,9 @@ def bound_secrets(spec: Spec, start: str) -> dict[str, BoundSecret]:
     for name, destination in destinations.items():
         variable = PREFIX + name
         value = os.environ.get(variable)
+        if value and (problem := _value_problem(value)) is not None:
+            problems.append(f"{variable} {problem}")
+            continue
         if value:
             bound[name] = BoundSecret(name, SecretStr(value), destination)
             continue
@@ -104,6 +116,18 @@ def bound_secrets(spec: Spec, start: str) -> dict[str, BoundSecret]:
     if problems:
         raise MissingSecretError(problems)
     return bound
+
+
+def _value_problem(value: str) -> str | None:
+    trimmed = value.strip(VALUE_WHITESPACE)
+    if not trimmed:
+        return "is only whitespace; set it to a nonblank test secret"
+    encodings = [trimmed.encode()]
+    if all(ord(char) < 256 for char in trimmed):
+        encodings.append(trimmed.encode("latin-1"))
+    if any(len(encoded) < 4 for encoded in encodings):
+        return "must have at least 4 bytes after trimming in UTF-8 and, when encodable, Latin-1"
+    return None
 
 
 def _protocol_logging(environ: Mapping[str, str]) -> str | None:

@@ -252,3 +252,33 @@ def test_a_spec_that_references_no_secret_binds_none_whatever_is_logged(
     spec = secret_spec(tmp_path, account="{ email: reader@example.test }")
 
     assert bound_secrets(spec, START) == {}
+
+
+@pytest.mark.parametrize(
+    "value", [" \t\r\n", "\ufeff\u00a0", "abc", "\ufeffabc\ufeff", "éé", "päx"]
+)
+def test_a_blank_or_under_four_byte_value_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    # Deliberately unusable fake values, including the shorter Latin-1 form.
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", value)
+    with pytest.raises(MissingSecretError) as raised:
+        bound_secrets(secret_spec(tmp_path), START)
+    assert raised.value.exit_code == 12
+    assert "AQA_SECRET_TEST_PASSWORD" in str(raised.value)
+    assert (
+        "whitespace" in str(raised.value)
+        if not value.strip(" \t\r\n\ufeff\u00a0")
+        else "4 bytes" in str(raised.value)
+    )
+    if value.strip():
+        assert value not in str(raised.value)
+
+
+@pytest.mark.parametrize("value", ["fake", "fäke", "秘密", "\ufeff fake \ufeff"])
+def test_a_value_with_four_bytes_in_every_supported_encoding_is_usable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", value)
+    held = bound_secrets(secret_spec(tmp_path), START)["TEST_PASSWORD"]
+    assert held.value.get_secret_value() == value

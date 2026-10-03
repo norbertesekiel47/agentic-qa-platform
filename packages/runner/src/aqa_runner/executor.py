@@ -44,6 +44,7 @@ from aqa_runner.egress import EgressGate, InfrastructureEvent
 from aqa_runner.egress_proxy import EgressBlocks, EgressProxy
 from aqa_runner.invariants import InvariantResult, invariant_results
 from aqa_runner.locators import Absent, Miss, Resolved, Unresolved, Use
+from aqa_runner.redaction import Redactor
 from aqa_runner.run_record import RunRecord
 from aqa_runner.secret_fields import SecretNotFilledError, SecretRefusedError
 from aqa_runner.settling import Settled, Window
@@ -220,6 +221,7 @@ async def replay(
     # value (exit 5 before 12).
     runnable, checks = _accepted(script, setup.spec)
     bound = bound_secrets(setup.spec, setup.start)
+    redactor = Redactor(bound.values())
     run = _Replay(
         setup,
         script.targets,
@@ -232,7 +234,7 @@ async def replay(
     record = setup.record
     steps: list[StepResult] = []
     async with open_browser_session(
-        chromium, egress=proxy, settings=script.browser
+        chromium, egress=proxy, settings=script.browser, redactor=redactor
     ) as session:
         session.limit_waits(
             action_seconds=setup.config.budgets.resolve_seconds,
