@@ -9,7 +9,7 @@ import base64
 import contextlib
 import hashlib
 import threading
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from http import HTTPStatus
@@ -23,7 +23,7 @@ from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.document_origins import PolicyEvent, PolicyEventError
 from aqa_runner.locators import Resolved
 from aqa_runner.settling import Window
-from playwright.async_api import ElementHandle, Error, async_playwright
+from playwright.async_api import ElementHandle, Error, Page, async_playwright
 
 from packages.runner.tests import document_fixtures
 from packages.runner.tests.document_fixtures import Sites, serving_sites, to
@@ -649,13 +649,29 @@ def test_settling_a_crashed_page_raises_playwrights_error(
     site: Site, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settling, "SETTLE_SECONDS", 2)
+    # What Playwright does when Chromium reports a crashed renderer: it emits
+    # the page's crash event, and every later call fails "Target crashed".
+    # Simulated: Chromium on CI's Ubuntu 24.04 host never reports a crash
+    # (LAB_NOTES, 2026-10-02).
+    on_crash: list[Callable[[Page], object]] = []
+    listen: Callable[..., object] = Page.on
+
+    def listening(page: Page, event: str, handler: Callable[[Page], object]) -> None:
+        if event == "crash":
+            on_crash.append(handler)
+        listen(page, event, handler)
+
+    async def crashed(_: Page, *__: object, **___: object) -> object:
+        raise Error("Page.evaluate: Target crashed")
+
+    monkeypatch.setattr(Page, "on", listening)
 
     async def scenario() -> None:
         async with browsing(site) as session:
             window = await session.navigate(f"{site.origin}/page/wait")
-            # Chromium's page that crashes the renderer, which never loads.
-            with pytest.raises(Error):
-                await session.page.goto("chrome://crash")
+            for handler in on_crash:
+                handler(session.page)
+            monkeypatch.setattr(Page, "evaluate", crashed)
             # Not a page that keeps changing: the page has crashed.
             with pytest.raises(Error, match="crashed"):
                 await session.settle(window)
