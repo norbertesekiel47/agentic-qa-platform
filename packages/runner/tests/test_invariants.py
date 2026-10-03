@@ -17,7 +17,7 @@ from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.invariants import INVARIANTS, invariant_results
 from playwright.async_api import async_playwright
 
-from packages.runner.tests.egress_fixtures import gate
+from packages.runner.tests.egress_fixtures import gate, unused_port
 from packages.runner.tests.executor_fixtures import App, serving_app
 
 type Seen = Mapping[InvariantName, Records[str]]
@@ -52,7 +52,7 @@ def observe(
             await session.settle(await session.navigate(app.origin + path))
             if then is not None:
                 await then(session)
-            return session.invariants.seen
+            return session.invariant_observers.seen
 
     return asyncio.run(scenario())
 
@@ -138,6 +138,26 @@ def test_an_error_during_the_first_navigation_and_one_after_a_reload_are_both_se
         "js_exceptions": ["thrown-navigate", "thrown-reload"],
         "http_5xx": [f"500 {app.origin}/status/500"] * 2,
         "broken_images": [f"{app.origin}/image/not-an-image"] * 2,
+    }
+
+
+def test_the_proxys_failed_tunnel_is_no_http_5xx(app: App) -> None:
+    # An allowed https origin that nothing serves: the proxy fails the
+    # tunnel with a 502, which Chromium never shows the page as a response
+    # (ADR-0026's #42 amendment). Its failed load is a console error.
+    nowhere = f"https://127.0.0.1:{unused_port()}"
+
+    seen = observe(
+        app,
+        f"/page/fetches?to={quote(nowhere + '/data', safe='')}",
+        origins=(nowhere,),
+    )
+
+    assert violated(seen) == {
+        "console_errors": [
+            "Failed to load resource: net::ERR_TUNNEL_CONNECTION_FAILED"
+        ],
+        "js_exceptions": ["Failed to fetch"],
     }
 
 

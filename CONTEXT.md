@@ -47,7 +47,7 @@ A host the project lets pages load resources from, such as a CDN or font host, w
 _Avoid_: calling it an allowed origin
 
 **Expected-blocked host**:
-A host the project declares that pages may try to reach but the browser must never load from, such as an analytics host. Its egress blocks are expected, so their direct symptoms don't count against invariants.
+A host the project declares that pages may try to reach but the browser must never load from, such as an analytics host. Its egress blocks are expected, so they don't keep a run from passing, and, as for any request the run refuses, their direct symptoms don't count against invariants.
 
 ### Compiled scripts
 

@@ -61,6 +61,19 @@ KEPT_ATTEMPTS = 1000
 MAX_HOST = 253
 
 
+def named_host(host: str) -> str:
+    """`host` as a run's record names a refused host: itself when an origin
+    could write it and it is at most `MAX_HOST` characters, otherwise empty.
+    A page chooses it, so a long one could carry what the page exfiltrates."""
+    if len(host) > MAX_HOST:
+        return ""
+    try:
+        written, _ = authority(f"http://{host}")
+    except ValueError:  # a host no origin writes
+        return ""
+    return host if written == host else ""
+
+
 @dataclass(frozen=True)
 class BlockedAttempt:
     """A request or WebSocket the browser sessions' routing refused before it
@@ -107,9 +120,8 @@ class BlockedAttempts:
 @dataclass(frozen=True)
 class RefusedHost:
     """A host and port an egress block refused, as the run's record names
-    it: the host only when an origin could write it and it is at most
-    `MAX_HOST` characters, since a page chooses it, otherwise empty; and no
-    port when the attempt named none a scheme gives."""
+    it (`named_host`), with no port when the attempt named none a scheme
+    gives."""
 
     host: str
     port: int | None
@@ -187,7 +199,7 @@ class EgressProxy:
             RefusedHost(attempt.host, attempt.port)
             for attempt in self.blocked_attempts.counts
         ] + [
-            RefusedHost(_named(refusal.host), refusal.port)
+            RefusedHost(named_host(refusal.host), refusal.port)
             for refusal in self._gate.refusals
             if refusal.kind == "host"
         ]
@@ -304,19 +316,6 @@ class EgressProxy:
             )
         finally:
             writer.close()
-
-
-def _named(host: str) -> str:
-    """`host`, a refused host the gate recorded as the page wrote it, when an
-    origin could write it and it is at most `MAX_HOST` characters, as
-    routing keeps its own; otherwise empty."""
-    if len(host) > MAX_HOST:
-        return ""
-    try:
-        written, _ = authority(f"http://{host}")
-    except ValueError:  # a host no origin writes
-        return ""
-    return host if written == host else ""
 
 
 def _plain_target(target: bytes) -> tuple[str, int, str]:

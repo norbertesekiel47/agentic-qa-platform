@@ -224,12 +224,14 @@ class BrowserSession:
     `page` is public until #53 makes it private. No production code outside
     this module may use it: it observes and acts without the checks."""
 
-    def __init__(self, page: Page, policy: EgressPolicy, invariants: Observers) -> None:
+    def __init__(
+        self, page: Page, policy: EgressPolicy, invariant_observers: Observers
+    ) -> None:
         self.page = page
         self._policy = policy
         # What each invariant saw on the page, from before its first
         # navigation (`aqa_runner.invariants.Observers.watch`).
-        self.invariants = invariants
+        self.invariant_observers = invariant_observers
         self._refs_given = 0
         self._current: dict[str, str] = {}
         self._turn = asyncio.Lock()
@@ -923,7 +925,7 @@ async def open_browser_session(
         await install_routes(context, egress.policy, egress.blocked_attempts)
         page = await context.new_page()
         # Before the page's first navigation.
-        invariants = await Observers.watch(page, egress.policy)
-        yield BrowserSession(page, egress.policy, invariants)
+        observers = await Observers.watch(page, egress.policy)
+        yield BrowserSession(page, egress.policy, observers)
     finally:
         await browser.close()
