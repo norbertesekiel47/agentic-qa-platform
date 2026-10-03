@@ -75,7 +75,7 @@ def _escaped(char: str) -> str:
     return f"\\u{ord(char):04x}" if ord(char) <= 0xFFFF else char
 
 
-def _name_pattern(name: str) -> str:
+def name_pattern(name: str) -> str:
     """An anchored regex that matches an accessible name, as Playwright
     reports it, exactly when the name normalizes to `name` (written
     normalized, DATA_MODEL §7): private-use glyphs may sit anywhere, and a
@@ -102,7 +102,7 @@ def _query(
         case ByRole(role=role, name=name):
             # A compiled pattern, which Playwright matches against the name
             # with its whitespace already collapsed; None means any name.
-            pattern = None if name is None else re.compile(_name_pattern(name))
+            pattern = None if name is None else re.compile(name_pattern(name))
             return root.get_by_role(role, name=pattern, include_hidden=hidden)
         case ByLabel(label=label):
             return root.get_by_label(label, exact=True)

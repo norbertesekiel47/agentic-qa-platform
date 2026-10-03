@@ -115,7 +115,7 @@ A checkpoint preserves graph state, not the browser. Resuming therefore requires
 |---|---|
 | `navigate(url)`, `reload()` | Only absolute http(s) URLs on the run's allowed origins, refused before anything is requested; the page each lands on, after redirects, is checked (ADR-0026) |
 | `click(ref)`, `fill(ref, text)`, `select(ref, option)`, `press(key)` | Act on accessibility-tree element refs |
-| `fill_secret(ref, name)` | Inject a named secret at the browser layer, only into a field and origin the secret is bound to (project config, DATA_MODEL §9) |
+| `fill_secret(ref, name)` | Inject a named secret at the browser layer, only into a field and origin the secret is bound to (project config, DATA_MODEL §9); a refusal comes back to the agent as a tool error that names the secret, never its value (`BrowserSession.fill_secret`, ADR-0026) |
 | `screenshot(region?)` | Visual observation for verification (hybrid perception, M2; M1's navigator reads the accessibility tree only) |
 | `vision_click(x, y)` | Vision fallback, only when the tree lacks a usable ref (M2) |
 | `assert_*` | Bind a coverage-plan check to an element ref and evaluate it; compiles directly into the script |

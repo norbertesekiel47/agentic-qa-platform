@@ -220,6 +220,31 @@ def page(sites: Sites, path: str, query: dict[str, list[str]]) -> str | None:
             <label>Name <input></label>
             <label>Size <select><option>S</option><option>M</option></select></label>
             <button onclick="this.textContent = 'Saved'">Save</button>""",
+        # Sign-in fields for fill_secret (#49): a password field, one whose
+        # type is written in capitals, and fields named for an API token, of
+        # two roles, beside one named for a key.
+        "/signin": """<label>Email <input type="email"></label>
+            <label>Password <input type="password"></label>
+            <label>Upper <input type="PASSWORD"></label>""",
+        "/tokens": """<label>API token <input></label>
+            <label>API key <input></label>
+            <label>API token <input type="search"></label>""",
+        # The sign-in page in a frame of the second allowed origin and in one
+        # of the subresource host, beside a password field in a frame of the
+        # page's own origin.
+        "/framed": f"""<iframe src="{sites.other}/signin"></iframe>
+            <iframe src="{sites.cdn}/signin"></iframe>
+            <iframe srcdoc='<label>Inner <input type="password"></label>'></iframe>""",
+        # The sign-in page in a sandboxed frame, on an opaque origin though
+        # its URL is the page's, and in a frame of the page's own origin
+        # inside a frame of the second allowed origin.
+        "/sandboxed": '<iframe sandbox="allow-scripts" src="/signin"></iframe>',
+        "/sandwich": f'<iframe src="{sites.other}/framing"></iframe>',
+        "/framing": f'<iframe src="{sites.app}/signin"></iframe>',
+        # A password field whose page throws back the text it is handed.
+        "/throws": """<label>Password <input type="password"></label><script>
+            document.execCommand = (command, ui, text) => { throw new Error(text); };
+        </script>""",
     }.get(path)
 
 

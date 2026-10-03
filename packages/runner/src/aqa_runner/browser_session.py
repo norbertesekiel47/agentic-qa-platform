@@ -18,6 +18,12 @@ from aqa_core.compiled import Target
 from playwright.async_api import ElementHandle, Error, Frame, Page
 
 from aqa_runner import settling
+from aqa_runner.bound_secrets import (
+    BoundSecret,
+    SecretRefusedError,
+    described,
+    field_matches,
+)
 from aqa_runner.document_origins import (
     DocumentChangedError,
     PolicyEvent,
@@ -28,6 +34,7 @@ from aqa_runner.document_origins import (
     document_origin,
     frame_origin,
     navigable_origin,
+    reaches,
 )
 from aqa_runner.egress import EgressPolicy
 from aqa_runner.egress_proxy import EgressProxy
@@ -379,6 +386,52 @@ class BrowserSession:
                 )
             return window
 
+    async def fill_secret(self, element: ElementHandle, secret: BoundSecret) -> Window:
+        """Fill `element` with `secret`'s value, as `fill` fills, once the page
+        and the element's frame are checked as for every action, and only
+        where its binding allows (ADR-0026, Test secrets; SECURITY §5): the
+        page is on one of its destinations, the element's frame is on the
+        page's own origin, and the element is the field the binding names.
+        Otherwise `SecretRefusedError`, before anything is filled.
+
+        A fill that fails raises Playwright's `Error` with a message of ours,
+        and keeps nothing of Playwright's: the page's own scripts can throw
+        back the value they were handed."""
+        async with self._turn:
+            frame = await self._require_actionable(element)
+            page = await frame_origin(self.page.main_frame)
+            origins = secret.destination.origins
+            if page not in origins:
+                raise SecretRefusedError(
+                    f"fill_secret refused {secret.name}: the page is on {page}, "
+                    f"which isn't one of its destinations: {', '.join(origins)}"
+                )
+            if (outside := await self._outside_the_page(frame, page)) is not None:
+                raise SecretRefusedError(
+                    f"fill_secret refused {secret.name}: the field is in {outside}, "
+                    f"not on the page's origin, {page}"
+                )
+            if not await field_matches(frame, element, secret.destination.field):
+                raise SecretRefusedError(
+                    f"fill_secret refused {secret.name}: the field isn't "
+                    f"{described(secret.destination.field)}"
+                )
+            window = self._traffic.next_window()
+            try:
+                filled = await element.evaluate(FILL, secret.value.get_secret_value())
+            except Error:
+                # Playwright's general error type: the page broke the fill,
+                # or went. Its message can hold what the page's scripts threw,
+                # which can be the value, so it is dropped here, unbound, and
+                # the error below has no context to show it.
+                filled = False
+            if not filled:
+                raise Error(
+                    f"fill_secret: the field didn't take {secret.name}: it takes no "
+                    "text, its page changed the value, or its page broke the fill"
+                )
+            return window
+
     async def select(self, element: ElementHandle, option: str) -> Window:
         """Select the option of `element` whose value or label is `option`,
         once the page and the element's frame are checked."""
@@ -589,10 +642,11 @@ class BrowserSession:
             self.policy_events.add(PolicyEvent("popup", url, origin))
         await popup.close()
 
-    async def _require_actionable(self, element: ElementHandle) -> None:
+    async def _require_actionable(self, element: ElementHandle) -> Frame:
         """Record and raise a policy event unless the page, and the frame of
         `element`, are on the run's allowed origins, and `element` contains
-        no frame that isn't, at any depth. An element in no frame is on none.
+        no frame that isn't, at any depth; that frame otherwise. An element
+        in no frame is on none.
 
         An action lands wherever the browser draws at the point it uses:
         Playwright's hit check accepts the element or any descendant, and
@@ -600,6 +654,27 @@ class BrowserSession:
         element around another origin's frame lands in that frame."""
         frame = await self._require_allowed_element(element)
         await self._require_no_foreign_frame(element, frame)
+        return frame
+
+    async def _outside_the_page(self, frame: Frame, page: str | None) -> str | None:
+        """Which of `frame` and the frames around it, up to the page, isn't
+        on `page`, the page's origin, as a refusal says it; None when all
+        are. Each must also be one its parent reaches: a frame at a URL on
+        the page's origin is on an opaque origin when it is sandboxed, by
+        its frame's attribute or its response's CSP, which is where an app
+        puts content it doesn't trust. The origins are checked first, so
+        only documents on the page's origin are asked whether they reach."""
+        frames = []
+        while frame.parent_frame is not None:
+            frames.append(frame)
+            frame = frame.parent_frame
+        for framed in frames:
+            if (here := await frame_origin(framed)) != page:
+                return f"a frame on {here or 'no origin a run could allow'}"
+        for framed in frames:
+            if not await reaches(framed):
+                return "a frame the page can't reach"
+        return None
 
     async def _require_allowed_element(self, element: ElementHandle) -> Frame:
         """Record and raise a policy event unless the page, and the frame of
