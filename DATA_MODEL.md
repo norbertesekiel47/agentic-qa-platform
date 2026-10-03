@@ -160,17 +160,22 @@ Free-form notes for humans. The agent never reads the body; anything that affect
 
 | Name | Fails when |
 |---|---|
-| `console_errors` | The console records an error-level message: the page's own `console.error` calls, and the browser's own error entries such as "Failed to load resource" for a 4xx or 5xx response |
+| `console_errors` | The console records an error-level message: the page's own `console.error` calls, and the browser's own error entries such as "Failed to load resource" for a 4xx or 5xx response or a failed load |
 | `js_exceptions` | The page throws an uncaught exception or leaves a promise rejection unhandled |
 | `http_5xx` | Any response to the browser has a 5xx status |
-| `broken_images` | An image fails to load |
+| `broken_images` | An image fails to load: an `<img>` fires its `error` event, whether its load failed or what loaded isn't an image |
 
-`console_errors` and `js_exceptions` never overlap: an uncaught exception is not a console error, even though DevTools prints it in the console. In Playwright terms, `console_errors` counts `console` events of type `error` and `js_exceptions` counts `pageerror` events. The benchmark manifest's invariant ground truth (§8) relies on this split.
+`console_errors` and `js_exceptions` never overlap: an uncaught exception is not a console error, even though DevTools prints it in the console. In Playwright terms, `console_errors` counts `console` events of type `error` and `js_exceptions` counts `pageerror` events. The benchmark manifest's invariant ground truth (§8) relies on this split. A 5xx response or a missing image in the page's own documents also logs the browser's "Failed to load resource" entry, so it fires `console_errors` too, as conduit-bug-003 names it in §8.
 
-**Egress blocks and invariants (ADR-0026).**
-- *What counts as a block:* a request to a host that is neither an allowed origin nor a subresource host (§9).
+**How the invariants are observed (M1, `aqa_runner.invariants`, ADR-0024's #47 amendment).** The browser session installs the observers on its page before the first navigation, and they collect until the session ends, reloads included. Once the run is over, the spec's `invariants` decide which count: each invariant is `held`, `violated` or `disabled`, with the first 100 things it saw, each cut to 200 characters, and how many there were.
+- *Where:* every frame of the page and its dedicated workers, as Playwright reports them on the page: console messages, page errors and responses. A dedicated worker's failed load logs no console entry there (Playwright 1.63). Broken images count only in documents on an allowed origin, so not in a subresource host's frame or a `data:` frame. Popups are never observed: the session closes them.
+- *Broken images* are seen from a script in an isolated world of the page's own, which reports every trusted `error` event of an `<img>`. Nothing the page's scripts do can stop a report, and a made-up `error` event is no broken image. An image inside a shadow root isn't seen (its `error` event doesn't leave the root), and neither is one in a frame on an allowed origin of another site, which runs out of the page's process.
+
+**Egress blocks and invariants (ADR-0026, and its #47 amendment).**
+- *What counts as a block:* a request to a host that is neither an allowed origin nor a subresource host (§9). It is read from both of the run's records, routing's and the egress gate's refusals of a host, each host and port once. Also a block, since it may hide one: routing's record overflowing, and an attempt that names no host an origin could write, such as a scheme the proxy can't carry. A refusal by the IP policy (an allowed host resolving to an address it may not use) is no block, and no infrastructure event either.
 - *Effect on the run:* the run refuses the request, and the block alone keeps the run from passing. It is not an invariant failure and not a finding.
-- *Expected-blocked hosts* (§9) are the exception. For them, the block's direct symptoms don't count against `console_errors` or `broken_images`: its console error and a broken image, matched by the failed request, never by console text.
+- *Expected-blocked hosts* (§9) are the exception: their blocks don't keep the run from passing.
+- *Direct symptoms:* the symptoms of a request the run refused never count against `console_errors` or `broken_images`, an expected-blocked host's or any other's: the browser's console entry for it, and a broken image whose load it was, straight or at a redirect hop. Both are matched by the request's URL, read as routing reads it, never by console or failure text. A console call of the page's own always counts, whatever URL it names.
 - *Indirect effects* always count, such as app code failing because a blocked script never loaded.
 
 **Parsing (M1).** Specs are read before a browser or a model is involved, and every problem is reported at once, each naming the file, the key and the problem. An invalid project config doesn't hide the specs' problems.
