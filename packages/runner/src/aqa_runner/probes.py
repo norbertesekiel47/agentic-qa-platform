@@ -64,26 +64,28 @@ async def read_stable(gate: EgressGate, url: str, json_path: str) -> JsonValue:
     (`EgressUpstreamError`), both recorded with the gate, and `ValueError`
     for a URL no request line carries, which a spec's probe never is
     (`aqa_core.schema.ProbeEndpoint`)."""
-    reads: list[str] = []
+    reads = 0
+    previous: JsonValue = None
     limit = asyncio.timeout(STABLE_SECONDS)
     try:
         async with limit:
             while True:
                 value = await _read(gate, url, json_path)
-                reads.append(canonical_hash(value))
-                if reads[-2:-1] == reads[-1:]:
+                reads += 1
+                if reads > 1 and same(previous, value):
                     return value
+                previous = value
                 await asyncio.sleep(READ_SECONDS)
     except TimeoutError:
         if not limit.expired():
             raise  # not the read's own bound
-        if len(reads) < 2:
+        if reads < 2:
             raise ProbeError(
                 f"the probe didn't answer twice within {STABLE_SECONDS:g} s"
             ) from None
         raise ProbeUnstableError(
             f"the probe's value never held still within {STABLE_SECONDS:g} s: "
-            f"{len(reads)} reads, none the same as the one before"
+            f"{reads} reads, none the same as the one before"
         ) from None
 
 
