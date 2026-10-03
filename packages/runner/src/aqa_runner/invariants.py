@@ -22,7 +22,6 @@ or failure text (ADR-0026's #47 amendment). What the page then does without
 what it was refused, such as a script that throws, still counts. Popups are
 never observed: the session closes them (ADR-0026's amendments)."""
 
-import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, Self, get_args
@@ -50,14 +49,9 @@ BINDING = "aqaBrokenImage"
 # data: URL can run to megabytes.
 URL_CHARS = 2048
 
-# Notes of image loads refused at a redirect hop, which wait for their
-# image's error: how many URLs keep notes at most, and how many each (the
-# oldest goes first), and how long a note waits, in seconds. Chromium
-# reports the error milliseconds after the failed request (measured), so an
-# older note is one no error came for, such as a CSS image's, and excuses
-# nothing.
+# How many URLs whose latest image load was refused at a redirect hop are
+# kept at most; the oldest goes first.
 PENDING_LOADS = 100
-NOTE_SECONDS = 5
 
 # The broken-image reporter, run in `WORLD` in every document of the page
 # before the document's own scripts. Its capture listener on the window is
@@ -109,10 +103,12 @@ class Observers:
         self.seen: dict[InvariantName, Records[str]] = {
             name: Records[str]() for name in INVARIANTS
         }
-        # Image loads the run refused at a redirect hop, by the URL each
-        # started at (`_load_key`), the image's `currentSrc`, with when each
-        # was noted (`time.monotonic`), oldest first.
-        self._refused_hops: dict[str, list[float]] = {}
+        # The URLs (`_load_key`), each an image's `currentSrc`, whose latest
+        # image load the run refused at a redirect hop, oldest first. Blink
+        # loads a URL once for all the images that want it at the time
+        # (measured), so every one of their errors is that load's; an image
+        # error at the URL after a newer load has started is the newer one's.
+        self._refused_hops: dict[str, None] = {}
 
     @classmethod
     async def watch(cls, page: Page, policy: EgressPolicy) -> Self:
@@ -125,6 +121,8 @@ class Observers:
         # Playwright 1.63 reports a dedicated worker's responses on the page.
         # https://playwright.dev/python/docs/api/class-page#page-event-response
         page.on("response", observers._response)
+        # https://playwright.dev/python/docs/api/class-page#page-event-request
+        page.on("request", observers._started)
         # https://playwright.dev/python/docs/api/class-page#page-event-request-failed
         page.on("requestfailed", observers._failed)
         # The page's own CDP session, for the reporter's world: Playwright's
@@ -170,12 +168,19 @@ class Observers:
         if 500 <= response.status <= 599:
             self._add("http_5xx", f"{response.status} {response.url}")
 
+    def _started(self, request: Request) -> None:
+        """A new image load of a URL, not a redirect's next hop: the image
+        errors at that URL from now on are this load's, not those of a
+        refused load before it."""
+        if request.resource_type == "image" and request.redirected_from is None:
+            self._refused_hops.pop(_load_key(request.url), None)
+
     def _failed(self, request: Request) -> None:
         """Note an image load the run refused at a redirect hop, under the
-        URL it started at, so its image's broken image is left out once.
-        Chromium reports the failed request before the image's `error`
-        event, which runs the reporter (measured). A load refused straight
-        needs no note: its own URL says so."""
+        URL it started at, so the broken images of the images that share
+        it are left out. Chromium reports the failed request before an
+        image's `error` event, which runs the reporter (measured). A load
+        refused straight needs no note: its own URL says so."""
         first = request.redirected_from
         if request.resource_type != "image" or first is None:
             return
@@ -183,10 +188,10 @@ class Observers:
             return
         while first.redirected_from is not None:
             first = first.redirected_from
-        key, now = _load_key(first.url), time.monotonic()
-        # The newest URL last, so the oldest is the first to go.
-        notes = [*_waiting(self._refused_hops.pop(key, []), now), now]
-        self._refused_hops[key] = notes[-PENDING_LOADS:]
+        key = _load_key(first.url)
+        # The newest last, so the oldest is the first to go.
+        self._refused_hops.pop(key, None)
+        self._refused_hops[key] = None
         if len(self._refused_hops) > PENDING_LOADS:
             del self._refused_hops[next(iter(self._refused_hops))]
 
@@ -195,19 +200,15 @@ class Observers:
         one of the run's allowed origins (a serialized origin is written as
         an allowed origin is: a subresource host's frame, or a data: frame,
         is on none), unless its load was one the run refused: straight, or
-        at a redirect hop whose note still waits, which it takes."""
+        at a redirect hop, as its URL's latest load."""
         payload = event.get("payload")
         if event.get("name") != BINDING or not isinstance(payload, str):
             return
         origin, _, url = payload.partition("\n")
         if origin not in self._policy.allowed_origins or self._refused(url):
             return
-        key = _load_key(url)
-        waiting = _waiting(self._refused_hops.pop(key, []), time.monotonic())
-        if not waiting:
+        if _load_key(url) not in self._refused_hops:
             self._add("broken_images", url)
-        elif len(waiting) > 1:
-            self._refused_hops[key] = waiting[1:]
 
     def _refused(self, url: str) -> bool:
         """Whether a request for `url` is one the run refuses, read as
@@ -223,11 +224,6 @@ class Observers:
 
     def _add(self, name: InvariantName, what: str) -> None:
         self.seen[name].add(what[:TEXT_CHARS])
-
-
-def _waiting(notes: list[float], now: float) -> list[float]:
-    """The notes no older than `NOTE_SECONDS` at `now`."""
-    return [noted for noted in notes if now - noted <= NOTE_SECONDS]
 
 
 def _load_key(url: str) -> str:
