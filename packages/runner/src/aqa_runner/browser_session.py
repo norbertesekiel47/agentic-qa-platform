@@ -414,6 +414,16 @@ class BrowserSession:
             await self.page.keyboard.press(key)
             return window
 
+    def limit_waits(self, *, action_seconds: float, navigation_seconds: float) -> None:
+        """Bound how long an action waits (for its element to be actionable,
+        or an option to appear) and how long `navigate` and `reload` wait,
+        in seconds, instead of Playwright's 30 s for each. A wait holds the
+        session's lock.
+        https://playwright.dev/python/docs/api/class-page#page-set-default-timeout
+        https://playwright.dev/python/docs/api/class-page#page-set-default-navigation-timeout"""
+        self.page.set_default_timeout(action_seconds * 1000)
+        self.page.set_default_navigation_timeout(navigation_seconds * 1000)
+
     async def settle(self, window: Window) -> Settled:
         """Wait until the action whose settle window is `window` has settled
         (`aqa_runner.settling.settle`): `"idle"` once its requests have
