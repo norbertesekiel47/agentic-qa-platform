@@ -22,6 +22,7 @@ or failure text (ADR-0026's #47 amendment). What the page then does without
 what it was refused, such as a script that throws, still counts. Popups are
 never observed: the session closes them (ADR-0026's amendments)."""
 
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, Self, get_args
@@ -49,10 +50,14 @@ BINDING = "aqaBrokenImage"
 # data: URL can run to megabytes.
 URL_CHARS = 2048
 
-# How many notes of image loads refused at a redirect hop wait at most for
-# their image's error; the oldest goes first. An image that reports no error,
-# such as a CSS image, leaves its note waiting for nothing.
+# Notes of image loads refused at a redirect hop, which wait for their
+# image's error: how many URLs keep notes at most, and how many each (the
+# oldest goes first), and how long a note waits, in seconds. Chromium
+# reports the error milliseconds after the failed request (measured), so an
+# older note is one no error came for, such as a CSS image's, and excuses
+# nothing.
 PENDING_LOADS = 100
+NOTE_SECONDS = 5
 
 # The broken-image reporter, run in `WORLD` in every document of the page
 # before the document's own scripts. Its capture listener on the window is
@@ -105,9 +110,9 @@ class Observers:
             name: Records[str]() for name in INVARIANTS
         }
         # Image loads the run refused at a redirect hop, by the URL each
-        # started at (`_load_key`), the image's `currentSrc`, and how many
-        # wait for their image's error there: the latest `PENDING_LOADS` URLs.
-        self._refused_hops: dict[str, int] = {}
+        # started at (`_load_key`), the image's `currentSrc`, with when each
+        # was noted (`time.monotonic`), oldest first.
+        self._refused_hops: dict[str, list[float]] = {}
 
     @classmethod
     async def watch(cls, page: Page, policy: EgressPolicy) -> Self:
@@ -178,9 +183,10 @@ class Observers:
             return
         while first.redirected_from is not None:
             first = first.redirected_from
-        key = _load_key(first.url)
-        # The newest last, so the oldest is the first to go.
-        self._refused_hops[key] = self._refused_hops.pop(key, 0) + 1
+        key, now = _load_key(first.url), time.monotonic()
+        # The newest URL last, so the oldest is the first to go.
+        notes = [*_waiting(self._refused_hops.pop(key, []), now), now]
+        self._refused_hops[key] = notes[-PENDING_LOADS:]
         if len(self._refused_hops) > PENDING_LOADS:
             del self._refused_hops[next(iter(self._refused_hops))]
 
@@ -189,7 +195,7 @@ class Observers:
         one of the run's allowed origins (a serialized origin is written as
         an allowed origin is: a subresource host's frame, or a data: frame,
         is on none), unless its load was one the run refused: straight, or
-        at a redirect hop a note waits for."""
+        at a redirect hop whose note still waits, which it takes."""
         payload = event.get("payload")
         if event.get("name") != BINDING or not isinstance(payload, str):
             return
@@ -197,13 +203,11 @@ class Observers:
         if origin not in self._policy.allowed_origins or self._refused(url):
             return
         key = _load_key(url)
-        waiting = self._refused_hops.get(key, 0)
-        if waiting > 1:
-            self._refused_hops[key] = waiting - 1
-        elif waiting:
-            del self._refused_hops[key]
-        else:
+        waiting = _waiting(self._refused_hops.pop(key, []), time.monotonic())
+        if not waiting:
             self._add("broken_images", url)
+        elif len(waiting) > 1:
+            self._refused_hops[key] = waiting[1:]
 
     def _refused(self, url: str) -> bool:
         """Whether a request for `url` is one the run refuses, read as
@@ -219,6 +223,11 @@ class Observers:
 
     def _add(self, name: InvariantName, what: str) -> None:
         self.seen[name].add(what[:TEXT_CHARS])
+
+
+def _waiting(notes: list[float], now: float) -> list[float]:
+    """The notes no older than `NOTE_SECONDS` at `now`."""
+    return [noted for noted in notes if now - noted <= NOTE_SECONDS]
 
 
 def _load_key(url: str) -> str:
