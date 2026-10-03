@@ -881,3 +881,15 @@ def test_a_css_value_with_closed_quotes_is_accepted(css: str) -> None:
     script["targets"]["pay_button"]["locators"][1] = {"css": css}
 
     assert CompiledScript.model_validate_json(json.dumps(script))
+
+
+@pytest.mark.parametrize("check", ["network_seen", "network_none"])
+@pytest.mark.parametrize("pattern", ["(", "a{4294967296}", "[[:digit:]]+"])
+def test_a_url_pattern_must_compile_as_a_python_regex(check: str, pattern: str) -> None:
+    script = example()
+    script["assertions"][1].update(check=check, url_pattern=pattern)
+
+    [(location, _, message)] = errors(script)
+
+    assert location == ("assertions", 1, check, "url_pattern")
+    assert "is not a Python regex" in message

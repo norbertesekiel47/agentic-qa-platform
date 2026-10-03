@@ -82,7 +82,7 @@ class PlannedCheck(StrictModel):
     probe: NonEmpty | None = None
     value: ProbeValue | None = None
     method: HttpMethod | None = None
-    url_pattern: NonEmpty | None = None
+    url_pattern: PythonRegex | None = None
     status_class: StatusClass | None = None
 
     @model_validator(mode="after")
