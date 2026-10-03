@@ -414,3 +414,46 @@ The hostile-page suite's WebRTC page sent a packet past the egress proxy on Linu
   - `tests/test_peer_connections.py`, through the packet capture (`tests/peer_connection_scenarios.py`): a session's page makes a peer connection with a data channel and an offer, gathers, then negotiates with a second one and adds remote candidates whose `.local` names it chose. Chromium resolves such a name: with the feature off it would ask the system resolver (mDNSResponder on macOS; on Linux glibc's name services: nss-mdns, resolved or plain DNS), with it on its own mDNS client, either way a query naming what the page chose (the security review's measurement, on macOS without the resolver rule). The launch's resolver rule fails the lookup before either; without it the capture holds DNS queries, one or more for each candidate (measured in an `ubuntu:24.04` container). On every OS gathering completes with no candidate and nothing holds a UDP socket on port 5353: on Linux no socket in the capture's network (`/proc/net`), where every socket is the scenario's; on macOS none of the session's Chromium processes (`lsof`). On Linux, nothing joined the mDNS group and the capture holds no packet but TCP. macOS's own mDNSResponder is in that group on every interface, so there joins can't be told apart. Red on main on both OSes: on Linux the socket, the join on the veth and the report; on macOS ten sockets on 5353.
   - `test_transports.py`: the command-line test expects the switch, and the drift test above.
 - **Residual.** Proven on the headless shell only, as the launch's WebRTC switches are. Full Chromium (headed, as `PWDEBUG` forces, or by `channel`) reads the same switch, but nothing here runs it. After a Playwright upgrade that adds a feature to its list, that feature stays on until `DISABLED_FEATURES` follows, since the launch's switch wins; the drift test fails meanwhile.
+
+## Amendment (2026-10-02): hostile pages (#43)
+
+The Decision's egress tests: for each way a page might send data out, a hostile page in a real browser session tries it, and nothing reaches a disallowed host or leaves except through the egress proxy, observed at the packet level on Linux (the amendment on observing packets). This completes #43.
+
+- **The suite.** `tests/test_hostile_pages.py` runs each method's page (`tests/hostile_pages.py`) through `observe`, in the scenario file `tests/hostile_scenarios.py`: a real `open_browser_session` behind the egress proxy, with an allowed origin on `127.0.0.1` that serves the page, a 307 `/redirect?to=` (which keeps a POST and its body) and the page's other scripts. The methods and their attempts:
+  - fetch and XHR: straight to a canary, and through a redirect hop;
+  - form POST: into a frame, straight and through a 307 hop;
+  - WebSocket: from the page, from a dedicated worker, and as a `WebSocketStream`;
+  - WebRTC: STUN and TURN over UDP, and TURN over TCP;
+  - QUIC: WebTransport, and HTTP/3 to an allowed https origin that answers `Alt-Svc: h3` naming a UDP canary;
+  - IPv6 literals: `[::1]` and the IPv4-mapped `[::ffff:7f00:1]` (which reaches 127.0.0.1's canary), a redirect hop to `[::1]`, a worker's socket, and STUN;
+  - DNS prefetch: `dns-prefetch` and `preconnect` by names only the proxy could resolve, `preconnect` and `prefetch` to canaries;
+  - service workers: registration plainly and through the prototype, by a worker script that would send to a canary;
+  - non-HTTP schemes: `ftp:`, `gopher:`, a custom scheme (`aqa-exfil:`), `file:` (local and with a host) and `chrome:`, each by fetch and in a frame.
+- **Canaries.** Each attempt aims at a TCP or UDP listener of its own on `127.0.0.1` or `::1`, written as an address literal, which counts every connection or datagram. So each record names one attempt, and an attempt that got out would be heard on every OS.
+- **What every OS checks.**
+  - No canary heard anything.
+  - Routing's records and the gate's refusals are exactly the expected sets of distinct records (the coordinator's ruling: a missing record and an extra one both fail). Routing records an IPv4-mapped literal with no host, since no origin writes one (the amendment on routing).
+  - What the page saw: requests failed, the routed socket closed, the worker's socket errored, the stream failed, gathering produced no candidate, both registrations were refused with `SecurityError` and the worker script was never served, every scheme failed.
+  - Every connection the allowed origin accepted is one the egress proxy opened (below).
+- **What only Linux checks:** every packet in the capture belongs to a TCP connection to the proxy's listener or to one the proxy opened. So no UDP (STUN, TURN, QUIC, mDNS), no DNS (the prefetch names, secure DNS), no IGMP or ICMP, no IPv6, and no TCP to anything the proxy didn't open, to hosts no canary listens on included. macOS has no capture, so there the canaries, records and origin are the evidence (the amendment on observing packets).
+- **Attribution.** Packets name addresses and ports, not processes, and in the capture's network a browser connecting straight to an allowed origin looks like the proxy's own upstream connection (that amendment's *Residual*). `AttributedGate`, a test subclass of `EgressGate` in the scenario file, calls the gate's own `connect` and records the local address and port of every upstream connection it opened. A packet is the proxy's when one of its ends is the proxy's listener or one of those sockets, and the origin's connection is the proxy's when its peer is one of them. *The control*, `test_a_direct_connection_to_an_allowed_origin_is_caught`: the session loads the origin through the proxy, then a context with no proxy, in a browser launched without the launch-level proxy (`test_transports.WithoutTheSwitches`), loads the same origin straight. Both checks flag exactly that connection, at the origin on every OS and in the packets on Linux, and accept the proxied one.
+- **A test double for QUIC, `TrustingTheFixture`.** HTTP/3 needs an https origin whose `Alt-Svc` Chromium honours, so Chromium must trust the fixture's certificate: with `--ignore-certificate-errors` it never tried HTTP/3 (measured). The double launches through `aqa_runner.sandbox.launch` and its sandbox check, with everything `launch` asks for plus one switch, `--ignore-certificate-errors-spki-list` for the fixture's key, and lives only in root `tests/` (the coordinator's conditions). *Its control*, `test_the_quic_page_sends_quic_without_the_protections`: the same trust without the switches, the launch-level proxy or a context proxy, and the page's WebTransport and HTTP/3 send QUIC Initials to the canaries (measured on macOS and in the Linux capture), so the protected run's silence means something.
+- **Measured, beyond the tests' controls** (macOS; the protected runs again on Linux):
+  - TURN over TCP goes to the proxy as `CONNECT` to the TURN server and is refused; without the protections its Allocate reaches the canary.
+  - A worker's socket and a `WebSocketStream` meet only the proxy, which refuses them; without the protections the stream's upgrade reaches the canary.
+  - `prefetch` is routed (resource type `other`) and aborted; `preconnect` sends the proxy no request and nothing reaches its canary; `dns-prefetch` sends no query (Linux).
+  - Chromium refuses every non-HTTP scheme itself, before routing or the proxy sees it, with the protections and without them.
+- **Each method's protections, and the mutants that remove them** (Phase 4; each method's test fails both when the layer that acts first is removed and when every layer is):
+  - fetch, XHR, form POST, prefetch, IPv6 fetches: routing first (passing everything leaves a record missing and adds a gate refusal), then the proxy (a policy that allows every host lets the hop and the straight attempts reach their canaries);
+  - WebSocket: socket routing for the page's socket, the proxy for the worker's and the stream's;
+  - WebRTC: the WebRTC switches for UDP, the proxy for TURN over TCP;
+  - QUIC: the proxy, then `--disable-quic`; removing both sends QUIC to the canaries;
+  - DNS prefetch by name: the resolver rule (only Linux sees the query);
+  - service workers: the `register` lock (Playwright's own block alone lets the prototype's method register);
+  - every method: the session's proxy, whose removal fails the attribution check.
+  - *Equivalent while another layer holds, so not survivors* (the coordinator's ruling): dropping `--disable-quic` alone, since every context has a proxy and Chromium sends no QUIC through one (the launch amendment). *Not applicable:* non-HTTP schemes, which no layer of ours acts on: Chromium refuses them, and the test pins that against upgrades.
+- **AC4.** The suite is in root `tests/`, which CI's required `python` job runs under `uv run pytest --cov` (ADR-0029), so it blocks merges with no workflow change. It adds about a dozen Chromium sessions in network namespaces, under a minute.
+- **Residual.**
+  - Methods the list doesn't name (`sendBeacon`, images, stylesheets, `EventSource`) take the same HTTP path as fetch, through routing and the proxy.
+  - Proven on the headless shell only; full Chromium is untested, as the launch amendment says.
+  - The capture's own limits are that amendment's.
