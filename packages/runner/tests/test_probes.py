@@ -7,6 +7,7 @@ on the OS that runs it: Linux in CI, macOS locally."""
 import asyncio
 import contextlib
 import json
+import math
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -154,6 +155,30 @@ def test_a_null_value_is_read_twice_too() -> None:
 
     assert value is None
     assert len(paths) == 2
+
+
+@pytest.mark.parametrize(
+    ("number", "value"),
+    [
+        ("2.5", 2.5),
+        ("-1.25e2", -125.0),
+        # Zero written with a fraction or an exponent is zero, not a number
+        # too small for a float.
+        ("0.0e-400", 0.0),
+        ("-0.0", -0.0),
+        ("0E5", 0.0),
+    ],
+)
+def test_a_number_with_a_fraction_or_an_exponent_reads_as_a_float(
+    number: str, value: float
+) -> None:
+    read_value, _ = read(
+        lambda _path, _index: answer(f'{{"amount": {number}}}'), "$.amount"
+    )
+
+    assert isinstance(read_value, float)
+    assert read_value == value
+    assert math.copysign(1, read_value) == math.copysign(1, value)
 
 
 def test_a_body_nested_as_deep_as_a_probe_may_reads() -> None:
