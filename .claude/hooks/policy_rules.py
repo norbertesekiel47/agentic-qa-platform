@@ -94,9 +94,9 @@ def path_pattern(shapes: NameShapes) -> AnyCase:
 
 # In a shell command a name also ends at whitespace, a quote or a shell
 # operator, and a {name} part may hold any other character (`test_*.py`), up
-# to a file name's 255.
+# to a file name's 255, which case folding can triple.
 _BREAK = r"\s'\"`;&|<>()"
-_SHELL_NAME = rf"[^/{_BREAK}]{{0,255}}"
+_SHELL_NAME = rf"[^/{_BREAK}]{{0,765}}"
 # A name starts where no word, "." or "-" character runs into it, so not inside
 # `x.ruff.toml`; or after what the shell takes off the front of a word: an
 # attached short option (`-o.claude/settings.json`) or a variable, which may be

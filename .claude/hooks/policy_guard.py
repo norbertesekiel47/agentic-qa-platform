@@ -104,6 +104,10 @@ Known gaps, stated rather than hidden
   matcher to ``toBeTruthy``) keeps the count level and is not detected.
 * In files, only known credential formats are recognised; the generic
   ``PASSWORD=...`` detection runs on shell commands only.
+* An edit's path that reaches the project through another name for one of its
+  directories, not a case variant (macOS's ``/System/Volumes/Data`` firmlink,
+  ``/.vol/``, ``/.nofollow/``), counts as outside the project and is not
+  checked.
 * Shell writes are recognised heuristically. The Stop scan backstops rules
   1-3; rules 4-6 have no backstop for a write through an opaque script. A
   watched file goes unseen when a ``find -delete`` or a script deletes it, a
