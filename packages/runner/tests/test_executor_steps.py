@@ -84,13 +84,6 @@ def test_unsupported_steps_and_checks_are_refused_by_name_before_the_browser_ope
                 "value": "Ada",
                 "side_effect": False,
             },
-            {
-                "seq": 2,
-                "action": "fill_secret",
-                "target": "name",
-                "secret": "TEST_PASSWORD",
-                "side_effect": False,
-            },
             # Tab held down could move the focus before the key goes.
             {"seq": 3, "action": "press", "key": "Tab+a", "side_effect": False},
             # Every modifier held before one key is a key press can take.
@@ -148,8 +141,7 @@ def test_unsupported_steps_and_checks_are_refused_by_name_before_the_browser_ope
         run(app, tmp_path, script)
 
     assert refused.value.problems == (
-        "steps[1] (seq 2): fill_secret is not run until #49",
-        "steps[2] (seq 3): press takes one key, with only modifiers held before it: 'Tab+a'",
+        "steps[1] (seq 3): press takes one key, with only modifiers held before it: 'Tab+a'",
         "assertions[1] (a2): network_none is not evaluated until #48",
         "assertions[2] (a3): network_seen is not evaluated until #48",
         "assertions[3] (a4): probe_equals_baseline is not evaluated until #48",

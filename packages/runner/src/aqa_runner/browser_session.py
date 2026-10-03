@@ -38,7 +38,12 @@ from aqa_runner.locators import Absent, Resolved, Unresolved, Use, rendered_text
 from aqa_runner.locators import resolve as resolve_target
 from aqa_runner.routing import install_routes
 from aqa_runner.sandbox import Chromium, launch
-from aqa_runner.secret_fields import SecretRefusedError, describe_field, field_matches
+from aqa_runner.secret_fields import (
+    SecretNotFilledError,
+    SecretRefusedError,
+    describe_field,
+    field_matches,
+)
 from aqa_runner.settling import Settled, Traffic, Window
 
 # The settings every run uses unless the caller passes its own (ADR-0025).
@@ -393,9 +398,10 @@ class BrowserSession:
         element is the field the binding names. Otherwise
         `SecretRefusedError`, before anything is filled.
 
-        Any other failure, of a check or of the fill, raises Playwright's
-        `Error` with a message of ours, and keeps nothing of Playwright's: the
-        page's own scripts can throw back this value, or one filled before."""
+        Any other failure, of a check or of the fill, raises
+        `SecretNotFilledError`, Playwright's `Error` type with a message of
+        ours, and keeps nothing of Playwright's: the page's own scripts can
+        throw back this value, or one filled before."""
         async with self._turn:
             try:
                 window = await self._fill_where_bound(element, secret)
@@ -407,7 +413,7 @@ class BrowserSession:
                 # to show it.
                 window = None
             if window is None:
-                raise Error(
+                raise SecretNotFilledError(
                     f"fill_secret: {secret.name} wasn't filled: the field takes no "
                     "text, its page changed the value, or the page broke or closed "
                     "during the fill or its checks"

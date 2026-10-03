@@ -8,6 +8,7 @@ It acts and observes only through the browser session's methods, which check
 every document they touch (ADR-0026's amendments on document origins)."""
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal, assert_never, overload
@@ -29,9 +30,10 @@ from aqa_core.compiled import (
 )
 from aqa_core.config import ProjectConfig
 from aqa_core.project import SpecError, path_on_origin, start_url
-from aqa_core.spec import Spec
+from aqa_core.spec import Spec, secret_references
 from playwright.async_api import BrowserType, ElementHandle, Error
 
+from aqa_runner.bound_secrets import BoundSecret, bound_secrets
 from aqa_runner.browser_session import BrowserSession, one_key, open_browser_session
 from aqa_runner.document_origins import (
     DocumentChangedError,
@@ -42,6 +44,7 @@ from aqa_runner.egress import EgressGate, InfrastructureEvent
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.locators import Absent, Miss, Resolved, Unresolved, Use
 from aqa_runner.run_record import RunRecord
+from aqa_runner.secret_fields import SecretNotFilledError, SecretRefusedError
 from aqa_runner.settling import Settled, Window
 from aqa_runner.text_search import SearchTimeoutError, text_matches, url_matches
 
@@ -63,8 +66,12 @@ MARGIN_SECONDS = 1
 # can hold what the page chose.
 REASON_CHARS = 200
 
+# The call a Playwright error's first line names before its message, such as
+# `ElementHandle.evaluate`: Playwright's own words, never the page's.
+PLAYWRIGHT_CALL = re.compile(r"[A-Z][A-Za-z]*\.[a-z][A-Za-z]*(?=: )")
+
 # The steps the executor runs: those that act on a target, and the rest.
-type Targeted = Click | Fill | Select
+type Targeted = Click | Fill | FillSecret | Select
 type Untargeted = Navigate | Reload | Press
 
 # The checks M1 evaluates; #48 adds the others (DATA_MODEL §7).
@@ -97,6 +104,22 @@ class RunSetup:
     config: ProjectConfig
     start: str
     record: RunRecord
+
+
+@dataclass(frozen=True)
+class _Replay:
+    """What every step of one replay shares: its setup, the script's targets,
+    and the test secrets its steps fill, by name, bound for this run."""
+
+    setup: RunSetup
+    targets: Mapping[str, Target]
+    secrets: Mapping[str, BoundSecret]
+
+    @property
+    def withheld(self) -> bool:
+        """Whether Playwright's messages stay out of the run's reasons: a page
+        handed a test secret can throw it back in any later error."""
+        return bool(self.secrets)
 
 
 @dataclass(frozen=True)
@@ -169,8 +192,22 @@ async def replay(
     """Run `script` once for `setup`, through `proxy`, the run's egress
     proxy, whose gate is `gate`, recording each step in the setup's record.
     The session uses `script.browser`, never the project's or the spec's
-    settings (ADR-0025)."""
-    runnable, checks = _accepted(script)
+    settings (ADR-0025).
+
+    Before the browser starts, it binds the test secrets the spec references
+    (`aqa_runner.bound_secrets.bound_secrets`): a missing value raises
+    `MissingSecretError`, and a binding the run doesn't allow `SpecError`."""
+    runnable, checks = _accepted(script, setup.spec)
+    bound = bound_secrets(setup.spec, setup.start)
+    run = _Replay(
+        setup,
+        script.targets,
+        {
+            step.secret: bound[step.secret]
+            for step in runnable
+            if isinstance(step, FillSecret)
+        },
+    )
     record = setup.record
     steps: list[StepResult] = []
     async with open_browser_session(
@@ -205,12 +242,13 @@ async def replay(
                     0, {"action": "navigate", "url": path}, False, NAVIGATION_SECONDS
                 ),
                 lambda: session.navigate(first),
+                withheld=run.withheld,
             )
         )
         for step in runnable:
             if steps[-1].outcome != "completed" or interrupted():
                 break
-            result = await _run(session, setup, script, step, interrupted)
+            result = await _run(session, run, step, interrupted)
             if result is None:
                 break
             steps.append(result)
@@ -220,9 +258,7 @@ async def replay(
                 for check in checks
             )
         else:
-            assertions = await _evaluate_each(
-                session, checks, script.targets, setup.config.budgets.resolve_seconds
-            )
+            assertions = await _evaluate_each(session, checks, run)
         errored = (
             interrupted()
             or any(step.outcome == "failed" for step in steps)
@@ -243,18 +279,23 @@ async def replay(
 
 
 def _accepted(
-    script: CompiledScript,
+    script: CompiledScript, spec: Spec
 ) -> tuple[list[Targeted | Untargeted], list[Evaluated]]:
     """`script`'s steps and assertions, or `SpecError` naming each step and
     check M1 can't run, before anything is opened (ADR-0024's #46
-    amendment)."""
+    amendment), and each `fill_secret` naming a secret `spec` doesn't
+    reference, which has no binding in the run."""
+    referenced = {name for _, name in secret_references(spec.frontmatter)}
     runnable: list[Targeted | Untargeted] = []
     checks: list[Evaluated] = []
     problems: list[str] = []
     for index, step in enumerate(script.steps):
         where = f"steps[{index}] (seq {step.seq})"
-        if isinstance(step, FillSecret):
-            problems.append(f"{where}: fill_secret is not run until #49")
+        if isinstance(step, FillSecret) and step.secret not in referenced:
+            problems.append(
+                f"{where}: fill_secret names {step.secret}, which the spec doesn't "
+                "reference, so this run has no binding for it"
+            )
         elif isinstance(step, Press) and not one_key(step.key):
             problems.append(
                 f"{where}: press takes one key, with only modifiers held before "
@@ -284,22 +325,21 @@ class _UnansweredError(Exception):
 
 
 async def _evaluate_each(
-    session: BrowserSession,
-    checks: list[Evaluated],
-    targets: Mapping[str, Target],
-    budget: float,
+    session: BrowserSession, checks: list[Evaluated], run: _Replay
 ) -> tuple[AssertionResult, ...]:
     """Every assertion, in order, each evaluated once, as the last step left
-    the page; each gets `budget` of its own. First the page must answer one
-    look (its visible text): a URL or a target's state can be read from a
-    page whose renderer has stopped. Once a look at the page raises, what
-    remains isn't evaluated, and each says which assertion's look it was."""
+    the page; each gets the run's `resolve_seconds` of its own. First the
+    page must answer one look (its visible text): a URL or a target's state
+    can be read from a page whose renderer has stopped. Once a look at the
+    page raises, what remains isn't evaluated, and each says which
+    assertion's look it was."""
+    budget = run.setup.config.budgets.resolve_seconds
     try:
         await _bounded(_read(session, budget), budget)
     except (Error, PolicyEventError, DocumentChangedError, _UnansweredError) as error:
         # As below: the page couldn't be looked at, so nothing on it can be
         # evaluated.
-        reason = _described(error)
+        reason = _described(error, withheld=run.withheld)
         return tuple(
             AssertionResult(check.id, "not_evaluated", error=reason) for check in checks
         )
@@ -311,7 +351,7 @@ async def _evaluate_each(
             results.append(AssertionResult(check.id, "not_evaluated", error=reason))
             continue
         try:
-            results.append(await _evaluate(session, check, targets, budget))
+            results.append(await _evaluate(session, check, run.targets, budget))
         except (
             Error,
             PolicyEventError,
@@ -324,7 +364,11 @@ async def _evaluate_each(
             # answer: the look raised, so the check can't be evaluated.
             raised = check.id
             results.append(
-                AssertionResult(check.id, "not_evaluated", error=_described(error))
+                AssertionResult(
+                    check.id,
+                    "not_evaluated",
+                    error=_described(error, withheld=run.withheld),
+                )
             )
     return tuple(results)
 
@@ -439,14 +483,14 @@ async def _absent(
 
 async def _run(
     session: BrowserSession,
-    setup: RunSetup,
-    script: CompiledScript,
+    run: _Replay,
     step: Targeted | Untargeted,
     interrupted: Callable[[], bool],
 ) -> StepResult | None:
     """Resolve `step`'s target, if it has one, then record, dispatch and
     settle it. None when the run was `interrupted` while the target was
     looked for: nothing is dispatched after that."""
+    setup = run.setup
     budget = setup.config.budgets.resolve_seconds
     action = step.model_dump(
         mode="json", exclude={"seq", "side_effect", "side_effect_basis", "satisfies"}
@@ -458,14 +502,17 @@ async def _run(
             setup.record,
             _Dispatch(step.seq, action, step.side_effect, wait),
             lambda: _untargeted(session, step, setup.start),
+            withheld=run.withheld,
         )
     try:
-        found = await _resolve(session, script.targets[step.target], "action", budget)
+        found = await _resolve(session, run.targets[step.target], "action", budget)
     except (Error, PolicyEventError) as error:
         # A look the session refused (a page off the allowed origins), or
         # Playwright's general error type (a crashed page): nothing was
         # dispatched, so there is no intent, and the run stops.
-        return StepResult(step.seq, "failed", error=_described(error))
+        return StepResult(
+            step.seq, "failed", error=_described(error, withheld=run.withheld)
+        )
     if not isinstance(found, Resolved):
         return StepResult(step.seq, "drifted", misses=found.misses)
     if interrupted():
@@ -476,7 +523,8 @@ async def _run(
         _Dispatch(
             step.seq, action, step.side_effect, budget, step.target, found.locator_index
         ),
-        lambda: _targeted(session, step, found.element),
+        lambda: _targeted(session, step, found.element, run.secrets),
+        withheld=run.withheld,
     )
 
 
@@ -492,13 +540,19 @@ def _untargeted(
 
 
 def _targeted(
-    session: BrowserSession, step: Targeted, element: ElementHandle
+    session: BrowserSession,
+    step: Targeted,
+    element: ElementHandle,
+    secrets: Mapping[str, BoundSecret],
 ) -> Awaitable[Window]:
-    """`step`'s action on `element`, its target's, through the session."""
+    """`step`'s action on `element`, its target's, through the session;
+    a `fill_secret` with the secret of that name, bound for the run."""
     if isinstance(step, Click):
         return session.click(element)
     if isinstance(step, Fill):
         return session.fill(element, step.value)
+    if isinstance(step, FillSecret):
+        return session.fill_secret(element, secrets[step.secret])
     return session.select(element, step.option)
 
 
@@ -558,10 +612,13 @@ async def _dispatched(
     record: RunRecord,
     dispatch: _Dispatch,
     act: Callable[[], Awaitable[Window]],
+    *,
+    withheld: bool,
 ) -> StepResult:
     """Record `dispatch`'s intent, then dispatch its step with `act`, giving
     it up to `MARGIN_SECONDS` past its wait, settle it, and record its
-    completion with the locator that found its target."""
+    completion with the locator that found its target. A failed step's
+    reason keeps nothing of Playwright's message when it is `withheld`."""
     seq, index = dispatch.seq, dispatch.locator_index
     record.step_intent(
         seq,
@@ -575,13 +632,13 @@ async def _dispatched(
         async with limit:
             window = await act()
         settled = await session.settle(window)
-    except (Error, PolicyEventError) as error:
+    except (Error, PolicyEventError, SecretRefusedError) as error:
         # Playwright's general error type (a failed navigation, an action
-        # the page refused, a crashed page) or a document off the allowed
-        # origins, raised between the intent and the completion: whether
-        # the action took effect is unknown, so its intent stays unresolved
-        # and the run stops.
-        return StepResult(seq, "failed", error=_described(error))
+        # the page refused, a crashed page), a document off the allowed
+        # origins, or a fill_secret its binding refused, raised between the
+        # intent and the completion: whether the action took effect is
+        # unknown, so its intent stays unresolved and the run stops.
+        return StepResult(seq, "failed", error=_described(error, withheld=withheld))
     except TimeoutError:
         if not limit.expired():
             raise  # not the action's own limit
@@ -593,17 +650,42 @@ async def _dispatched(
 
 
 def _described(
-    error: Error | PolicyEventError | DocumentChangedError | _UnansweredError,
+    error: Error
+    | PolicyEventError
+    | DocumentChangedError
+    | _UnansweredError
+    | SecretRefusedError,
+    *,
+    withheld: bool,
 ) -> str:
     """What raised, as a failed step's or an unevaluated assertion's reason:
     the executor's or the session's own message (a policy event's names
-    only an origin); or the first line of Playwright's, with
-    what isn't printable escaped, at most `REASON_CHARS` in all. The rest of
-    Playwright's message can hold what the page chose (#49 must keep it
-    from a filled secret)."""
-    if isinstance(error, PolicyEventError | DocumentChangedError | _UnansweredError):
+    only an origin, a fill_secret refusal only the secret, origins and
+    field); or the first line of Playwright's, with what isn't printable
+    escaped, at most `REASON_CHARS` in all. The rest of Playwright's message
+    can hold what the page chose.
+
+    When `withheld`, in a run whose script fills a test secret, Playwright's
+    message is left out altogether, keeping only its error type and the call
+    it names: a page handed a value can throw it back from any later call,
+    encoded as it likes (ADR-0026's fill_secret amendment)."""
+    if isinstance(
+        error,
+        PolicyEventError
+        | DocumentChangedError
+        | _UnansweredError
+        | SecretRefusedError
+        | SecretNotFilledError,
+    ):
         return str(error)
     line = str(error).split("\n", 1)[0]
+    if withheld:
+        call = PLAYWRIGHT_CALL.match(line)
+        named = f"{call[0]}: " if call else ""
+        return (
+            f"{type(error).__name__}: {named}the rest is withheld, since the page "
+            "was handed a test secret"
+        )
     shown = "".join(
         char if char.isprintable() else char.encode("unicode_escape").decode("ascii")
         for char in line
