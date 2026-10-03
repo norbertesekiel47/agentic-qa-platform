@@ -11,9 +11,10 @@ from pathlib import Path
 import pytest
 from aqa_core.config import RoleField
 from aqa_core.project import SecretDestination
-from aqa_runner.bound_secrets import BoundSecret, SecretRefusedError, bound_secrets
+from aqa_runner.bound_secrets import BoundSecret, bound_secrets
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.document_origins import PolicyEvent, PolicyEventError
+from aqa_runner.secret_fields import SecretRefusedError
 from playwright.async_api import ElementHandle, Error
 from pydantic import SecretStr
 

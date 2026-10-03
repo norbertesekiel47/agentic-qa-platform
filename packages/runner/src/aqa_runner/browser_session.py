@@ -18,12 +18,7 @@ from aqa_core.compiled import Target
 from playwright.async_api import ElementHandle, Error, Frame, Page
 
 from aqa_runner import settling
-from aqa_runner.bound_secrets import (
-    BoundSecret,
-    SecretRefusedError,
-    described,
-    field_matches,
-)
+from aqa_runner.bound_secrets import BoundSecret
 from aqa_runner.document_origins import (
     DocumentChangedError,
     PolicyEvent,
@@ -33,8 +28,8 @@ from aqa_runner.document_origins import (
     Records,
     document_origin,
     frame_origin,
+    frames_off_origin,
     navigable_origin,
-    reaches,
 )
 from aqa_runner.egress import EgressPolicy
 from aqa_runner.egress_proxy import EgressProxy
@@ -42,6 +37,7 @@ from aqa_runner.locators import Absent, Resolved, Unresolved, Use, rendered_text
 from aqa_runner.locators import resolve as resolve_target
 from aqa_runner.routing import install_routes
 from aqa_runner.sandbox import Chromium, launch
+from aqa_runner.secret_fields import SecretRefusedError, describe_field, field_matches
 from aqa_runner.settling import Settled, Traffic, Window
 
 # The settings every run uses unless the caller passes its own (ADR-0025).
@@ -407,7 +403,7 @@ class BrowserSession:
                     f"fill_secret refused {secret.name}: the page is on {page}, "
                     f"which isn't one of its destinations: {', '.join(origins)}"
                 )
-            if (outside := await self._outside_the_page(frame, page)) is not None:
+            if (outside := await frames_off_origin(frame, page)) is not None:
                 raise SecretRefusedError(
                     f"fill_secret refused {secret.name}: the field is in {outside}, "
                     f"not on the page's origin, {page}"
@@ -415,7 +411,7 @@ class BrowserSession:
             if not await field_matches(frame, element, secret.destination.field):
                 raise SecretRefusedError(
                     f"fill_secret refused {secret.name}: the field isn't "
-                    f"{described(secret.destination.field)}"
+                    f"{describe_field(secret.destination.field)}"
                 )
             window = self._traffic.next_window()
             try:
@@ -656,26 +652,6 @@ class BrowserSession:
         frame = await self._require_allowed_element(element)
         await self._require_no_foreign_frame(element, frame)
         return frame
-
-    async def _outside_the_page(self, frame: Frame, page: str | None) -> str | None:
-        """Which of `frame` and the frames around it, up to the page, isn't
-        on `page`, the page's origin, as a refusal says it; None when all
-        are. Each must also be one its parent reaches: a frame at a URL on
-        the page's origin is on an opaque origin when it is sandboxed, by
-        its frame's attribute or its response's CSP, which is where an app
-        puts content it doesn't trust. The origins are checked first, so
-        only documents on the page's origin are asked whether they reach."""
-        frames = []
-        while frame.parent_frame is not None:
-            frames.append(frame)
-            frame = frame.parent_frame
-        for framed in frames:
-            if (here := await frame_origin(framed)) != page:
-                return f"a frame on {here or 'no origin a run could allow'}"
-        for framed in frames:
-            if not await reaches(framed):
-                return "a frame the page can't reach"
-        return None
 
     async def _require_allowed_element(self, element: ElementHandle) -> Frame:
         """Record and raise a policy event unless the page, and the frame of

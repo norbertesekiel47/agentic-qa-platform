@@ -6,35 +6,16 @@ browser starts, and hold the values in memory only, behind pydantic's
 `BrowserSession.fill_secret`, never through its environment."""
 
 import os
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from aqa_core.config import SecretField
 from aqa_core.project import SecretDestination, secret_destinations
 from aqa_core.spec import Spec, secret_references
-from aqa_core.text import normalize
-from playwright.async_api import ElementHandle, Frame
 from pydantic import SecretStr
-
-from aqa_runner.locators import name_pattern
 
 # Where a test secret's value comes from, locally and in CI. The prefix keeps
 # a spec from pulling an unrelated variable, such as a cloud key, into a field.
 PREFIX = "AQA_SECRET_"
-
-# The fields a `password` binding names: <input type="password">, whose type
-# HTML reads case-insensitively, as the css engine's `i` flag does.
-CONCEALED_INPUTS = 'css=input[type="password" i]'
-
-# Whether `element` is one of `found`, compared as the same node. It runs in
-# the page's own world: nothing there can redefine `===`, but `found`
-# arrives through it, so this keeps a secret from the wrong field, not from
-# the page, which is on one of its destinations.
-AMONG = """(element, found) => {
-    for (let i = 0; i < found.length; i++) if (found[i] === element) return true;
-    return false;
-}"""
 
 
 @dataclass(frozen=True)
@@ -97,47 +78,3 @@ def bound_secrets(spec: Spec, start: str) -> dict[str, BoundSecret]:
     if problems:
         raise MissingSecretError(problems)
     return bound
-
-
-class SecretRefusedError(Exception):
-    """fill_secret refused to fill a test secret where its binding doesn't
-    allow it: not a policy event, since the page is on an allowed origin, but
-    the wrong page or field for this secret. Nothing was filled, and the
-    message names the secret, never its value."""
-
-
-def described(field: SecretField) -> str:
-    """The field a binding names, as a refusal says it."""
-    if field == "password":
-        return 'an <input type="password">'
-    return f'the {field.role} named "{field.name}"'
-
-
-async def field_matches(
-    frame: Frame, element: ElementHandle, field: SecretField
-) -> bool:
-    """Whether `element`, in `frame`, is the field a binding names: an
-    `<input type="password">` (`CONCEALED_INPUTS`), or an element whose role
-    and accessible name Playwright computes as the binding's, the name
-    compared normalized, as a role locator's is (DATA_MODEL §7).
-
-    The fields are found in Playwright's utility world, which the page's
-    scripts can't reach: `element_handles` resolves its selector there,
-    unlike `evaluate_all`, which resolves it in the page's own world
-    (Playwright 1.63's `FrameSelectors._callOnSelectorInternal` and
-    `queryArrayInMainWorld`)."""
-    if field == "password":
-        candidates = frame.locator(CONCEALED_INPUTS)
-    else:
-        name = normalize(field.name)
-        if not name:
-            return False  # a name that compares as empty names no field
-        # https://playwright.dev/python/docs/api/class-frame#frame-get-by-role
-        candidates = frame.get_by_role(field.role, name=re.compile(name_pattern(name)))
-    # https://playwright.dev/python/docs/api/class-locator#locator-element-handles
-    found = await candidates.element_handles()
-    try:
-        return bool(await element.evaluate(AMONG, found))
-    finally:
-        for handle in found:
-            await handle.dispose()
