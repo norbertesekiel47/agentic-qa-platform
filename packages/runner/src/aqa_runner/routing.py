@@ -13,7 +13,7 @@ from aqa_core.schema import DEFAULT_PORTS, authority
 from playwright.async_api import BrowserContext, Route, WebSocketRoute
 
 from aqa_runner.egress import EgressPolicy, Requester
-from aqa_runner.egress_proxy import BlockedAttempt, BlockedAttempts
+from aqa_runner.egress_proxy import MAX_HOST, BlockedAttempt, BlockedAttempts
 
 # For each scheme the egress proxy carries: the scheme whose origins its
 # authority is read as, and how the proxy sees the connection. Chromium sends
@@ -26,9 +26,6 @@ PROXIED_SCHEMES: dict[str, tuple[str, Requester]] = {
     "ws": ("http", "tunnel"),
     "wss": ("https", "tunnel"),
 }
-
-# The longest host a record keeps; a longer one is no DNS name.
-MAX_HOST = 253
 
 # The port a WebSocket's URL leaves out, by scheme: WHATWG URL's defaults,
 # which Playwright's socket routing sees the URL serialized with.
@@ -58,7 +55,6 @@ def refused_attempt(
         return BlockedAttempt(resource_type, parts.scheme, "", None)
     if policy.allows(host, port, requester):
         return None
-    # A DNS name is at most 253 characters (RFC 1035 §2.3.4, written out).
     return BlockedAttempt(
         resource_type, parts.scheme, host if len(host) <= MAX_HOST else "", port
     )
