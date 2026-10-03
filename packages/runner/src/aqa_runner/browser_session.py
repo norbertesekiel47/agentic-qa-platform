@@ -383,8 +383,7 @@ class BrowserSession:
         down, such as Tab in `Tab+a`, could move the focus, and the next key
         would follow it unchecked; and Playwright leaves the held keys down
         when the last is empty (`Shift+`)."""
-        *held, pressed = press_keys(key)
-        if not pressed or not set(held) <= MODIFIERS:
+        if not one_key(key):
             raise ValueError(
                 f"press takes one key, with only modifiers held before it "
                 f"({', '.join(sorted(MODIFIERS))}): {key[:40]!r} isn't that"
@@ -694,6 +693,13 @@ class BrowserSession:
         """Record `event`, and the error to raise for it."""
         self.policy_events.add(event)
         return PolicyEventError(event)
+
+
+def one_key(key: str) -> bool:
+    """Whether `key` is what `BrowserSession.press` takes: one key, with only
+    modifiers held down before it."""
+    *held, pressed = press_keys(key)
+    return bool(pressed) and set(held) <= MODIFIERS
 
 
 def press_keys(key: str) -> list[str]:
