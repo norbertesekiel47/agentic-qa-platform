@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.hostile_pages import PAGES
 from tests.packet_capture import observe
 from tests.packet_flows import Flow
 
@@ -161,6 +162,11 @@ EXPECTED = {
         )
     ),
 }
+
+
+def test_every_hostile_page_has_its_expectations() -> None:
+    assert set(EXPECTED) == set(PAGES)
+
 
 # How routing records a host no origin writes: without it (ADR-0026, the
 # amendment on routing). An IPv4-mapped address is one.

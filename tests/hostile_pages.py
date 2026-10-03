@@ -114,6 +114,17 @@ const framed = (url) => new Promise((done) => {
     frame.src = url;
     document.body.append(frame);
 });
+const navigated = (url) => new Promise((done) => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    frame.onload = () => done("settled");
+    setTimeout(() => done("timeout"), 3000);
+    try {
+        frame.contentWindow.location.href = url;
+    } catch (error) {
+        done(`refused: ${error.name}`);  // a URL no location takes
+    }
+});
 """
 
 TCP4, TCP6, UDP4, UDP6 = Target("tcp4"), Target("tcp6"), Target("udp4"), Target("udp6")
@@ -276,6 +287,7 @@ PAGES = {
             for (const [name, url] of Object.entries(urls)) {
                 outcomes[name] = await settled(fetch(url));
                 await framed(url);
+                await navigated(url);
             }
             return outcomes;
         }""",
