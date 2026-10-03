@@ -183,3 +183,31 @@ def test_visible_text_of_a_page_without_a_body_is_empty(sites: Sites) -> None:
             return await session.visible_text()
 
     assert asyncio.run(scenario()) == ""
+
+
+@pytest.mark.parametrize(
+    "markup",
+    [
+        '<p id="read" hidden>Order confirmed</p>',
+        '<div style="display: none"><p id="read">Order confirmed</p></div>',
+        '<p id="read" style="visibility: hidden">Order confirmed</p>',
+        '<p id="read" style="width: 0; height: 0; overflow: hidden">Order confirmed</p>',
+    ],
+    ids=["hidden", "a display none ancestor", "visibility hidden", "no box"],
+)
+def test_text_of_reads_nothing_from_an_element_the_page_doesnt_render(
+    sites: Sites, markup: str
+) -> None:
+    read = Target(semantic="the order status", locators=(ByCss(css="#read"),))
+
+    async def scenario() -> str:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/kept")
+            await session.page.evaluate(
+                "(markup) => document.body.insertAdjacentHTML('beforeend', markup)",
+                markup,
+            )
+            return await session.text_of(await found(session, read))
+
+    # Its innerText would be its text content; on screen it has none.
+    assert asyncio.run(scenario()) == ""
