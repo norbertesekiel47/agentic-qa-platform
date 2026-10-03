@@ -137,11 +137,11 @@ PAGES = SHOPS | {
     "busy": """<p>Busy</p><script>setTimeout(() => { for (;;) {} }, 200);</script>""",
     # An error in the status area that the page never shows.
     "hidden-error": """<section id="status-area"><p class="error" hidden>Card declined</p></section>""",
-    # The status area, without an error in it, 1.5 s after the page loads.
+    # The test releases the empty status area while resolving its scope.
     "late-area": """<script>
-        setTimeout(() => {
+        addEventListener("show-status-area", () => {
             document.body.insertAdjacentHTML("beforeend", '<section id="status-area"></section>');
-        }, 1500);
+        }, {once: true});
     </script>""",
     # Sign-in pages for fill_secret steps (#49): a form that posts its
     # password to the app; a field whose page throws back the text it is
