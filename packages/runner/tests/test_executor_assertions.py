@@ -554,3 +554,35 @@ def test_text_in_target_fails_on_text_the_page_never_shows_as_text_visible_does(
         ("a3", "failed"),
         ("a4", "pass"),
     ]
+
+
+def test_a_target_lookup_the_page_never_answers_is_a_look_that_raised(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def never(*_: object) -> Any:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(BrowserSession, "resolve", never)
+    script = compiled(
+        [],
+        targets=SHOP_TARGETS,
+        assertions=[
+            {
+                "id": "a1",
+                "expect_index": 0,
+                "check": "text_in_target",
+                "target": "status",
+                "text": "saved",
+            },
+            {"id": "a2", "expect_index": 0, "check": "url_matches", "pattern": "/"},
+        ],
+    )
+    config = ProjectConfig.model_validate({"budgets": {"resolve_seconds": 1}})
+    spec = a_spec(tmp_path, config, start_url="/page/shop")
+
+    result = run(app, tmp_path, script, config=config, spec=spec).result
+
+    # Not drift: no look finished, so the page didn't answer.
+    assert outcomes(result) == [("a1", "not_evaluated"), ("a2", "not_evaluated")]
+    assert result.assertions[0].error == "the page didn't answer within 1 s"
+    assert result.outcome == "errored"

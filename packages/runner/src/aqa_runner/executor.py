@@ -406,7 +406,7 @@ async def _target_text(
     session: BrowserSession, target: Target, budget: float
 ) -> str | Unresolved:
     """`target`'s rendered text, or why it wasn't found within `budget`."""
-    found = await _resolve(session, target, "assertion", budget)
+    found = _answered(await _resolve(session, target, "assertion", budget), budget)
     if not isinstance(found, Resolved):
         return found
     try:
@@ -415,13 +415,22 @@ async def _target_text(
         await found.element.dispose()
 
 
+def _answered[R: Resolved | Absent | Unresolved](found: R, budget: float) -> R:
+    """`found`, unless no look at the page finished within `budget`: that
+    is a page that didn't answer, not drift (every target has a locator, so
+    a finished look leaves a miss)."""
+    if isinstance(found, Unresolved) and not found.misses:
+        raise _UnansweredError(budget)
+    return found
+
+
 async def _absent(
     session: BrowserSession, target: Target, budget: float
 ) -> bool | Unresolved:
     """Whether `target` is absent: looked at once, so a target that is there
     fails at once (ADR-0024's #46 amendment), and only drift is waited out,
     within `budget`."""
-    found = await _resolve(session, target, "negative_check", budget)
+    found = _answered(await _resolve(session, target, "negative_check", budget), budget)
     if isinstance(found, Resolved):
         await found.element.dispose()
         return False
