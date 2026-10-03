@@ -88,12 +88,15 @@ short option or a variable (``-o.claude/...``, ``$D.ruff.toml``), its segments
 may sit behind quotes, several slashes or ``.`` and ``..`` steps, and a
 directory stands for every file under it.
 
-Watched names match in any letter case, since macOS's filesystem ignores it:
-there ``.claude/Hooks/x.py`` is the guard, and pytest reads a new
-``Pytest.toml``. What the guard skips is matched as typed: the exempt
-directories, and a test file's exemption from the source rules, so a name that
-is a test's only in another case (``Test_a.py``, which pytest never collects)
-gets both the test and the source rules.
+Watched names match in any letter case, as macOS's filesystem compares them,
+by full case folding (a ligature can stand for two letters): there
+``.claude/Hooks/x.py`` is the guard, pytest reads a new ``Pytest.toml``, and an
+edit's path may spell the project's own directory in another case. The
+narrowings in a name's shape (a ``.bak`` backup, the shell's ``test`` command)
+match in any case too. What the guard skips beyond them is matched as typed:
+the exempt directories, and a test file's exemption from the source rules, so a
+name that is a test's only in another case (``Test_a.py``, which pytest never
+collects) gets both the test and the source rules.
 
 Known gaps, stated rather than hidden
 -------------------------------------
@@ -432,6 +435,17 @@ def edit_texts(
     return before, after
 
 
+def project_relative(path: Path, project: Path) -> str | None:
+    """`path` below `project`, or None outside it. The project's own part is
+    compared in any letter case, as macOS's filesystem compares it; the rest
+    keeps the case typed."""
+    count = len(project.parts)
+    head = [part.casefold() for part in path.parts[:count]]
+    if head != [part.casefold() for part in project.parts]:
+        return None
+    return Path(*path.parts[count:]).as_posix()
+
+
 def check_file_edit(
     tool_name: str, tool_input: dict[str, Any], cwd: str, project: Path
 ) -> Verdict | None:
@@ -441,9 +455,8 @@ def check_file_edit(
     path = Path(raw).expanduser()
     if not path.is_absolute():
         path = Path(cwd) / path
-    try:
-        rel = path.resolve().relative_to(project).as_posix()
-    except ValueError:
+    rel = project_relative(path.resolve(), project)
+    if rel is None:
         return None
     before, after = edit_texts(tool_name, tool_input, path)
     return judge_change(rel, before, after, project)

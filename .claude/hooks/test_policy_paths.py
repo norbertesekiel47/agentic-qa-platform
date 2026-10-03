@@ -483,8 +483,9 @@ class ScopeTests(PathTestCase):
 class CaseVariantTests(PathTestCase):
     """macOS's filesystem ignores letter case, so a path typed in another case
     names the same file there, and its tools read `Pytest.toml` as
-    `pytest.toml`. On Linux it names another file. Either way it gets the
-    decision of the correctly cased path."""
+    `pytest.toml`. On Linux it names another, absent file, so an edit of it is
+    judged on its fragments. Either way it gets the decision of the correctly
+    cased path."""
 
     def assert_same(
         self, expected: str, judge: Callable[[str], str], *paths: str
@@ -521,6 +522,7 @@ class CaseVariantTests(PathTestCase):
             "CONSTRAINTS.md",
             "constraints.md",
             "Constraints.md",
+            "CON\ufb06RAINTS.md",  # macOS folds case fully: the ligature is st
         )
         self.assert_same(
             "ask",
@@ -528,6 +530,7 @@ class CaseVariantTests(PathTestCase):
             "pytest.toml",
             "Pytest.toml",
             "PYTEST.TOML",
+            "pyte\ufb06.toml",
         )
 
     def test_a_case_variant_of_a_gated_pyproject_section_asks(self) -> None:
@@ -581,6 +584,7 @@ class CaseVariantTests(PathTestCase):
             "tests/test_a.py",
             "Tests/TEST_a.py",
             "TESTS/Test_A.py",
+            "te\ufb06s/te\ufb06_a.py",
         )
 
     def test_a_test_name_in_another_case_gets_both_rule_sets(self) -> None:
@@ -589,7 +593,8 @@ class CaseVariantTests(PathTestCase):
         # rules' retry check.
         stub = "def f() -> int:\n    raise NotImplementedError\n"
         retry = "const options = { retry: 3 }\n"
-        for rel in ("packages/a/Test_x.py", "packages/a/Tests/x.py", "apps/a.Spec.ts"):
+        names = ("packages/a/Test_x.py", "packages/a/Tests/x.py", "apps/a.Spec.ts")
+        for rel in (*names, "packages/a/te\ufb06_x.py"):
             with self.subTest(rel=rel):
                 self.assertEqual(self.write(rel, stub), "deny")
                 self.assertEqual(self.write(rel, retry), "deny")
@@ -634,6 +639,11 @@ class CaseVariantTests(PathTestCase):
             "rm tests/a_test.py",
             "rm Tests/A_TEST.py",
             "rm -rf apps/web/TESTS",
+            # macOS folds case fully: the ligatures are st and fi.
+            "echo x > CON\ufb06RAINTS.md",
+            "cp x pyte\ufb06.toml",
+            "rm tscon\ufb01g.json",
+            "rm -rf apps/web/te\ufb06s",
         )
 
     def test_case_variant_near_misses_stay_inert(self) -> None:
@@ -649,6 +659,43 @@ class CaseVariantTests(PathTestCase):
         )
         self.assertEqual(self.write(".claude/Settings.json.BAK", "{}\n"), "allow")
         self.assertEqual(self.write(".Claude/Hooks-Old/a.py", "x = 1\n"), "allow")
+
+    def test_the_project_directory_in_another_case_is_the_project(self) -> None:
+        # The project's own path in another case is the project on macOS; on
+        # Linux it is compared the same way, which can only ask more.
+        variant = str(self.project).upper()
+        self.put("CONSTRAINTS.md", "Coverage: 94%\n")
+        for rel in ("CONSTRAINTS.md", ".claude/hooks/policy_guard.py"):
+            with self.subTest(rel=rel):
+                write = {"file_path": f"{variant}/{rel}", "content": "x\n"}
+                self.assertEqual(self.decide("Write", write), "ask")
+        # A relative path from a working directory spelt in another case.
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "CONSTRAINTS.md", "content": "x\n"},
+            "cwd": variant,
+        }
+        result = self.run_guard(payload=payload)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.strip(), "allowed")
+        output = json.loads(result.stdout)["hookSpecificOutput"]
+        self.assertEqual(output["permissionDecision"], "ask")
+
+    def test_the_tree_scan_judges_case_variants_as_an_edit_does(self) -> None:
+        stub = "def f() -> int:\n    raise NotImplementedError\n"
+        self.put("packages/a/Test_x.py", stub)
+        self.put("packages/a/test_y.py", stub)
+        self.put(".Scratch/a.py", "x = f()  # type: ignore\n")
+        result = self.run_guard("--scan", str(self.project))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(
+            sorted(result.stdout.splitlines()),
+            [
+                ".Scratch/a.py:1: `# type: ignore`",
+                "packages/a/Test_x.py:2: unimplemented stub",
+            ],
+        )
 
 
 if __name__ == "__main__":
