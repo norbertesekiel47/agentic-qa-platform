@@ -205,6 +205,14 @@ def test_a_secret_referenced_twice_is_reported_where_the_spec_first_uses_it(
         ("DEBUG", "pw:*", "DEBUG turns on pw:protocol"),
         ("DEBUG", "*", "DEBUG turns on pw:protocol"),
         ("DEBUG", "pw:api, pw:protocol", "DEBUG turns on pw:protocol"),
+        # The driver prints the browser's stderr, where the headless shell
+        # writes the page's console messages, a value the page logs included.
+        ("DEBUG", "pw:browser", "DEBUG turns on pw:browser"),
+        ("DEBUG", "pw:*,-pw:protocol", "DEBUG turns on pw:browser"),
+        # Separated and trimmed as JavaScript's \s, where U+FEFF is space and
+        # U+001C is not, so `x\x1c-pw:protocol` is one name, not an off.
+        ("DEBUG", "\ufeffpw:protocol", "DEBUG turns on pw:protocol"),
+        ("DEBUG", "pw:protocol,x\x1c-pw:protocol", "DEBUG turns on pw:protocol"),
     ],
 )
 def test_a_secret_isnt_bound_where_playwright_would_log_its_value(
@@ -225,7 +233,9 @@ def test_a_secret_isnt_bound_where_playwright_would_log_its_value(
     assert logged.value.exit_code == 12
 
 
-@pytest.mark.parametrize("debug", ["pw:api", "pw:*,-pw:protocol", "other:*"])
+@pytest.mark.parametrize(
+    "debug", ["pw:api", "pw:*,-pw:protocol,-pw:browser", "other:*", "pw:protocolx"]
+)
 def test_debug_logging_that_leaves_the_protocol_out_is_allowed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, debug: str
 ) -> None:

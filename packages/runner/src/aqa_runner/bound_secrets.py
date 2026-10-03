@@ -18,6 +18,13 @@ from pydantic import SecretStr
 # a spec from pulling an unrelated variable, such as a cloud key, into a field.
 PREFIX = "AQA_SECRET_"
 
+# What separates the names in `DEBUG`: commas, and what JavaScript's `\s`
+# matches, U+FEFF included and U+001C to U+001F and U+0085 not, as the
+# driver's `debug` package splits them.
+_DEBUG_SEPARATORS = re.compile(
+    "[,\t\n\x0b\x0c\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+"
+)
+
 
 @dataclass(frozen=True)
 class BoundSecret:
@@ -100,20 +107,27 @@ def bound_secrets(spec: Spec, start: str) -> dict[str, BoundSecret]:
 
 
 def _protocol_logging(environ: Mapping[str, str]) -> str | None:
-    """What in `environ` turns on Playwright's protocol logging, as a refusal
-    says it; None when nothing does. `DEBUGP`, set to anything
-    (`playwright/_impl/_transport.py`); or `DEBUG`, read as the `debug`
-    package reads it: names split at commas and whitespace, `*` matching
-    anything, a name starting `-` turning one off, and an off winning
-    (Playwright 1.63's driver, `debugLogger.isEnabled("protocol")`)."""
+    """What in `environ` makes Playwright log a value, as a refusal says it;
+    None when nothing does. `DEBUGP`, set to anything, makes its Python
+    client print every protocol message (`playwright/_impl/_transport.py`).
+    `DEBUG` turning on `pw:protocol` makes its driver log them, and turning
+    on `pw:browser` makes it print the browser's stderr, where the headless
+    shell writes the page's console messages (#49's security re-review).
+    `DEBUG` is read as the driver's `debug` package reads it: names split at
+    commas and JavaScript's whitespace, `*` matching anything, a name
+    starting `-` turning one off, and an off winning (Playwright 1.63's
+    `utilsBundle.js`, `debugLogger.isEnabled`)."""
     if "DEBUGP" in environ:
         return "DEBUGP is set"
-    names = [name for name in re.split(r"[\s,]+", environ.get("DEBUG", "")) if name]
+    names = [name for name in _DEBUG_SEPARATORS.split(environ.get("DEBUG", "")) if name]
+    for logged in ("pw:protocol", "pw:browser"):
+        off = any(_names(name[1:], logged) for name in names if name.startswith("-"))
+        on = any(_names(name, logged) for name in names if not name.startswith("-"))
+        if on and not off:
+            return f"DEBUG turns on {logged}"
+    return None
 
-    def names_protocol(name: str) -> bool:
-        pattern = re.escape(name).replace(r"\*", ".*?")
-        return re.fullmatch(pattern, "pw:protocol") is not None
 
-    off = any(names_protocol(name[1:]) for name in names if name.startswith("-"))
-    on = any(names_protocol(name) for name in names if not name.startswith("-"))
-    return "DEBUG turns on pw:protocol" if on and not off else None
+def _names(name: str, logged: str) -> bool:
+    """Whether `name`, one of `DEBUG`'s, names the debug name `logged`."""
+    return re.fullmatch(re.escape(name).replace(r"\*", ".*?"), logged) is not None
