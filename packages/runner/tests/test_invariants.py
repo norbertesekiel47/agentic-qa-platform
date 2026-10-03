@@ -234,13 +234,23 @@ def test_more_refused_images_than_any_record_keeps_dont_count(app: App) -> None:
     assert violated(seen) == {}
 
 
-def test_a_refused_load_no_image_reports_makes_way_and_excuses_nothing_later(
-    app: App, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("bound", "value"),
+    [
+        # Room for one URL's notes: the <img>'s note pushes the CSS image's out.
+        ("PENDING_LOADS", 1),
+        # Notes that wait half a second: the CSS image's is a second old when
+        # the later failure comes.
+        ("NOTE_SECONDS", 0.5),
+    ],
+)
+def test_a_refused_load_no_image_reports_excuses_nothing_later(
+    app: App, monkeypatch: pytest.MonkeyPatch, bound: str, value: float
 ) -> None:
-    # The CSS image's refused load leaves a note no error ever takes. With
-    # room for one note, the <img> refused next takes its place and finds
-    # its own, and a later failure at the CSS image's URL counts.
-    monkeypatch.setattr(invariants, "PENDING_LOADS", 1)
+    # The CSS image's load is refused at a redirect hop, and no error ever
+    # takes its note. The <img> refused next finds its own, and a later
+    # failure at the CSS image's URL counts.
+    monkeypatch.setattr(invariants, bound, value)
 
     seen = observe(app, "/page/background-then-images")
 
