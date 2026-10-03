@@ -31,7 +31,6 @@ from playwright.async_api import ConsoleMessage, Error, Page, Request, Response
 
 from aqa_runner.document_origins import Records
 from aqa_runner.egress import EgressPolicy
-from aqa_runner.egress_proxy import KEPT_ATTEMPTS
 from aqa_runner.routing import PROXIED_SCHEMES, refused_attempt
 
 # Every invariant, in DATA_MODEL §6's order.
@@ -46,21 +45,36 @@ TEXT_CHARS = 200
 WORLD = "aqa-invariants"
 BINDING = "aqaBrokenImage"
 
+# The most of an image's URL a report carries: the page chooses it, and a
+# data: URL can run to megabytes.
+URL_CHARS = 2048
+
+# How many notes of image loads refused at a redirect hop wait at most for
+# their image's error; the oldest goes first. An image that reports no error,
+# such as a CSS image, leaves its note waiting for nothing.
+PENDING_LOADS = 100
+
 # The broken-image reporter, run in `WORLD` in every document of the page
 # before the document's own scripts. Its capture listener on the window is
 # the first, so nothing the page adds runs before it, and in its own world
 # the binding, `HTMLImageElement` and `currentSrc` are out of the page's
 # reach. It reports each trusted `error` event of an <img>: the document's
-# origin, a newline, which no serialized origin or URL holds, and the URL the
-# image tried. An `error` event isn't composed, so an image inside a shadow
-# root is never seen.
+# origin, a newline, which no serialized origin or URL holds, and the first
+# `URL_CHARS` of the URL the image tried. Opening the document anew erases
+# every listener on it and its window, and starts no new world, so the
+# reporter listens again whenever the document's root is replaced (a
+# MutationObserver isn't a listener, and stays). An `error` event isn't
+# composed, so an image inside a shadow root is never seen.
 BROKEN_IMAGES = f"""(() => {{
     const report = globalThis.{BINDING};
-    addEventListener("error", (event) => {{
+    const reported = (event) => {{
         if (event.isTrusted && event.target instanceof HTMLImageElement) {{
-            report(self.origin + "\\n" + event.target.currentSrc);
+            report(self.origin + "\\n" + event.target.currentSrc.slice(0, {URL_CHARS}));
         }}
-    }}, true);
+    }};
+    const listen = () => addEventListener("error", reported, true);
+    listen();
+    new MutationObserver(listen).observe(document, {{childList: true}});
 }})();"""
 
 # What became of an invariant: the page did nothing it counts, the page did,
@@ -90,10 +104,10 @@ class Observers:
         self.seen: dict[InvariantName, Records[str]] = {
             name: Records[str]() for name in INVARIANTS
         }
-        # The first URL of each image load the run refused, straight or at a
-        # later hop, without its fragment, the first `KEPT_ATTEMPTS` of them:
-        # the image's `currentSrc` is that URL, not the refused hop's.
-        self._refused_loads: set[str] = set()
+        # Image loads the run refused at a redirect hop, by the URL each
+        # started at (`_load_key`), the image's `currentSrc`, and how many
+        # wait for their image's error there: the latest `PENDING_LOADS` URLs.
+        self._refused_hops: dict[str, int] = {}
 
     @classmethod
     async def watch(cls, page: Page, policy: EgressPolicy) -> Self:
@@ -152,35 +166,52 @@ class Observers:
             self._add("http_5xx", f"{response.status} {response.url}")
 
     def _failed(self, request: Request) -> None:
-        """Note the first URL of an image load the run refused, straight or
-        at a later hop, so the image's broken image is left out. Chromium
-        reports the failed request before the image's `error` event, which
-        runs the reporter (measured, straight and at a redirect hop)."""
-        if request.resource_type != "image" or not self._refused(request.url):
+        """Note an image load the run refused at a redirect hop, under the
+        URL it started at, so its image's broken image is left out once.
+        Chromium reports the failed request before the image's `error`
+        event, which runs the reporter (measured). A load refused straight
+        needs no note: its own URL says so."""
+        first = request.redirected_from
+        if request.resource_type != "image" or first is None:
             return
-        while request.redirected_from is not None:
-            request = request.redirected_from
-        if len(self._refused_loads) < KEPT_ATTEMPTS:
-            self._refused_loads.add(request.url.partition("#")[0])
+        if not self._refused(request.url):
+            return
+        while first.redirected_from is not None:
+            first = first.redirected_from
+        key = _load_key(first.url)
+        # The newest last, so the oldest is the first to go.
+        self._refused_hops[key] = self._refused_hops.pop(key, 0) + 1
+        if len(self._refused_hops) > PENDING_LOADS:
+            del self._refused_hops[next(iter(self._refused_hops))]
 
     def _reported(self, event: Mapping[str, object]) -> None:
         """A broken image the reporter saw, counted when its document is on
         one of the run's allowed origins (a serialized origin is written as
         an allowed origin is: a subresource host's frame, or a data: frame,
-        is on none), unless its load was one the run refused."""
-        if event.get("name") != BINDING:
+        is on none), unless its load was one the run refused: straight, or
+        at a redirect hop a note waits for."""
+        payload = event.get("payload")
+        if event.get("name") != BINDING or not isinstance(payload, str):
             return
-        origin, _, url = str(event.get("payload")).partition("\n")
-        if origin not in self._policy.allowed_origins:
+        origin, _, url = payload.partition("\n")
+        if origin not in self._policy.allowed_origins or self._refused(url):
             return
-        if url.partition("#")[0] not in self._refused_loads:
+        key = _load_key(url)
+        waiting = self._refused_hops.get(key, 0)
+        if waiting > 1:
+            self._refused_hops[key] = waiting - 1
+        elif waiting:
+            del self._refused_hops[key]
+        else:
             self._add("broken_images", url)
 
     def _refused(self, url: str) -> bool:
         """Whether a request for `url` is one the run refuses, read as
         routing reads it: routing aborts it, or the proxy refuses it where
-        routing can't see, as at a redirect hop. A URL that reaches no
-        network, such as a data: or blob: URL, or none, is refused by none."""
+        routing can't see, as at a redirect hop. Only the schemes the proxy
+        carries: a data: or blob: URL reaches no network, and Chromium
+        refuses ftp:, file: and the like itself, so their failures are no
+        refusal of the run's and count."""
         return (
             url.partition(":")[0].lower() in PROXIED_SCHEMES
             and refused_attempt(url, self._policy, "") is not None
@@ -188,6 +219,12 @@ class Observers:
 
     def _add(self, name: InvariantName, what: str) -> None:
         self.seen[name].add(what[:TEXT_CHARS])
+
+
+def _load_key(url: str) -> str:
+    """The URL an image's load started at as a report and a failed request
+    both carry it: its first `URL_CHARS`, without a fragment."""
+    return url[:URL_CHARS].partition("#")[0]
 
 
 def invariant_results(

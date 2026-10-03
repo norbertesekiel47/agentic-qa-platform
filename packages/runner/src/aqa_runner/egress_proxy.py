@@ -19,7 +19,7 @@ h11 frames HTTP/1.1 on both sides: https://h11.readthedocs.io/en/v0.16.0/api.htm
 
 import asyncio
 import contextlib
-from collections.abc import Awaitable, Callable, Collection, Coroutine, Iterable
+from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Self
@@ -190,12 +190,15 @@ class EgressProxy:
         every request against it (#43), as the gate does at the proxy."""
         return self._gate.policy
 
-    def egress_blocks(self, expected_blocked: Collection[str]) -> EgressBlocks:
+    def egress_blocks(self, expected_blocked: tuple[str, ...]) -> EgressBlocks:
         """The run's egress blocks so far, from routing's record and the
         gate's `host` refusals, which can overlap (ADR-0026's #43 amendment),
-        leaving out the hosts in `expected_blocked`. The gate's `address`
-        refusals are the IP policy's, and no egress block."""
+        leaving out the hosts in `expected_blocked`, the project config's.
+        The gate's `address` refusals are the IP policy's, and no egress
+        block."""
         refused = [
+            # Routing named its hosts as it recorded them; the gate keeps
+            # them as the page wrote them.
             RefusedHost(attempt.host, attempt.port)
             for attempt in self.blocked_attempts.counts
         ] + [
