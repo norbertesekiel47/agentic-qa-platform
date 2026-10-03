@@ -19,14 +19,14 @@ h11 frames HTTP/1.1 on both sides: https://h11.readthedocs.io/en/v0.16.0/api.htm
 
 import asyncio
 import contextlib
-from collections.abc import Awaitable, Callable, Coroutine, Iterable
+from collections.abc import Awaitable, Callable, Collection, Coroutine, Iterable
 from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Self
 from urllib.parse import urlsplit
 
 import h11
-from aqa_core.schema import DEFAULT_PORTS
+from aqa_core.schema import DEFAULT_PORTS, authority
 
 from aqa_runner.egress import (
     EgressGate,
@@ -55,6 +55,10 @@ HOP_BY_HOP = {
 # How many distinct attempts routing's record keeps, so a page can't grow it
 # without bound; repeats and the total are counted whatever the bound.
 KEPT_ATTEMPTS = 1000
+
+# The longest host a record keeps; a longer one is no DNS name (RFC 1035
+# §2.3.4, written out).
+MAX_HOST = 253
 
 
 @dataclass(frozen=True)
@@ -98,6 +102,35 @@ class BlockedAttempts:
         not every refused host: a page chose a thousand distinct attempts
         first. #47 counts that as an egress block."""
         return self.total > sum(self.counts.values())
+
+
+@dataclass(frozen=True)
+class RefusedHost:
+    """A host and port an egress block refused, as the run's record names
+    it: the host only when an origin could write it and it is at most
+    `MAX_HOST` characters, since a page chooses it, otherwise empty; and no
+    port when the attempt named none a scheme gives."""
+
+    host: str
+    port: int | None
+
+
+@dataclass(frozen=True)
+class EgressBlocks:
+    """A run's egress blocks (ADR-0026's #47 amendment): each host and port
+    routing or the gate refused for being no allowed origin or subresource
+    host, once, in the order first recorded, the expected-blocked hosts left
+    out; and whether routing's record overflowed, and so names not every
+    refused host."""
+
+    refused: tuple[RefusedHost, ...]
+    overflowed: bool
+
+    @property
+    def blocked(self) -> bool:
+        """Whether the run has an egress block: a refused host, or an
+        overflowed record, which may hide one."""
+        return bool(self.refused) or self.overflowed
 
 
 class EgressProxy:
@@ -144,6 +177,28 @@ class EgressProxy:
         observes against its allowed origins (#44), and its routing judges
         every request against it (#43), as the gate does at the proxy."""
         return self._gate.policy
+
+    def egress_blocks(self, expected_blocked: Collection[str]) -> EgressBlocks:
+        """The run's egress blocks so far, from routing's record and the
+        gate's `host` refusals, which can overlap (ADR-0026's #43 amendment),
+        leaving out the hosts in `expected_blocked`. The gate's `address`
+        refusals are the IP policy's, and no egress block."""
+        refused = [
+            RefusedHost(attempt.host, attempt.port)
+            for attempt in self.blocked_attempts.counts
+        ] + [
+            RefusedHost(_named(refusal.host), refusal.port)
+            for refusal in self._gate.refusals
+            if refusal.kind == "host"
+        ]
+        return EgressBlocks(
+            tuple(
+                host
+                for host in dict.fromkeys(refused)
+                if host.host not in expected_blocked
+            ),
+            self.blocked_attempts.overflowed,
+        )
 
     @property
     def url(self) -> str:
@@ -249,6 +304,19 @@ class EgressProxy:
             )
         finally:
             writer.close()
+
+
+def _named(host: str) -> str:
+    """`host`, a refused host the gate recorded as the page wrote it, when an
+    origin could write it and it is at most `MAX_HOST` characters, as
+    routing keeps its own; otherwise empty."""
+    if len(host) > MAX_HOST:
+        return ""
+    try:
+        written, _ = authority(f"http://{host}")
+    except ValueError:  # a host no origin writes
+        return ""
+    return host if written == host else ""
 
 
 def _plain_target(target: bytes) -> tuple[str, int, str]:

@@ -10,7 +10,13 @@ from typing import Any
 
 import pytest
 from aqa_runner.egress import Connection, EgressGate
-from aqa_runner.egress_proxy import EgressProxy
+from aqa_runner.egress_proxy import (
+    KEPT_ATTEMPTS,
+    BlockedAttempt,
+    EgressBlocks,
+    EgressProxy,
+    RefusedHost,
+)
 
 from packages.runner.tests.egress_fixtures import (
     Seen,
@@ -588,3 +594,113 @@ def test_a_browser_reset_inside_a_tunnel_is_no_upstream_failure() -> None:
 
     assert closed
     assert egress.infrastructure_events == []
+
+
+# The egress blocks a run reads from routing's record and the gate's refusals
+# (#47; ADR-0026's #47 amendment): each refused host and port once, the
+# expected-blocked hosts left out.
+
+
+def test_egress_blocks_name_each_refused_host_once_from_routing_and_the_gate() -> None:
+    egress = gate(allowed=("http://127.0.0.1:9",))
+    proxy = EgressProxy(egress)
+    proxy.blocked_attempts.add(
+        BlockedAttempt("image", "https", "cdn.example.test", 443)
+    )
+    proxy.blocked_attempts.add(
+        BlockedAttempt("fetch", "https", "cdn.example.test", 443)
+    )
+    # A socket routing missed, refused by the proxy too, and a redirect hop
+    # only the proxy saw.
+    egress.record_refusal("cdn.example.test", 443, "host", "not allowed")
+    egress.record_refusal("hop.example.test", 80, "host", "not allowed")
+
+    blocks = proxy.egress_blocks(())
+
+    assert blocks == EgressBlocks(
+        (RefusedHost("cdn.example.test", 443), RefusedHost("hop.example.test", 80)),
+        overflowed=False,
+    )
+    assert blocks.blocked
+
+
+def test_egress_blocks_leave_out_expected_blocked_hosts() -> None:
+    egress = gate(allowed=("http://127.0.0.1:9",))
+    proxy = EgressProxy(egress)
+    proxy.blocked_attempts.add(
+        BlockedAttempt("image", "http", "analytics.example.test", 80)
+    )
+    egress.record_refusal("analytics.example.test", 443, "host", "not allowed")
+    proxy.blocked_attempts.add(BlockedAttempt("script", "http", "cdn.example.test", 80))
+
+    blocks = proxy.egress_blocks(("analytics.example.test",))
+
+    assert blocks == EgressBlocks(
+        (RefusedHost("cdn.example.test", 80),), overflowed=False
+    )
+    assert not proxy.egress_blocks(
+        ("analytics.example.test", "cdn.example.test")
+    ).blocked
+
+
+def test_an_overflowed_record_is_an_egress_block() -> None:
+    proxy = EgressProxy(gate(allowed=("http://127.0.0.1:9",)))
+    # A page fills the record with expected-blocked attempts first, so the
+    # attempts after it are counted but not named.
+    for port in range(1, KEPT_ATTEMPTS + 2):
+        proxy.blocked_attempts.add(
+            BlockedAttempt("fetch", "http", "analytics.example.test", port)
+        )
+
+    blocks = proxy.egress_blocks(("analytics.example.test",))
+
+    assert blocks == EgressBlocks((), overflowed=True)
+    assert blocks.blocked
+
+
+def test_an_attempt_that_names_no_host_is_an_egress_block() -> None:
+    # A scheme the proxy carries nothing for, or a host no origin writes.
+    proxy = EgressProxy(gate(allowed=("http://127.0.0.1:9",)))
+    proxy.blocked_attempts.add(BlockedAttempt("other", "ftp", "", None))
+
+    assert proxy.egress_blocks(()) == EgressBlocks(
+        (RefusedHost("", None),), overflowed=False
+    )
+
+
+def test_a_refused_host_no_origin_writes_is_named_as_none() -> None:
+    # The gate records a host as the page wrote it, which the run's record
+    # mustn't hold: a long one could carry what the page exfiltrates.
+    egress = gate(allowed=("http://127.0.0.1:9",))
+    egress.record_refusal("evil.example.test.", 80, "host", "not allowed")
+    egress.record_refusal("x" * 250 + ".test", 80, "host", "not allowed")
+    egress.record_refusal("[::ffff:7f00:1]", 9, "host", "not allowed")
+
+    assert EgressProxy(egress).egress_blocks(()) == EgressBlocks(
+        (RefusedHost("", 80), RefusedHost("", 9)), overflowed=False
+    )
+
+
+def test_an_ip_policy_refusal_is_neither_an_egress_block_nor_an_infrastructure_event() -> (
+    None
+):
+    # An allowed origin whose name resolves to a private address it may not use.
+    egress = gate(
+        allowed=("http://127.0.0.1:9", "http://app.example.test"),
+        answers={"app.example.test": ["10.0.0.1"]},
+    )
+
+    async def scenario() -> tuple[bytes, EgressProxy]:
+        async with EgressProxy(egress) as proxy:
+            return await exchange(
+                proxy, get("http://app.example.test/", close=True)
+            ), proxy
+
+    response, proxy = asyncio.run(scenario())
+
+    assert response == b""
+    assert [(r.host, r.kind) for r in egress.refusals] == [
+        ("app.example.test", "address")
+    ]
+    assert egress.infrastructure_events == []
+    assert not proxy.egress_blocks(()).blocked
