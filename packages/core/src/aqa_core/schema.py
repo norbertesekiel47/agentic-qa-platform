@@ -188,8 +188,8 @@ def _probe_endpoint(text: str) -> str:
     if method != "GET" or not space:
         raise ValueError(
             f"'{text}' is not a probe: write GET and a path, such as GET "
-            "/test-api/orders/count: a probe only reads, from the start origin "
-            "(DATA_MODEL §6)"
+            "/test-api/orders/count, since a probe only reads, and only from the "
+            "start origin (DATA_MODEL §6)"
         )
     try:
         _start_path(path)

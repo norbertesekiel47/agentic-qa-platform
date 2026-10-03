@@ -21,7 +21,6 @@ from aqa_runner.probes import (
     JsonValue,
     ProbeError,
     ProbeUnstableError,
-    equals,
     read_stable,
     same,
 )
@@ -149,6 +148,36 @@ def test_a_probe_that_holds_still_at_once_takes_two_reads(
     assert time.monotonic() - started >= 0.2
 
 
+def test_a_null_value_is_read_twice_too() -> None:
+    # null is a value like any other: one read never makes it stable.
+    value, paths = read(lambda _path, _index: answer('{"state": null}'), "$.state")
+
+    assert value is None
+    assert len(paths) == 2
+
+
+def test_a_body_nested_as_deep_as_a_probe_may_reads() -> None:
+    body = "[" * 256 + "]" * 256
+
+    value, _ = read(lambda _path, _index: answer(body), "$")
+
+    assert json.dumps(value) == body
+
+
+def test_a_timeout_that_isnt_the_reads_own_passes_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Only the read's own bound becomes a ProbeError or ProbeUnstableError.
+    async def times_out(*_: object) -> None:
+        raise TimeoutError
+
+    monkeypatch.setattr(probes, "runner_request", times_out)
+    egress = gate(allowed=("http://127.0.0.1:9",))
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(read_stable(egress, "http://127.0.0.1:9/count", "$.count"))
+
+
 def test_a_probe_that_never_holds_still_is_unstable_within_the_bound(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -226,9 +255,18 @@ def test_a_truncated_probe_body_never_reads_as_a_value(*, whole: bool) -> None:
         (b'{"count": NaN}', "has NaN"),
         (b'{"count": -Infinity}', "has -Infinity"),
         (b'{"count": ' + b"9" * 5000 + b"}", "isn't JSON"),
+        # Deeper than a probe's body may nest, whether the decoder reads it
+        # or runs out of stack first (json.loads, 3.14.7).
+        (b"[" * 257 + b"]" * 257, "nests too deep"),
+        (b'{"a":' * 257 + b"1" + b"}" * 257, "nests too deep"),
         (b"[" * 1_000_000 + b"]" * 1_000_000, "nests too deep"),
+        # A nonzero number too small for a float would read as 0.
+        (b'{"amount": 1e-400}', "has a number no float holds"),
+        (b'{"amount": -0.0002e-999}', "has a number no float holds"),
     ],
-    ids=lambda value: repr(value[:20]) if isinstance(value, bytes) else value,
+    ids=lambda value: (
+        f"{value[:20]!r} ({len(value)} bytes)" if isinstance(value, bytes) else value
+    ),
 )
 def test_a_probe_body_is_one_json_object_or_array(body: bytes, problem: str) -> None:
     error = refused(lambda _path, _index: answer(body))
@@ -345,39 +383,26 @@ def test_probe_reads_carry_none_of_the_browsers_cookies() -> None:
 
 
 @pytest.mark.parametrize(
-    ("selected", "value", "equal"),
+    ("read", "expected", "equal"),
     [
-        (2, 2, True),
+        (5, 5, True),
         ("paid", "paid", True),
-        # Neither 2.0 nor true is the integer 2, nor "2".
+        ({"a": 1, "b": [1, "x"]}, {"b": [1, "x"], "a": 1}, True),
+        (5, 6, False),
+        # Neither 2.0 nor true is the integer 2, nor is "2".
         (2.0, 2, False),
         (True, 1, False),
         ("2", 2, False),
         (2, "2", False),
         ("Paid", "paid", False),
         ({"count": 2}, 2, False),
-    ],
-    ids=repr,
-)
-def test_probe_equals_compares_type_and_value(
-    selected: JsonValue, value: int | str, *, equal: bool
-) -> None:
-    assert equals(selected, value) is equal
-
-
-@pytest.mark.parametrize(
-    ("before", "after", "equal"),
-    [
-        (5, 5, True),
-        ({"a": 1, "b": [1, "x"]}, {"b": [1, "x"], "a": 1}, True),
-        (5, 6, False),
-        (1, 1.0, False),
-        (1, True, False),
         ([1, 2], [2, 1], False),
     ],
     ids=repr,
 )
-def test_a_baseline_compares_as_canonical_json(
-    before: JsonValue, after: JsonValue, *, equal: bool
+def test_a_value_compares_as_canonical_json(
+    read: JsonValue, expected: JsonValue, *, equal: bool
 ) -> None:
-    assert same(before, after) is equal
+    # As probe_equals compares with its value, and probe_equals_baseline with
+    # the baseline.
+    assert same(read, expected) is equal

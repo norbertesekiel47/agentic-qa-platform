@@ -419,8 +419,8 @@ def test_a_probe_problem_reads_in_full(tmp_path: Path) -> None:
     assert problems_for(path) == (
         (
             f"{path}: preconditions.probes.count: 'POST /test-api/count' is not a "
-            "probe: write GET and a path, such as GET /test-api/orders/count: a probe "
-            "only reads, from the start origin (DATA_MODEL §6)"
+            "probe: write GET and a path, such as GET /test-api/orders/count, since a "
+            "probe only reads, and only from the start origin (DATA_MODEL §6)"
         ),
     )
 

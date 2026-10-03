@@ -31,6 +31,11 @@ from aqa_runner.runner_requests import runner_request
 STABLE_SECONDS = 10
 READ_SECONDS = 0.5
 
+# The most objects and arrays a probe's body may nest in one another, as a
+# compiled script's (`aqa_core.project`): deeper, and comparing two values
+# could run out of stack (#48's security review).
+DEEPEST_JSON = 256
+
 type JsonValue = (
     bool | int | float | str | list[JsonValue] | dict[str, JsonValue] | None
 )
@@ -39,14 +44,14 @@ type JsonValue = (
 class ProbeError(Exception):
     """A probe that couldn't be read: it answered other than 200, its body
     isn't one JSON object or array, its JSON path selects nothing, or it
-    didn't answer within `STABLE_SECONDS`. The message is ours, and holds
-    nothing of the body."""
+    didn't answer twice within `STABLE_SECONDS`. The message is ours, and
+    holds nothing of the body."""
 
 
 class ProbeUnstableError(Exception):
     """A probe whose value never held still within `STABLE_SECONDS`: no two
     reads in a row selected the same value. It establishes neither a pass
-    nor a failure (DATA_MODEL §7, `check_timed_out`)."""
+    nor a failure (ADR-0024's #48 amendment)."""
 
 
 async def read_stable(gate: EgressGate, url: str, json_path: str) -> JsonValue:
@@ -99,7 +104,9 @@ async def _read(gate: EgressGate, url: str, json_path: str) -> JsonValue:
 
 
 def _parsed(body: bytes) -> JsonValue:
-    """The body as one JSON object or array, or `ProbeError`."""
+    """The body as one JSON object or array, nested at most `DEEPEST_JSON`
+    deep, or `ProbeError`. The decoder's hooks raise `ProbeError` itself,
+    not a ValueError, so the handler below never rewords it."""
     try:
         text = body.decode("utf-8")
     except UnicodeDecodeError:
@@ -124,7 +131,23 @@ def _parsed(body: bytes) -> JsonValue:
             "the probe's body is one JSON object or array: a bare value cut "
             "short could still read as one"
         )
+    _within_depth(value)
     return value
+
+
+def _within_depth(body: JsonValue) -> None:
+    """`ProbeError` when `body` nests objects and arrays more than
+    `DEEPEST_JSON` deep, the top value being level 1. Walked with a stack,
+    not recursion, which deep JSON would exhaust."""
+    stack: list[tuple[JsonValue, int]] = [(body, 1)]
+    while stack:
+        value, level = stack.pop()
+        if not isinstance(value, dict | list):
+            continue
+        if level > DEEPEST_JSON:
+            raise ProbeError("the probe's body nests too deep")
+        children = value.values() if isinstance(value, dict) else value
+        stack.extend((child, level + 1) for child in children)
 
 
 def _unrepeated(pairs: Sequence[tuple[str, JsonValue]]) -> dict[str, JsonValue]:
@@ -145,11 +168,13 @@ def _constant(name: str) -> JsonValue:
 
 
 def _finite(text: str) -> float:
-    """A number with a fraction or an exponent, which must fit a float. An
-    integer is exact in Python, up to its limit on digits, past which
-    `json.loads` raises ValueError."""
+    """A number with a fraction or an exponent, which must fit a float: not
+    past its range, and not so small that a nonzero number reads as 0
+    (#48's Codex review). An integer is exact in Python, up to its limit on
+    digits, past which `json.loads` raises ValueError."""
     number = float(text)
-    if not math.isfinite(number):
+    nonzero = text.lower().partition("e")[0].strip("-0.") != ""
+    if not math.isfinite(number) or (number == 0 and nonzero):
         raise ProbeError("the probe's body has a number no float holds")
     return number
 
@@ -169,14 +194,9 @@ def _select(body: JsonValue, json_path: str) -> JsonValue:
     return value
 
 
-def equals(selected: JsonValue, value: int | str) -> bool:
-    """Whether a probe's selected value is a `probe_equals` check's `value`:
-    the same JSON type and the same value, so neither `2.0` nor `true` is
-    the integer 2, and a string compares exactly."""
-    return type(selected) is type(value) and selected == value
-
-
-def same(before: JsonValue, after: JsonValue) -> bool:
-    """Whether a probe read the same value twice: the same canonical JSON
-    (`aqa_core.spec.canonical_hash`), so `1` is neither `1.0` nor `true`."""
-    return canonical_hash(before) == canonical_hash(after)
+def same(read: JsonValue, expected: JsonValue) -> bool:
+    """Whether a value a probe read is `expected`: the same canonical JSON
+    (`aqa_core.spec.canonical_hash`), so `1`, `1.0`, `true` and `"1"` are
+    four values. A read is compared so with the read before it, a
+    `probe_equals` check's `value` and a baseline."""
+    return canonical_hash(read) == canonical_hash(expected)

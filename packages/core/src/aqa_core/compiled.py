@@ -96,8 +96,8 @@ def _regex(pattern: str) -> str:
 # A probe's JSON path (#48): $, then a step for each level, .name for an
 # object's key (ASCII letters, digits, _ or -) or [index] for an array's
 # item, of at most nine digits. Nothing else, so no path reads two ways.
-_JSON_PATH = re.compile(r"\$(?:\.[A-Za-z0-9_-]+|\[(?:0|[1-9][0-9]{0,8})\])*")
-_JSON_STEP = re.compile(r"\.([A-Za-z0-9_-]+)|\[([0-9]+)\]")
+_JSON_STEP = re.compile(r"\.([A-Za-z0-9_-]+)|\[(0|[1-9][0-9]{0,8})\]")
+_JSON_PATH = re.compile(rf"\$(?:{_JSON_STEP.pattern})*")
 
 
 def _json_path(path: str) -> str:
@@ -518,14 +518,18 @@ class NetworkSeen(_NetworkCheck):
     check: Literal["network_seen"]
 
 
+# A probe_equals check's value, planned or compiled: never true, 2.0 or an
+# empty string. A plain union, so the plan's response schema names no alias.
+ProbeValue = StrictInt | NonEmpty
+
+
 class ProbeEquals(_Assertion):
     """A probe the spec declares reads `value` at `json_path` (#48)."""
 
     check: Literal["probe_equals"]
     probe: NonEmpty
     json_path: JsonPath
-    # As the planned check's: never true, 2.0 or an empty string.
-    value: StrictInt | NonEmpty
+    value: ProbeValue
 
 
 class ProbeEqualsBaseline(_Assertion):
