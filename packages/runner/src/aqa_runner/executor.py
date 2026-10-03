@@ -8,7 +8,7 @@ It acts and observes only through the browser session's methods, which check
 every document they touch (ADR-0026's amendments on document origins)."""
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal, overload
 
@@ -213,7 +213,9 @@ async def replay(
                 for check in checks
             )
         else:
-            assertions = await _evaluated(session, setup, script, checks)
+            assertions = await _evaluate_each(
+                session, checks, script.targets, setup.config.budgets.resolve_seconds
+            )
         errored = (
             interrupted()
             or any(step.outcome == "failed" for step in steps)
@@ -266,11 +268,11 @@ def _accepted(
     return runnable, checks
 
 
-async def _evaluated(
+async def _evaluate_each(
     session: BrowserSession,
-    setup: RunSetup,
-    script: CompiledScript,
     checks: list[Evaluated],
+    targets: Mapping[str, Target],
+    budget: float,
 ) -> tuple[AssertionResult, ...]:
     """Every assertion, in order, each evaluated once, as the last step left
     the page. Once a look at the page raises (it left the allowed origins,
@@ -281,7 +283,7 @@ async def _evaluated(
             results.append(AssertionResult(check.id, "not_evaluated"))
             continue
         try:
-            results.append(await _evaluate(session, setup, script, check))
+            results.append(await _evaluate(session, check, targets, budget))
         except (Error, PolicyEventError, DocumentChangedError) as error:
             # Playwright's general error type (a crashed page), a page off
             # the allowed origins, or one that changed under every read
@@ -294,25 +296,22 @@ async def _evaluated(
 
 async def _evaluate(
     session: BrowserSession,
-    setup: RunSetup,
-    script: CompiledScript,
     check: Evaluated,
+    targets: Mapping[str, Target],
+    budget: float,
 ) -> AssertionResult:
     """`check`'s outcome, through the session's observations and the bounded
     text search (DATA_MODEL §7, Replay outcomes). A target is looked for
-    within `resolve_seconds` while no locator gives the match its use
-    needs; a `not_visible` target found visible fails at once, since waiting
-    for it to go would pass an error that shows and then fades."""
-    budget = setup.config.budgets.resolve_seconds
+    within `budget` seconds while no locator gives the match its use needs;
+    a `not_visible` target found visible fails at once, since waiting for it
+    to go would pass an error that shows and then fades."""
     try:
         if isinstance(check, TextVisible):
             held = await text_matches(check, await _read(session, budget))
         elif isinstance(check, UrlMatches):
             held = await url_matches(check.pattern, await session.url())
         elif isinstance(check, TextInTarget):
-            found = await _resolve(
-                session, script.targets[check.target], "assertion", budget
-            )
+            found = await _resolve(session, targets[check.target], "assertion", budget)
             if not isinstance(found, Resolved):
                 return AssertionResult(check.id, "binding_unresolved", found.misses)
             try:
@@ -321,14 +320,14 @@ async def _evaluate(
                 await found.element.dispose()
             held = await text_matches(check, text)
         else:
-            seen = await _resolve(
-                session, script.targets[check.target], "negative_check", budget
+            looked = await _resolve(
+                session, targets[check.target], "negative_check", budget
             )
-            if isinstance(seen, Unresolved):
-                return AssertionResult(check.id, "binding_unresolved", seen.misses)
-            if isinstance(seen, Resolved):
-                await seen.element.dispose()
-            held = isinstance(seen, Absent)
+            if isinstance(looked, Unresolved):
+                return AssertionResult(check.id, "binding_unresolved", looked.misses)
+            if isinstance(looked, Resolved):
+                await looked.element.dispose()
+            held = isinstance(looked, Absent)
     except SearchTimeoutError:
         return AssertionResult(check.id, "check_timed_out")
     return AssertionResult(check.id, "pass" if held else "failed")
@@ -504,8 +503,9 @@ async def _dispatched(
 
 
 def _described(error: Error | PolicyEventError | DocumentChangedError) -> str:
-    """What raised, as a failed step's reason: a policy event's message,
-    which names only an origin, or the first line of Playwright's, with
+    """What raised, as a failed step's or an unevaluated assertion's reason:
+    the session's own message for a policy event, which names only an
+    origin, or for a changed page; or the first line of Playwright's, with
     what isn't printable escaped, at most `REASON_CHARS` in all. The rest of
     Playwright's message can hold what the page chose (#49 must keep it
     from a filled secret)."""
