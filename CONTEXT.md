@@ -27,7 +27,7 @@ Everything an expectation says about its subject: its text, state, position, des
 A condition every run checks regardless of the spec's expectations: no console errors, no uncaught exceptions, no HTTP 5xx responses and no broken images. Each is a separate invariant, so an uncaught exception is not also a console error. A spec inherits all of them and can disable individual ones.
 
 **Probe**:
-A read-only endpoint a spec declares so it can check app state the UI can't show, such as "no order was created".
+A read-only endpoint on the start origin that a spec declares so it can check app state the UI can't show, such as "no order was created". A check reads it until its value holds still, and a value read before a step the script names is the probe's baseline.
 
 **Reset hook**:
 An optional endpoint a spec declares to put the app in the spec's starting state. Every attempt starts by calling it, the first included, so a spec that declares one can run repeatedly.

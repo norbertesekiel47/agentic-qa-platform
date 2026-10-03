@@ -260,3 +260,31 @@ Building `aqa explore --plan-only` (#41) settled how the plan is shaped and hash
 - **The run record** (`aqa_runner.run_record.RunRecord`) is `<spec root>/.aqa/runs/<run_id>/`, `run_id` a UUIDv7. `.aqa/` holds a `.gitignore` of `*`, written if missing and never overwritten, so the user's repository needn't list it. `plan.json` holds the run and spec ids, `spec_hash`, the outcome and its reasons, the plan and its `plan_hash` (null without a plan), and the cost record of every response, so a billed response is always kept. A `.aqa` or `.aqa/runs` that is a link is refused, a spec error before the call (security reviews, 2026-10-02): a repository could commit one pointing outside the spec root. A document is made before its file is opened, so one that can't be written leaves no half-written file. A spec root that can't be written, on a read-only checkout say, ends the run with Python's own error before the call, for now: its exit code is an open question. The record is made before the call, so a spec root that can't hold one stops the run before anything is billed, and every run that reaches the call writes `plan.json`, including one that got no response, which has no cost record. #46 and #53 add their documents to the same record.
 - **What the model wrote is printed with control characters escaped:** C0 and C1 controls, line and paragraph separators, and bidi controls. A reason with a newline or an ANSI escape can't break the one-line-per-cause output or recolour the terminal.
 - **No second tracing guard.** The command builds the router, whose constructor switches ambient tracing off, before any LangChain call (#40's follow-up). A test pins that tracing is off when the model is called.
+
+## Amendment (2026-10-03): network, probe and visible_unoccluded checks (#48)
+
+Evaluating the rest of M1's checks (#48) settled what the Decision's "Probes. Reads repeat until the value is stable, within a bound" left open. DATA_MODEL §6 and §7 hold the rules ("Probe reads"); this records why. #48 lands in three pull requests, and each adds its part here.
+
+### Probes
+- **A probe is `GET <path>` on the start origin.**
+  - *Options:* (1) `GET` and a path, joined to the start origin; (2) also `GET` and an absolute URL on any allowed origin.
+  - *Chosen: 1* (coordinator, 2026-10-03). The pilot's probes are paths on the app's origin, and schema version 1 records no navigate to another allowed origin either.
+  - A spec that writes anything else fails to load, naming the probe. The path is held to `start_url`'s rules, so no spelling of it reaches another origin; to ASCII, since the runner sends it as written and a request line carries nothing else (`runner_request` refuses it); and to no fragment, which a request never carries, so the probe would read another path than the one written.
+  - The runner-side client still checks the URL's whole origin against the run's allowed origins, a second layer.
+- **Reads repeat until two in a row select the same value**, `READ_SECONDS` (0.5 s) apart, within `STABLE_SECONDS` (10 s) for the whole read (`aqa_runner.probes.read_stable`).
+  - *Options:* (1) two equal reads in a row; (2) equal reads across a quiet period, as settling waits out; (3) some larger number of equal reads.
+  - *Chosen: 1*, with reads 0.5 s apart, so a value that held for settling's quiet period is stable. The pilot's counts change once, when a write lands after the step.
+  - *The bound* is settling's 10 s, a constant as settling's is: nothing yet needs another value. It covers every request, through one `asyncio.timeout` around the whole read, so a probe that never answers is cancelled at the bound and its connection closed. #42 left that bound to the runner-side client's callers (ADR-0026's #42 amendment).
+  - *The same value* means the same canonical JSON (`spec_hash`'s rules), so `1`, `1.0` and `true` are three values.
+- **A probe that never holds still is `check_timed_out`** (the maintainer's ruling, 2026-10-03).
+  - When the bound passes after two reads or more, none the same as the one before, the read established neither a pass nor a failure, as a text search that runs out of time doesn't. So it gets that outcome, and the run can't pass.
+  - That is how the ticket's "one that never settles fails within the bound" is met: the read ends at the bound, and the check can't pass.
+  - *Rejected:* `failed`, which M2 would turn into `expectation_violated`, a finding the app may not have.
+  - When the bound passes before a second read, the probe didn't answer, which is a probe that can't be read.
+- **What a probe answers is read strictly.** The app under test writes it.
+  - *Status:* only a 200. A redirect comes back unfollowed (ADR-0026), and any other status carries no value of the probe's.
+  - *Body:* UTF-8 JSON whose top level is an object or array, with no repeated key, no `NaN` or `Infinity` and no fraction or exponent past a float's range. An integer is read exactly, up to Python's limit on digits, past which the body doesn't parse. A body the connection's close ends, as a TLS stream that loses its `close_notify` does, can be cut short with nothing in the framing to show it (#42's follow-up). An object or array cut before its closing bracket never parses, where a bare `12` cut to `1` would read as a value. A repeated key would leave the value to the parser's choice, as in a compiled script (#46).
+  - *Measured* with Python 3.14.7 (`uv run python` at `107754a`): `json.loads` reads arrays nested 100,000 deep but raises `RecursionError` at 1,000,000, and reads `1e400` as `inf`. So the reader catches that error and refuses a number no float holds.
+  - A response the reader refuses, a JSON path that selects nothing and a probe that didn't answer raise `ProbeError`, whose message is ours and holds nothing of the body: not a repeated key, not a number's text (#48's doubt review).
+  - *Residual:* nothing caps a response body's size (ADR-0026's #42 amendment). The bound caps the time to receive it, but not the time `json.loads` then takes, which no timeout can interrupt.
+- **Compared by type.** `probe_equals` holds only when the selected value has its `value`'s JSON type and equals it, so neither `2.0` nor `true` passes for `2`. `probe_equals_baseline` compares canonical JSON.
