@@ -192,7 +192,8 @@ PAGES = SHOPS | {
     # entry for the failed load.
     "page-5xx": """<script>fetch("/status/500")</script>""",
     "missing-image": """<img src="/status/404">""",
-    # A load that fails without reaching any network: a revoked blob.
+    # A load that fails without reaching any network: a revoked blob. The
+    # fetch's rejection is caught, so only the console entry fires.
     "revoked-blob": """<script>
         const blob = URL.createObjectURL(new Blob(["gone"]));
         URL.revokeObjectURL(blob);
