@@ -1,6 +1,6 @@
 # Security — Agentic QA Platform
 
-Last updated: 2026-10-02 (the browser session's document-origin checks, #44; runner-side requests through the egress gate, #42; the launch's transport switches and fail-closed proxy, routing, service workers and popups, and WebRTC's mDNS responder off at launch, #43); 2026-10-01 (the egress proxy, #42; the browser session's empty environment, #36; the sandbox check, #35; M1 design decisions, ADR-0026). Threat model and controls for a multi-tenant SaaS that runs browser agents against customer web apps. Guarantees are stated as narrowly as they are actually enforced.
+Last updated: 2026-10-02 (the browser session's document-origin checks, #44; runner-side requests through the egress gate, #42; the launch's transport switches and fail-closed proxy, routing, service workers and popups, WebRTC's mDNS responder off at launch, and hostile pages, #43); 2026-10-01 (the egress proxy, #42; the browser session's empty environment, #36; the sandbox check, #35; M1 design decisions, ADR-0026). Threat model and controls for a multi-tenant SaaS that runs browser agents against customer web apps. Guarantees are stated as narrowly as they are actually enforced.
 
 ## 1. Assets
 
@@ -111,7 +111,7 @@ The agent reads arbitrary page content. A malicious or compromised page may say 
   - **Egress blocks.** A request to a host that is neither an allowed origin nor a subresource host is refused and recorded, and it keeps the run from passing without being a finding: the run ends `errored` with `egress_blocked`, exit 6 (API.md §7).
     - *Exception:* a host the project config lists as expected-blocked. For it, the block's direct symptoms (its console error and a broken image, matched by the failed request) don't count against invariants.
     - *Proxy failures:* the proxy never makes up a response the page could count as the app's. On an upstream failure it drops the connection, and an unreachable start origin is an infrastructure error (ADR-0026).
-  - **Other transports.** Non-HTTP(S)/WS schemes are blocked. Chromium launches so that WebRTC sends UDP only through a proxy, so none (`disable_non_proxied_udp`, under both the headless shell's switch and full Chromium's; proven on the headless shell), QUIC is off (`--disable-quic`), Chromium resolves no name itself (`--host-resolver-rules`): every lookup is the proxy's (ADR-0026 amendment, 2026-10-02, which lists what this doesn't cover, such as Playwright's own driver-side requests), and a page's peer connection starts no mDNS responder, which would bind UDP 5353 and join the mDNS group on every interface (`WebRtcHideLocalIpsWithMdns` off, in a `--disable-features` switch that repeats Playwright's list; ADR-0026 amendment on WebRTC's mDNS responder). The packet-level proof that nothing else leaves comes with #43's hostile-page suite.
+  - **Other transports.** Chromium refuses schemes other than HTTP(S) and WS(S) itself, before routing or the proxy sees them (measured, with the protections and without). Chromium launches so that WebRTC sends UDP only through a proxy, so none (`disable_non_proxied_udp`, under both the headless shell's switch and full Chromium's; proven on the headless shell), QUIC is off (`--disable-quic`), Chromium resolves no name itself (`--host-resolver-rules`): every lookup is the proxy's (ADR-0026 amendment, 2026-10-02, which lists what this doesn't cover, such as Playwright's own driver-side requests), and a page's peer connection starts no mDNS responder, which would bind UDP 5353 and join the mDNS group on every interface (`WebRtcHideLocalIpsWithMdns` off, in a `--disable-features` switch that repeats Playwright's list; ADR-0026 amendment on WebRTC's mDNS responder). #43's hostile pages show at the packet level that nothing else leaves (below).
   - **Tests** cover:
     - subresources, fetch/XHR and form posts;
     - WebSockets, QUIC, IPv6 and DNS prefetch;
@@ -119,7 +119,7 @@ The agent reads arbitrary page content. A malicious or compromised page may say 
     - DNS rebinding and service-worker registration attempts;
     - documents reached by clicks, redirects, `location` changes and popups, and frames from other origins.
 
-    The tests observe traffic at the packet level, on Linux as CI runs them, in a network namespace of their own (ADR-0026 amendment, 2026-10-02).
+    The tests observe traffic at the packet level, on Linux as CI runs them, in a network namespace of their own (ADR-0026 amendment, 2026-10-02). For each exfiltration method a hostile page in a real session tries every way that method has, each aimed at a canary of its own: no canary hears anything, routing or the proxy records each attempt that meets it, and every packet belongs to a connection to the proxy or one the proxy opened, told apart from a browser's own connection to an allowed origin by the proxy's own sockets (ADR-0026 amendment on hostile pages).
 - Per-org limits: concurrent runs, runs/hour, steps/run, minutes/run, tokens/run.
 - The public demo can only target our own benchmark apps.
 
