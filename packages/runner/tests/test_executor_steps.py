@@ -446,7 +446,6 @@ def test_a_popup_off_the_allowed_origins_makes_the_run_errored(
 
     result = run(app, tmp_path, script, spec=spec).result
 
-    # The click completed, but the popup's request hit an egress block.
     assert [(step.seq, step.outcome) for step in result.steps] == [
         (0, "completed"),
         (1, "completed"),
@@ -597,8 +596,6 @@ def test_an_event_during_a_lookup_stops_the_run_before_the_step_is_dispatched(
     done = run(app, tmp_path, script, spec=spec)
 
     result = done.result
-    # The popup's request hit an egress block while the run waited for the
-    # button, which came later and was never clicked.
     assert [(step.seq, step.outcome) for step in result.steps] == [(0, "completed")]
     assert [event.kind for event in result.policy_events] == ["popup"]
     assert [line["seq"] for line in read_steps(done.record.path)] == [0, 0]
