@@ -19,6 +19,7 @@ from aqa_core.config import ProjectConfig
 from aqa_runner import settling, text_search
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.document_origins import DocumentChangedError, PolicyEvent
+from aqa_runner.egress_proxy import RefusedHost
 from aqa_runner.executor import RunResult
 from aqa_runner.locators import Absent, Resolved, Unresolved, Use
 from aqa_runner.settling import Window
@@ -281,6 +282,7 @@ def test_an_assertion_that_meets_a_page_off_the_allowed_origins_ends_the_evaluat
         PolicyEvent("document", "chrome-error://chromewebdata/", None),
     )
     assert result.outcome == "errored"
+    assert result.error_code == "egress_blocked"
 
 
 @pytest.mark.parametrize(("changes", "outcome"), [(1, "pass"), (1000, "not_evaluated")])
@@ -461,9 +463,10 @@ def test_a_page_that_hit_an_egress_block_never_passes(app: App, tmp_path: Path) 
 
     result = run(app, tmp_path, script, spec=spec).result
 
-    # Until #47 decides what an egress block does, it ends the run errored.
     assert outcomes(result) == [("a1", "not_evaluated")]
     assert result.outcome == "errored"
+    assert result.error_code == "egress_blocked"
+    assert result.egress_blocks.refused == (RefusedHost("undeclared.example.test", 80),)
 
 
 def test_a_page_that_stops_answering_is_never_passed_on_its_url(

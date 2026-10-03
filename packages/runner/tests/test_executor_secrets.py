@@ -5,6 +5,7 @@ and no copy of a value in what the run leaves behind, even when the page
 throws it back. The browser tests launch real Chromium on the OS that runs
 them: Linux in CI, macOS locally."""
 
+import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from aqa_core.compiled import CompiledScript
 from aqa_core.project import SpecError
 from aqa_runner import executor
 from aqa_runner.bound_secrets import MissingSecretError, SecretLoggedError
+from aqa_runner.egress_proxy import EgressBlocks, RefusedHost
 from aqa_runner.executor import RunResult
 
 from packages.runner.tests.executor_fixtures import (
@@ -80,6 +82,51 @@ def no_copy(tmp_path: Path, *texts: str) -> list[str]:
     with its compiled script, and the run record), or any of `texts`."""
     files = [path for path in tmp_path.rglob("*") if path.is_file()]
     return copies_found(FAKE_VALUE, files=files, texts=texts)
+
+
+@pytest.mark.usefixtures("with_the_value")
+def test_a_secret_filling_runs_egress_record_names_no_host_or_port(
+    app: App, tmp_path: Path
+) -> None:
+    spec = secret_spec(
+        tmp_path,
+        start_url="/page/fetches?to=http%3A%2F%2Fundeclared.example.test%3A8080%2Fx",
+    )
+
+    done = run(app, tmp_path, signing_in([FILL_PASSWORD]), spec=spec)
+
+    assert [step.seq for step in done.result.steps] == [0]
+    assert done.result.outcome == "errored"
+    assert done.result.error_code == "egress_blocked"
+    assert done.result.egress_blocks == EgressBlocks(
+        (RefusedHost("undeclared.example.test", 8080),), False
+    )
+    assert json.loads((done.record.path / "egress.json").read_text()) == {
+        "error_code": "egress_blocked",
+        "refused_count": 1,
+        "overflowed": False,
+        "hosts_and_ports_withheld": True,
+    }
+
+
+@pytest.mark.usefixtures("with_the_value")
+def test_a_value_the_page_logs_and_throws_reaches_nothing_the_run_keeps(
+    app: App, tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    spec = secret_spec(tmp_path, start_url="/page/signin-echoes")
+
+    result = run(app, tmp_path, signing_in([FILL_PASSWORD]), spec=spec).result
+    out, err = capfd.readouterr()
+
+    assert result.outcome == "failed"
+    assert result.error_code is None
+    assert [assertion.outcome for assertion in result.assertions] == ["pass"]
+    observed = {invariant.name: invariant for invariant in result.invariants}
+    for name in ("console_errors", "js_exceptions"):
+        assert observed[name].outcome == "violated"
+        assert observed[name].total > 0
+        assert observed[name].seen == ()
+    assert no_copy(tmp_path, repr(result), out, err) == []
 
 
 @pytest.mark.usefixtures("with_the_value")

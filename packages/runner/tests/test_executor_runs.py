@@ -16,6 +16,7 @@ import pytest
 from aqa_core.config import ProjectConfig
 from aqa_runner import settling
 from aqa_runner.anthropic_client import AnthropicClient
+from aqa_runner.egress_proxy import EgressBlocks
 from aqa_runner.invariants import InvariantResult
 from aqa_runner.model_router import ModelRouter
 from aqa_runner.run_record import RunRecord
@@ -329,6 +330,7 @@ def test_a_disabled_invariant_doesnt_keep_a_run_from_passing(
     result = run(app, tmp_path, compiled([]), spec=spec).result
 
     assert result.outcome == "passed"
+    assert result.error_code is None
     assert [assertion.outcome for assertion in result.assertions] == ["pass"]
     assert result.invariants == (
         InvariantResult("console_errors", "disabled", ("console-trigger",), 1),
@@ -353,3 +355,32 @@ def test_an_invariant_violation_fails_a_run_whose_assertions_pass(
         InvariantResult("broken_images", "held", (), 0),
     )
     assert result.outcome == "failed"
+    assert result.error_code is None
+
+
+def test_an_expected_blocked_request_doesnt_end_the_run(
+    app: App, tmp_path: Path
+) -> None:
+    config = ProjectConfig.model_validate(
+        {"egress": {"expected_blocked": ["analytics.example.test"]}}
+    )
+    spec = a_spec(tmp_path, config, start_url="/page/expected-blocked")
+    script = compiled([{"seq": 1, "action": "reload", "side_effect": False}])
+
+    done = run(app, tmp_path, script, config=config, spec=spec)
+
+    assert done.result.outcome == "passed"
+    assert [(step.seq, step.outcome) for step in done.result.steps] == [
+        (0, "completed"),
+        (1, "completed"),
+    ]
+    assert [assertion.outcome for assertion in done.result.assertions] == ["pass"]
+    assert done.result.error_code is None
+    assert done.result.egress_blocks == EgressBlocks((), False)
+    assert done.result.invariants == (
+        InvariantResult("console_errors", "held", (), 0),
+        InvariantResult("js_exceptions", "held", (), 0),
+        InvariantResult("http_5xx", "held", (), 0),
+        InvariantResult("broken_images", "held", (), 0),
+    )
+    assert not (done.record.path / "egress.json").exists()

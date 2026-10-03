@@ -5,6 +5,7 @@ browser tests launch real Chromium on the OS that runs them: Linux in CI,
 macOS locally."""
 
 import asyncio
+import json
 import time
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
@@ -18,6 +19,7 @@ from aqa_core.project import SpecError
 from aqa_runner import executor
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.document_origins import DocumentChangedError, PolicyEvent
+from aqa_runner.egress_proxy import EgressBlocks, RefusedHost
 from aqa_runner.locators import Unresolved, Use
 from playwright.async_api import ElementHandle
 
@@ -38,6 +40,62 @@ from packages.runner.tests.executor_fixtures import (
 def app() -> Iterator[App]:
     with serving_app() as served:
         yield served
+
+
+def test_a_blank_popup_doesnt_end_the_run(app: App, tmp_path: Path) -> None:
+    script = compiled(
+        [{"seq": 1, "action": "click", "target": "pop", "side_effect": False}],
+        targets={
+            "pop": {
+                "semantic": "the pop button",
+                "locators": [by_role("button", "Pop")],
+            }
+        },
+    )
+    spec = a_spec(tmp_path, ProjectConfig(), start_url="/page/blank-popup")
+
+    result = run(app, tmp_path, script, spec=spec).result
+
+    assert [event.kind for event in result.policy_events] == ["popup"]
+    assert [step.outcome for step in result.steps] == ["completed", "completed"]
+    assert result.outcome == "passed"
+    assert [assertion.outcome for assertion in result.assertions] == ["pass"]
+    assert result.error_code is None
+
+
+@pytest.mark.parametrize("redirect", [False, True], ids=["routing", "gate"])
+def test_a_request_to_an_undeclared_host_ends_the_run_egress_blocked(
+    app: App, tmp_path: Path, redirect: bool
+) -> None:
+    destination = "http://undeclared.example.test/x"
+    if redirect:
+        destination = f"/redirect?to={quote(destination, safe='')}"
+    spec = a_spec(
+        tmp_path,
+        ProjectConfig(),
+        start_url=f"/page/fetches?to={quote(destination, safe='')}",
+    )
+    script = compiled([{"seq": 1, "action": "reload", "side_effect": False}])
+
+    done = run(app, tmp_path, script, spec=spec)
+
+    result = done.result
+    assert [step.seq for step in result.steps] == [0]
+    assert [line["seq"] for line in read_steps(done.record.path)] == [0, 0]
+    assert result.outcome == "errored"
+    assert result.error_code == "egress_blocked"
+    assert result.egress_blocks == EgressBlocks(
+        (RefusedHost("undeclared.example.test", 80),), False
+    )
+    assert {i.name for i in result.invariants if i.outcome == "violated"} == {
+        "js_exceptions"
+    }
+    assert json.loads((done.record.path / "egress.json").read_text()) == {
+        "error_code": "egress_blocked",
+        "refused": [{"host": "undeclared.example.test", "port": 80}],
+        "overflowed": False,
+        "hosts_and_ports_withheld": False,
+    }
 
 
 def test_the_first_navigation_goes_to_the_start_url_and_navigate_paths_join_as_written(
@@ -371,6 +429,7 @@ def test_a_step_that_lands_off_the_allowed_origins_stops_the_run_errored(
         PolicyEvent("document", "chrome-error://chromewebdata/", None),
     )
     assert result.outcome == "errored"
+    assert result.error_code == "egress_blocked"
 
 
 def test_a_popup_off_the_allowed_origins_makes_the_run_errored(
@@ -387,13 +446,14 @@ def test_a_popup_off_the_allowed_origins_makes_the_run_errored(
 
     result = run(app, tmp_path, script, spec=spec).result
 
-    # The click itself completed; the popup it opened is a policy event.
+    # The click completed, but the popup's request hit an egress block.
     assert [(step.seq, step.outcome) for step in result.steps] == [
         (0, "completed"),
         (1, "completed"),
     ]
     assert [event.kind for event in result.policy_events] == ["popup"]
     assert result.outcome == "errored"
+    assert result.error_code == "egress_blocked"
 
 
 def test_an_unreachable_start_origin_ends_the_run_errored_before_any_step(
@@ -423,6 +483,7 @@ def test_an_unreachable_start_origin_ends_the_run_errored_before_any_step(
         ("not_evaluated", 0)
     ]
     assert result.outcome == "errored"
+    assert result.error_code is None
 
 
 def test_an_action_waits_no_longer_than_resolve_seconds(
@@ -510,6 +571,7 @@ def test_a_lookup_that_meets_a_page_off_the_allowed_origins_stops_the_run_errore
         ("not_evaluated", 1)
     ]
     assert result.outcome == "errored"
+    assert result.error_code == "egress_blocked"
 
 
 def test_an_event_during_a_lookup_stops_the_run_before_the_step_is_dispatched(
@@ -535,13 +597,14 @@ def test_an_event_during_a_lookup_stops_the_run_before_the_step_is_dispatched(
     done = run(app, tmp_path, script, spec=spec)
 
     result = done.result
-    # The popup came while the run waited for the button; the button came
-    # later, and was never clicked.
+    # The popup's request hit an egress block while the run waited for the
+    # button, which came later and was never clicked.
     assert [(step.seq, step.outcome) for step in result.steps] == [(0, "completed")]
     assert [event.kind for event in result.policy_events] == ["popup"]
     assert [line["seq"] for line in read_steps(done.record.path)] == [0, 0]
     assert ("POST", "/write/pay") not in app.seen
     assert result.outcome == "errored"
+    assert result.error_code == "egress_blocked"
 
 
 def test_an_action_the_page_never_lets_finish_ends_with_the_budget(
@@ -624,6 +687,7 @@ def test_an_infrastructure_event_after_a_step_stops_the_run_errored(
         ("not_evaluated", 0)
     ]
     assert result.outcome == "errored"
+    assert result.error_code is None
 
 
 def test_an_error_that_isnt_the_pages_or_the_browsers_is_raised(

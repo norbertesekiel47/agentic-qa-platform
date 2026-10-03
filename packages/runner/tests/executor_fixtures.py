@@ -119,6 +119,9 @@ PAGES = SHOPS | {
     </script>""",
     # A page that fetches the URL its `to` parameter names, as it loads.
     "fetches": """<script>fetch(new URLSearchParams(location.search).get("to"))</script>""",
+    "expected-blocked": """<img src="http://analytics.example.test/direct.png">
+        <img src="/redirect?to=http%3A%2F%2Fanalytics.example.test%2Fhop.png">""",
+    "blank-popup": """<button onclick="window.open()">Pop</button>""",
     # Rendered text no regex can search in time: forty a's, then a b.
     "catastrophic": """<p>aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab</p>""",
     # An error toast that shows on save and fades 3 s later.
@@ -162,6 +165,10 @@ PAGES = SHOPS | {
     "signin-hides": """<label>Password <input type="password"
             oninput="this.getBoundingClientRect = () => { throw new Error(this.value); }">
         </label>""",
+    "signin-echoes": """<label>Password <input type="password" oninput="
+            console.error(this.value);
+            setTimeout(() => { throw new Error(this.value); }, 0);
+        "></label>""",
     "form": """<label>Name <input oninput="fetch('/did/fill')"></label>
         <label>Size <select onchange="fetch('/did/select')">
             <option>S</option><option>M</option></select></label>
