@@ -22,9 +22,9 @@ from aqa_runner.browser_session import (
     BrowserSession,
     RefError,
     open_browser_session,
-    renumber,
 )
 from aqa_runner.sandbox import Environment, SandboxUnavailableError
+from aqa_runner.snapshot_refs import renumber
 from playwright.async_api import (
     Browser,
     BrowserType,
