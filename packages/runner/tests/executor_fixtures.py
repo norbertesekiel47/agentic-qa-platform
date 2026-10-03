@@ -28,7 +28,33 @@ from playwright.async_api import async_playwright
 from packages.runner.tests.egress_fixtures import gate
 
 # The fixture app's pages, by name.
-PAGES = {
+# The shop page, whose save shows what was saved in #status, as `said`
+# does it: the clean page's, the wrong page's, and the page that loses
+# #status instead.
+SHOP = """<label>Name <input id="name" oninput="fetch('/did/fill')"></label>
+    <label>Size <select id="size"><option>S</option><option>M</option></select></label>
+    <button id="save">Save</button>
+    <section id="status-area"><p id="status" data-testid="status">Not saved</p></section>
+    <script>
+        addEventListener("keydown", (event) => {
+            if (event.key === "Enter") fetch("/did/press");
+        });
+        document.querySelector("#save").addEventListener("click", () => {
+            const name = document.querySelector("#name").value;
+            const size = document.querySelector("#size").value;
+            const status = document.querySelector("#status");
+            fetch("/write/save", {method: "POST"}).then(() => { SAID; });
+        });
+    </script>"""
+SHOPS = {
+    "shop": SHOP.replace(
+        "SAID", "status.textContent = `Saved ${name} in size ${size}`"
+    ),
+    "shop-wrong": SHOP.replace("SAID", 'status.textContent = "Saved nobody"'),
+    "shop-gone": SHOP.replace("SAID", "status.remove()"),
+}
+
+PAGES = SHOPS | {
     "start": """<a href="/page/form">Form</a>""",
     # A write 1 s after a click, and a button that appears 1.5 s after it.
     "late": """<button id="save">Save</button><script>
@@ -92,6 +118,22 @@ PAGES = {
     </script>""",
     # A page that fetches the URL its `to` parameter names, as it loads.
     "fetches": """<script>fetch(new URLSearchParams(location.search).get("to"))</script>""",
+    # Rendered text no regex can search in time: forty a's, then a b.
+    "catastrophic": """<p>aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab</p>""",
+    # An error toast that shows on save and fades 3 s later.
+    "toast": """<button id="save">Save</button><section id="status-area"></section><script>
+        document.querySelector("#save").addEventListener("click", () => {
+            const area = document.querySelector("#status-area");
+            area.innerHTML = '<p class="error">Card declined</p>';
+            setTimeout(() => { area.innerHTML = ""; }, 3000);
+        });
+    </script>""",
+    # The status area, without an error in it, 1.5 s after the page loads.
+    "late-area": """<script>
+        setTimeout(() => {
+            document.body.insertAdjacentHTML("beforeend", '<section id="status-area"></section>');
+        }, 1500);
+    </script>""",
     "form": """<label>Name <input oninput="fetch('/did/fill')"></label>
         <label>Size <select onchange="fetch('/did/select')">
             <option>S</option><option>M</option></select></label>
@@ -391,3 +433,76 @@ def paths(window: Window | None) -> list[tuple[str, str]]:
     return [
         (request.method, urlsplit(request.url).path) for request in window.requests.kept
     ]
+
+
+# Targets on the shop page, its error included: a not_visible target's
+# locators are scoped (DATA_MODEL §7, "Checked by the loader").
+SHOP_TARGETS = {
+    "name": {"semantic": "the name field", "locators": [{"css": "#name"}]},
+    "size": {"semantic": "the size list", "locators": [{"css": "#size"}]},
+    "save": {"semantic": "the save button", "locators": [by_role("button", "Save")]},
+    "status": {
+        "semantic": "the save status",
+        "locators": [{"css": "#status"}, {"testid": "status"}],
+    },
+    "error": {
+        "semantic": "the error message",
+        "locators": [{"css": ".error", "scope": {"css": "#status-area"}}],
+    },
+}
+
+
+def shop_script(page: str) -> CompiledScript:
+    """Every M1 action on the shop page called `page`, then one assertion
+    of each M1 check."""
+    return compiled(
+        [
+            {
+                "seq": 1,
+                "action": "navigate",
+                "url": f"/page/{page}",
+                "side_effect": False,
+            },
+            {"seq": 2, "action": "reload", "side_effect": False},
+            {
+                "seq": 3,
+                "action": "fill",
+                "target": "name",
+                "value": "Ada",
+                "side_effect": False,
+            },
+            {
+                "seq": 4,
+                "action": "select",
+                "target": "size",
+                "option": "M",
+                "side_effect": False,
+            },
+            {"seq": 5, "action": "press", "key": "Enter", "side_effect": False},
+            {
+                "seq": 6,
+                "action": "click",
+                "target": "save",
+                "side_effect": True,
+                "side_effect_basis": "network: POST /write/save",
+            },
+        ],
+        targets=SHOP_TARGETS,
+        assertions=[
+            {"id": "a1", "expect_index": 0, "check": "text_visible", "text": "saved"},
+            {
+                "id": "a2",
+                "expect_index": 0,
+                "check": "text_in_target",
+                "target": "status",
+                "pattern": r"Saved Ada in size M\b",
+            },
+            {"id": "a3", "expect_index": 0, "check": "not_visible", "target": "error"},
+            {
+                "id": "a4",
+                "expect_index": 0,
+                "check": "url_matches",
+                "pattern": "/page/shop",
+            },
+        ],
+    )
