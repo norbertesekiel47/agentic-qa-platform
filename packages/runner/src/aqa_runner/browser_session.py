@@ -204,6 +204,10 @@ class RefError(LookupError):
     given, or one whose element has left the page."""
 
 
+class UnsupportedVisualFrameError(RuntimeError):
+    """A child document cannot establish its ancestors' visibility or occlusion."""
+
+
 class BrowserSession:
     """The browser one attempt or replay of a run uses: a fresh Chromium
     process and its page. Open it with `open_browser_session`, which launches
@@ -543,10 +547,15 @@ class BrowserSession:
         self, element: ElementHandle, min_size: tuple[int, int], in_viewport: bool
     ) -> bool:
         """Read the size, viewport and first-rect hit test without scrolling.
-        The page and element's frame must be on allowed origins. One evaluation
-        in the page's world makes this the page's word, as the action hit test is."""
+        After origin checks, refuse child-frame targets: their own document's
+        geometry cannot establish the containing page's visibility or occlusion.
+        Supported observations use one evaluation in the page's world."""
         async with self._turn:
-            await self._require_allowed_element(element)
+            frame = await self._require_allowed_element(element)
+            if frame is not self.page.main_frame:
+                raise UnsupportedVisualFrameError(
+                    "visible_unoccluded does not support elements inside frames"
+                )
             return bool(await element.evaluate(UNOCCLUDED, [min_size, in_viewport]))
 
     async def text_of(self, element: ElementHandle) -> str:

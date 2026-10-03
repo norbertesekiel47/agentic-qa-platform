@@ -1,5 +1,3 @@
-"""Network checks read only the browser responses in settle windows (#48)."""
-
 import asyncio
 from typing import Literal
 

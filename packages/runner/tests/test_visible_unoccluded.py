@@ -1,12 +1,12 @@
-"""Deterministic visual checks through the origin-controlled browser session (#48)."""
-
 import asyncio
 from collections.abc import Iterator
 
 import pytest
 from aqa_core.compiled import ByCss, Target
+from aqa_runner import browser_session
 from aqa_runner.document_origins import PolicyEvent, PolicyEventError
 from aqa_runner.locators import Resolved
+from playwright.async_api import Frame
 
 from packages.runner.tests.document_fixtures import Sites, browsing, serving_sites
 from packages.runner.tests.test_locators import ACTIONABLE_LAYOUTS
@@ -111,3 +111,66 @@ def test_unoccluded_refuses_an_element_off_the_allowed_origins(sites: Sites) -> 
     assert asyncio.run(scenario()) == PolicyEvent(
         "frame", f"{sites.cdn}/doc", sites.cdn
     )
+
+
+async def child_frame(parent: Frame, url: str, top: str = "8px") -> Frame:
+    await parent.set_content(
+        '<body style="height: 2000px">'
+        f'<iframe src="{url}" style="position: absolute; left: 8px; '
+        f'top: {top}; width: 300px; height: 150px"></iframe>'
+    )
+    owner = await parent.wait_for_selector("iframe")
+    assert owner is not None
+    frame = await owner.content_frame()
+    assert frame is not None
+    await frame.wait_for_selector("button")
+    return frame
+
+
+@pytest.mark.parametrize(
+    "layout", ["visible", "offscreen", "covered", "nested", "other"]
+)
+def test_unoccluded_refuses_allowed_child_frames_without_scrolling(
+    sites: Sites, layout: str
+) -> None:
+    async def scenario() -> None:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/kept")
+            frame = await child_frame(
+                session.page.main_frame,
+                f"{sites.other if layout == 'other' else sites.app}/kept",
+                "110vh" if layout == "offscreen" else "8px",
+            )
+            frames = [session.page.main_frame, frame]
+            if layout == "nested":
+                frame = await child_frame(frame, f"{sites.app}/kept?nested")
+                frames.append(frame)
+            await frame.set_content('<body style="height: 2000px">' + link())
+            if layout == "covered":
+                await session.page.evaluate(
+                    """() => document.body.insertAdjacentHTML("beforeend",
+                        '<div style="position: fixed; inset: 0; z-index: 999; '
+                        + 'background: white"></div>')"""
+                )
+            element = await frame.query_selector('[data-is="b"]')
+            assert element is not None
+            for index, observed in enumerate(frames):
+                await observed.evaluate("(y) => scrollTo(0, y)", index + 1)
+            before = [
+                await observed.evaluate("[scrollX, scrollY]") for observed in frames
+            ]
+            assert before == [[0, index + 1] for index in range(len(frames))]
+
+            with pytest.raises(RuntimeError) as refused:
+                await session.unoccluded(element, (44, 24), True)
+
+            assert type(refused.value) is browser_session.UnsupportedVisualFrameError
+            assert str(refused.value) == (
+                "visible_unoccluded does not support elements inside frames"
+            )
+            after = [
+                await observed.evaluate("[scrollX, scrollY]") for observed in frames
+            ]
+            assert after == before
+
+    asyncio.run(scenario())

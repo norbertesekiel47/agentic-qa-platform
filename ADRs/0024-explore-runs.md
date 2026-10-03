@@ -302,7 +302,14 @@ Evaluating the rest of M1's checks (#48) settled what the Decision's "Probes. Re
 ### Visible and unoccluded
 
 - **One shared hit test.** Reuse action resolution's center of the first non-empty client rect, through the element's own root, and accept the element or a descendant. A bounding-box center can fall between a wrapped link's pieces, and asking only the document misses shadow-root elements (LAB_NOTES, 2026-10-02).
-- **One observation, no scrolling.** The browser session checks the page and element origins, then reads the bounding-box size, viewport containment and shared hit test in one page-world evaluation. Scrolling would change what later assertions see and let an off-screen element pass. A covered element resolves for assertion use and evaluates false.
+- **One observation, no scrolling.** The browser session checks the page and element origins and requires a main-frame target, then reads the bounding-box size, viewport containment and shared hit test in one page-world evaluation. Scrolling would change what later assertions see and let an off-screen element pass. A covered element resolves for assertion use and evaluates false.
+- **Child frames: refused in M1** (maintainer, 2026-10-03).
+  - *Finding:* the independent spec review exposed false passes for a target in an offscreen iframe and one covered by the parent document. Its visible control passed (LAB_NOTES, 2026-10-03).
+  - *Options:* (1) map the target's bounds and hit point through every ancestor frame and check viewport containment and occlusion at each level, accounting for clipping, borders, scrolling, transforms and document changes; (2) refuse child-frame observations explicitly.
+  - *Chosen: 2.* An own-document observation cannot establish the containing page's display. Main-frame targets match the current compiled locator surface, which has no frame traversal. Full ancestor geometry is a separate design.
+  - *Contract:* after existing origin checks, a target outside the session page's main frame raises `UnsupportedVisualFrameError`, with the fixed message `visible_unoccluded does not support elements inside frames`. This includes visible, offscreen, covered, nested and other allowed-origin frames. An off-allowed-origin target still raises its original policy error first.
+  - *Consequence:* M1 cannot establish visual claims inside child frames, including unobstructed ones. Refusal never returns false and never scrolls. Main-frame checks, including open shadow roots, keep the shared hit test.
+  - *Cost:* no paid resource, model call or extra browser observation; use the owner frame already returned by the origin check.
 - **Limits.** This is the page's word, as action resolution's hit test is. It does not detect overlays with `pointer-events: none`, transparency, or pixel differences. M1's executor still refuses these check types until #48's executor slice. That slice also refuses `in_viewport: false` before opening the browser, as the approved plan requires.
 
 ## Amendment (2026-10-02): invariant observers (#47)
