@@ -151,14 +151,17 @@ FILL = """(element, value) => {
 # can: a box of some size and a computed visibility of `visible` (`hidden`,
 # `display: none` on it or an ancestor, and a detached element leave no box).
 # Unlike Playwright, an element with `display: contents` counts as having no
-# box. An element that isn't HTML, such as SVG's, has no innerText: its text
-# content is read.
+# box. Only HTML elements have rendered text: any other, such as SVG's, raises,
+# as Playwright's innerText does, since its text content holds what the page
+# hides (a `<tspan visibility="hidden">`, a `<title>`).
 RENDERED_TEXT = """(element) => {
+    if (!(element instanceof HTMLElement)) {
+        throw new Error(`text_of reads HTML elements only: <${element.localName}> isn't one`);
+    }
     const box = element.getBoundingClientRect();
     const shown = box.width > 0 && box.height > 0 &&
         getComputedStyle(element).visibility === "visible";
-    if (!shown) return "";
-    return element instanceof HTMLElement ? element.innerText : (element.textContent ?? "");
+    return shown ? element.innerText : "";
 }"""
 
 # Whether an element with the focus stands for nothing focused: the body, or

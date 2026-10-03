@@ -17,7 +17,7 @@ from aqa_runner.document_origins import (
     PolicyEventError,
 )
 from aqa_runner.locators import Resolved
-from playwright.async_api import ElementHandle
+from playwright.async_api import ElementHandle, Error
 
 from packages.runner.tests.document_fixtures import Sites, browsing, serving_sites, to
 
@@ -211,3 +211,23 @@ def test_text_of_reads_nothing_from_an_element_the_page_doesnt_render(
 
     # Its innerText would be its text content; on screen it has none.
     assert asyncio.run(scenario()) == ""
+
+
+def test_text_of_reads_no_element_that_isnt_html(sites: Sites) -> None:
+    status = Target(semantic="the order status", locators=(ByCss(css="#status"),))
+
+    async def scenario() -> Error:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/kept")
+            # SVG text whose hidden part its text content would still hold.
+            await session.page.evaluate(
+                """document.body.insertAdjacentHTML("beforeend",
+                    '<svg><text id="status" x="0" y="20">Payment failed' +
+                    '<tspan visibility="hidden"> Payment confirmed</tspan></text></svg>')"""
+            )
+            with pytest.raises(Error) as refused:
+                await session.text_of(await found(session, status))
+            return refused.value
+
+    # A look that raises, never a reading of text the page hides.
+    assert "reads HTML elements only" in str(asyncio.run(scenario()))
