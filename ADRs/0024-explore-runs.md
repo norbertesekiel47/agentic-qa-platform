@@ -172,6 +172,25 @@ The Decision's step readiness, as the browser session builds it (`aqa_runner.set
 - **`visible_text()`** is the rendered text of the page's `body`, read the same way (`text_visible`), or empty when the page has none. It checks the page before and after, and counts frame changes from before the first check, as `resolve` does. If any happened, it discards what it read and raises `DocumentChangedError`, even when the page is back on an allowed origin.
 - **Known limit, chosen for M1** (coordinator, 2026-10-02): rendered text never enters a frame, so text inside a frame, even one on an allowed origin, never satisfies `text_visible`. Reading allowed frames would need each one checked. Revisit when a spec needs frame text.
 
+### The executor
+`aqa_runner.executor.replay(script, setup, *, chromium, proxy, gate)` runs a compiled script once, with no model. `RunSetup(spec, config, start, record)` carries the spec and project config the run is for, its start origin and its record: four inputs that travel together, bundled to keep within Ruff's argument limit.
+- **What M1 can't run is refused first.** A `fill_secret` step (#49) and the `network_none`, `network_seen`, `probe_equals_baseline` and `visible_unoccluded` checks (#48) are a `SpecError` (exit 5), one problem naming each, before the browser opens (coordinator's ruling). *Rejected:* running the rest and leaving those out, which would report a run that never checked what the spec claims.
+- **One session, the script's settings:** `script.browser`, never the project's or the spec's (ADR-0025, "Browser settings").
+- **Seq 0 is the start URL** (`aqa_core.project.start_url`), recorded and settled as a step. Each compiled `navigate` joins its path to the start origin (`path_on_origin`).
+- **Each step:** resolve its target for `action`, write the intent, dispatch through the session, settle, then write the completion with the index of the locator used and how settling ended.
+- **Resolution waits within `resolve_seconds`,** looking every 100 ms. Each look is cut off when the budget runs out, since `is_enabled` can wait for good on an element moved into another document (ADR-0025's #52 amendment); the cut keeps that off the run without touching `locators`. A look the page changed under (`DocumentChangedError`) is made again, within the same budget.
+- **Waits are bounded** (`BrowserSession.limit_waits`). An action's own wait, for its element to be actionable or an option to appear, ends at `resolve_seconds`. `navigate` and `reload` wait up to `NAVIGATION_SECONDS`, 30 s, Playwright's default made explicit, and hold the session's lock that long.
+  - *Options:* one bound, `resolve_seconds`, for both; Playwright's 30 s for both; `resolve_seconds` for actions and 30 s for navigations.
+  - *Chosen:* the third (coordinator). `resolve_seconds` is a lookup budget, and a slow first load on the pilot apps' stack shouldn't fail a step. No config field.
+- **What stops the run.** Every assertion is still listed, `not_evaluated`, naming the step that stopped the run.
+  - A step whose target never resolves: it drifted, nothing was dispatched and no intent written.
+  - A dispatch or a settle that raises Playwright's `Error` or `PolicyEventError`: the step `failed`, and its intent stays unresolved, since whether the action took effect is unknown.
+  - An infrastructure event, or any policy event (a popup's included), after a step. What a policy event does to a run is #47's; until then it ends the run errored.
+  - A `press` key the session refuses raises `ValueError` out of `replay`: the script's fault, not the page's.
+- **The run's outcome** is `passed`, `failed` or `errored`, DATA_MODEL's `runs.status` vocabulary (`heal_proposed` is M2's). `errored` follows an infrastructure or policy event or a failed step; `passed` needs every step completed and every assertion passed; anything else is `failed`. The reason is on each step and assertion, a drifted step's included, so M2 reads drift without a run-level value. *Rejected:* more run-level values (`drifted`, `inconclusive`) with a precedence between them. No run passes until #46's assertions pull request evaluates them.
+- **The run record.** `RunRecord.step_intent` and `step_completed` each append one JSON line to the run's `steps.jsonl` and force it to disk (`os.fsync`, and the directory's when the file is new) before returning, so an action is dispatched only after its intent is on disk. An intent with no completion after it is unresolved (DATA_MODEL §7, "Local run record").
+- **Cost:** none. No model, and no AWS resource; every step costs at least settling's 0.5 s.
+
 ## Amendment (2026-10-02): the coverage plan (#41)
 
 Building `aqa explore --plan-only` (#41) settled how the plan is shaped and hashed. DATA_MODEL §7 ("Coverage plan first") holds the format; this records why. #41 lands in three pull requests, and each adds its part here.

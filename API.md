@@ -1,6 +1,6 @@
 # API — Agentic QA Platform
 
-Last updated: 2026-10-02 (`aqa explore --plan-only`, its run record, and exit codes 3, 5, 10 and 11, #41; an invalid compiled script is a spec error, #46; `--url` is an origin, #39; explore exit codes and flags, ADR-0024). REST over HTTPS, JSON, base path `/v1`. The FastAPI app is the source of truth; its generated OpenAPI document produces the dashboard's typed client. This file is the design contract — update it in the same PR as any endpoint change.
+Last updated: 2026-10-02 (`aqa explore --plan-only`, its run record, and exit codes 3, 5, 10 and 11, #41; an invalid compiled script is a spec error, and so is one the M1 executor can't run, #46; `--url` is an origin, #39; explore exit codes and flags, ADR-0024). REST over HTTPS, JSON, base path `/v1`. The FastAPI app is the source of truth; its generated OpenAPI document produces the dashboard's typed client. This file is the design contract — update it in the same PR as any endpoint change.
 
 ## 1. Conventions
 
@@ -173,7 +173,7 @@ Exit codes:
 | `2` | Heal proposals pending |
 | `3` | Inconclusive. For `explore`: gave up (attempts or budget exhausted, a model refusal with no fallback, a coverage plan that didn't parse, was cut off at the output bound or doesn't fit its spec, or a flaky confirmation) |
 | `4` | Non-resumable run |
-| `5` | Spec error: the spec, its compiled script or the project config is invalid, a required setting is missing (a start origin, the provider's key), or an expectation has no establishing check (ADR-0024; DATA_MODEL §7, "Checked by the loader") |
+| `5` | Spec error: the spec, its compiled script or the project config is invalid, a required setting is missing (a start origin, the provider's key), an expectation has no establishing check, or the compiled script has a step or check M1 can't run yet (`fill_secret`, #49; network, probe and visual checks, #48) (ADR-0024 and its #46 amendment; DATA_MODEL §7, "Checked by the loader") |
 | `6` | Policy: egress blocked. The page requested a host that is neither an allowed origin, a subresource host nor expected-blocked. No finding; the run record names the refused host (ADR-0026) |
 | `10` | No sandbox: Chromium's sandbox can't start, or the sandbox check can't prove it (`aqa_runner.sandbox.SandboxUnavailableError.exit_code`, ADR-0026) |
 | `11` | No model response: a model call got none (a provider outage, a timeout, a refused key), or a fallback got none after a billed refusal, whose cost record is kept (#41) |
