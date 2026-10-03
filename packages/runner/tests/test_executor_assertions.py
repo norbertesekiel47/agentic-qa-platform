@@ -5,8 +5,11 @@ assertion is evaluated, `pass`, `failed`, `binding_unresolved` or
 are written by hand, and the browser tests launch real Chromium on the OS
 that runs them: Linux in CI, macOS locally."""
 
+import asyncio
+import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from aqa_core.config import ProjectConfig
@@ -14,6 +17,7 @@ from aqa_runner import text_search
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.document_origins import DocumentChangedError, PolicyEvent
 from aqa_runner.executor import RunResult
+from playwright.async_api import Error
 
 from packages.runner.tests.executor_fixtures import (
     SHOP_TARGETS,
@@ -206,10 +210,14 @@ def test_not_visible_waits_out_a_scope_that_isnt_there_yet(
     # The status area appears 1.5 s after the page loads, with no error in it.
     spec = a_spec(tmp_path, config, start_url="/page/late-area")
 
+    started = time.monotonic()
+
     result = run(app, tmp_path, script, config=config, spec=spec).result
 
     assert outcomes(result) == [("a1", outcome)]
     assert result.assertions[0].misses == misses
+    # Absent is a result at the look that finds it, not after the budget.
+    assert time.monotonic() - started < 8
 
 
 def test_an_assertion_that_meets_a_page_off_the_allowed_origins_ends_the_evaluation(
@@ -242,7 +250,9 @@ def test_an_assertion_that_meets_a_page_off_the_allowed_origins_ends_the_evaluat
 
     assert outcomes(result) == [("a1", "not_evaluated"), ("a2", "not_evaluated")]
     assert (result.assertions[0].error or "").startswith("the page is on no origin")
-    assert result.assertions[1].error is None
+    assert (
+        result.assertions[1].error == "not evaluated after a1's look at the page raised"
+    )
     assert result.policy_events == (
         PolicyEvent("document", "chrome-error://chromewebdata/", None),
     )
@@ -280,4 +290,132 @@ def test_page_text_is_read_again_while_the_page_changes_under_the_read(
     # Once it changed under the read, read again; while it keeps changing
     # past resolve_seconds, nothing about the check can be said.
     assert outcomes(result) == [("a1", outcome)]
+    if outcome == "not_evaluated":
+        assert result.assertions[0].error == str(DocumentChangedError())
     assert result.outcome == ("passed" if outcome == "pass" else "errored")
+
+
+def test_a_look_that_raises_leaves_every_later_assertion_unlooked_at(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    looks: list[str] = []
+
+    async def crashed(_: BrowserSession) -> str:
+        looks.append("url")
+        raise Error("Page.evaluate: Target crashed")
+
+    async def text(_: BrowserSession) -> str:
+        looks.append("text")
+        return "Name"
+
+    monkeypatch.setattr(BrowserSession, "url", crashed)
+    monkeypatch.setattr(BrowserSession, "visible_text", text)
+    script = compiled(
+        [],
+        assertions=[
+            {"id": "a1", "expect_index": 0, "check": "url_matches", "pattern": "/"},
+            {"id": "a2", "expect_index": 0, "check": "text_visible", "text": "Name"},
+            {"id": "a3", "expect_index": 0, "check": "url_matches", "pattern": "/"},
+        ],
+    )
+
+    result = run(app, tmp_path, script).result
+
+    assert outcomes(result) == [
+        ("a1", "not_evaluated"),
+        ("a2", "not_evaluated"),
+        ("a3", "not_evaluated"),
+    ]
+    assert result.assertions[0].error == "Error: Page.evaluate: Target crashed"
+    assert [assertion.error for assertion in result.assertions[1:]] == [
+        "not evaluated after a1's look at the page raised"
+    ] * 2
+    # Nothing was looked at after the look that raised.
+    assert looks == ["url"]
+    assert result.outcome == "errored"
+
+
+@pytest.mark.parametrize("read", ["visible_text", "text_of"])
+def test_a_read_the_page_never_answers_ends_with_the_budget(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read: str
+) -> None:
+    async def never(*_: object) -> Any:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(BrowserSession, read, never)
+    script = compiled(
+        [],
+        targets=SHOP_TARGETS,
+        assertions=[
+            {"id": "a1", "expect_index": 0, "check": "text_visible", "text": "Name"}
+            if read == "visible_text"
+            else {
+                "id": "a1",
+                "expect_index": 0,
+                "check": "text_in_target",
+                "target": "status",
+                "text": "saved",
+            },
+        ],
+    )
+    config = ProjectConfig.model_validate({"budgets": {"resolve_seconds": 1}})
+    spec = a_spec(tmp_path, config, start_url="/page/shop")
+    started = time.monotonic()
+
+    result = run(app, tmp_path, script, config=config, spec=spec).result
+
+    assert outcomes(result) == [("a1", "not_evaluated")]
+    assert result.assertions[0].error == "the page didn't answer within 2 s"
+    assert result.outcome == "errored"
+    assert time.monotonic() - started < 20
+
+
+def test_text_in_target_reads_only_its_targets_text(app: App, tmp_path: Path) -> None:
+    script = compiled(
+        [],
+        targets={
+            "save": {
+                "semantic": "the save button",
+                "locators": [{"css": "button.save"}],
+            }
+        },
+        assertions=[
+            # "Size" is on the page, in a label, not in the button.
+            {
+                "id": "a1",
+                "expect_index": 0,
+                "check": "text_in_target",
+                "target": "save",
+                "text": "Size",
+            },
+            {
+                "id": "a2",
+                "expect_index": 0,
+                "check": "text_in_target",
+                "target": "save",
+                "text": "Save",
+            },
+        ],
+    )
+
+    result = run(app, tmp_path, script).result
+
+    assert outcomes(result) == [("a1", "failed"), ("a2", "pass")]
+
+
+def test_not_visible_passes_on_an_error_the_page_never_shows(
+    app: App, tmp_path: Path
+) -> None:
+    script = compiled(
+        [],
+        targets=SHOP_TARGETS,
+        assertions=[
+            {"id": "a1", "expect_index": 0, "check": "not_visible", "target": "error"}
+        ],
+    )
+    spec = a_spec(tmp_path, ProjectConfig(), start_url="/page/hidden-error")
+
+    result = run(app, tmp_path, script, spec=spec).result
+
+    # Only what is on screen counts: the hidden error is absent.
+    assert outcomes(result) == [("a1", "pass")]

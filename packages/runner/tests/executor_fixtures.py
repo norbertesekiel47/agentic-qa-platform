@@ -128,6 +128,8 @@ PAGES = SHOPS | {
             setTimeout(() => { area.innerHTML = ""; }, 3000);
         });
     </script>""",
+    # An error in the status area that the page never shows.
+    "hidden-error": """<section id="status-area"><p class="error" hidden>Card declined</p></section>""",
     # The status area, without an error in it, 1.5 s after the page loads.
     "late-area": """<script>
         setTimeout(() => {
