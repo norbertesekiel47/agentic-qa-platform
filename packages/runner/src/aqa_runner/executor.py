@@ -254,25 +254,21 @@ async def _run(
 def _untargeted(
     session: BrowserSession, step: Untargeted, start: str
 ) -> Awaitable[Window]:
-    match step:
-        case Navigate(url=path):
-            return session.navigate(path_on_origin(start, path))
-        case Reload():
-            return session.reload()
-        case Press(key=key):
-            return session.press(key)
+    if isinstance(step, Navigate):
+        return session.navigate(path_on_origin(start, step.url))
+    if isinstance(step, Reload):
+        return session.reload()
+    return session.press(step.key)
 
 
 def _targeted(
     session: BrowserSession, step: Targeted, element: ElementHandle
 ) -> Awaitable[Window]:
-    match step:
-        case Click():
-            return session.click(element)
-        case Fill(value=value):
-            return session.fill(element, value)
-        case Select(option=option):
-            return session.select(element, option)
+    if isinstance(step, Click):
+        return session.click(element)
+    if isinstance(step, Fill):
+        return session.fill(element, step.value)
+    return session.select(element, step.option)
 
 
 async def _resolve(

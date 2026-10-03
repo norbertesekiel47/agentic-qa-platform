@@ -1042,3 +1042,27 @@ def test_the_run_uses_the_scripts_browser_settings_not_the_project_or_spec_overr
         "scale": ["2"],
         "scheme": ["dark"],
     }
+
+
+def test_a_timeout_a_lookup_raises_itself_is_not_taken_for_the_budget(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def times_out(*_: object) -> Any:
+        raise TimeoutError("the lookup's own")
+
+    monkeypatch.setattr(BrowserSession, "resolve", times_out)
+    script = compiled(
+        [
+            {
+                "seq": 1,
+                "action": "fill",
+                "target": "name",
+                "value": "Ada",
+                "side_effect": False,
+            }
+        ],
+        targets=FORM_TARGETS,
+    )
+
+    with pytest.raises(TimeoutError, match="the lookup's own"):
+        run(app, tmp_path, script)
