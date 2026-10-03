@@ -228,6 +228,7 @@ def page(sites: Sites, path: str, query: dict[str, list[str]]) -> str | None:
             <label>Upper <input type="PASSWORD"></label>""",
         "/tokens": """<label>API token <input></label>
             <label>API key <input></label>
+            <label>API tokens <input></label>
             <label>API token <input type="search"></label>""",
         # The sign-in page in a frame of the second allowed origin and in one
         # of the subresource host, beside a password field in a frame of the
@@ -241,6 +242,20 @@ def page(sites: Sites, path: str, query: dict[str, list[str]]) -> str | None:
         "/sandboxed": '<iframe sandbox="allow-scripts" src="/signin"></iframe>',
         "/sandwich": f'<iframe src="{sites.other}/framing"></iframe>',
         "/framing": f'<iframe src="{sites.app}/signin"></iframe>',
+        # A password field served sandboxed (see the handler), at the top
+        # and in a frame of the page; and a field with no name.
+        "/ugc": '<label>Password <input type="password"></label>',
+        "/framed-ugc": '<iframe src="/ugc"></iframe>',
+        "/unnamed": "<input>",
+        # A password field that reports each input to the site as /typed.
+        "/reports": """<label>Password
+            <input type="password" oninput="fetch('/typed')"></label>""",
+        # A password field that, once filled, makes the check before an
+        # action on it throw back what it holds: it has a subresource host's
+        # frame beside it, so every action asks whether it contains one.
+        "/rethrows": f"""<label>Password <input type="password"
+                oninput="this.matches = () => {{ throw new Error(this.value); }}"></label>
+            <iframe src="{sites.cdn}/doc"></iframe>""",
         # A password field whose page throws back the text it is handed.
         "/throws": """<label>Password <input type="password"></label><script>
             document.execCommand = (command, ui, text) => { throw new Error(text); };
@@ -274,6 +289,10 @@ def serving_sites(monkeypatch: pytest.MonkeyPatch) -> Iterator[Sites]:
             data = f"<!doctype html><title>{target.path}</title>{body}".encode()
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html")
+            if target.path == "/ugc":
+                # Content the app doesn't trust, which its response puts on
+                # an opaque origin whatever its URL (#49).
+                self.send_header("Content-Security-Policy", "sandbox allow-scripts")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
