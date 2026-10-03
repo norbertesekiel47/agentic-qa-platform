@@ -142,6 +142,26 @@ PAGES = SHOPS | {
             document.body.insertAdjacentHTML("beforeend", '<section id="status-area"></section>');
         }, 1500);
     </script>""",
+    # Sign-in pages for fill_secret steps (#49): a form that posts its
+    # password to the app; a field whose page throws back the text it is
+    # handed; one that, once filled, makes the check before a later action on
+    # it throw what it holds (the frame beside it, on no origin and making no
+    # request, makes every action ask); and one that, once filled, makes
+    # reading its text throw what it holds.
+    "signin": """<form method="post" action="/write/signin" accept-charset="utf-8">
+            <label>Password <input type="password" name="password"></label>
+            <label>Name <input name="name"></label>
+            <button>Sign in</button>
+        </form>""",
+    "signin-throws": """<label>Password <input type="password"></label><script>
+        document.execCommand = (command, ui, text) => { throw new Error(text); };
+    </script>""",
+    "signin-rethrows": """<label>Password <input type="password"
+            oninput="this.matches = () => { throw new Error(this.value); }"></label>
+        <iframe src="data:text/html,<p>Frame</p>"></iframe>""",
+    "signin-hides": """<label>Password <input type="password"
+            oninput="this.getBoundingClientRect = () => { throw new Error(this.value); }">
+        </label>""",
     "form": """<label>Name <input oninput="fetch('/did/fill')"></label>
         <label>Size <select onchange="fetch('/did/select')">
             <option>S</option><option>M</option></select></label>
@@ -177,6 +197,8 @@ class App:
     # Each request's method and path, and the steps record's lines when it
     # arrived.
     records: list[tuple[str, str, list[dict[str, Any]]]] = field(default_factory=list)
+    # Each POST's path and body, in order.
+    bodies: list[tuple[str, bytes]] = field(default_factory=list)
 
     def hold(self, key: str) -> threading.Event:
         with self.arrived:
@@ -198,7 +220,9 @@ class _Handler(BaseHTTPRequestHandler):
     app: App
 
     def do_POST(self) -> None:
-        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        with self.app.arrived:
+            self.app.bodies.append((self.path, body))
         self._answer()
 
     def do_GET(self) -> None:

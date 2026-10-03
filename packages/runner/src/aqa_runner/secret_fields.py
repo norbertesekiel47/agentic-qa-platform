@@ -7,7 +7,7 @@ import re
 
 from aqa_core.config import SecretField
 from aqa_core.text import normalize
-from playwright.async_api import ElementHandle, Frame
+from playwright.async_api import ElementHandle, Error, Frame
 
 from aqa_runner.locators import name_pattern
 
@@ -28,6 +28,14 @@ class SecretRefusedError(Exception):
     allow it: not a policy event, since the page is on an allowed origin, but
     the wrong page or field for this secret. Nothing was filled, and the
     message names the secret, never its value."""
+
+
+class SecretNotFilledError(Error):
+    """fill_secret didn't fill a test secret: the field took no text, its page
+    changed the value, or the page broke or closed during the fill or its
+    checks. Playwright's error type, with a message of ours that names the
+    secret: nothing of the page's error is kept, since the page can throw a
+    value back."""
 
 
 def describe_field(field: SecretField) -> str:
