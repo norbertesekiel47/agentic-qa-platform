@@ -64,6 +64,16 @@ def test_each_step_is_completed_after_its_action_with_the_locator_used(
         "side_effect": True,
         "target_used": "save",
     }
+    # Each step's side_effect flag as compiled, the press's included.
+    assert [line["side_effect"] for line in intents] == [
+        False,
+        False,
+        False,
+        True,
+        True,
+        False,
+        False,
+    ]
     completions = [line for line in lines if line["state"] == "completed"]
     assert [line["locator_used"] for line in completions] == [
         None,

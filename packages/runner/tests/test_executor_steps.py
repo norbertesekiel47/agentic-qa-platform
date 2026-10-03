@@ -9,6 +9,7 @@ import time
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import pytest
 from aqa_core.compiled import Target
@@ -17,7 +18,7 @@ from aqa_core.project import SpecError
 from aqa_runner import executor
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.document_origins import DocumentChangedError, PolicyEvent
-from aqa_runner.locators import Use
+from aqa_runner.locators import Unresolved, Use
 from playwright.async_api import ElementHandle
 
 from packages.runner.tests.egress_fixtures import unused_port
@@ -92,6 +93,13 @@ def test_unsupported_steps_and_checks_are_refused_by_name_before_the_browser_ope
             },
             # Tab held down could move the focus before the key goes.
             {"seq": 3, "action": "press", "key": "Tab+a", "side_effect": False},
+            # Every modifier held before one key is a key press can take.
+            {
+                "seq": 4,
+                "action": "press",
+                "key": "Shift+Control+Alt+Meta+ControlOrMeta+a",
+                "side_effect": False,
+            },
         ],
         targets=FORM_TARGETS,
         assertions=[
@@ -413,7 +421,7 @@ def test_an_unreachable_start_origin_ends_the_run_errored_before_any_step(
         targets=FORM_TARGETS,
     )
 
-    result = run(app, tmp_path, script, start=nowhere).result
+    result = run(app, tmp_path, script, origins=(nowhere,)).result
 
     assert [step.seq for step in result.steps] == [0]
     assert [(event.host, event.port) for event in result.infrastructure_events] == [
@@ -597,3 +605,86 @@ def test_a_failed_steps_reason_holds_only_a_bounded_line_of_what_the_page_said(
     assert error.startswith("Error: ElementHandle.evaluate: Error: ")
     assert "\x1b" not in error
     assert len(error) <= 200
+
+
+def test_an_infrastructure_event_after_a_step_stops_the_run_errored(
+    app: App, tmp_path: Path
+) -> None:
+    nowhere = f"http://127.0.0.1:{unused_port()}"
+    script = compiled([{"seq": 1, "action": "reload", "side_effect": False}])
+    # The start page fetches from another allowed origin, which nothing serves.
+    spec = a_spec(
+        tmp_path,
+        ProjectConfig(),
+        start_url=f"/page/fetches?to={quote(nowhere, safe='')}",
+    )
+
+    done = run(app, tmp_path, script, spec=spec, origins=(app.origin, nowhere))
+
+    result = done.result
+    # The start URL's step completed; the reload after it never ran.
+    assert [(step.seq, step.outcome) for step in result.steps] == [(0, "completed")]
+    assert [line["seq"] for line in read_steps(done.record.path)] == [0, 0]
+    assert [(event.host, event.port) for event in result.infrastructure_events] == [
+        ("127.0.0.1", int(nowhere.rsplit(":", 1)[1]))
+    ]
+    assert [(a.outcome, a.stopped_at) for a in result.assertions] == [
+        ("not_evaluated", 0)
+    ]
+    assert result.outcome == "errored"
+
+
+def test_an_error_that_isnt_the_pages_or_the_browsers_is_raised(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def broken(*_: object) -> Any:
+        raise RuntimeError("the runner's own fault")
+
+    monkeypatch.setattr(BrowserSession, "click", broken)
+    script = compiled(
+        [
+            {
+                "seq": 1,
+                "action": "click",
+                "target": "save",
+                "side_effect": True,
+                "side_effect_basis": "network: POST /write/save",
+            }
+        ],
+        targets=FORM_TARGETS,
+    )
+
+    # Not a failed step: a fault in the runner is no outcome of the page's.
+    with pytest.raises(RuntimeError, match="the runner's own fault"):
+        run(app, tmp_path, script)
+
+
+def test_a_target_is_looked_for_every_tenth_of_a_second(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    looks: list[float] = []
+
+    async def never(*_: object) -> Any:
+        looks.append(time.monotonic())
+        return Unresolved(("no match",))
+
+    monkeypatch.setattr(BrowserSession, "resolve", never)
+    script = compiled(
+        [
+            {
+                "seq": 1,
+                "action": "fill",
+                "target": "name",
+                "value": "Ada",
+                "side_effect": False,
+            }
+        ],
+        targets=FORM_TARGETS,
+    )
+    config = ProjectConfig.model_validate({"budgets": {"resolve_seconds": 1}})
+
+    result = run(app, tmp_path, script, config=config).result
+
+    assert result.steps[1].outcome == "drifted"
+    # About ten looks in the second, not a spin.
+    assert 5 <= len(looks) <= 12

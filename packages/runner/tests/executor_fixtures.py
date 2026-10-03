@@ -90,6 +90,8 @@ PAGES = {
             throw new Error("\\x1b[31m" + "x".repeat(100000));
         };
     </script>""",
+    # A page that fetches the URL its `to` parameter names, as it loads.
+    "fetches": """<script>fetch(new URLSearchParams(location.search).get("to"))</script>""",
     "form": """<label>Name <input oninput="fetch('/did/fill')"></label>
         <label>Size <select onchange="fetch('/did/select')">
             <option>S</option><option>M</option></select></label>
@@ -300,14 +302,16 @@ def run(
     *,
     config: ProjectConfig | None = None,
     spec: Spec | None = None,
-    start: str | None = None,
+    origins: tuple[str, ...] | None = None,
 ) -> Run:
-    """Replay `script` against the app, or against `start` when given, with
-    a record under `tmp_path`, for `spec` (by default one whose start_url
-    is the form)."""
+    """Replay `script` against the app, or against the first of `origins`
+    when given, which the run allows with the rest, with a record under
+    `tmp_path`, for `spec` (by default one whose start_url is the form)."""
     settings = config or ProjectConfig()
-    origin = start or app.origin
-    run_gate = gate(allowed=(origin,))
+    allowed = origins or (app.origin,)
+    origin = allowed[0]
+    # Declared private only so they may be loopback here.
+    run_gate = gate(allowed=allowed, private=allowed[1:])
     record = RunRecord.create(tmp_path)
     app.record = record.path
     setup = RunSetup(
@@ -362,7 +366,13 @@ FORM_STEPS = [
         "option": "M",
         "side_effect": False,
     },
-    {"seq": 3, "action": "press", "key": "Enter", "side_effect": False},
+    {
+        "seq": 3,
+        "action": "press",
+        "key": "Enter",
+        "side_effect": True,
+        "side_effect_basis": "network: GET /did/press",
+    },
     {
         "seq": 4,
         "action": "click",
