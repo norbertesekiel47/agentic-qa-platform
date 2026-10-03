@@ -10,10 +10,11 @@ The page's peer connection also takes remote candidates with `.local` names
 the page chose. On every OS gathering completes with no ICE candidate and the
 session's Chromium holds no socket on mDNS's port. On Linux, as CI runs it,
 nothing joined the mDNS group and the capture holds no packet but TCP, so no
-query named a remote candidate either. macOS has no capture, its own
-mDNSResponder is in the mDNS group on every interface, and a query it sent
-would be its own, not Chromium's, so there only gathering and Chromium's
-sockets are checked."""
+query named a remote candidate either. macOS has no capture: its own
+mDNSResponder is in the mDNS group on every interface, and a lookup Chromium
+asked it for would leave as mDNSResponder's query, which nothing here sees
+without root. So there only gathering and Chromium's sockets are checked, and
+Linux pins the lookup."""
 
 import sys
 from pathlib import Path
