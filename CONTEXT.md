@@ -130,7 +130,7 @@ _Avoid_: retry
 The state of a run that can't safely continue because a side-effect step's outcome is unknown. The run ends as errored, with evidence.
 
 **Run record**:
-The directory a local run writes what it leaves behind to, such as the coverage plan and the cost record of every model response: under its spec root's `.aqa/runs/`, which git ignores.
+The directory a local run writes what it leaves behind to, such as the coverage plan, the cost record of every model response, and each step's intent and completion: under its spec root's `.aqa/runs/`, which git ignores.
 
 **Attempt**:
 One pass through a run from step 1, in a fresh browser and after the spec's reset hook if it declares one. The report keeps every attempt.

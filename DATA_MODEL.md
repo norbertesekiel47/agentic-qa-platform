@@ -1,6 +1,6 @@
 # Data Model — Agentic QA Platform
 
-Last updated: 2026-10-02 (the coverage plan's format and hash, and local run records under the spec root, #41; `ws://` to a subresource host on port 443, corrected, #43; loading a compiled script and bounding its text searches, #46; model roles and cost records, #40; M1 design decisions, ADR-0024–0026). PostgreSQL 16+ on RDS. Internal IDs are UUIDv7 (time-ordered). External identifiers (Clerk org/user IDs, GitHub IDs) are stored as their native strings/integers and mapped to internal IDs. All timestamps `timestamptz` UTC.
+Last updated: 2026-10-02 (the M1 executor's step and run outcomes, and its local steps record, #46; the coverage plan's format and hash, and local run records under the spec root, #41; `ws://` to a subresource host on port 443, corrected, #43; loading a compiled script and bounding its text searches, #46; model roles and cost records, #40; M1 design decisions, ADR-0024–0026). PostgreSQL 16+ on RDS. Internal IDs are UUIDv7 (time-ordered). External identifiers (Clerk org/user IDs, GitHub IDs) are stored as their native strings/integers and mapped to internal IDs. All timestamps `timestamptz` UTC.
 
 ## 1. Entity overview
 
@@ -347,6 +347,9 @@ A compiled script is read as strictly as a spec (§6): an unknown field is an er
 - **Binding unresolved:** no locator gives the match its use needs (see *Resolution per use*) within the wait budget → drift → heal path.
 - **Expectation failed:** the target resolved and the check evaluated false → `expectation_violated` (after invariants and all assertions are evaluated, so the report is complete).
 - **Check timed out** (`check_timed_out`): the check's text or URL search ran past its 2 s bound (*Text parameters*), so it established neither a pass nor a failure. A run with one can't pass. M2 maps it to `inconclusive`, never to `expectation_violated` (ADR-0024's 2026-10-02 amendment).
+- **Step outcomes** (the M1 executor, ADR-0024's #46 amendment): `completed`, dispatched and settled, `idle` or `timeout`; `drifted`, its target never resolved within `resolve_seconds`, so nothing was dispatched; `failed`, dispatching or settling raised, and its intent stays unresolved. A drifted or failed step stops the run, and every assertion is then `not_evaluated`, naming that step.
+- **Run outcome:** `passed` when every step completed and every assertion passed; `errored` after an infrastructure or policy event or a failed step; `failed` otherwise.
+- **Local run record (M1):** `<spec root>/.aqa/runs/<run_id>/steps.jsonl`, one JSON line per intent and per completion, as `run_steps` rows without a lease or an org. An intent, `{seq, state: "intent", action, side_effect, target_used, at}`, is on disk before its action is dispatched; a completion, `{seq, state: "completed", locator_used, settled, at}`, follows once it settled. Seq 0 is the start URL's navigation. An intent with no completion after it is unresolved.
 - **Egress block:** a request to an undeclared host keeps the run from passing without producing a finding. The run ends `errored` with `error_code: egress_blocked`, with no verdict, and the run record names the refused host. The CLI exits 6 (§6, API.md §7, ADR-0026).
 
 ### What a heal patch may change (validator-enforced)
