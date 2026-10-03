@@ -180,6 +180,7 @@ from policy_rules import (
     SUPPRESSION,
     TEST_DEF,
     TEST_FILE,
+    TEST_FILE_AS_TYPED,
     TEST_PATH_IN_SHELL,
     TEST_RULES,
     TEXT_BODY,
@@ -232,11 +233,18 @@ def cites_existing_adr(line: str, project: Path) -> bool:
 # --- rules 1 and 2 ------------------------------------------------------------------
 
 
+def rules_for(rel: str) -> tuple[Rule, ...]:
+    """The test rules for a test file, the source rules for any other, and both
+    for a name that is a test's only in another case (`Test_a.py`)."""
+    if not TEST_FILE.search(rel):
+        return SOURCE_RULES
+    return TEST_RULES if TEST_FILE_AS_TYPED.search(rel) else CONTENT_RULES
+
+
 def unexcused_hits(
-    text: str, project: Path, *, tests: bool
+    text: str, project: Path, *, rules: tuple[Rule, ...]
 ) -> Iterator[tuple[int, Rule, str]]:
     """(line number, rule, line) for each rule match on a line citing no ADR."""
-    rules = TEST_RULES if tests else SOURCE_RULES
     for number, line in enumerate(text.splitlines(), 1):
         hits = [rule for rule in rules if rule.pattern.search(line)]
         if hits and not cites_existing_adr(line, project):
@@ -245,11 +253,11 @@ def unexcused_hits(
 
 
 def added_findings(
-    before: str, after: str, project: Path, *, tests: bool
+    before: str, after: str, project: Path, *, rules: tuple[Rule, ...]
 ) -> list[Finding]:
     """Rules with more unexcused matches in `after` than in `before`."""
-    old = Counter(rule for _, rule, _ in unexcused_hits(before, project, tests=tests))
-    new_hits = list(unexcused_hits(after, project, tests=tests))
+    old = Counter(rule for _, rule, _ in unexcused_hits(before, project, rules=rules))
+    new_hits = list(unexcused_hits(after, project, rules=rules))
     new = Counter(rule for _, rule, _ in new_hits)
     old_lines = set(before.splitlines())
     findings: list[Finding] = []
@@ -445,8 +453,7 @@ def judge_change(rel: str, before: str, after: str, project: Path) -> Verdict:
     if is_exempt(rel):
         return verdict
     if not is_doc(rel):
-        tests = bool(TEST_FILE.search(rel))
-        verdict.findings = added_findings(before, after, project, tests=tests)
+        verdict.findings = added_findings(before, after, project, rules=rules_for(rel))
     added = credential_hits(after)
     if len(added) > len(credential_hits(before)):
         verdict.secrets = [f"line {line}: {description}" for line, description in added]
@@ -467,7 +474,7 @@ def check_bash(command: str, project: Path) -> Verdict:
     launches = BROWSER_LAUNCH.search(command) is not None
     verdict.findings.extend(
         finding
-        for finding in added_findings("", command, project, tests=False)
+        for finding in added_findings("", command, project, rules=SOURCE_RULES)
         if writes or (launches and finding[1] == SANDBOX)
     )
     # A path can reach a watched file through quotes and . and .. steps.
@@ -621,10 +628,9 @@ def scan_file(path: Path, rel: str, project: Path) -> list[str]:
         return []
     problems: list[str] = []
     if not is_doc(rel):
-        tests = bool(TEST_FILE.search(rel))
         problems.extend(
             f"{rel}:{number}: {rule.label}"
-            for number, rule, _ in unexcused_hits(text, project, tests=tests)
+            for number, rule, _ in unexcused_hits(text, project, rules=rules_for(rel))
         )
     problems.extend(
         f"{rel}:{number}: {description}"

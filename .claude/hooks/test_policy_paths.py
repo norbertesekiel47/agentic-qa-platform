@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -347,7 +348,8 @@ class ShellNameTests(PathTestCase):
     def test_long_commands_are_checked_quickly(self) -> None:
         # Well inside the hook's 10 s timeout, after which it fails open.
         runs = ("*", "a*", "/", "test_", "*test_", "x_tes", "tsconfig", "a/../")
-        for run in runs:
+        # Names match in any case, so upper-case runs are read too.
+        for run in (*runs, "*Test_", "X_TES", "TSCONFIG"):
             with self.subTest(run=run):
                 start = time.perf_counter()
                 decision = self.bash("rm " + run * (100_000 // len(run)))
@@ -476,6 +478,177 @@ class ScopeTests(PathTestCase):
         self.put("docs/logo.PNG", self.SUPPRESSED)
         result = self.run_guard("--scan", str(self.project))
         self.assertEqual(result.returncode, 0, result.stdout)
+
+
+class CaseVariantTests(PathTestCase):
+    """macOS's filesystem ignores letter case, so a path typed in another case
+    names the same file there, and its tools read `Pytest.toml` as
+    `pytest.toml`. On Linux it names another file. Either way it gets the
+    decision of the correctly cased path."""
+
+    def assert_same(
+        self, expected: str, judge: Callable[[str], str], *paths: str
+    ) -> None:
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertEqual(judge(path), expected)
+
+    def test_a_case_variant_of_a_guard_file_asks(self) -> None:
+        self.put(".claude/hooks/policy_guard.py", "RULES = 1\n")
+        self.assert_same(
+            "ask",
+            lambda rel: self.edit(rel, "RULES = 1", "RULES = 2"),
+            ".claude/hooks/policy_guard.py",
+            ".claude/Hooks/policy_guard.py",
+            ".CLAUDE/HOOKS/POLICY_GUARD.PY",
+            # macOS folds the Kelvin sign to k, as it folds K.
+            ".claude/hoo\u212as/policy_guard.py",
+        )
+        self.put(".claude/settings.json", "{}\n")
+        self.assert_same(
+            "ask",
+            lambda rel: self.write(rel, '{"hooks": {}}\n'),
+            ".claude/settings.json",
+            ".Claude/Settings.json",
+            ".claude/\u017fettings.json",  # long s, folded to s
+        )
+
+    def test_a_case_variant_of_a_whole_file_gate_config_asks(self) -> None:
+        self.put("CONSTRAINTS.md", "Coverage: 94%\n")
+        self.assert_same(
+            "ask",
+            lambda rel: self.edit(rel, "94%", "50%"),
+            "CONSTRAINTS.md",
+            "constraints.md",
+            "Constraints.md",
+        )
+        self.assert_same(
+            "ask",
+            lambda rel: self.write(rel, "[pytest]\naddopts = []\n"),
+            "pytest.toml",
+            "Pytest.toml",
+            "PYTEST.TOML",
+        )
+
+    def test_a_case_variant_of_a_gated_pyproject_section_asks(self) -> None:
+        self.put("pyproject.toml", GATE_SECTIONS)
+        # The header goes with the line: where the variant is another, absent
+        # file, the edit's fragments are what gets judged.
+        new = GATE_SECTIONS.replace("94", "50")
+        self.assert_same(
+            "ask",
+            lambda rel: self.edit(rel, GATE_SECTIONS, new),
+            "pyproject.toml",
+            "PyProject.toml",
+            "PYPROJECT.TOML",
+        )
+
+    def test_a_case_variant_of_package_json_asks(self) -> None:
+        self.put("package.json", PACKAGE_JSON)
+        self.assert_same(
+            "ask",
+            lambda rel: self.edit(rel, '"test": "vitest run"', '"test": "true"'),
+            "package.json",
+            "Package.json",
+            "PACKAGE.JSON",
+        )
+
+    def test_a_case_variant_of_a_workflow_or_ci_script_asks(self) -> None:
+        self.put(".github/workflows/ci.yml", WORKFLOW_YML)
+        self.assert_same(
+            "ask",
+            lambda rel: self.edit(rel, "uv run pytest", "true"),
+            ".github/workflows/ci.yml",
+            ".GitHub/Workflows/ci.yml",
+            ".github/workflows/CI.YML",
+        )
+        self.put(".github/scripts/audit-lockfile.sh", "jq -e 'all(.score < 7)'\n")
+        self.assert_same(
+            "ask",
+            lambda rel: self.edit(rel, "< 7", "< 11"),
+            ".github/scripts/audit-lockfile.sh",
+            ".GitHub/Scripts/audit-lockfile.sh",
+            ".github/Scripts/audit-lockfile.sh",
+        )
+
+    def test_a_case_variant_of_a_test_file_asks_when_it_drops_an_assertion(
+        self,
+    ) -> None:
+        self.put("tests/test_a.py", TEST_A)
+        self.assert_same(
+            "ask",
+            lambda rel: self.edit(rel, "    assert f(2) == 3\n", ""),
+            "tests/test_a.py",
+            "Tests/TEST_a.py",
+            "TESTS/Test_A.py",
+        )
+
+    def test_a_test_name_in_another_case_gets_both_rule_sets(self) -> None:
+        # pytest never collects Test_x.py (it matches names case-sensitively),
+        # so such a name keeps the source rules' stub check and takes the test
+        # rules' retry check.
+        stub = "def f() -> int:\n    raise NotImplementedError\n"
+        retry = "const options = { retry: 3 }\n"
+        for rel in ("packages/a/Test_x.py", "packages/a/Tests/x.py", "apps/a.Spec.ts"):
+            with self.subTest(rel=rel):
+                self.assertEqual(self.write(rel, stub), "deny")
+                self.assertEqual(self.write(rel, retry), "deny")
+        self.assertEqual(self.write("packages/a/test_x.py", stub), "allow")
+        self.assertEqual(self.write("packages/a/test_x.py", retry), "deny")
+
+    def test_an_exempt_directory_is_matched_as_typed(self) -> None:
+        # A case variant never widens a skip: on Linux, Bench/Apps/ and a
+        # committed .Scratch/ are directories of their own, which CI checks.
+        suppressed = "x = f()  # type: ignore\n"
+        for rel, variant in (
+            (".scratch/a.py", ".Scratch/a.py"),
+            ("bench/apps/x/a.py", "Bench/Apps/x/a.py"),
+        ):
+            with self.subTest(rel=rel):
+                self.assertEqual(self.write(rel, suppressed), "allow")
+                self.assertEqual(self.write(variant, suppressed), "deny")
+        # The guard's own files ask in any case; only as typed are they exempt.
+        self.assertEqual(self.write(".claude/hooks/test_a.py", suppressed), "ask")
+        self.assertEqual(self.write(".claude/Hooks/test_a.py", suppressed), "deny")
+
+    def test_shell_commands_naming_a_case_variant_ask(self) -> None:
+        self.assert_bash(
+            "ask",
+            "rm -rf .claude/hooks",
+            "rm -rf .Claude/Hooks",
+            "rm .claude/hoo\u212as/policy_guard.py",
+            "echo x > .claude/settings.json",
+            "echo x > .Claude/SETTINGS.json",
+            "echo x > CONSTRAINTS.md",
+            "echo x > Constraints.md",
+            "cp x pytest.toml",
+            "cp x Pytest.toml",
+            "mv pyproject.toml x",
+            "mv PyProject.toml x",
+            "cp x package.json",
+            "cp x Package.json",
+            "rm .github/workflows/ci.yml",
+            "rm .GitHub/Workflows/ci.yml",
+            "sed -i '' s/7/11/ .github/scripts/audit-lockfile.sh",
+            "sed -i '' s/7/11/ .GitHub/Scripts/audit-lockfile.sh",
+            "rm tests/a_test.py",
+            "rm Tests/A_TEST.py",
+            "rm -rf apps/web/TESTS",
+        )
+
+    def test_case_variant_near_misses_stay_inert(self) -> None:
+        # #68's narrowings hold in any case: a backup, another directory, a
+        # name another runs into, and the shell's test command.
+        self.assert_bash(
+            "allow",
+            "cp x .claude/Settings.json.BAK",
+            "rm -rf .Claude/Hooks-Old",
+            "rm -rf My.Claude/Hooks",
+            "rm X.Ruff.toml",
+            "TEST -f x && rm -f y",
+        )
+        self.assertEqual(self.write(".claude/Settings.json.BAK", "{}\n"), "allow")
+        self.assertEqual(self.write(".Claude/Hooks-Old/a.py", "x = 1\n"), "allow")
 
 
 if __name__ == "__main__":
