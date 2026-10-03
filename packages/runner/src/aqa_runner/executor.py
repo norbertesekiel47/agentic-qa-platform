@@ -182,10 +182,17 @@ async def replay(
         )
 
         def interrupted() -> bool:
-            """Whether the gate couldn't reach an allowed host, or the session
-            met a document off the allowed origins: what a policy event does
-            to a run is #47's, and until then it ends the run errored."""
-            return bool(gate.infrastructure_events) or session.policy_events.total > 0
+            """Whether the gate couldn't reach an allowed host, the session
+            met a document off the allowed origins, or the page hit an egress
+            block (routing refused a request, or the gate did). What policy
+            events and egress blocks do to a run is #47's; until then each
+            ends the run errored, so an egress block never lets it pass."""
+            return (
+                bool(gate.infrastructure_events)
+                or session.policy_events.total > 0
+                or proxy.blocked_attempts.total > 0
+                or bool(gate.refusals)
+            )
 
         # Seq 0 is no compiled step: a compiled script's steps start at 1.
         first = start_url(setup.spec, setup.start)
@@ -283,9 +290,19 @@ async def _evaluate_each(
     budget: float,
 ) -> tuple[AssertionResult, ...]:
     """Every assertion, in order, each evaluated once, as the last step left
-    the page; each gets `budget` of its own. Once a look at the page raises,
-    what remains isn't evaluated, and each says which assertion's look it
-    was."""
+    the page; each gets `budget` of its own. First the page must answer one
+    look (its visible text): a URL or a target's state can be read from a
+    page whose renderer has stopped. Once a look at the page raises, what
+    remains isn't evaluated, and each says which assertion's look it was."""
+    try:
+        await _bounded(_read(session, budget), budget)
+    except (Error, PolicyEventError, DocumentChangedError, _UnansweredError) as error:
+        # As below: the page couldn't be looked at, so nothing on it can be
+        # evaluated.
+        reason = _described(error)
+        return tuple(
+            AssertionResult(check.id, "not_evaluated", error=reason) for check in checks
+        )
     results: list[AssertionResult] = []
     raised: str | None = None
     for check in checks:

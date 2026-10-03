@@ -6,18 +6,21 @@ are written by hand, and the browser tests launch real Chromium on the OS
 that runs them: Linux in CI, macOS locally."""
 
 import asyncio
+import contextlib
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import pytest
 from aqa_core.config import ProjectConfig
-from aqa_runner import text_search
+from aqa_runner import settling, text_search
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.document_origins import DocumentChangedError, PolicyEvent
 from aqa_runner.executor import RunResult
-from playwright.async_api import Error
+from aqa_runner.settling import Window
+from playwright.async_api import Error, Page
 
 from packages.runner.tests.executor_fixtures import (
     SHOP_TARGETS,
@@ -330,8 +333,8 @@ def test_a_look_that_raises_leaves_every_later_assertion_unlooked_at(
     assert [assertion.error for assertion in result.assertions[1:]] == [
         "not evaluated after a1's look at the page raised"
     ] * 2
-    # Nothing was looked at after the look that raised.
-    assert looks == ["url"]
+    # The look that shows the page answers, then a1's, and nothing after it.
+    assert looks == ["text", "url"]
     assert result.outcome == "errored"
 
 
@@ -419,3 +422,135 @@ def test_not_visible_passes_on_an_error_the_page_never_shows(
 
     # Only what is on screen counts: the hidden error is absent.
     assert outcomes(result) == [("a1", "pass")]
+
+
+def test_a_page_that_hit_an_egress_block_never_passes(app: App, tmp_path: Path) -> None:
+    script = compiled(
+        [],
+        assertions=[
+            {"id": "a1", "expect_index": 0, "check": "url_matches", "pattern": "/"}
+        ],
+    )
+    # The start page fetches from a host the run doesn't declare.
+    spec = a_spec(
+        tmp_path,
+        ProjectConfig(),
+        start_url=f"/page/fetches?to={quote('http://undeclared.example.test/x', safe='')}",
+    )
+
+    result = run(app, tmp_path, script, spec=spec).result
+
+    # Until #47 decides what an egress block does, it ends the run errored.
+    assert outcomes(result) == [("a1", "not_evaluated")]
+    assert result.outcome == "errored"
+
+
+def test_a_page_that_stops_answering_is_never_passed_on_its_url(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Shorter than settling's 10 s: the busy page settles only as a timeout.
+    monkeypatch.setattr(settling, "SETTLE_SECONDS", 2)
+    script = compiled(
+        [],
+        assertions=[
+            {"id": "a1", "expect_index": 0, "check": "url_matches", "pattern": "busy"}
+        ],
+    )
+    config = ProjectConfig.model_validate({"budgets": {"resolve_seconds": 1}})
+    spec = a_spec(tmp_path, config, start_url="/page/busy")
+
+    result = run(app, tmp_path, script, config=config, spec=spec).result
+
+    # Its URL still reads busy, but a page that doesn't answer is unobserved.
+    assert outcomes(result) == [("a1", "not_evaluated")]
+    assert result.assertions[0].error == "the page didn't answer within 2 s"
+    assert result.outcome == "errored"
+
+
+def test_a_page_whose_renderer_crashed_unreported_is_never_passed_on_its_url(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # CI's Ubuntu 24.04 host on any host: the session never hears of the crash.
+    listen: Callable[..., object] = Page.on
+
+    def deaf_to_crashes(
+        page: Page, event: str, handler: Callable[[Page], object]
+    ) -> None:
+        if event != "crash":
+            listen(page, event, handler)
+
+    settle = BrowserSession.settle
+
+    async def then_crash(session: BrowserSession, window: Window) -> Any:
+        settled = await settle(session, window)
+        # Chromium's page that crashes the renderer, which never loads.
+        with contextlib.suppress(Error):
+            await session.page.goto("chrome://crash")
+        return settled
+
+    monkeypatch.setattr(Page, "on", deaf_to_crashes)
+    monkeypatch.setattr(BrowserSession, "settle", then_crash)
+    script = compiled(
+        [],
+        assertions=[
+            {"id": "a1", "expect_index": 0, "check": "url_matches", "pattern": "/"}
+        ],
+    )
+    config = ProjectConfig.model_validate({"budgets": {"resolve_seconds": 1}})
+
+    result = run(app, tmp_path, script, config=config).result
+
+    assert outcomes(result) == [("a1", "not_evaluated")]
+    assert result.outcome == "errored"
+
+
+def test_text_in_target_fails_on_text_the_page_never_shows_as_text_visible_does(
+    app: App, tmp_path: Path
+) -> None:
+    targets = {
+        name: {"semantic": f"the {name} status", "locators": [{"css": f"#{name}"}]}
+        for name in ("confirmed", "inner", "pending")
+    }
+    script = compiled(
+        [],
+        targets=targets,
+        assertions=[
+            {
+                "id": "a1",
+                "expect_index": 0,
+                "check": "text_in_target",
+                "target": "confirmed",
+                "text": "Order confirmed",
+            },
+            {
+                "id": "a2",
+                "expect_index": 0,
+                "check": "text_in_target",
+                "target": "inner",
+                "text": "Order confirmed",
+            },
+            {
+                "id": "a3",
+                "expect_index": 0,
+                "check": "text_visible",
+                "text": "Order confirmed",
+            },
+            {
+                "id": "a4",
+                "expect_index": 0,
+                "check": "text_in_target",
+                "target": "pending",
+                "text": "Order pending",
+            },
+        ],
+    )
+    spec = a_spec(tmp_path, ProjectConfig(), start_url="/page/pre-rendered")
+
+    result = run(app, tmp_path, script, spec=spec).result
+
+    assert outcomes(result) == [
+        ("a1", "failed"),
+        ("a2", "failed"),
+        ("a3", "failed"),
+        ("a4", "pass"),
+    ]

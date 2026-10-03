@@ -145,6 +145,22 @@ FILL = """(element, value) => {
     return (element.isContentEditable ? element.textContent : element.value) === value;
 }"""
 
+# An element's rendered text, or nothing when the page doesn't render it,
+# worked out in one evaluation so the page can't change between the two.
+# Rendered as Playwright 1.63 judges an element visible, as far as one script
+# can: a box of some size and a computed visibility of `visible` (`hidden`,
+# `display: none` on it or an ancestor, and a detached element leave no box).
+# Unlike Playwright, an element with `display: contents` counts as having no
+# box. An element that isn't HTML, such as SVG's, has no innerText: its text
+# content is read.
+RENDERED_TEXT = """(element) => {
+    const box = element.getBoundingClientRect();
+    const shown = box.width > 0 && box.height > 0 &&
+        getComputedStyle(element).visibility === "visible";
+    if (!shown) return "";
+    return element instanceof HTMLElement ? element.innerText : (element.textContent ?? "");
+}"""
+
 # Whether an element with the focus stands for nothing focused: the body, or
 # the document's root.
 NOTHING_FOCUSED = """(element) =>
@@ -463,13 +479,17 @@ class BrowserSession:
             return found
 
     async def text_of(self, element: ElementHandle) -> str:
-        """`element`'s rendered text (`aqa_runner.locators.rendered_text`),
-        once the page and the element's frame are checked: an observation,
-        as `text_in_target` makes it. The element is held, so it can't read
-        a document that replaced its own."""
+        """`element`'s rendered text, as `text_in_target` reads it, once the
+        page and the element's frame are checked: its innerText, or nothing
+        for an element the page doesn't render, whose innerText would be its
+        text content (`RENDERED_TEXT` says which elements count as rendered).
+        One evaluation in the page's world decides both, so it is the page's
+        word, as everything a page renders is. The element is held, so it
+        can't read a document that replaced its own."""
         async with self._turn:
             await self._require_allowed_element(element)
-            return await rendered_text(element)
+            text = await element.evaluate(RENDERED_TEXT)
+            return text if isinstance(text, str) else ""
 
     async def visible_text(self) -> str:
         """The page's rendered text, as `text_visible` reads it: its body's,

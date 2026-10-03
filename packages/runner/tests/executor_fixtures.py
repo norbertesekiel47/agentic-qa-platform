@@ -128,6 +128,12 @@ PAGES = SHOPS | {
             setTimeout(() => { area.innerHTML = ""; }, 3000);
         });
     </script>""",
+    # A success message rendered ahead and hidden, beside one that shows.
+    "pre-rendered": """<p id="confirmed" hidden>Order confirmed</p>
+        <div style="display: none"><p id="inner">Order confirmed</p></div>
+        <p id="pending">Order pending</p>""",
+    # A page whose scripts stop answering 200 ms after it loads.
+    "busy": """<p>Busy</p><script>setTimeout(() => { for (;;) {} }, 200);</script>""",
     # An error in the status area that the page never shows.
     "hidden-error": """<section id="status-area"><p class="error" hidden>Card declined</p></section>""",
     # The status area, without an error in it, 1.5 s after the page loads.
