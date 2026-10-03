@@ -126,7 +126,6 @@ class Traffic:
         window.changed_at = time.monotonic()
 
     def _responded(self, response: Response) -> None:
-        # https://playwright.dev/python/docs/api/class-response#response-request
         request = response.request
         window = self._request_windows[request]
         window.responses.add(Exchange(request.method, request.url, response.status))
