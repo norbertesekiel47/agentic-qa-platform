@@ -237,12 +237,11 @@ async def replay(
         steps.append(
             await _dispatched(
                 session,
-                record,
+                run,
                 _Dispatch(
                     0, {"action": "navigate", "url": path}, False, NAVIGATION_SECONDS
                 ),
                 lambda: session.navigate(first),
-                withheld=run.withheld,
             )
         )
         for step in runnable:
@@ -499,10 +498,9 @@ async def _run(
         wait = budget if isinstance(step, Press) else NAVIGATION_SECONDS
         return await _dispatched(
             session,
-            setup.record,
+            run,
             _Dispatch(step.seq, action, step.side_effect, wait),
             lambda: _untargeted(session, step, setup.start),
-            withheld=run.withheld,
         )
     try:
         found = await _resolve(session, run.targets[step.target], "action", budget)
@@ -519,12 +517,11 @@ async def _run(
         return None
     return await _dispatched(
         session,
-        setup.record,
+        run,
         _Dispatch(
             step.seq, action, step.side_effect, budget, step.target, found.locator_index
         ),
         lambda: _targeted(session, step, found.element, run.secrets),
-        withheld=run.withheld,
     )
 
 
@@ -609,16 +606,14 @@ async def _resolve(
 
 async def _dispatched(
     session: BrowserSession,
-    record: RunRecord,
+    run: _Replay,
     dispatch: _Dispatch,
     act: Callable[[], Awaitable[Window]],
-    *,
-    withheld: bool,
 ) -> StepResult:
-    """Record `dispatch`'s intent, then dispatch its step with `act`, giving
-    it up to `MARGIN_SECONDS` past its wait, settle it, and record its
-    completion with the locator that found its target. A failed step's
-    reason keeps nothing of Playwright's message when it is `withheld`."""
+    """Record `dispatch`'s intent in `run`'s record, then dispatch its step
+    with `act`, giving it up to `MARGIN_SECONDS` past its wait, settle it,
+    and record its completion with the locator that found its target."""
+    record = run.setup.record
     seq, index = dispatch.seq, dispatch.locator_index
     record.step_intent(
         seq,
@@ -638,7 +633,7 @@ async def _dispatched(
         # origins, or a fill_secret its binding refused, raised between the
         # intent and the completion: whether the action took effect is
         # unknown, so its intent stays unresolved and the run stops.
-        return StepResult(seq, "failed", error=_described(error, withheld=withheld))
+        return StepResult(seq, "failed", error=_described(error, withheld=run.withheld))
     except TimeoutError:
         if not limit.expired():
             raise  # not the action's own limit
