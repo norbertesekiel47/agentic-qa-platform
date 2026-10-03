@@ -99,8 +99,9 @@ def test_a_search_that_runs_out_of_time_is_check_timed_out_and_the_run_cannot_pa
     monkeypatch.setattr(text_search, "SEARCH_SECONDS", 1)
     script = compiled(
         [],
+        targets={"line": {"semantic": "the line of a's", "locators": [{"css": "p"}]}},
         assertions=[
-            # Backtracks for exponential time on forty a's and a b.
+            # Each backtracks for exponential time on forty a's and a b.
             {
                 "id": "a1",
                 "expect_index": 0,
@@ -109,6 +110,13 @@ def test_a_search_that_runs_out_of_time_is_check_timed_out_and_the_run_cannot_pa
             },
             {
                 "id": "a2",
+                "expect_index": 0,
+                "check": "text_in_target",
+                "target": "line",
+                "pattern": "(a+)+$",
+            },
+            {
+                "id": "a3",
                 "expect_index": 0,
                 "check": "url_matches",
                 "pattern": "catastrophic",
@@ -120,7 +128,38 @@ def test_a_search_that_runs_out_of_time_is_check_timed_out_and_the_run_cannot_pa
     result = run(app, tmp_path, script, spec=spec).result
 
     # Neither a pass nor a failure, and the next check is still evaluated.
-    assert outcomes(result) == [("a1", "check_timed_out"), ("a2", "pass")]
+    assert outcomes(result) == [
+        ("a1", "check_timed_out"),
+        ("a2", "check_timed_out"),
+        ("a3", "pass"),
+    ]
+    assert result.outcome == "failed"
+
+
+def test_url_matches_fails_on_a_url_the_pattern_isnt_found_in(
+    app: App, tmp_path: Path
+) -> None:
+    script = compiled(
+        [],
+        assertions=[
+            {
+                "id": "a1",
+                "expect_index": 0,
+                "check": "url_matches",
+                "pattern": "/checkout",
+            },
+            {
+                "id": "a2",
+                "expect_index": 0,
+                "check": "url_matches",
+                "pattern": r"/page/form\Z",
+            },
+        ],
+    )
+
+    result = run(app, tmp_path, script).result
+
+    assert outcomes(result) == [("a1", "failed"), ("a2", "pass")]
     assert result.outcome == "failed"
 
 

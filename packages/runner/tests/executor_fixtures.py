@@ -27,7 +27,6 @@ from playwright.async_api import async_playwright
 
 from packages.runner.tests.egress_fixtures import gate
 
-# The fixture app's pages, by name.
 # The shop page, whose save shows what was saved in #status, as `said`
 # does it: the clean page's, the wrong page's, and the page that loses
 # #status instead.
@@ -54,6 +53,7 @@ SHOPS = {
     "shop-gone": SHOP.replace("SAID", "status.remove()"),
 }
 
+# The fixture app's pages, by name.
 PAGES = SHOPS | {
     "start": """<a href="/page/form">Form</a>""",
     # A write 1 s after a click, and a button that appears 1.5 s after it.
