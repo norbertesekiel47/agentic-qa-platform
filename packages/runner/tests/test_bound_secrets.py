@@ -8,7 +8,11 @@ from pathlib import Path
 import pytest
 from aqa_core.config import RoleField
 from aqa_core.project import SecretDestination, SpecError
-from aqa_runner.bound_secrets import MissingSecretError, bound_secrets
+from aqa_runner.bound_secrets import (
+    MissingSecretError,
+    SecretLoggedError,
+    bound_secrets,
+)
 
 from packages.runner.tests.secret_fixtures import (
     BOUND_AT_START,
@@ -31,10 +35,13 @@ BOTH_ACCOUNT = "{ email: { secret: API_TOKEN }, password: { secret: TEST_PASSWOR
 
 @pytest.fixture(autouse=True)
 def no_secrets_in_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """None of the names these tests use, whatever the developer's shell has."""
+    """None of the names these tests use, whatever the developer's shell has,
+    and no Playwright debug logging."""
     for name in ("TEST_PASSWORD", "API_TOKEN"):
         monkeypatch.delenv(f"AQA_SECRET_{name}", raising=False)
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("DEBUG", raising=False)
+    monkeypatch.delenv("DEBUGP", raising=False)
 
 
 def test_each_referenced_secret_is_bound_with_its_value_and_destination(
@@ -186,3 +193,52 @@ def test_a_secret_referenced_twice_is_reported_where_the_spec_first_uses_it(
             f"TEST_PASSWORD, which {spec.path} references at preconditions.account.email"
         ),
     )
+
+
+@pytest.mark.parametrize(
+    ("variable", "value", "says"),
+    [
+        # Playwright's Python client prints every protocol message.
+        ("DEBUGP", "1", "DEBUGP is set"),
+        # Its driver logs them under the debug name pw:protocol.
+        ("DEBUG", "pw:protocol", "DEBUG turns on pw:protocol"),
+        ("DEBUG", "pw:*", "DEBUG turns on pw:protocol"),
+        ("DEBUG", "*", "DEBUG turns on pw:protocol"),
+        ("DEBUG", "pw:api, pw:protocol", "DEBUG turns on pw:protocol"),
+    ],
+)
+def test_a_secret_isnt_bound_where_playwright_would_log_its_value(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    variable: str,
+    value: str,
+    says: str,
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
+    monkeypatch.setenv(variable, value)
+
+    with pytest.raises(SecretLoggedError) as logged:
+        bound_secrets(secret_spec(tmp_path), START)
+
+    assert str(logged.value).startswith(f"{says}: ")
+    # An infrastructure error, as a missing value is.
+    assert logged.value.exit_code == 12
+
+
+@pytest.mark.parametrize("debug", ["pw:api", "pw:*,-pw:protocol", "other:*"])
+def test_debug_logging_that_leaves_the_protocol_out_is_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, debug: str
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
+    monkeypatch.setenv("DEBUG", debug)
+
+    assert list(bound_secrets(secret_spec(tmp_path), START)) == ["TEST_PASSWORD"]
+
+
+def test_a_spec_that_references_no_secret_binds_none_whatever_is_logged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DEBUGP", "1")
+    spec = secret_spec(tmp_path, account="{ email: reader@example.test }")
+
+    assert bound_secrets(spec, START) == {}
