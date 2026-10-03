@@ -14,11 +14,13 @@ from typing import Any
 from urllib.parse import quote
 
 import pytest
+from aqa_core.compiled import Target
 from aqa_core.config import ProjectConfig
 from aqa_runner import settling, text_search
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.document_origins import DocumentChangedError, PolicyEvent
 from aqa_runner.executor import RunResult
+from aqa_runner.locators import Absent, Resolved, Unresolved, Use
 from aqa_runner.settling import Window
 from playwright.async_api import Error, Page
 
@@ -199,7 +201,26 @@ def test_not_visible_waits_out_a_scope_that_isnt_there_yet(
     resolve_seconds: int,
     outcome: str,
     misses: tuple[str, ...],
+    *,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    resolve = BrowserSession.resolve
+    first_lookup_at: float | None = None
+    lookup_results: list[Resolved | Absent | Unresolved] = []
+
+    async def resolving(
+        session: BrowserSession, target: Target, use: Use
+    ) -> Resolved | Absent | Unresolved:
+        nonlocal first_lookup_at
+        if first_lookup_at is None:
+            first_lookup_at = time.monotonic()
+        elif time.monotonic() - first_lookup_at >= 1.5:
+            await session.page.evaluate("dispatchEvent(new Event('show-status-area'))")
+        found = await resolve(session, target, use)
+        lookup_results.append(found)
+        return found
+
+    monkeypatch.setattr(BrowserSession, "resolve", resolving)
     script = compiled(
         [],
         targets=SHOP_TARGETS,
@@ -210,13 +231,13 @@ def test_not_visible_waits_out_a_scope_that_isnt_there_yet(
     config = ProjectConfig.model_validate(
         {"budgets": {"resolve_seconds": resolve_seconds}}
     )
-    # The status area appears 1.5 s after the page loads, with no error in it.
     spec = a_spec(tmp_path, config, start_url="/page/late-area")
 
     started = time.monotonic()
 
     result = run(app, tmp_path, script, config=config, spec=spec).result
 
+    assert lookup_results[:1] == [Unresolved(("no scope",))]
     assert outcomes(result) == [("a1", outcome)]
     assert result.assertions[0].misses == misses
     # Absent is a result at the look that finds it, not after the budget.
