@@ -41,6 +41,14 @@ FILE_TOOLS = frozenset({"Edit", "MultiEdit", "Write", "NotebookEdit"})
 # path_pattern() for a project-relative path, as an edit or --diff names it, and
 # shell_pattern() for a shell command that may write one. A name added to a
 # definition is caught by both.
+#
+# Both checks match in any letter case. macOS's filesystem ignores it, so there
+# `.claude/Hooks/x.py` is `.claude/hooks/x.py`, and pytest reads a new
+# `Pytest.toml` as its `pytest.toml` (LAB_NOTES, 2026-10-03). On Linux a case
+# variant is another file, which a macOS checkout reads the same way. What the
+# guard skips, EXEMPT_DIRS and a test file's exemption from the source rules,
+# stays matched as typed.
+ANY_CASE = re.IGNORECASE
 
 
 @dataclass(frozen=True)
@@ -69,7 +77,7 @@ def path_pattern(shapes: NameShapes) -> re.Pattern[str]:
     if shapes.dirs:
         names.append(f"(?:{'|'.join(shapes.dirs)})/(?:{shapes.under})")
     body = "|".join(names).replace("{name}", "[^/]*")
-    return re.compile(f"(?:^|/)(?:{body})$")
+    return re.compile(f"(?:^|/)(?:{body})$", ANY_CASE)
 
 
 # In a shell command a name also ends at whitespace, a quote or a shell
@@ -112,7 +120,7 @@ def shell_pattern(*kinds: NameShapes) -> re.Pattern[str]:
         for kind in kinds
         for d in kind.dirs
     ]
-    return re.compile("|".join(files + dirs))
+    return re.compile("|".join(files + dirs), ANY_CASE)
 
 
 # A shell word, quotes and substitutions included, and the quoting the shell
@@ -187,6 +195,9 @@ WORKFLOW_NAMES = NameShapes(dirs=(r"\.github/workflows",), under=r"[^/]+\.ya?ml"
 PROTECTED = path_pattern(GUARD_NAMES)
 PROTECTED_IN_SHELL = shell_pattern(GUARD_NAMES)
 TEST_FILE = path_pattern(TEST_NAMES)
+# pytest matches test names case-sensitively, so it never collects `Test_a.py`:
+# a test name only in another case keeps the source rules too.
+TEST_FILE_AS_TYPED = re.compile(TEST_FILE.pattern)
 TEST_PATH_IN_SHELL = shell_pattern(TEST_NAMES)
 GATE_WHOLE_FILE = path_pattern(GATE_WHOLE_NAMES)
 GATE_SECTION_FILE = path_pattern(GATE_SECTION_NAMES)
@@ -448,7 +459,7 @@ TEST_DEF = re.compile(r"^\s*(?:async\s+)?def\s+test|\b(?:it|test)\(", re.MULTILI
 # weakens the bar and keeps every assertion, so --diff asks about any change to
 # an existing file. A new one can't lower the floor. The guard's own tests ask
 # as part of the guard (PROTECTED).
-BAR_TESTS = re.compile(r"^tests/")
+BAR_TESTS = re.compile(r"^tests/", ANY_CASE)
 
 # --- shell heuristics ---------------------------------------------------------------
 

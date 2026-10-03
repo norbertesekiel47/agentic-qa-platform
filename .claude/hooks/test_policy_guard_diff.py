@@ -367,6 +367,20 @@ class TestChangeTests(DiffTestCase):
         (self.project / "tests/fixtures/page.png").write_bytes(b"\x89PNG\ntwo\n")
         self.assertIn("proves the bar", self.assert_needs_approval("tests/fixtures"))
 
+    def test_a_case_variant_test_path_needs_approval(self) -> None:
+        # On macOS's filesystem these are tests/test_constraints.py and a
+        # conftest.py: a flipped outcome keeps every assertion, and a deleted
+        # fixtures-only conftest drops none.
+        conftest = "import pytest\n\n\n@pytest.fixture\ndef page():\n    return 1\n"
+        self.on_main(
+            {"Tests/test_constraints.py": self.BAR, "Tests/CONFTEST.py": conftest}
+        )
+        flipped = self.BAR.replace("[True, False]", "[True, True]")
+        self.put("Tests/test_constraints.py", flipped)
+        self.git("rm", "-q", "Tests/CONFTEST.py")
+        output = self.assert_needs_approval("Tests/CONFTEST.py: this change deletes")
+        self.assertIn("Tests/test_constraints.py proves the bar", output)
+
     def test_a_deleted_bar_test_needs_approval(self) -> None:
         self.on_main({"tests/test_constraints.py": self.BAR})
         self.git("rm", "-q", "tests/test_constraints.py")
@@ -478,6 +492,11 @@ class GateTests(DiffTestCase):
         # Judged as a package manifest, it would have no gate lines to change.
         self.put(".github/workflows/package.json.yml", WORKFLOW_YML)
         self.assert_needs_approval(".github/workflows/package.json.yml")
+
+    def test_a_case_variant_gate_config_that_appears_needs_approval(self) -> None:
+        # On macOS's filesystem, a checkout's pytest reads it as pytest.toml.
+        self.put("Pytest.toml", "[pytest]\naddopts = --cov-fail-under=0\n")
+        self.assert_needs_approval("Pytest.toml")
 
 
 class OutputTests(DiffTestCase):
