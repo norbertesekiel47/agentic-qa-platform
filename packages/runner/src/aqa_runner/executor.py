@@ -26,9 +26,14 @@ from aqa_core.compiled import (
 from aqa_core.config import ProjectConfig
 from aqa_core.project import SpecError, path_on_origin, start_url
 from aqa_core.spec import Spec
-from playwright.async_api import BrowserType, ElementHandle
+from playwright.async_api import BrowserType, ElementHandle, Error
 
 from aqa_runner.browser_session import BrowserSession, open_browser_session
+from aqa_runner.document_origins import (
+    DocumentChangedError,
+    PolicyEvent,
+    PolicyEventError,
+)
 from aqa_runner.egress import EgressGate, InfrastructureEvent
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.locators import Miss, Resolved, Unresolved
@@ -37,6 +42,14 @@ from aqa_runner.settling import Settled, Window
 
 # How often resolution looks again for a target that hasn't resolved.
 LOOK_SECONDS = 0.1
+
+# How long `navigate` and `reload` may wait for the page to load, holding the
+# session's lock: Playwright's default, made explicit. An action's wait is
+# bounded by the run's `resolve_seconds` instead (ADR-0024's #46 amendment).
+NAVIGATION_SECONDS = 30
+
+# The checks M1 evaluates; #48 adds the others (DATA_MODEL §7).
+EVALUATED = frozenset({"text_visible", "text_in_target", "not_visible", "url_matches"})
 
 # The steps the executor runs: those that act on a target, and the rest.
 type Targeted = Click | Fill | Select
@@ -105,13 +118,15 @@ class AssertionResult:
 @dataclass(frozen=True)
 class RunResult:
     """A replay: every step that ran and every assertion, each with its
-    outcome, and the run's."""
+    outcome, and the run's; the egress gate's infrastructure events and the
+    session's policy events (the first 100)."""
 
     run_id: str
     outcome: RunOutcome
     steps: tuple[StepResult, ...]
     assertions: tuple[AssertionResult, ...]
     infrastructure_events: tuple[InfrastructureEvent, ...]
+    policy_events: tuple[PolicyEvent, ...]
 
 
 async def replay(
@@ -132,6 +147,10 @@ async def replay(
     async with open_browser_session(
         chromium, egress=proxy, settings=script.browser
     ) as session:
+        session.limit_waits(
+            action_seconds=setup.config.budgets.resolve_seconds,
+            navigation_seconds=NAVIGATION_SECONDS,
+        )
         first = start_url(setup.spec, setup.start)
         path = setup.spec.frontmatter.preconditions.start_url
         steps.append(
@@ -143,26 +162,45 @@ async def replay(
             )
         )
         for step in runnable:
-            result = await _run(session, setup, script, step)
-            steps.append(result)
-            if result.outcome != "completed":
+            if _stopped(steps, session, gate):
                 break
-    stopped = next((step.seq for step in steps if step.outcome != "completed"), None)
+            steps.append(await _run(session, setup, script, step))
+        stopped = steps[-1].seq if _stopped(steps, session, gate) else None
+        policy_events = tuple(session.policy_events.kept)
     assertions = tuple(
         AssertionResult(assertion.id, "not_evaluated", stopped)
         for assertion in script.assertions
     )
+    errored = bool(gate.infrastructure_events or policy_events) or any(
+        step.outcome == "failed" for step in steps
+    )
     return RunResult(
         record.run_id,
-        _outcome(steps, assertions, gate),
+        _outcome(errored=errored),
         tuple(steps),
         assertions,
         tuple(gate.infrastructure_events),
+        policy_events,
+    )
+
+
+def _stopped(
+    steps: Sequence[StepResult], session: BrowserSession, gate: EgressGate
+) -> bool:
+    """Whether the run stops after the last step: it didn't complete, or the
+    gate couldn't reach an allowed host, or the session met a document off
+    the allowed origins (what a policy event does to a run is #47's; until
+    then it ends the run errored)."""
+    return (
+        steps[-1].outcome != "completed"
+        or bool(gate.infrastructure_events)
+        or session.policy_events.total > 0
     )
 
 
 def _runnable(script: CompiledScript) -> list[Targeted | Untargeted]:
-    """`script`'s steps, or `SpecError` naming each one M1 can't run."""
+    """`script`'s steps, or `SpecError` naming each step and check M1 can't
+    run, before anything is opened (ADR-0024's #46 amendment)."""
     runnable: list[Targeted | Untargeted] = []
     problems: list[str] = []
     for index, step in enumerate(script.steps):
@@ -172,6 +210,11 @@ def _runnable(script: CompiledScript) -> list[Targeted | Untargeted]:
             )
         else:
             runnable.append(step)
+    problems.extend(
+        f"assertions[{index}] ({assertion.id}): {assertion.check} is not evaluated until #48"
+        for index, assertion in enumerate(script.assertions)
+        if assertion.check not in EVALUATED
+    )
     if problems:
         raise SpecError(problems)
     return runnable
@@ -236,14 +279,33 @@ async def _resolve(
     session: BrowserSession, target: Target, budget: float
 ) -> Resolved | Unresolved:
     """`target`'s element for an action, looked for every `LOOK_SECONDS`
-    until it resolves or `budget` seconds have passed."""
+    until it resolves or `budget` seconds have passed: then the last look's
+    misses, or none when no look finished.
+
+    Each look is cut off when the budget runs out, so a look that waits for
+    good, as `is_enabled` can on an element moved into another document
+    (ADR-0025's #52 amendment), can't hold the run. A look the page changed
+    under (`DocumentChangedError`) is made again."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + budget
-    while True:
-        found = await session.resolve(target, "action")
-        if isinstance(found, Resolved) or loop.time() >= deadline:
-            return found
+    last = Unresolved(())
+    while loop.time() < deadline:
+        limit = asyncio.timeout_at(deadline)
+        try:
+            async with limit:
+                found = await session.resolve(target, "action")
+        except TimeoutError:
+            if not limit.expired():
+                raise  # not the budget's own limit
+            break
+        except DocumentChangedError:
+            pass  # the page changed under the look: look again
+        else:
+            if isinstance(found, Resolved):
+                return found
+            last = found
         await asyncio.sleep(LOOK_SECONDS)
+    return last
 
 
 async def _dispatched(
@@ -259,22 +321,22 @@ async def _dispatched(
     record.step_intent(
         seq, intent.action, side_effect=intent.side_effect, target_used=intent.target
     )
-    window = await act()
-    settled = await session.settle(window)
+    try:
+        window = await act()
+        settled = await session.settle(window)
+    except (Error, PolicyEventError) as error:
+        # Playwright's general error type (a failed navigation, an action
+        # the page refused, a crashed page) or a document off the allowed
+        # origins, raised between the intent and the completion: whether
+        # the action took effect is unknown, so its intent stays unresolved
+        # and the run stops.
+        return StepResult(seq, "failed", error=str(error))
     record.step_completed(seq, locator_used=locator_index, settled=settled)
     return StepResult(seq, "completed", window, locator_index, settled)
 
 
-def _outcome(
-    steps: Sequence[StepResult],
-    assertions: Sequence[AssertionResult],
-    gate: EgressGate,
-) -> RunOutcome:
-    """`errored` on an infrastructure event or a step that failed;
-    `passed` only when every step completed and every assertion passed;
-    `failed` otherwise."""
-    if gate.infrastructure_events or any(step.outcome == "failed" for step in steps):
-        return "errored"
-    if all(step.outcome == "completed" for step in steps) and not assertions:
-        return "passed"
-    return "failed"
+def _outcome(*, errored: bool) -> RunOutcome:
+    """`errored` when told. Otherwise `failed`: a run passes only when every
+    step completed and every assertion passed, and no assertion is
+    evaluated until #46's assertions pull request."""
+    return "errored" if errored else "failed"
