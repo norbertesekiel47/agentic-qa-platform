@@ -19,7 +19,7 @@ MDNS_PORT = 5353
 MDNS_GROUP = "FB0000E0"
 
 # A peer connection with a data channel and an offer, which gathers with no
-# ICE server, then connects to a second one, which answers, and is handed
+# ICE server, then negotiates with a second one, which answers, and is handed
 # remote candidates whose `.local` names the page chose: a browser that looked
 # such a name up itself would send a query naming it. Both stay open while the
 # browser's sockets are read. Returns each candidate gathered and how
