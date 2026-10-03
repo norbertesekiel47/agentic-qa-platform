@@ -84,7 +84,12 @@ class RoleField(StrictModel):
     name: NonEmpty
 
 
-def _field(value: object) -> Literal["password"] | RoleField:
+# The field a test secret may go into: `password` is an
+# <input type="password">; otherwise a role and an accessible name.
+SecretField = Literal["password"] | RoleField
+
+
+def _field(value: object) -> SecretField:
     if value == "password":
         return "password"
     if isinstance(value, dict):
@@ -106,8 +111,7 @@ class SecretBinding(StrictModel):
         DistinctListOf[Annotated[StrictStr, AfterValidator(_binding_origin)]],
         AtLeastOne,
     ]
-    # `password` is an <input type="password">.
-    field: Annotated[Literal["password"] | RoleField, PlainValidator(_field)]
+    field: Annotated[SecretField, PlainValidator(_field)]
 
 
 class Budgets(StrictModel):

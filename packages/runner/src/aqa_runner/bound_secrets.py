@@ -9,9 +9,8 @@ import os
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
 
-from aqa_core.config import RoleField
+from aqa_core.config import SecretField
 from aqa_core.project import SecretDestination, secret_destinations
 from aqa_core.spec import Spec, secret_references
 from aqa_core.text import normalize
@@ -107,7 +106,7 @@ class SecretRefusedError(Exception):
     message names the secret, never its value."""
 
 
-def described(field: Literal["password"] | RoleField) -> str:
+def described(field: SecretField) -> str:
     """The field a binding names, as a refusal says it."""
     if field == "password":
         return 'an <input type="password">'
@@ -115,7 +114,7 @@ def described(field: Literal["password"] | RoleField) -> str:
 
 
 async def field_matches(
-    frame: Frame, element: ElementHandle, field: Literal["password"] | RoleField
+    frame: Frame, element: ElementHandle, field: SecretField
 ) -> bool:
     """Whether `element`, in `frame`, is the field a binding names: an
     `<input type="password">` (`CONCEALED_INPUTS`), or an element whose role
