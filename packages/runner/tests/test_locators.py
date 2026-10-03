@@ -12,7 +12,8 @@ from typing import Any
 
 import playwright
 import pytest
-from aqa_core.compiled import PLAYWRIGHT_PSEUDO_CLASSES, AriaRole, ByCss, Target
+from aqa_core.compiled import PLAYWRIGHT_PSEUDO_CLASSES, ByCss, Target
+from aqa_core.schema import AriaRole
 from aqa_core.text import has_pattern, has_text
 from aqa_runner.browser_session import open_browser_session
 from aqa_runner.locators import (

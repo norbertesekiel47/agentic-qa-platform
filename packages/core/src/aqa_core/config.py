@@ -1,13 +1,21 @@
 """The project config, `qa/config.yaml` (DATA_MODEL §9). Every key is
 optional, and unknown keys are errors."""
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
-from pydantic import AfterValidator, Field, PlainValidator, StrictInt, StrictStr
+from pydantic import (
+    AfterValidator,
+    BeforeValidator,
+    Field,
+    PlainValidator,
+    StrictInt,
+    StrictStr,
+)
 
 from aqa_core.browser import BrowserOverrides
 from aqa_core.price_map import Capability
 from aqa_core.schema import (
+    AriaRole,
     AtLeastOne,
     DistinctListOf,
     Host,
@@ -58,10 +66,21 @@ class Egress(StrictModel):
     private_origins: DistinctListOf[Origin] = ()
 
 
-class RoleField(StrictModel):
-    """A field found by its role and accessible name."""
+def _aria_role(value: object) -> object:
+    # Checked first, so a typo gets one line rather than every role listed.
+    if value not in get_args(AriaRole):
+        raise ValueError(
+            f"'{value}' is not an ARIA role: write a role Playwright's get_by_role "
+            "takes, such as textbox"
+        )
+    return value
 
-    role: NonEmpty
+
+class RoleField(StrictModel):
+    """A field found by its role, which no field could have unless it is
+    one Playwright's get_by_role takes, and its accessible name."""
+
+    role: Annotated[AriaRole, BeforeValidator(_aria_role)]
     name: NonEmpty
 
 

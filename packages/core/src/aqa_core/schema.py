@@ -1,10 +1,10 @@
 """What the spec, project-config and compiled-script models share: a strict
-model base, and the origins, hosts, paths and names they are written with
+model base, and the origins, hosts, paths, names and roles they are written with
 (DATA_MODEL §6, §7, §9; ADR-0026)."""
 
 import ipaddress
 import re
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StrictStr
@@ -181,3 +181,92 @@ def _start_path(text: str) -> str:
 # A path on the start origin: a spec's start_url, and a compiled navigate
 # step's url (DATA_MODEL §6, §7).
 StartPath = Annotated[StrictStr, AfterValidator(_start_path)]
+
+
+# The roles Playwright 1.63's get_by_role accepts, which are WAI-ARIA's, as
+# its signature lists them
+# (https://playwright.dev/python/docs/api/class-page#page-get-by-role).
+AriaRole = Literal[
+    "alert",
+    "alertdialog",
+    "application",
+    "article",
+    "banner",
+    "blockquote",
+    "button",
+    "caption",
+    "cell",
+    "checkbox",
+    "code",
+    "columnheader",
+    "combobox",
+    "complementary",
+    "contentinfo",
+    "definition",
+    "deletion",
+    "dialog",
+    "directory",
+    "document",
+    "emphasis",
+    "feed",
+    "figure",
+    "form",
+    "generic",
+    "grid",
+    "gridcell",
+    "group",
+    "heading",
+    "img",
+    "insertion",
+    "link",
+    "list",
+    "listbox",
+    "listitem",
+    "log",
+    "main",
+    "marquee",
+    "math",
+    "menu",
+    "menubar",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "meter",
+    "navigation",
+    "none",
+    "note",
+    "option",
+    "paragraph",
+    "presentation",
+    "progressbar",
+    "radio",
+    "radiogroup",
+    "region",
+    "row",
+    "rowgroup",
+    "rowheader",
+    "scrollbar",
+    "search",
+    "searchbox",
+    "separator",
+    "slider",
+    "spinbutton",
+    "status",
+    "strong",
+    "subscript",
+    "superscript",
+    "switch",
+    "tab",
+    "table",
+    "tablist",
+    "tabpanel",
+    "term",
+    "textbox",
+    "time",
+    "timer",
+    "toolbar",
+    "tooltip",
+    "tree",
+    "treegrid",
+    "treeitem",
+]
