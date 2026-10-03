@@ -34,6 +34,7 @@ from aqa_runner.document_origins import (
 )
 from aqa_runner.egress import EgressPolicy
 from aqa_runner.egress_proxy import EgressProxy
+from aqa_runner.invariants import Observers
 from aqa_runner.locators import Absent, Resolved, Unresolved, Use, rendered_text
 from aqa_runner.locators import resolve as resolve_target
 from aqa_runner.routing import install_routes
@@ -223,9 +224,12 @@ class BrowserSession:
     `page` is public until #53 makes it private. No production code outside
     this module may use it: it observes and acts without the checks."""
 
-    def __init__(self, page: Page, policy: EgressPolicy) -> None:
+    def __init__(self, page: Page, policy: EgressPolicy, invariants: Observers) -> None:
         self.page = page
         self._policy = policy
+        # What each invariant saw on the page, from before its first
+        # navigation (`aqa_runner.invariants.Observers.watch`).
+        self.invariants = invariants
         self._refs_given = 0
         self._current: dict[str, str] = {}
         self._turn = asyncio.Lock()
@@ -917,6 +921,9 @@ async def open_browser_session(
         await context.add_init_script(SERVICE_WORKERS_REFUSED)
         # Before the first page, so routing sees every request a page makes.
         await install_routes(context, egress.policy, egress.blocked_attempts)
-        yield BrowserSession(await context.new_page(), egress.policy)
+        page = await context.new_page()
+        # Before the page's first navigation.
+        invariants = await Observers.watch(page, egress.policy)
+        yield BrowserSession(page, egress.policy, invariants)
     finally:
         await browser.close()
