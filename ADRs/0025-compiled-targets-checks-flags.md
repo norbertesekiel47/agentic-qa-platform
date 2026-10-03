@@ -276,12 +276,19 @@ Building the compiler's locator generation (#52) settled choices that "Locator g
   - *Which scope:*
     - *Options:* the nearest scope that is unique where the element was seen; a list of landmarks; or the nearest that is unique where it was seen and also holds at the check.
     - *Chosen:* the third. On the pilot, `ul.nav` is the nearest unique ancestor of the header's links on the login page. The home page's feed tabs are a `ul.nav` too, so under the first option login's "no Sign in link" check had no scope. A list of landmarks would be per app.
-    - So each locator is kept under every scope that finds the element where it was seen, nearest first. At the check, of each kind, the first whose scope is on the page decides: on the pilot, `ul.navbar-nav`, with nothing visible in it.
+    - So each locator is kept under every scope that finds the element where it was seen, nearest first. At the check, of each kind, the first whose scope is on the page with nothing visible in it is kept: on the pilot, `ul.navbar-nav`.
   - *An element still shown:*
-    - *Options:* keep the kinds that miss it and drop those that find it; or fail.
-    - *Chosen:* fail. Under the first, a page that changes the attribute one kind uses, such as its test ID, keeps the element on screen with a target that misses it, so the check passes on every replay (#52's security review).
+    - *Options:*
+      1. keep the locators that miss it and drop those that find it;
+      2. let the first locator of each kind whose scope is on the page decide;
+      3. look at every locator seen, and fail if any finds something visible.
+    - *Chosen:* the third. #52's security reviews defeated the first two.
+      - Under the first, a page that changes the attribute one kind uses, such as its test ID, keeps the element on screen with a target that misses it, so the check passes on every replay.
+      - Under the second, a page that renames a button and its class keeps it on screen, while the bare `button` its toolbar holds, a later locator of the same kind, still finds it.
     - A visible match counts whether there is one or several, because several hide which one is the element.
-  - A check whose scope is gone, as on an error page, or whose element is still shown, gets no target, so compiling fails by name. So does a check of an element never seen, or one whose latest sighting failed.
+    - The price is that a broad locator, under a far scope, may find another element like it, and then the check fails by name too.
+    - A look the page breaks, as by navigating, establishes nothing, so it fails the check as well.
+  - A check whose scope is gone, as on an error page, or whose element is still shown, gets no target, so compiling fails by name. So does a check of an element never seen, or one whose latest sighting failed. Every negative check, one that joins a target included, is judged against the latest sighting.
 - **Known limits, for the callers (#53, #46):**
   - A class that flips with state, such as Bootstrap's `btn-outline-primary` and `btn-primary`, can't be told from a stable one. A target used before and after such a flip is checked at both uses, so the flip splits it (above).
   - A page can copy a filled secret into a name, a test ID or a placeholder, and a locator built on it would carry the secret. Before a script is written, its caller must drop, never redact, any locator that reveals a secret value.
