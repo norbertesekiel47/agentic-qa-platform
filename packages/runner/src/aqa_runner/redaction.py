@@ -202,7 +202,13 @@ def _paths(value: str) -> tuple[tuple[_Token, ...], ...]:
     encodings = {value.encode()}
     if all(ord(char) < 256 for char in value):
         encodings.add(value.encode("latin-1"))
-    paths = [_needle(value), _needle(value.lower())]
+    producer_value = value.replace("\u200b", "").replace("\u00ad", "")
+    paths = [
+        _needle(value),
+        _needle(value.lower()),
+        _needle(producer_value),
+        _needle(producer_value.lower()),
+    ]
     for raw in encodings:
         for alignment in range(3):
             # Only characters whose six bits lie wholly inside the value.

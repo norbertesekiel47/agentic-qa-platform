@@ -280,3 +280,83 @@ def test_short_paths_match_an_independent_finite_language() -> None:
             assert redactor.redact(f"<{shown}>{shown}") == f"<{MARKER}>{MARKER}"
             near_match = shown[:-1] + "?"
             assert redactor.redact(near_match) == near_match
+
+
+@pytest.mark.parametrize(
+    ("value", "shown"),
+    [
+        ("\u200b fake-value", "fake-value"),
+        ("fake-value \u200b", "fake-value"),
+        ("\u00ad fake-value", "fake-value"),
+        ("fake-value \u00ad", "fake-value"),
+        ("fake \u200b value", "fake value"),
+        ("fake \u00ad value", "fake value"),
+        ("\u200b fake-value \u00ad", "fake-value"),
+        ("\u200b \u00ad\tfake-value \u200b \u00ad", "fake-value"),
+        ("fake \u200b \u00ad\tvalue", "fake value"),
+        ("\u200b \u00ad\tfake \u200b \u00ad\tvalue \u00ad \u200b", "fake value"),
+        ("\u200b\u00a0fake\u00a0\u200b\ufeffvalue\u00a0\u00ad", "fake value"),
+    ],
+)
+def test_producer_removal_precedes_whitespace_normalization(
+    value: str, shown: str
+) -> None:
+    redactor = Redactor([secret(value)])
+    assert redactor.redact(shown) == MARKER
+    assert redactor.redact(f"<{shown}>") == f"<{MARKER}>"
+    assert redactor.redact(f"<{value}>") == f"<{MARKER}>"
+    assert redactor.redact(quote(value, safe="")) == MARKER
+    assert redactor.redact(quote(shown, safe="")) == MARKER
+
+
+@pytest.mark.parametrize("value", ["fake \u200b value", "fake \u00ad value"])
+def test_producer_normalization_preserves_required_interior_whitespace(
+    value: str,
+) -> None:
+    redactor = Redactor([secret(value)])
+    assert redactor.redact("fake value") == MARKER
+    assert redactor.redact("fake%20value") == MARKER
+    assert redactor.redact("fakevalue") == "fakevalue"
+
+
+def test_removed_producer_path_keeps_contextual_lowercase() -> None:
+    redactor = Redactor([secret("FAKE-\u039f\u200bΣ")])
+    assert redactor.redact("fake-%CE%BF%CF%82") == MARKER
+    assert redactor.redact("fake-ος") == MARKER
+    assert redactor.redact("FAKE-\u039f\u200bΣ") == MARKER
+
+
+def test_producer_paths_keep_original_secret_priority() -> None:
+    redactor = Redactor([secret("fake", "SHORT"), secret("\u200b fake", "LONG")])
+    assert redactor.redact("fake") == "[SECRET:LONG]"
+    tied = Redactor([secret("fake\u200b", "FIRST"), secret("\u200bfake", "SECOND")])
+    assert tied.redact("fake") == "[SECRET:FIRST]"
+
+
+def test_producer_paths_do_not_expand_base64_generation() -> None:
+    value = "\u200b fake-value"
+    redactor = Redactor([secret(value)])
+    assert redactor.redact(b64encode(value.encode()).decode()) == MARKER
+    assert redactor.redact("ZmFrZS12YWx1ZQ==") == "ZmFrZS12YWx1ZQ=="
+
+
+@pytest.mark.parametrize("value", ["\u200b\u00ad\u200b", "\u00ad" * 4, "\u200b \u00ad"])
+def test_empty_producer_paths_do_not_insert_markers(value: str) -> None:
+    redactor = Redactor([secret(value)])
+    assert redactor.redact("") == ""
+    assert redactor.redact("ordinary") == "ordinary"
+    assert redactor.redact(value) == MARKER
+
+
+def test_whitespace_only_producer_paths_still_consume_positive_spans() -> None:
+    redactor = Redactor([secret("\u200b \u00ad")])
+    assert redactor.redact("ordinary words") == f"ordinary{MARKER}words"
+    assert redactor.redact("<  >") == f"<{MARKER}>"
+    assert redactor.redact("") == ""
+
+
+def test_short_producer_remnants_can_redact_unrelated_text() -> None:
+    redactor = Redactor([secret("\u200b f\u00ad")])
+    assert redactor.redact("f") == MARKER
+    assert redactor.redact("leaf") == f"lea{MARKER}"
+    assert redactor.redact("") == ""

@@ -532,6 +532,24 @@ A filled value is present in Playwright 1.63's raw [AI snapshot](https://playwri
 - Producer forms include JSON quoting and Unicode escapes (surrogate pairs included), YAML doubled apostrophes, C0/C1 hex escapes, Python's escaped UTF-8 bytes, and optional U+200B/U+00AD that Playwright removes. These precede ref rewriting and any cut.
 - Under the existing session lock: retire refs; check the page; take the raw snapshot; classify live frame origins using raw refs; check frame changes; prune entire forbidden raw subtrees; redact; rewrite ref imitations and renumber surviving refs. A final scan returns the marker type and only refs still present are published. Removed text is never rejoined. Pure parsing lives in `snapshot_refs`; document policy and state stay in `BrowserSession`. Scanning before subtree pruning is rejected because a value such as `ref=` destroys the syntax needed to exclude a forbidden frame (LAB_NOTES, 2026-10-03).
 
+### Producer normalization order
+
+Playwright removes U+200B and U+00AD before trimming and collapsing whitespace.
+The scanner retains its original-value and whole-value lowercase paths, then
+adds paths for the value with those characters removed and its whole-value
+lowercase form. Existing tokenization now sees newly exposed edge whitespace
+and joins newly adjacent interior whitespace runs before matching them.
+Identical paths are deduplicated. Making only edge whitespace optional is
+insufficient because removal can also join two interior runs into one.
+
+Admission and filling still use the original value, as does base64 generation.
+The added paths may match a short remnant in unrelated text, or positive-width
+whitespace when the producer's fully normalized value is empty. This conservative
+over-redaction is accepted. Empty paths cannot insert zero-width markers.
+At most two additional paths survive deduplication per value; the work bounds
+below include their token positions and spelling groups. No resource ceiling
+is added. Base64 of a normalized value is outside this correction.
+
 ### Matcher correction
 
 The scanner compiles finite spelling groups by consumed width. Standard-library regular expressions find those fixed-width spellings with simple Unicode case equivalence. Multi-character groups use lookahead so overlapping occurrences remain available. Only literal alternatives and fixed-width base64 character classes reach the regex engine. Tokens represent one, optional, zero-or-more or one-or-more occurrences.
