@@ -56,6 +56,20 @@ SHOPS = {
 
 # The fixture app's pages, by name.
 PAGES = SHOPS | {
+    "visual": """<a id="visual" style="position:absolute;left:8px;top:8px;
+        width:100px;height:30px;display:block">Save</a>
+        <div id="cover" style="display:none;position:absolute;inset:0;background:white"></div>
+        <script>
+            const state = new URLSearchParams(location.search).get("state");
+            const target = document.querySelector("#visual");
+            if (state === "covered") document.querySelector("#cover").style.display = "block";
+            if (state === "offscreen") target.style.top = "110vh";
+            if (state === "narrow") target.style.width = "43px";
+            if (state === "short") target.style.height = "23px";
+            if (state === "missing") target.remove();
+        </script>""",
+    "visual-frame": '<iframe src="/page/form"></iframe>',
+    "visual-foreign-frame": '<iframe src="data:text/html,<button>Save</button>"></iframe>',
     "probe-cookies": """<script>
         document.cookie = "fake-browser=value; path=/";
         fetch('/did/cookie');

@@ -4,8 +4,8 @@ recorded settings, each step's intent on disk before its action and its
 completion after (ARCHITECTURE §3.3). No model is involved: nothing here
 imports or builds a model client.
 
-It acts and observes only through the browser session's methods, which check
-every document they touch (ADR-0026's amendments on document origins)."""
+Browser observations use the session methods, which check every document
+they touch (ADR-0026). Probe reads use the same egress gate as the browser."""
 
 import asyncio
 import re
@@ -14,11 +14,14 @@ from dataclasses import dataclass, field, replace
 from typing import Literal, assert_never, overload
 
 from aqa_core.compiled import (
+    Assertion,
     Click,
     CompiledScript,
     Fill,
     FillSecret,
     Navigate,
+    NetworkNone,
+    NetworkSeen,
     NotVisible,
     Press,
     ProbeBaseline,
@@ -30,15 +33,21 @@ from aqa_core.compiled import (
     TextInTarget,
     TextVisible,
     UrlMatches,
+    VisibleUnoccluded,
 )
 from aqa_core.config import ProjectConfig
 from aqa_core.project import SpecError, path_on_origin, probe_url, start_url
 from aqa_core.spec import Spec, secret_references
 from playwright.async_api import BrowserType, ElementHandle, Error
 
-from aqa_runner import probes
+from aqa_runner import network, probes
 from aqa_runner.bound_secrets import BoundSecret, bound_secrets
-from aqa_runner.browser_session import BrowserSession, one_key, open_browser_session
+from aqa_runner.browser_session import (
+    BrowserSession,
+    UnsupportedVisualFrameError,
+    one_key,
+    open_browser_session,
+)
 from aqa_runner.document_origins import (
     DocumentChangedError,
     PolicyEvent,
@@ -87,16 +96,6 @@ PLAYWRIGHT_CALL = re.compile(r"[A-Z][A-Za-z]{0,40}\.[a-z][A-Za-z]{0,40}(?=: )")
 # The steps the executor runs: those that act on a target, and the rest.
 type Targeted = Click | Fill | FillSecret | Select
 type Untargeted = Navigate | Reload | Press
-
-# The checks M1 evaluates; #48 adds the others (DATA_MODEL §7).
-type Evaluated = (
-    TextVisible
-    | TextInTarget
-    | NotVisible
-    | UrlMatches
-    | ProbeEquals
-    | ProbeEqualsBaseline
-)
 
 # How a step ended: dispatched and settled; its target never resolved, so
 # nothing was dispatched; or dispatching or settling raised, so its outcome
@@ -331,7 +330,7 @@ async def replay(
 
 def _accepted(
     script: CompiledScript, spec: Spec
-) -> tuple[list[Targeted | Untargeted], list[Evaluated]]:
+) -> tuple[list[Targeted | Untargeted], list[Assertion]]:
     """`script`'s steps and assertions, or `SpecError` naming each step and
     check M1 can't run, before anything is opened (ADR-0024's #46
     amendment), and each `fill_secret` naming a secret `spec` doesn't
@@ -339,7 +338,7 @@ def _accepted(
     definitions must name probes declared by the spec."""
     referenced = {name for _, name in secret_references(spec.frontmatter)}
     runnable: list[Targeted | Untargeted] = []
-    checks: list[Evaluated] = []
+    checks: list[Assertion] = []
     problems: list[str] = []
     for index, step in enumerate(script.steps):
         where = f"steps[{index}] (seq {step.seq})"
@@ -364,21 +363,13 @@ def _accepted(
             problems.append(
                 f"assertions[{index}] ({assertion.id}): probe {assertion.probe} is not declared by the spec"
             )
-        if isinstance(
-            assertion,
-            TextVisible
-            | TextInTarget
-            | NotVisible
-            | UrlMatches
-            | ProbeEquals
-            | ProbeEqualsBaseline,
-        ):
-            checks.append(assertion)
-        else:
+        if isinstance(assertion, VisibleUnoccluded) and not assertion.in_viewport:
             problems.append(
-                f"assertions[{index}] ({assertion.id}): {assertion.check} is not "
-                "evaluated until #48"
+                f"assertions[{index}] ({assertion.id}): "
+                "visible_unoccluded requires in_viewport: true"
             )
+        else:
+            checks.append(assertion)
     problems.extend(
         f"probe_baselines[{name}]: probe {name} is not declared by the spec"
         for name in script.probe_baselines
@@ -398,7 +389,7 @@ class _UnansweredError(Exception):
 
 
 async def _evaluate_each(
-    session: BrowserSession, checks: list[Evaluated], run: _Replay
+    session: BrowserSession, checks: list[Assertion], run: _Replay
 ) -> tuple[AssertionResult, ...]:
     """Every assertion, in order, each evaluated once, as the last step left
     the page; each gets the run's `resolve_seconds` of its own. First the
@@ -433,6 +424,8 @@ async def _evaluate_each(
             probes.ProbeError,
             EgressRefusedError,
             EgressUpstreamError,
+            network.WindowsOverflowError,
+            UnsupportedVisualFrameError,
         ) as error:
             raised = check.id
             results.append(
@@ -447,7 +440,7 @@ async def _evaluate_each(
 
 async def _evaluate(
     session: BrowserSession,
-    check: Evaluated,
+    check: Assertion,
     run: _Replay,
     budget: float,
 ) -> AssertionResult:
@@ -463,7 +456,7 @@ async def _evaluate(
 
 async def _held(
     session: BrowserSession,
-    check: Evaluated,
+    check: Assertion,
     run: _Replay,
     budget: float,
 ) -> bool | Unresolved:
@@ -472,22 +465,18 @@ async def _held(
     What it looks at on the page takes at most `budget` seconds and
     `MARGIN_SECONDS` past them."""
     match check:
-        case TextVisible():
-            text = await _bounded(_read(session, budget), budget)
-            return await text_matches(check, text)
+        case TextVisible() | TextInTarget():
+            return await _text_held(session, check, run.targets, budget)
         case UrlMatches(pattern=pattern):
             return await url_matches(pattern, await _bounded(session.url(), budget))
-        case TextInTarget(target=name):
-            seen = await _bounded(
-                _target_text(session, run.targets[name], budget), budget
-            )
-            return (
-                seen
-                if isinstance(seen, Unresolved)
-                else await text_matches(check, seen)
-            )
         case NotVisible(target=name):
             return await _bounded(_absent(session, run.targets[name], budget), budget)
+        case VisibleUnoccluded(target=name):
+            return await _bounded(
+                _visual(session, run.targets[name], check, budget), budget
+            )
+        case NetworkNone() | NetworkSeen():
+            return await network.held(check, session.windows())
         case ProbeEquals() | ProbeEqualsBaseline():
             expected: probes.JsonValue
             if isinstance(check, ProbeEquals):
@@ -499,6 +488,35 @@ async def _held(
             return probes.same(value, expected)
         case _:
             assert_never(check)
+
+
+async def _text_held(
+    session: BrowserSession,
+    check: TextVisible | TextInTarget,
+    targets: Mapping[str, Target],
+    budget: float,
+) -> bool | Unresolved:
+    seen = await _bounded(
+        _target_text(session, targets[check.target], budget)
+        if isinstance(check, TextInTarget)
+        else _read(session, budget),
+        budget,
+    )
+    return seen if isinstance(seen, Unresolved) else await text_matches(check, seen)
+
+
+async def _visual(
+    session: BrowserSession, target: Target, check: VisibleUnoccluded, budget: float
+) -> bool | Unresolved:
+    found = _answered(await _resolve(session, target, "assertion", budget), budget)
+    if not isinstance(found, Resolved):
+        return found
+    try:
+        return await session.unoccluded(
+            found.element, check.min_size_px, check.in_viewport
+        )
+    finally:
+        await found.element.dispose()
 
 
 async def _read_probe(run: _Replay, name: str, path: str) -> probes.JsonValue:
@@ -771,6 +789,8 @@ type _Raised = (
     | probes.ProbeUnstableError
     | EgressRefusedError
     | EgressUpstreamError
+    | network.WindowsOverflowError
+    | UnsupportedVisualFrameError
 )
 
 
@@ -789,6 +809,10 @@ def _described(error: _Raised, *, withheld: bool) -> str:
     for kind, reason in (
         (probes.ProbeError, "the probe could not be read"),
         (
+            UnsupportedVisualFrameError,
+            "visible_unoccluded does not support elements inside frames",
+        ),
+        (
             probes.ProbeUnstableError,
             "the probe value did not stabilize within its read bound",
         ),
@@ -803,7 +827,8 @@ def _described(error: _Raised, *, withheld: bool) -> str:
         | DocumentChangedError
         | _UnansweredError
         | SecretRefusedError
-        | SecretNotFilledError,
+        | SecretNotFilledError
+        | network.WindowsOverflowError,
     ):
         return str(error)
     line = str(error).split("\n", 1)[0]
