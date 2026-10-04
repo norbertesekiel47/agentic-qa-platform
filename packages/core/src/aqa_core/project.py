@@ -447,17 +447,24 @@ def load_compiled(path: Path, config: ProjectConfig) -> CompiledScript:
     in JSON mode, where `compiled_at` may be a string, then its parts checked
     against each other and the secrets `config` declares. Every problem is
     reported at once, as a SpecError."""
-    text = _read_text(path)
+    return parse_compiled(_read_text(path), config, source=path)
+
+
+def parse_compiled(text: str, config: ProjectConfig, *, source: Path) -> CompiledScript:
+    """Validate compiled JSON and its cross-field rules without file I/O.
+    `source` identifies every SpecError problem, as in `load_compiled`."""
     problems = [
-        f"{path}: {_key(where)}: the key appears more than once, and a reader "
+        f"{source}: {_key(where)}: the key appears more than once, and a reader "
         "keeps only its last value, so write it once"
-        for where in _repeated_keys(text, path)
+        for where in _repeated_keys(text, source)
     ]
     try:
         script = CompiledScript.model_validate_json(text)
     except ValidationError as error:
-        raise SpecError([*problems, *_problems(error, path)]) from None
-    problems.extend(f"{path}: {problem}" for problem in _name_problems(script, config))
+        raise SpecError([*problems, *_problems(error, source)]) from None
+    problems.extend(
+        f"{source}: {problem}" for problem in _name_problems(script, config)
+    )
     if problems:
         raise SpecError(problems)
     return script
