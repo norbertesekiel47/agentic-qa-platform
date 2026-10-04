@@ -245,7 +245,7 @@ Building `aqa explore --plan-only` (#41) settled how the plan is shaped and hash
 ### The call
 `make_plan(router, spec)` makes one `ModelRouter.call` on the navigator role, in `explore` mode, with `CoveragePlan` as the response format and no tools, so the request has no tool choice at all. It returns the plan the model wrote if it parsed, the misfits if it doesn't fit, and the routed call with every response's cost record.
 - **Bounds on every Anthropic request** (#40's follow-ups). The adapter now states `max_tokens` 4096 and a 120 s timeout for each try. Left to langchain-anthropic 1.7.4, the fallback model `claude-opus-5-5` asked for 128,000 output tokens, up to $2.56 at its $20 per million, and no request ever timed out (LAB_NOTES, 2026-10-02). 4096 keeps the role's own requests as they were. 120 s covers 4096 tokens at 40 a second, and the SDK's two retries stay, so a provider that never answers holds a call for about 6 minutes. Both are constants, not config: nothing yet needs another value. A plan longer than the bound is cut off with the stop reason `max_tokens`, so the adapter leaves it unparsed and the router records it `invalid` (#40): never a shorter plan. PR B's recordings measure how far the pilot's plans are from it.
-- **The response format's shape, against the API's limits** (structured outputs, "JSON Schema limitations", platform.claude.com/docs/en/build-with-claude/structured-outputs): 11 optional properties and 10 with `anyOf`, under the limits of 24 and 16. One `$defs` entry is only a `$ref` to another, from the `DistinctListOf` alias. The page lists `$ref` and `$defs` as supported and says nothing of a definition that is only a reference, so PR B's first recording is what proves the API takes it.
+- **The response format's shape, against the API's limits** (structured outputs, "JSON Schema limitations", platform.claude.com/docs/en/build-with-claude/structured-outputs): 11 optional properties and 10 with `anyOf`, under the limits of 24 and 16. One `$defs` entry is only a `$ref` to another, from the `DistinctListOf` alias. The page lists `$ref` and `$defs` as supported and says nothing of a definition that is only a reference, so the live-recording amendment below records the first measured API acceptance.
 
 ### The command
 `aqa explore <spec> --plan-only` (`aqa_cli.explore`) resolves everything before any model call, makes the plan call, and writes the result to the run record. API.md §7 has the synopsis and the exit codes.
@@ -339,3 +339,34 @@ The executor's late-scope test must distinguish a missing scope from an empty sc
 - **Options:** extend the page-load timer; arm an autonomous timer after the first lookup; or let later lookups release the fixture after a delay measured from the first lookup. A longer page-load timer preserves the measured race. Arming a timer later removes settling from its delay, but keeps an independently advancing producer.
 - **Decision:** the existing test wraps `BrowserSession.resolve` locally and records its first lookup's time. Only a later lookup at least 1.5 s after that time dispatches the fixture's one-shot `show-status-area` event. Every lookup calls the real resolver and returns its actual result. The fixture owns the same empty section markup. Neither the event nor the wrapper chooses behavior from the budget or expected verdict.
 - **Consequences:** both parameter rows keep their budgets, expected results, misses and eight-second bound. An added assertion requires the first real lookup to report `no scope`, so the ten-second case needs retries to pass. The executor continues to enforce its own deadline and cooperative cancellation. A lookup admitted before its deadline may resume late and dispatch before cancellation runs; this is not an absolute prohibition on late dispatch. The fixture removes the measured page-load-versus-settling race without changing production behavior, dependencies or cost.
+
+## Amendment (2026-10-03): live provider recordings and retained costs (#41 B1)
+
+The earlier handwritten successful cassettes proved request construction and response parsing, but not provider acceptance. B1 replaces `coverage_plan`, `tools`, `structured_output` and `plain_with_effort` with four real Anthropic responses. The five `BY DESIGN` failure cassettes stay unchanged. This establishes the four generic requests; the five pilot plans and their REVIEW.md obligations remain B2's separate acceptance work.
+
+- **Options:** re-record through the pytest fixture, which can promote a response before later assertions fail; or use a small test-only named-case recorder that retains evidence and costs before acceptance and promotion.
+- **Decision:** use `packages.runner.tests.record_cassettes`, reusing the router, price map, `cost_record`, existing request examples, `make_plan` and VCR sanitizer. Each attempt gets a unique ignored directory. The recorder saves returned costs and reconciles observed SDK responses, including any retry response with usage. Unavailable usage stays explicitly unpriced. It never edits an answer to make it pass. Promotion requires a usable single response and request ID; unsuccessful or multi-response attempts remain private. TESTING §4 owns the command and artifact details.
+- **Consequences:** recording is deliberate paid work; replay stays offline. This changes no production call, retry, model, price or schema behavior. The source SHA and request hashes connect a capture to its code and wire request. Costs from local fake-provider tests are fixture values, not live spending.
+
+### Measured provider evidence
+
+Source SHA `207061428232f3c34e4fd0cd8d3ad8ec00062301`, using the pinned Anthropic 1.9.0, langchain-anthropic 1.7.4 and VCR.py 8.3.0. From that worktree root, with the provider key sourced from its authorized ignored file, the four command arguments were:
+
+```bash
+capture_root="$PWD/.scratch/ticket-41/session6/live"
+uv run python -m packages.runner.tests.record_cassettes coverage_plan "$capture_root/coverage_plan-001"
+uv run python -m packages.runner.tests.record_cassettes tools "$capture_root/tools-001"
+uv run python -m packages.runner.tests.record_cassettes structured_output "$capture_root/structured_output-001"
+uv run python -m packages.runner.tests.record_cassettes plain_with_effort "$capture_root/plain_with_effort-001"
+```
+
+Each command was run separately, with its receipt and replay checked before the next call. All four used the configured `claude-sonnet-5-5`, had HTTP 200 and one accepted response, and needed no retry. No failed or unpriced live attempt occurred. The receipts' CostRecords used pinned map `ae6b762190658e695c77b0ba63b6c65913b86ac0`; all cached-input counts were zero.
+
+| Case | Input tokens | Output tokens | CostRecord USD | Provider request ID |
+|---|---:|---:|---:|---|
+| `coverage_plan` | 3711 | 204 | 0.009462 | `req_011Cfgkgiautn768DeQnBRED` |
+| `tools` | 388 | 47 | 0.001246 | `req_011CfgkkuphjhdeqXVwGUe9W` |
+| `structured_output` | 271 | 59 | 0.001132 | `req_011CfgkqJ1KMjukpjFJsk3oP` |
+| `plain_with_effort` | 16 | 6 | 0.000092 | `req_011CfgkuTzwtUBficMR6ghHm` |
+
+The exact Decimal sum is **$0.011932**. Request bodies are unchanged from the preceding cassettes. The coverage-plan request includes the reference-only `$defs` entry discussed above; the API accepted it, returned `end_turn`, and produced a parsed plan with no spec misfits. This proves acceptance of this request at this source SHA, not all schemas or all future provider versions. Replay tests compare parsed replies with the saved wire responses and require no provider key.

@@ -1,8 +1,3 @@
-# HAND-WRITTEN RESPONSES. Nothing in this file was recorded from api.anthropic.com
-# (no provider key was available when it was made). The request bodies are what
-# aqa_runner.anthropic_client sent, through langchain-anthropic, to a local stub; the
-# responses were written by hand in the Messages API's shape. A re-recording with a
-# key replaces this file (TESTING.md section 4, Cassettes).
 interactions:
 - request:
     body: '{"max_tokens":4096,"messages":[{"role":"user","content":"Click the Sign
@@ -17,15 +12,12 @@ interactions:
     uri: https://api.anthropic.com/v1/messages
   response:
     body:
-      string: '{"id": "msg_handwritten_01", "type": "message", "role": "assistant",
-        "model": "claude-sonnet-5-5", "content": [{"type": "text", "text": "Clicking
-        Sign in."}, {"type": "tool_use", "id": "toolu_handwritten_01", "name": "click",
-        "input": {"ref": "e12"}}], "stop_reason": "tool_use", "stop_sequence": null,
-        "usage": {"cache_creation_input_tokens": 0, "cache_read_input_tokens": 100,
-        "input_tokens": 312, "output_tokens": 48}}'
+      string: '{"model":"claude-sonnet-5-5","id":"msg_011CfgkkvAYst9Gno4b21PPH","type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_013e13SLDsRyq4ZuYH19ojmT","name":"click","input":{"ref":"e12"},"caller":{"type":"direct"}}],"container":null,"stop_reason":"tool_use","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":388,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":47,"output_tokens_details":{"thinking_tokens":0},"service_tier":"standard","inference_geo":"global"},"diagnostics":null}'
     headers:
       content-type:
       - application/json
+      request-id:
+      - req_011CfgkkuphjhdeqXVwGUe9W
     status:
       code: 200
       message: OK
