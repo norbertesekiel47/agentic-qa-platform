@@ -150,12 +150,11 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
+from policy_commands import add_noqa, agent_config_installer, file_mutator, shell_write
 from policy_diff import changed_files, diff_asks, merge_base, texts
 from policy_rules import (
-    ADD_NOQA,
     ADR_HINT,
     ADR_REF,
-    AGENT_CONFIG_INSTALLER,
     ASSERTION,
     BROWSER_LAUNCH,
     CONTENT_RULES,
@@ -164,7 +163,6 @@ from policy_rules import (
     DSN,
     ENV_REFERENCE,
     FAKE_MARKER,
-    FILE_MUTATOR,
     FILE_SECRET_GUIDANCE,
     FILE_TOOLS,
     GATE_FILE_IN_SHELL,
@@ -188,7 +186,6 @@ from policy_rules import (
     SECRET_SLOTS,
     SECTION_HEADER,
     SHELL_SECRET_GUIDANCE,
-    SHELL_WRITE,
     SKIP_DIRS,
     SOURCE_RULES,
     SUPPRESSION,
@@ -491,10 +488,10 @@ def check_bash(command: str, project: Path) -> Verdict:
     verdict = Verdict(target="", secrets=find_secrets(command))
     if TEXT_BODY.search(command):
         command = MESSAGE.sub(lambda m: m[3] or "''", command)
-    if ADD_NOQA.search(command):
+    if add_noqa(command):
         verdict.findings.append(("`ruff --add-noqa`", SUPPRESSION, ""))
-    writes = SHELL_WRITE.search(command) is not None
-    mutates = writes or FILE_MUTATOR.search(command) is not None
+    writes = shell_write(command)
+    mutates = writes or file_mutator(command)
     launches = BROWSER_LAUNCH.search(command) is not None
     verdict.findings.extend(
         finding
@@ -509,7 +506,7 @@ def check_bash(command: str, project: Path) -> Verdict:
             "this shell command may modify the policy guard or the settings that "
             "load it (.claude/hooks, .claude/settings*.json)."
         )
-    if AGENT_CONFIG_INSTALLER.search(command) and not DRY_RUN.search(command):
+    if agent_config_installer(command) and not DRY_RUN.search(command):
         verdict.asks.append(
             "this installer rewrites .claude/settings.json and AGENTS.md; the fallow "
             "gate is installed by hand (see AGENTS.md), so review with --dry-run first."
