@@ -1,10 +1,7 @@
 """The Anthropic adapter (ADR-0007 amendments; #40): the client comes from the
 routed model's provider, tools are strict and `tool_choice` is `auto`, a schema
 is the response format, and no request forces a tool, because Sonnet 5.5 and
-Opus 5.5 answer a forced `tool_choice` of `any` or `tool` with a 400. The
-cassettes hold the requests the adapter really sent. Successful cases now
-carry live provider responses; failure cases remain hand-written by design
-(see each cassette's header and TESTING §4)."""
+Opus 5.5 answer a forced `tool_choice` of `any` or `tool` with a 400."""
 
 import asyncio
 import json
