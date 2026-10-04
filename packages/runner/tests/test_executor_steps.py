@@ -185,30 +185,6 @@ def test_unsupported_steps_and_checks_are_refused_by_name_before_the_browser_ope
         targets=FORM_TARGETS,
         assertions=[
             {"id": "a1", "expect_index": 0, "check": "url_matches", "pattern": "/"},
-            {
-                "id": "a2",
-                "expect_index": 0,
-                "check": "network_none",
-                "method": "POST",
-                "url_pattern": "/write",
-                "status_class": "2xx",
-            },
-            {
-                "id": "a3",
-                "expect_index": 0,
-                "check": "network_seen",
-                "method": "GET",
-                "url_pattern": "/did",
-                "status_class": "2xx",
-            },
-            {
-                "id": "a5",
-                "expect_index": 0,
-                "check": "visible_unoccluded",
-                "target": "save",
-                "min_size_px": [44, 24],
-                "in_viewport": True,
-            },
         ],
     )
     opened: list[object] = []
@@ -224,9 +200,6 @@ def test_unsupported_steps_and_checks_are_refused_by_name_before_the_browser_ope
 
     assert refused.value.problems == (
         "steps[1] (seq 3): press takes one key, with only modifiers held before it: 'Tab+a'",
-        "assertions[1] (a2): network_none is not evaluated until #48",
-        "assertions[2] (a3): network_seen is not evaluated until #48",
-        "assertions[3] (a5): visible_unoccluded is not evaluated until #48",
     )
     assert opened == []
     assert app.paths() == []
