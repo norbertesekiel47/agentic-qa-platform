@@ -225,7 +225,7 @@ def test_a_microvm_lives_a_capped_time(dry_run: DryRun) -> None:
     idle = json.loads(option(run, "--idle-policy"))
     assert idle == {
         "autoResumeEnabled": False,
-        "maxIdleDurationSeconds": 60,
+        "maxIdleDurationSeconds": 900,
         "suspendedDurationSeconds": 0,
     }
 
@@ -342,3 +342,21 @@ def test_no_secret_reaches_a_command_line(dry_run: DryRun) -> None:
     assert [word for word in arguments if "fake-ecr-password" in word] == []
     # The password went to docker login on stdin.
     assert any("<stdin: fake-ecr-password>" in call for call in dry_run.calls)
+
+
+def test_microvm_runtime_logs_and_single_post_timeout_are_explicit(
+    dry_run: DryRun,
+) -> None:
+    result = dry_run.run("invoke.sh", "microvm", "cold", scenario=INVOKABLE)
+    assert result.returncode == 0, result.stderr
+    [run] = calls_of(dry_run.calls, "lambda-microvms", "run-microvm")
+    assert "--logging" in run
+    assert json.loads(option(run, "--logging")) == {
+        "cloudWatch": {"logGroup": "/aqa-spike/hosted-chromium/microvm"}
+    }
+    [post] = [
+        call
+        for call in dry_run.calls
+        if call[0] == "curl" and call[-1] == f"{ENDPOINT}/trial"
+    ]
+    assert option(post, "--max-time") == "120"

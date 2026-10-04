@@ -1,0 +1,246 @@
+{
+  "kind": "failed_microvm_attempt",
+  "source_head": "8ae62222e62e547cb4c2f3ed90acb6e41df4c03d",
+  "package": {
+    "name": "microvm-8ae62222e62e.zip",
+    "bytes": 457649,
+    "sha256": "1ba49e95a710994d144a97296a58a28377cb1d9d885f79e2219e49e6af8b3756"
+  },
+  "approval_request_sha256": "1ec6310c2d34d93aaeb6166909ba5064f335c34cb433d169788bd7fd22b71b36",
+  "build_request_sha256": {
+    "approval6-update-payload.json": "b0c8c86eb47d7870c225abc4f9a4e6ca55e579d8932f21f0eeeb13f2217ed7ff",
+    "approval6-update-major1-proposed.json": "cec8fe6a7c5b69a46bb46c5b64833f841d94ac99015e5bc38918cf28fef47368"
+  },
+  "command": "spikes/hosted-chromium/scripts/invoke.sh microvm cold",
+  "started_utc": "2026-10-04T08:51:15.402660+00:00",
+  "finished_utc": "2026-10-04T08:53:21.010558+00:00",
+  "exit_code": 28,
+  "stderr": "curl: (28) Operation timed out after 120007 milliseconds with 0 bytes received",
+  "stdout_bytes": 0,
+  "attempts": {
+    "cold": 1,
+    "warm": 0,
+    "retried": 0,
+    "successful_trial_rows": 0
+  },
+  "sandbox_and_isolation": "unverified: no trial report returned",
+  "platform": {
+    "microvm": {
+      "microvmId": "microvm-3c89a5d0-ac63-30c2-8733-778aa6151585",
+      "state": "TERMINATED",
+      "imageArn": "arn:aws:lambda:us-east-2:<account>:microvm-image:aqa-spike-hosted-chromium",
+      "imageVersion": "2.0",
+      "idlePolicy": {
+        "maxIdleDurationSeconds": 60,
+        "suspendedDurationSeconds": 0,
+        "autoResumeEnabled": false
+      },
+      "maximumDurationInSeconds": 900,
+      "startedAt": "2026-10-04T01:51:18.468000-07:00",
+      "terminatedAt": "2026-10-04T01:52:23.726000-07:00",
+      "stateReason": "MicroVM exceeded maximum lifetime.",
+      "ingressNetworkConnectors": [
+        "arn:aws:lambda:us-east-2:aws:network-connector:aws-network-connector:ALL_INGRESS"
+      ],
+      "egressNetworkConnectors": [
+        "arn:aws:lambda:us-east-2:aws:network-connector:aws-network-connector:INTERNET_EGRESS"
+      ]
+    }
+  },
+  "vm_lifetime_seconds": 65.258,
+  "clock": {
+    "before": {
+      "offset_seconds": 0.000187,
+      "uncertainty_seconds": 0.075675
+    },
+    "after": {
+      "offset_seconds": -0.001894,
+      "uncertainty_seconds": 0.070562
+    }
+  },
+  "runtime_logs": {
+    "custom_group_events": 0,
+    "default_matching_groups": 0,
+    "limit": "These reads do not establish whether /trial entered or which stage stalled."
+  },
+  "cleanup": {
+    "command": "spikes/hosted-chromium/scripts/teardown.sh",
+    "started": "2026-10-04T08:56:08.167549+00:00",
+    "finished": "2026-10-04T08:57:28.328431+00:00",
+    "exit": 0,
+    "independent_checks": [
+      {
+        "service": "images",
+        "began_utc": "2026-10-04T08:58:38.566790+00:00",
+        "ended_utc": "2026-10-04T08:58:39.640059+00:00",
+        "exit": 0,
+        "absent": true,
+        "records": 0
+      },
+      {
+        "service": "versions",
+        "began_utc": "2026-10-04T08:58:38.567010+00:00",
+        "ended_utc": "2026-10-04T08:58:39.623779+00:00",
+        "exit": 0,
+        "absent": true,
+        "records": 0
+      },
+      {
+        "service": "version1",
+        "began_utc": "2026-10-04T08:58:38.567067+00:00",
+        "ended_utc": "2026-10-04T08:58:39.330678+00:00",
+        "exit": 254,
+        "absent": false,
+        "result": "unexpected failure; raw receipt retained"
+      },
+      {
+        "service": "version2",
+        "began_utc": "2026-10-04T08:58:39.330826+00:00",
+        "ended_utc": "2026-10-04T08:58:39.836247+00:00",
+        "exit": 254,
+        "absent": true,
+        "result": "ResourceNotFoundException"
+      },
+      {
+        "service": "vms",
+        "began_utc": "2026-10-04T08:58:39.623943+00:00",
+        "ended_utc": "2026-10-04T08:58:40.157426+00:00",
+        "exit": 0,
+        "absent": true,
+        "records": 0
+      },
+      {
+        "service": "functions",
+        "began_utc": "2026-10-04T08:58:39.640192+00:00",
+        "ended_utc": "2026-10-04T08:58:40.197665+00:00",
+        "exit": 0,
+        "absent": true,
+        "records": 0
+      },
+      {
+        "service": "clusters",
+        "began_utc": "2026-10-04T08:58:39.836412+00:00",
+        "ended_utc": "2026-10-04T08:58:40.928688+00:00",
+        "exit": 0,
+        "absent": true,
+        "records": 0
+      },
+      {
+        "service": "taskdefs-active",
+        "began_utc": "2026-10-04T08:58:40.157562+00:00",
+        "ended_utc": "2026-10-04T08:58:40.674706+00:00",
+        "exit": 0,
+        "absent": true,
+        "records": 0
+      },
+      {
+        "service": "taskdefs-inactive",
+        "began_utc": "2026-10-04T08:58:40.197805+00:00",
+        "ended_utc": "2026-10-04T08:58:40.739654+00:00",
+        "exit": 0,
+        "absent": true,
+        "records": 0
+      },
+      {
+        "service": "security-groups",
+        "began_utc": "2026-10-04T08:58:40.674849+00:00",
+        "ended_utc": "2026-10-04T08:58:41.318710+00:00",
+        "exit": 0,
+        "absent": true,
+        "records": 0
+      },
+      {
+        "service": "repositories",
+        "began_utc": "2026-10-04T08:58:40.739781+00:00",
+        "ended_utc": "2026-10-04T08:58:41.279376+00:00",
+        "exit": 0,
+        "absent": true,
+        "records": 0
+      },
+      {
+        "service": "buckets",
+        "began_utc": "2026-10-04T08:58:40.928839+00:00",
+        "ended_utc": "2026-10-04T08:58:41.471271+00:00",
+        "exit": 0,
+        "absent": true,
+        "records": 0
+      },
+      {
+        "service": "log-groups",
+        "began_utc": "2026-10-04T08:58:41.279537+00:00",
+        "ended_utc": "2026-10-04T08:58:41.775009+00:00",
+        "exit": 0,
+        "absent": true,
+        "records": 0
+      },
+      {
+        "service": "roles",
+        "began_utc": "2026-10-04T08:58:41.318846+00:00",
+        "ended_utc": "2026-10-04T08:58:41.873376+00:00",
+        "exit": 0,
+        "absent": true,
+        "records": 0
+      },
+      {
+        "service": "budget",
+        "began_utc": "2026-10-04T08:58:41.471419+00:00",
+        "ended_utc": "2026-10-04T08:58:42.075110+00:00",
+        "exit": 254,
+        "absent": true,
+        "result": "NotFoundException"
+      },
+      {
+        "service": "tagging",
+        "began_utc": "2026-10-04T08:58:41.775148+00:00",
+        "ended_utc": "2026-10-04T08:58:42.569462+00:00",
+        "exit": 0,
+        "absent": false,
+        "records": 2
+      }
+    ],
+    "version1_recheck": {
+      "name": "version1-recheck",
+      "utc": "2026-10-04T08:59:25.508499+00:00",
+      "exit": 254,
+      "result": "ResourceNotFoundException"
+    },
+    "ecs_cluster_status": "INACTIVE",
+    "task_definition_final": {
+      "name": "taskdef-recheck",
+      "utc": "2026-10-04T09:01:20.132881+00:00",
+      "exit": 0,
+      "state": "DELETE_IN_PROGRESS"
+    },
+    "tag_index_final": {
+      "name": "tagging-final",
+      "utc": "2026-10-04T09:01:20.664670+00:00",
+      "exit": 0,
+      "count": 2
+    },
+    "remaining": "Task definition deletion is in progress; tag index retains its ARN and the inactive cluster ARN. No live spike compute; both image versions are not found.",
+    "logout": {
+      "utc": "2026-10-04T09:01:20.862822+00:00",
+      "exit": 0
+    }
+  },
+  "raw_evidence_sha256": {
+    "trial-00-cold.started.json": "d529176985cfce2deb934df9e6ce5bd2cb0d71616a5c4846313cb5efe9d588bb",
+    "trial-00-cold.finished.json": "1bdfe0c159c493f6894dff9ec471e904f782d0dde65859c2377a1975ae66f411",
+    "trial-00-cold.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "trial-00-cold.stderr": "ca0ff466ca641e145b3de2952595e811b591df073a9b25f5c968330bd3630b1f",
+    "cold-terminal-get.json": "a18a4788dc977dc99f81e70c3fe2d6c0a024c8eb9248e9a475625f7c8044459f",
+    "cold-runtime-logs.json": "4d1e2bea8adb2974beb06d43440acc3b10b3403ed86aaae5207eaf76e7ba7a3c",
+    "cold-runtime-logs-final.json": "4d1e2bea8adb2974beb06d43440acc3b10b3403ed86aaae5207eaf76e7ba7a3c",
+    "pre-teardown-package.json": "ee3ea2f6330ffeb0ecc3df8faaac81fd3f4c4da5cb2b40d888c40613b6a853d6",
+    "pre-teardown-versions.json": "41ec683bf78a01391a981f4a4aadcc43c715ba3d82c1011442af071556fca1d6",
+    "teardown.stdout": "917b24a38f1464d06b3c1f916989e1d43e30fc43b0675e312d7c0041acceb6af",
+    "teardown.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "absence-summary.json": "e65c93268d2245f3323a15c92a135d9987a75b9b4271172dcb33ab63397597fb",
+    "absence-version1.stderr": "a013617c49ce3edd97cd8b1806e5cf9478dabbc4a62a574c020be501a5fcbb78",
+    "absence-version1-recheck.stderr": "1c8998bcd4866e436bbc674a8e33899b130f785917cd1b61f90bf3bb3a776ba4",
+    "absence-taskdef-recheck.stdout": "5568c5359f5b3e9a56eab83ba635e7cb417dcc9d3cc48cee495f11e9291b3be4",
+    "absence-tagging-final.stdout": "a5cb2f968b1231a5189165ffdeb741747c97e6837ab679dac4b56523ac65afd6",
+    "logout.receipt.json": "7624d6b24d49ed4cd751a084417606d2d58daec6f0e628b2854c260826369a74"
+  },
+  "cost_status": "Not billed evidence. The successful image build and the failed VM can incur charges. October 1 cost collection remains no earlier than October 9; version 2.0 creation plus eight days is October 12, 2026 UTC."
+}

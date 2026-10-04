@@ -25,6 +25,8 @@ from aqa_runner.sandbox import (
 )
 from playwright.async_api import Browser, async_playwright
 
+from aqa_hosted_chromium_spike.diagnostics import Stage, emit_stage
+
 # How often, and for how long after the launch, the trial samples its memory.
 SAMPLE_SECONDS = 0.05
 MEMORY_SECONDS = 1.0
@@ -73,7 +75,9 @@ def trial_on_this_host() -> Report:
 
 
 async def _trial_on_this_host(runs_file: Path) -> Report:
+    emit_stage(Stage.PLAYWRIGHT_START)
     async with async_playwright() as playwright:
+        emit_stage(Stage.PLAYWRIGHT_READY)
         return await run_trial(playwright.chromium, Path("/proc"), runs_file)
 
 
@@ -85,6 +89,7 @@ async def run_trial(chromium: Chromium, proc: Path, runs_file: Path) -> Report:
     earlier_runs = mark_run(runs_file, run_id)
     # Nothing else runs in the trial while the launch is timed: sampling memory
     # takes CPU that a small candidate would charge to the launch.
+    emit_stage(Stage.LAUNCH_START)
     started = time.perf_counter()
     browser: Browser | None
     observed: SandboxObservations | None
@@ -95,14 +100,23 @@ async def run_trial(chromium: Chromium, proc: Path, runs_file: Path) -> Report:
         # Every other error still stops the trial.
         sandbox, observed = Sandbox(on=False, error=str(error)), error.observed
         ready = ready_at = browser = None
+        emit_stage(Stage.LAUNCH_REFUSED)
     else:
         sandbox, ready = Sandbox(on=True), time.perf_counter() - started
         ready_at = time.time()
     try:
+        if browser is not None:
+            emit_stage(Stage.LAUNCH_READY)
+        emit_stage(Stage.MEMORY_START)
         peak = await memory_with_a_page(proc, browser)
+        emit_stage(Stage.MEMORY_DONE)
     finally:
         if browser is not None:
-            await browser.close()
+            try:
+                emit_stage(Stage.CLOSE_START)
+            finally:
+                await browser.close()
+            emit_stage(Stage.CLOSE_DONE)
     return Report(
         run_id=run_id,
         earlier_runs=earlier_runs,
