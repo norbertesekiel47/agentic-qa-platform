@@ -476,11 +476,9 @@ BAR_TESTS = AnyCase(r"^tests/")
 
 # --- shell heuristics ---------------------------------------------------------------
 
-SHELL_WRITE = re.compile(
+DIRECT_WRITE = re.compile(
     r"""
-      \bsed\b[^|;&\n]*?\s(?:-[a-zA-Z]*i\b|--in-place)   # sed -i
-    | \bperl\b[^|;&\n]*?\s-[a-zA-Z]*i                   # perl -i / -pi
-    | \btee\b
+      \btee\b
     | <<-?\s*['"]?[A-Za-z_]                             # heredoc
     | \b(?:python3?|node|ruby)\s+-[ce]\b                # inline interpreter
     | \bpatch\b
@@ -489,21 +487,13 @@ SHELL_WRITE = re.compile(
     """,
     re.VERBOSE,
 )
-# git's global options, which may stand between `git` and its subcommand.
-GIT_OPTIONS = r"(?:\s+(?:-[Cc]|--(?:git-dir|work-tree|namespace))\s+\S+|\s+-(?!(?:[Cc]|-(?:git-dir|work-tree|namespace))\s)[\w-]+(?:=\S+)?)*"
-FILE_MUTATOR = re.compile(
+DIRECT_MUTATOR = re.compile(
     r"\b(?:cp|mv|rm|rmdir|install|rsync|ln|truncate|chmod|unlink)\s"
-    r"|\bruff\s+(?:format|check\b[^|;&\n]*--fix)"
-    r"|\b(?:prettier|biome)\b[^|;&\n]*--write"
-    r"|\beslint\b[^|;&\n]*--fix"
-    r"|\bcurl\b[^|;&\n]*\s(?:-[a-zA-Z]*[oO]\b|--output\b|--remote-name\b)"
-    r"|\bwget\b"
-    r"|\bgit" + GIT_OPTIONS + r"\s+(?:checkout|restore|clean|apply)\b"
+    r"|\bruff\s+format|\bwget\b"
 )
-# Installers that rewrite .claude/settings.json and AGENTS.md without naming them.
-AGENT_CONFIG_INSTALLER = re.compile(
+DIRECT_INSTALLER = re.compile(
     r"\bfallow\s+(?:hooks\s+(?:install|uninstall)|agent\s+(?:install|uninstall)"
-    r"|setup-hooks|init\b[^|;&\n]*--(?:agents|hooks))\b"
+    r"|setup-hooks)\b"
 )
 DRY_RUN = re.compile(r"(?<![\w-])--dry-run\b")
 BROWSER_LAUNCH = re.compile(
@@ -516,7 +506,6 @@ TEXT_BODY = re.compile(
 MESSAGE = re.compile(
     r"""(?m)\\.|\$'(?:\\.|[^'\\])*'|'[^']*'|"(?:\\.|[^"\\])*"|<<-?[ \t]*(['"]?)(\w+)\1([^\n]*\n)(?:[^\n]*\n)*?[ \t]*\2[ \t]*$"""
 )
-ADD_NOQA = re.compile(r"\bruff\b[^;&|\n]*\s--add-noqa\b")
 
 # --- tree scan ------------------------------------------------------------------------
 
