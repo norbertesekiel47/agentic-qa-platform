@@ -782,3 +782,21 @@ def test_no_response_is_distinct_from_an_unpriced_observation(
     assert receipt["primary_failure"] == "call_error"
     assert receipt["receipt_written"]
     assert (library / "coverage_plan.yaml").read_text() == "previous cassette\n"
+
+
+def test_successful_capture_ignores_a_callers_active_exception(
+    capture_paths: Callable[[Mapping[str, object]], tuple[Path, Path]],
+) -> None:
+    answer = HELLO | {"content": [{"type": "text", "text": PLAN.model_dump_json()}]}
+    attempt, library = capture_paths(answer)
+    try:
+        int("fake caller error")
+    except ValueError:
+        costs = record("coverage_plan", attempt, library=library)
+    assert [str(item.cost_usd) for item in costs] == ["0.000048"]
+    receipt = json.loads((attempt / "receipt.json").read_text())
+    assert receipt["outcome"] == "accepted"
+    assert receipt["primary_failure"] is None
+    assert (library / "coverage_plan.yaml").read_bytes() == (
+        attempt / "coverage_plan.yaml"
+    ).read_bytes()
