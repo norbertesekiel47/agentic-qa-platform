@@ -1,4 +1,5 @@
 import asyncio
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -8,9 +9,9 @@ from aqa_core.compiled import Target
 from aqa_core.project import SecretDestination
 from aqa_runner import snapshot_refs
 from aqa_runner.bound_secrets import BoundSecret, bound_secrets
-from aqa_runner.browser_session import BrowserSession
+from aqa_runner.browser_session import BrowserSession, RefError
 from aqa_runner.locators import Resolved
-from aqa_runner.redaction import Redacted, Redactor
+from aqa_runner.redaction import NO_SECRETS, Redacted, Redactor
 from playwright.async_api import ElementHandle, Page
 from pydantic import SecretStr
 
@@ -180,5 +181,49 @@ def test_snapshot_redacts_removed_whitespace_producer_forms(
             assert '- button "[SECRET:FAKE]" [ref=' in snapshot
             assert normalized not in snapshot
             assert "Allowed text stays visible" in snapshot
+
+    asyncio.run(scenario())
+
+
+def test_a_ref_consumed_by_final_scan_is_not_resolvable(sites: Sites) -> None:
+    fake = BoundSecret(
+        "FAKE_REF", SecretStr("e100"), SecretDestination((sites.app,), "password")
+    )
+
+    async def scenario() -> None:
+        async with browsing(sites, redactor=Redactor([fake])) as session:
+            await session.navigate(f"{sites.app}/reflect")
+            observation = ""
+            for _ in range(20):
+                observation = await session.snapshot()
+                if "[ref=[SECRET:FAKE_REF]]" in observation:
+                    break
+            assert "[ref=[SECRET:FAKE_REF]]" in observation
+            assert "[ref=e100]" not in observation
+            raw = await session.page.aria_snapshot(mode="ai")
+            assert "[ref=e100]" not in raw
+            with pytest.raises(RefError):
+                await session.locate("e100")
+
+    asyncio.run(scenario())
+
+
+def test_snapshot_with_many_refs_finishes_within_regression_budget(
+    sites: Sites, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    taken = "\n".join(f'- button "fake {n}" [ref=e{n}]' for n in range(1, 32_001))
+
+    async def producer(_page: Page, **_kwargs: Any) -> str:
+        return taken
+
+    async def scenario() -> None:
+        async with browsing(sites, redactor=NO_SECRETS) as session:
+            await session.navigate(f"{sites.app}/reflect")
+            monkeypatch.setattr(Page, "aria_snapshot", producer)
+            started = time.perf_counter()
+            observation = await session.snapshot()
+            elapsed = time.perf_counter() - started
+            assert observation == taken
+            assert elapsed < 2.0
 
     asyncio.run(scenario())

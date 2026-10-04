@@ -298,9 +298,8 @@ class BrowserSession:
             )
             self._refs_given += len(refs)
             scanned = self.redactor.redact(text)
-            self._current = {
-                ref: own for ref, own in refs.items() if f"[ref={ref}]" in scanned
-            }
+            present = {match[1] for match in re.finditer(r"\[ref=(e[0-9]+)\]", scanned)}
+            self._current = {ref: own for ref, own in refs.items() if ref in present}
             return scanned
 
     async def locate(self, ref: str) -> ElementHandle:
