@@ -36,6 +36,23 @@ A run had a fresh VM only if `earlier_runs` is empty and the platform's own ID f
 
 The trial runs on Linux only, where the candidates run. Elsewhere, `trial_on_this_host()` refuses. The tests also call `run_trial` on macOS, where each process in `sandbox_observed` is `{"pid": …, "sandboxed": …}`, whether `sandbox_check` reported it sandboxed. An OS with no sandbox check reads nothing (`null`).
 
+## Diagnostic phases
+
+The October 4 diagnostic amendment in ADR-0032 adds flushed JSON records on **stderr**. The trial's `Report` and stdout contract stay unchanged. Each diagnostic record has exactly `stage` (a closed vocabulary) and `monotonic_seconds` (a process clock reading). It accepts no request, environment, identifier or error content. Group hosted records by their MicroVM log stream; clock differences locate elapsed time within that VM, not wall-clock time or time across restores.
+
+A successful HTTP trial emits at most 13 phase records in this order:
+
+1. `handler_received`, before reading the body; `body_read`, then `trial_start`.
+2. `playwright_start`, then `playwright_ready`.
+3. `launch_start`, then `launch_ready` after the guarded launch and sandbox observation return. Sandbox refusal emits `launch_refused` instead; another exception propagates without a success marker.
+4. `memory_start`, then `memory_done`.
+5. `close_start`, then `close_done` when a browser exists.
+6. `report_ready`, then `response_sent` after the server writes the reply. That last marker does not prove the client received it.
+
+Health checks and lifecycle hooks emit no trial-phase records. A refused sandbox emits 11 records, including the handler and Playwright phases, and still returns the existing refusal report. No phase record is emitted inside the ready-time interval or the memory-sampling loop; diagnostic overhead still limits comparisons between different package versions. Missing markers identify the last observed boundary, not the root cause.
+
+`invoke.sh` explicitly selects `/aqa-spike/hosted-chromium/microvm` for runtime logs. Its idle window now matches the 900-second lifetime cap, with suspended duration zero and auto-resume false; the single trial POST still times out after 120 seconds and failures still terminate the known VM without repeating that POST. This removes the shorter 60-second idle window from the proposed next experiment; it does not establish that idle termination caused the failed October 4 attempt. These changes are local pending review: building a new artifact and making any further AWS attempt need their separate approvals.
+
 ## The packages
 
 All three targets build on the container base Lambda publishes for MicroVMs, `public.ecr.aws/lambda/microvms:al2023-minimal` (Amazon Linux 2023, arm64), pinned by digest. The Lambda function runs its image through awslambdaric, and Lambda builds the MicroVM's image itself from a zip of the Dockerfile and its context ([MicroVM images](https://docs.aws.amazon.com/lambda/latest/dg/microvms-images.html)).
@@ -155,10 +172,12 @@ What #38 records for each candidate, with the command and the commit that produc
   - *Burst* is billed only for use above the baseline. The trial's peak memory sits below 2 GB, so any burst is CPU during the launch; #38 reads its cost from `collect.sh`.
   - *Snapshot reads:* each MicroVM reads its snapshot on start. The per-run cost is `R × $0.00155`, where R is the GB that `collect.sh` bills as snapshot reads, divided by the number of MicroVMs run.
   - *Snapshot storage:* $0.08 per GB-month for the image's snapshot, with a one-week minimum per image version. Per run, it is the monthly storage cost divided by the runs in a month. #38 reports it at 1,000 and at 10,000 runs a month. The snapshot's size is the memory and disk snapshot sizes `get-microvm-image-build` reports for each build; #37 missed that call, and #38 records it before the teardown. As a cross-check, the snapshot-storage GB-hours `collect.sh` shows for one whole UTC day inside the image's life, divided by 24, should match. AWS doesn't describe how the one-week minimum is billed. #38 runs `collect.sh` at least eight days after the image's creation, so the minimum has posted, and records how it shows up.
-  - *Snapshot writes* ($0.0038 per GB): `invoke.sh` terminates each MicroVM before its one-minute idle window can suspend it, and suspending writes a snapshot. Whether the image build's own snapshot bills as a write is for `collect.sh` to show.
+  - *Snapshot writes* ($0.0038 per GB): the successful October 1 trials terminated before the one-minute idle window. A failed trial can outlast that window; the October 4 attempt did, without a report that establishes whether suspension occurred. Suspending writes a snapshot. Whether either the image build or the failed attempt bills a write is for `collect.sh` to show.
 - **Every candidate** also stores its package: ECR at $0.10 per GB-month for the Lambda function's and the Fargate task's image, and S3 Standard ([S3](https://aws.amazon.com/s3/pricing/)) for the MicroVM's zip. Per run: the package's GB × the monthly price ÷ the runs in a month.
 
 
 ## Results
 
 #38 ran the trials on 2026-10-01. Their rows are in `results/2026-10-01.jsonl`, redacted for the public repository, and ADR-0032 holds every figure, with the commands that derive it from those rows.
+
+The current-package rerun on 2026-10-04 stopped after its first cold request timed out. There were no successful trial rows and no warm attempts. `results/2026-10-04-failed-attempt.json` records the failed attempt and scoped cleanup separately; it is not a trial `Report`. ADR-0032 records the evidence limits, pending task-definition/tag disappearance and outstanding billed costs. Hosted validation of the current launcher remains open.

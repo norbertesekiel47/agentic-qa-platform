@@ -5,6 +5,7 @@ function's handler and the MicroVM's HTTP server (ADR-0008 amendment,
 The command and the handler run a real trial on Linux, where the candidates
 run. On any other OS they refuse, since the trial reads Linux's /proc."""
 
+import io
 import json
 import os
 import subprocess
@@ -208,3 +209,66 @@ def test_the_microvm_runs_no_trial_for_other_requests(
 
     assert microvm.connection.getresponse().status >= 400
     assert microvm.reports == []
+
+
+def test_microvm_diagnostics_mark_entry_before_body_and_keep_content_private(
+    microvm: MicroVM, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FlushedStages(io.StringIO):
+        received = threading.Event()
+        completed = threading.Event()
+
+        def flush(self) -> None:
+            super().flush()
+            if '"stage": "handler_received"' in self.getvalue():
+                self.received.set()
+            if '"stage": "response_sent"' in self.getvalue():
+                self.completed.set()
+
+    sink = FlushedStages()
+    monkeypatch.setattr(sys, "stderr", sink)
+    body = b"fake-sensitive-body"
+    microvm.connection.putrequest("POST", "/trial")
+    microvm.connection.putheader("Content-Length", str(len(body)))
+    microvm.connection.putheader("X-Fake-Private", "fake-sensitive-header")
+    microvm.connection.endheaders()
+    # The body is withheld until the entry record is observable and flushed.
+    entered = sink.received.wait(timeout=2)
+    before_body = list(microvm.reports)
+    microvm.connection.send(body)
+    response = microvm.connection.getresponse()
+    assert response.status == 200
+    assert json.loads(response.read()) == REPORT
+    assert entered, "no flushed handler-entry diagnostic before reading the body"
+    assert sink.completed.wait(timeout=2), "response-sent diagnostic was not flushed"
+    assert before_body == []
+    assert microvm.reports == [REPORT]
+    records = [
+        json.loads(line)
+        for line in sink.getvalue().splitlines()
+        if line.startswith("{")
+    ]
+    assert [record["stage"] for record in records] == [
+        "handler_received",
+        "body_read",
+        "trial_start",
+        "report_ready",
+        "response_sent",
+    ]
+    assert all(set(record) == {"stage", "monotonic_seconds"} for record in records)
+    assert "fake-sensitive" not in json.dumps(records)
+
+
+@pytest.mark.parametrize("path", ["/health", f"{HOOK_PREFIX}run"])
+def test_microvm_diagnostics_do_not_report_trials_for_health_or_hooks(
+    microvm: MicroVM, capsys: pytest.CaptureFixture[str], path: str
+) -> None:
+    method = "GET" if path == "/health" else "POST"
+    microvm.connection.request(method, path)
+    response = microvm.connection.getresponse()
+    assert response.status == 200
+    assert response.read() == b""
+    assert microvm.reports == []
+    assert not any(
+        line.startswith("{") for line in capsys.readouterr().err.splitlines()
+    )

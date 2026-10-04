@@ -13,6 +13,7 @@ from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+from aqa_hosted_chromium_spike.diagnostics import Stage, emit_stage
 from aqa_hosted_chromium_spike.trial import Report, trial_on_this_host
 
 # Lambda sends a MicroVM's inbound traffic, and its hooks, to this port.
@@ -34,6 +35,8 @@ def server(address: tuple[str, int], trial: Callable[[], Report]) -> HTTPServer:
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
+            if self.path == "/trial":
+                emit_stage(Stage.HANDLER_RECEIVED)
             # The body goes unused, but it is read: closing a connection with
             # unread bytes resets it, and the reset can lose the reply.
             self.rfile.read(int(self.headers.get("Content-Length", 0)))
@@ -42,7 +45,12 @@ def server(address: tuple[str, int], trial: Callable[[], Report]) -> HTTPServer:
             if self.path in LIFECYCLE_HOOKS:
                 self._reply(HTTPStatus.OK, b"")
             elif self.path == "/trial":
-                self._reply(HTTPStatus.OK, json.dumps(trial()).encode())
+                emit_stage(Stage.BODY_READ)
+                emit_stage(Stage.TRIAL_START)
+                report = trial()
+                emit_stage(Stage.REPORT_READY)
+                self._reply(HTTPStatus.OK, json.dumps(report).encode())
+                emit_stage(Stage.RESPONSE_SENT)
             else:
                 self._reply(HTTPStatus.NOT_FOUND, b"")
 

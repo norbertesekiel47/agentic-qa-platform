@@ -6,15 +6,21 @@ the trial reports what `launch_with_observations` decides and observed."""
 
 import asyncio
 import json
+import math
 import os
 import shutil
 import sys
+import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from aqa_hosted_chromium_spike import trial
+from aqa_hosted_chromium_spike.diagnostics import Stage, emit_stage
 from aqa_hosted_chromium_spike.trial import (
     SAMPLE_SECONDS,
     Report,
@@ -469,3 +475,108 @@ def test_the_peak_is_the_largest_sample(proc: Path) -> None:
         return peak()
 
     assert asyncio.run(scenario()) == (512 + 50_000) * 1024
+
+
+def diagnostic_records(capsys: pytest.CaptureFixture[str]) -> list[dict[str, object]]:
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    records = [json.loads(line) for line in captured.err.splitlines()]
+    times: list[float] = []
+    for record in records:
+        assert set(record) == {"stage", "monotonic_seconds"}
+        stamp = record["monotonic_seconds"]
+        assert isinstance(stamp, (int, float))
+        assert math.isfinite(stamp)
+        assert stamp >= 0
+        times.append(stamp)
+    assert times == sorted(times)
+    return records
+
+
+@pytest.mark.parametrize("sandbox_refusal", [True, False])
+def test_trial_diagnostics_preserve_refusal_and_error_behavior(
+    proc: Path, runs: Path, capsys: pytest.CaptureFixture[str], sandbox_refusal: bool
+) -> None:
+    message = "fake-sensitive-error-content"
+    error = (
+        SandboxUnavailableError(message) if sandbox_refusal else RuntimeError(message)
+    )
+    if sandbox_refusal:
+        report = asyncio.run(run_trial(FailingChromium(error), proc, runs))
+        assert report["sandbox"] == {"on": False, "error": message}
+        expected = ["launch_start", "launch_refused", "memory_start", "memory_done"]
+    else:
+        with pytest.raises(RuntimeError) as stopped:
+            asyncio.run(run_trial(FailingChromium(error), proc, runs))
+        assert stopped.value is error
+        expected = ["launch_start"]
+    records = diagnostic_records(capsys)
+    assert [record["stage"] for record in records] == expected
+    assert message not in json.dumps(records)
+
+
+def test_trial_diagnostics_bound_successful_launch_and_cleanup(
+    proc: Path,
+    runs: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AQA_FAKE_PRIVATE", "fake-sensitive-environment")
+
+    async def scenario() -> Report:
+        async with async_playwright() as playwright:
+            return await run_trial(playwright.chromium, proc, runs)
+
+    report = asyncio.run(scenario())
+    assert report["sandbox"] == {"on": True}
+    assert report["earlier_runs"] == []
+    records = diagnostic_records(capsys)
+    assert [record["stage"] for record in records] == [
+        "launch_start",
+        "launch_ready",
+        "memory_start",
+        "memory_done",
+        "close_start",
+        "close_done",
+    ]
+    assert report["run_id"] not in json.dumps(records)
+    assert "fake-sensitive-environment" not in json.dumps(records)
+
+
+@pytest.mark.parametrize("startup_fails", [True, False])
+def test_trial_diagnostics_distinguish_playwright_startup_from_launch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    startup_fails: bool,
+) -> None:
+    error = RuntimeError("fake-sensitive-driver-error")
+
+    @asynccontextmanager
+    async def playwright_boundary() -> AsyncIterator[SimpleNamespace]:
+        if startup_fails:
+            raise error
+        yield SimpleNamespace(chromium=FailingChromium(error))
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(trial, "async_playwright", playwright_boundary)
+    with pytest.raises(RuntimeError) as stopped:
+        trial.trial_on_this_host()
+    assert stopped.value is error
+    records = diagnostic_records(capsys)
+    expected = ["playwright_start"]
+    if not startup_fails:
+        expected += ["playwright_ready", "launch_start"]
+    assert [record["stage"] for record in records] == expected
+    assert str(error) not in json.dumps(records)
+
+
+def test_diagnostic_sink_rejects_content_outside_its_closed_vocabulary(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(TypeError, match="diagnostic stage must be a Stage"):
+        emit_stage(cast(Stage, "fake-sensitive-stage"))
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""

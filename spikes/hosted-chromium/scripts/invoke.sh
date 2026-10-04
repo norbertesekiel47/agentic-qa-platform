@@ -138,12 +138,13 @@ invoke_microvm() {
   image=$(jq -r '.[0]' <<< "$images")
   role=$(aws iam get-role --role-name "$(role_name microvm)" --query Role.Arn --output text)
   requested=$(now)
-  # With no traffic for a minute the MicroVM suspends, and a suspended one is
-  # terminated at once; MICROVM_MAX_SECONDS bounds its life in any case.
+  # Match the idle window to the lifetime cap, so the single trial POST's
+  # 120-second wait doesn't face a shorter idle window (ADR-0032).
   run=$(aws lambda-microvms run-microvm --image-identifier "$image" \
     --execution-role-arn "$role" \
     --ingress-network-connectors "$MICROVM_CONNECTOR:ALL_INGRESS" \
-    --idle-policy '{"autoResumeEnabled": false, "maxIdleDurationSeconds": 60, "suspendedDurationSeconds": 0}' \
+    --logging "{\"cloudWatch\":{\"logGroup\":\"$(log_group microvm)\"}}" \
+    --idle-policy '{"autoResumeEnabled": false, "maxIdleDurationSeconds": 900, "suspendedDurationSeconds": 0}' \
     --maximum-duration-in-seconds "$MICROVM_MAX_SECONDS" \
     --query '[microvmId, endpoint]' --output text)
   read -r microvm endpoint <<< "$run"
