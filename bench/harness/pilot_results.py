@@ -15,6 +15,7 @@ from aqa_runner.executor import (
 from aqa_runner.invariants import INVARIANTS, InvariantOutcome
 from aqa_runner.locators import Miss
 from aqa_runner.settling import Settled
+from manifest import DRIFT, VIOLATED, Expected
 
 
 class StepObservation(NamedTuple):
@@ -140,4 +141,25 @@ def _eligible(result: RunResult, settings: Invariants) -> bool:
             )
             for i in result.invariants
         )
+    )
+
+
+def compare(observation: Observation, expected: Expected) -> bool:
+    """Match one explicit, validated manifest row after replay has finished."""
+    if (
+        not observation.eligible
+        or observation.spec_id != expected.spec
+        or observation.failed_expectations != frozenset(expected.expect)
+        or observation.violated_invariants != frozenset(expected.invariants)
+    ):
+        return False
+    has_failure = bool(
+        observation.failed_expectations or observation.violated_invariants
+    )
+    if expected.verdict == VIOLATED:
+        return has_failure and observation.outcome == "failed"
+    return (
+        expected.verdict == DRIFT
+        and not has_failure
+        and observation.outcome == "passed"
     )
