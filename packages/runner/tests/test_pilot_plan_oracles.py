@@ -557,3 +557,74 @@ def test_probe_schema_rejects_a_float_before_oracle_matching() -> None:
         PlannedCheck.model_validate(
             {"check": "probe_equals", "probe": "comment_count", "value": 2.0}
         )
+
+
+@pytest.mark.parametrize("change", ["added", "duplicate", "reformatted"])
+@pytest.mark.parametrize(
+    ("prefix", "suffix"),
+    [
+        ("| {index} |", "|"),
+        ("|{index}|", "|"),
+        ("|{index} |", "|"),
+        ("| {index}|", "|"),
+        ("|  {index}  |", "|"),
+        ("  | {index} |", "|"),
+        ("{index} |", ""),
+        ("| {index} |", ""),
+        ("{index} |", "|"),
+    ],
+    ids=[
+        "canonical",
+        "compact",
+        "no-space-before-index",
+        "no-space-after-index",
+        "multiple-padding",
+        "leading-indentation",
+        "no-outer-pipes",
+        "leading-pipe-only",
+        "trailing-pipe-only",
+    ],
+)
+def test_alternate_numbered_review_rows_force_review(
+    change: str, prefix: str, suffix: str
+) -> None:
+    review = (QA / "REVIEW.md").read_text()
+    first = next(line for line in review.splitlines() if line.startswith("| 0 |"))
+    body = first.split("|", 2)[2].removesuffix("|")
+    row = prefix.format(index=9 if change == "added" else 0) + body + suffix
+    replacement = row if change == "reformatted" else first + "\n" + row
+    expected = (
+        ()
+        if change == "reformatted" and prefix == "| {index} |" and suffix == "|"
+        else ("REVIEW rows differ",)
+    )
+    specs = tuple(s.frontmatter for s in load_project(QA).specs.values())
+    assert source_problems(review.replace(first, replacement, 1), specs) == expected
+
+
+def test_reordered_review_rows_force_review() -> None:
+    review = (QA / "REVIEW.md").read_text()
+    first = next(line for line in review.splitlines() if line.startswith("| 0 |"))
+    second = next(line for line in review.splitlines() if line.startswith("| 1 |"))
+    changed = review.replace(first + "\n" + second, second + "\n" + first, 1)
+    specs = tuple(s.frontmatter for s in load_project(QA).specs.values())
+    assert source_problems(changed, specs) == ("REVIEW rows differ",)
+
+
+@pytest.mark.parametrize(
+    ("heading", "prose"),
+    [
+        ("login", "A note mentioning | 9 | is prose."),
+        ("login", "9. This numbered list item is prose."),
+        ("read-article", "A note with a pipe | is prose."),
+    ],
+    ids=["inline-pipe", "numbered-list", "between-sections"],
+)
+def test_unrelated_review_prose_does_not_change_completeness(
+    heading: str, prose: str
+) -> None:
+    review = (QA / "REVIEW.md").read_text()
+    anchor = f"### `{heading}`"
+    changed = review.replace(anchor, prose + "\n\n" + anchor, 1)
+    specs = tuple(s.frontmatter for s in load_project(QA).specs.values())
+    assert source_problems(changed, specs) == ()
