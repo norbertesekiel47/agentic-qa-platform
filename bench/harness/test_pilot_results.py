@@ -1,6 +1,7 @@
 import json
 import unittest
 from dataclasses import astuple, replace
+from inspect import Parameter, signature
 from pathlib import Path
 from typing import cast
 
@@ -14,7 +15,8 @@ from aqa_runner.egress_proxy import EgressBlocks, RefusedHost
 from aqa_runner.executor import AssertionResult, RunResult, StepResult
 from aqa_runner.invariants import InvariantResult
 from aqa_runner.settling import PageRequest, Window
-from pilot_results import Observation, observe
+from manifest import Expected
+from pilot_results import Observation, compare, observe
 
 NAMES = ("console_errors", "js_exceptions", "http_5xx", "broken_images")
 
@@ -373,3 +375,138 @@ def ineligible_results() -> tuple[RunResult, ...]:
 
 def malformed_rows[T](rows: tuple[T, ...], unknown: T) -> tuple[tuple[T, ...], ...]:
     return rows[1:], (*rows, rows[0]), (rows[0], *rows[:-1]), (unknown, *rows[1:])
+
+
+class ScoringTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.script = script()
+        self.expected = Expected("pilot", "expectation_violated", (1,), ())
+        self.drift = Expected("pilot", "drift_consistent", (), ())
+
+    def compare(
+        self, result: RunResult, expected: Expected, settings: Invariants | None = None
+    ) -> bool:
+        return compare(
+            observe(
+                self.script,
+                result,
+                invariants=settings if settings is not None else Invariants(),
+            ),
+            expected,
+        )
+
+    def test_exact_expectation_set_counts_shared_assertions_once(self) -> None:
+        result = failed()
+        self.assertEqual(
+            observe(self.script, result, invariants=Invariants()).failed_expectations,
+            frozenset({1}),
+        )
+        self.assertTrue(self.compare(result, self.expected))
+        for indexes in ((0,), (1, 2), ()):
+            with self.subTest(indexes=indexes):
+                self.assertFalse(
+                    self.compare(result, replace(self.expected, expect=indexes))
+                )
+        extra = replace(
+            result, assertions=(AssertionResult("a0", "failed"), *result.assertions[1:])
+        )
+        self.assertFalse(self.compare(extra, self.expected))
+        self.assertFalse(self.compare(clean(), self.expected))
+        self.assertFalse(
+            self.compare(replace(clean(), outcome="failed"), self.expected)
+        )
+        self.assertFalse(self.compare(replace(result, outcome="passed"), self.expected))
+
+    def test_invariant_set_is_exact_and_independent(self) -> None:
+        result = clean()
+        violated = replace(
+            result,
+            outcome="failed",
+            invariants=(
+                result.invariants[0],
+                InvariantResult("js_exceptions", "violated", ("fake-js",), 2),
+                *result.invariants[2:],
+            ),
+        )
+        expected = Expected("pilot", "expectation_violated", (), ("js_exceptions",))
+        self.assertTrue(self.compare(violated, expected))
+        for names in ((), ("http_5xx",), ("js_exceptions", "http_5xx")):
+            with self.subTest(names=names):
+                self.assertFalse(
+                    self.compare(violated, replace(expected, invariants=names))
+                )
+        extra = replace(
+            violated,
+            invariants=(
+                *violated.invariants[:2],
+                InvariantResult("http_5xx", "violated", (), 1),
+                violated.invariants[3],
+            ),
+        )
+        self.assertFalse(self.compare(extra, expected))
+        both = replace(failed(), invariants=violated.invariants)
+        combined = Expected("pilot", "expectation_violated", (1,), ("js_exceptions",))
+        self.assertTrue(self.compare(both, combined))
+        self.assertFalse(self.compare(both, expected))
+        self.assertFalse(self.compare(both, self.expected))
+        self.assertFalse(self.compare(violated, combined))
+
+    def test_exact_sets_cannot_turn_errors_or_timeouts_into_matches(self) -> None:
+        self.assertTrue(self.compare(failed(), self.expected))
+        for result in ineligible_results():
+            with self.subTest(result=result):
+                self.assertFalse(self.compare(result, self.expected))
+        timeout = replace(
+            clean(),
+            steps=tuple(
+                StepResult(n, "completed", settled="timeout") for n in (0, 1, 3)
+            ),
+        )
+        self.assertFalse(self.compare(timeout, self.drift))
+        assertion_timeout = replace(
+            clean(),
+            assertions=(
+                AssertionResult("a0", "check_timed_out"),
+                *clean().assertions[1:],
+            ),
+        )
+        observation = observe(self.script, assertion_timeout, invariants=Invariants())
+        self.assertEqual(observation.assertions[0].outcome, "check_timed_out")
+        self.assertEqual(observation.failed_expectations, frozenset())
+        self.assertFalse(compare(observation, self.drift))
+
+    def test_disabled_observations_cannot_match_expected_violations(self) -> None:
+        result = clean()
+        disabled = replace(
+            result,
+            invariants=(
+                *result.invariants[:2],
+                InvariantResult("http_5xx", "disabled", (), 3),
+                result.invariants[3],
+            ),
+        )
+        settings = Invariants(disable=("http_5xx",))
+        self.assertTrue(self.compare(disabled, self.drift, settings))
+        expected = Expected("pilot", "expectation_violated", (), ("http_5xx",))
+        self.assertFalse(self.compare(disabled, expected, settings))
+        self.assertFalse(self.compare(disabled, self.drift))
+        self.assertFalse(
+            self.compare(replace(disabled, outcome="failed"), expected, settings)
+        )
+
+    def test_explicit_row_must_match_spec_verdict_and_run_outcome(self) -> None:
+        self.assertTrue(self.compare(clean(), self.drift))
+        self.assertFalse(
+            self.compare(failed(), replace(self.expected, spec="another-spec"))
+        )
+        self.assertFalse(
+            self.compare(clean(), replace(self.drift, verdict="expectation_violated"))
+        )
+        self.assertFalse(
+            self.compare(failed(), replace(self.expected, verdict="drift_consistent"))
+        )
+        self.assertFalse(self.compare(replace(clean(), outcome="failed"), self.drift))
+        self.assertFalse(self.compare(clean(), replace(self.drift, verdict="unknown")))
+        self.assertIs(
+            signature(compare).parameters["expected"].default, Parameter.empty
+        )
