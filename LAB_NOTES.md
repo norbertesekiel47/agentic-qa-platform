@@ -15,6 +15,9 @@ Running log of non-obvious failures and their root causes. One entry per lesson;
 
 ## Log
 
+- [2026-10-04] Added or duplicate REVIEW rows passed pilot-oracle completeness with compact spacing, padding, indentation, or omitted outer pipes
+  → the numbered-row recognizer required exactly one space on each side of the index and a leading pipe, so those rows disappeared before hashing
+  → recognize the numbered first cell with optional horizontal whitespace and an optional leading pipe, while preserving ordered raw-line fingerprints (`pilot_plan_oracles.review_rows`; ADR-0024 B2a amendment).
 - [2026-10-04] REVIEW's path-only URL examples cannot match the runner's complete absolute URL → `aqa_runner.text_search.url_matches` searches the supplied URL without extracting its path → the pilot oracle uses reviewed full-URL patterns and exercises the bounded runtime helper on absolute positive and negative URLs (ADR-0024 B2a amendment).
 - [2026-10-04] A check type or target keyword cannot establish a pilot expectation → the same date, author or button can appear in the wrong scope, and a reload keyword can describe the wrong action order → compare complete reviewed phrases, exact literals and check multisets; keep independent positive fixtures and proxy additions as well as replacements (ADR-0024 B2a amendment).
 

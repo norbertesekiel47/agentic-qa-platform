@@ -225,7 +225,7 @@ def review_rows(review: str) -> dict[str, list[tuple[int, str]]] | None:
             if current in sections:
                 return None
             sections[current] = []
-        elif indexed := re.match(r"\| (\d+) \|", line):
+        elif indexed := re.match(r"[ \t]*\|?[ \t]*(\d+)[ \t]*\|", line):
             if current is None:
                 return None
             sections[current].append(
