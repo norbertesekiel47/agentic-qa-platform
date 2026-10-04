@@ -145,3 +145,40 @@ def test_pruning_removes_whole_raw_subtrees_before_touching_any_ref_text() -> No
         == f"- iframe {snapshot_refs.LEFT_OUT}\n{kept}"
     )
     assert snapshot_refs.prune_frames(kept, left_out=set()) == kept
+
+
+@pytest.mark.parametrize(
+    ("value", "normalized"),
+    [
+        ("\u200b fake-value", "fake-value"),
+        ("fake-value \u200b", "fake-value"),
+        ("\u00ad fake-value", "fake-value"),
+        ("fake-value \u00ad", "fake-value"),
+        ("fake \u200b value", "fake value"),
+        ("fake \u00ad value", "fake value"),
+        ("\u200b fake-value \u00ad", "fake-value"),
+        ("\u200b \u00ad\tfake-value \u200b \u00ad", "fake-value"),
+        ("fake \u200b \u00ad\tvalue", "fake value"),
+        ("\u200b \u00ad\tfake \u200b \u00ad\tvalue \u00ad \u200b", "fake value"),
+        ("\u200b\u00a0fake\u00a0\u200b\ufeffvalue\u00a0\u00ad", "fake value"),
+    ],
+)
+def test_snapshot_redacts_removed_whitespace_producer_forms(
+    sites: Sites, value: str, normalized: str
+) -> None:
+    secret = BoundSecret(
+        "FAKE", SecretStr(value), SecretDestination((sites.app,), "password")
+    )
+
+    async def scenario() -> None:
+        async with browsing(sites, redactor=Redactor([secret])) as session:
+            await session.navigate(f"{sites.app}/reflect")
+            await session.fill_secret(await password(session), secret)
+            raw = await session.page.aria_snapshot(mode="ai")
+            assert f'- button "{normalized}" [ref=' in raw
+            snapshot = await session.snapshot()
+            assert '- button "[SECRET:FAKE]" [ref=' in snapshot
+            assert normalized not in snapshot
+            assert "Allowed text stays visible" in snapshot
+
+    asyncio.run(scenario())
