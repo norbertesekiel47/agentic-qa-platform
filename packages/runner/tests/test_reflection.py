@@ -1,5 +1,3 @@
-"""Real session observations redact secrets without exposing forbidden frames."""
-
 import asyncio
 from collections.abc import Iterator
 from pathlib import Path

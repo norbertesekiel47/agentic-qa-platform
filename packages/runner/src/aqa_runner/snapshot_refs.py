@@ -1,5 +1,3 @@
-"""Pure parsing and rewriting of Playwright AI snapshot refs."""
-
 import re
 from collections.abc import Set as AbstractSet
 
