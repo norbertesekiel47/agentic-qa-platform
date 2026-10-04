@@ -1,5 +1,3 @@
-"""Disposable hostile pages which reflect a filled value through browser APIs."""
-
 from collections.abc import Iterator
 from contextlib import contextmanager
 

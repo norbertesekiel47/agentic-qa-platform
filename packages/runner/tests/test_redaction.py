@@ -1,10 +1,12 @@
-"""A run's secret scan, including transformations upstream of observations."""
-
 import copy
 import hashlib
 import json
 import pickle
+import subprocess
+import sys
 from base64 import b64encode, urlsafe_b64encode
+from itertools import product
+from pathlib import Path
 from urllib.parse import quote, quote_plus
 
 import h11
@@ -120,8 +122,6 @@ def test_base64_is_redacted_at_each_byte_alignment(value: str, alignment: int) -
                 ):
                     scanned = redactor.redact(shown)
                     assert MARKER in scanned, (value, alignment, shown)
-                    # At most one prefix character carries only prefix bits;
-                    # the adjoining character's secret bits must disappear.
                     assert scanned.index(MARKER) == (alignment * 8 // 6)
     standalone = b64encode(value.encode()).decode()
     assert (
@@ -159,3 +159,124 @@ def test_generated_values_leave_no_copy() -> None:
 
 def test_full_case_expansion_can_mix_raw_and_percent_encoded_characters() -> None:
     assert Redactor([secret("fake-ß-ﬁ")]).redact("fake-S%53-F%49") == MARKER
+
+
+@pytest.mark.parametrize("case", ["ascii", "optional", "spaces"])
+def test_ambiguous_near_matches_finish_in_a_bounded_process(case: str) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            str(Path(__file__).with_name("redaction_probe.py")),
+            case,
+        ],
+        capture_output=True,
+        text=True,
+        env={},
+        timeout=5,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == f"{case}: near-matches unchanged; matches redacted\n"
+
+
+def test_contextual_lowercase_is_encoded_after_the_whole_value_changes() -> None:
+    redactor = Redactor([secret("FAKE-ΟΣ")])
+    for shown in (
+        "FAKE-ΟΣ",
+        "fake-\u03bfς",
+        "fake-%CE%BF%CF%82",
+        "fake-\u03bf%CF%82",
+        "FAKE-%CE%9F%CE%A3",
+    ):
+        assert redactor.redact(f"<{shown}>") == f"<{MARKER}>"
+
+
+@pytest.mark.parametrize(
+    ("value", "shown"),
+    [
+        ("fake-%25-tail", "fake-%25-tail"),
+        ("fake-%25-tail", "fake-%2525-tail"),
+        ("fake-%%25-tail", "fake-%25%25-tail"),
+        ("fake-%25%25-tail", "fake-%2525%25-tail"),
+        ("fake-\\'\"-tail", "fake-\\\\''\\\"-tail"),
+    ],
+)
+def test_all_local_spelling_widths_remain_available(value: str, shown: str) -> None:
+    assert Redactor([secret(value)]).redact(f"<{shown}>") == f"<{MARKER}>"
+
+
+def test_secret_priority_precedes_observed_span_length() -> None:
+    redactor = Redactor([secret("fake-ßß", "SHORT"), secret("fake-SSS", "LONG")])
+    assert redactor.redact("fake-SSSS") == "[SECRET:LONG]S"
+    assert (
+        Redactor([secret("fake", "FIRST"), secret("fake", "SECOND")]).redact("fake")
+        == "[SECRET:FIRST]"
+    )
+
+
+def test_selection_is_leftmost_longest_within_a_secret_and_nonoverlapping() -> None:
+    redactor = Redactor([secret("fake-tail", "LONG"), secret("fake", "SHORT")])
+    assert redactor.redact("fake fake-tailfake-tail") == (
+        "[SECRET:SHORT] [SECRET:LONG][SECRET:LONG]"
+    )
+    assert Redactor([secret("fakefake")]).redact("fakefakefake") == f"{MARKER}fake"
+    assert Redactor([secret("fake\u200b")]).redact("fake\u200b") == MARKER
+    assert Redactor([secret("fake ")]).redact("fake   ") == MARKER
+    assert Redactor([secret("fake' ")]).redact("fake''   ") == MARKER
+
+
+@pytest.mark.parametrize("value", ["\u200b\u00ad", "\u200b\u200b", "\u00ad" * 4])
+def test_zero_length_matches_do_not_replace_text(value: str) -> None:
+    redactor = Redactor([secret(value)])
+    assert redactor.redact("") == ""
+    assert redactor.redact("ordinary") == "ordinary"
+    assert redactor.redact(value) == MARKER
+    assert redactor.redact(quote(value, safe="")) == MARKER
+    assert redactor.redact(json.dumps(value)[1:-1]) == MARKER
+    assert redactor.redact(f"<{value[0]}>") == f"<{MARKER}>"
+
+
+@pytest.mark.parametrize(
+    ("value", "shown"),
+    [
+        ("fake-I", "fake-\u0131"),
+        ("fake-i", "fake-İ"),
+        ("fake-İ", "fake-i"),
+        ("fake-s", "fake-\u017f"),
+        ("fake-k", "fake-\u212a"),
+        ("fake-\u03c3", "fake-ς"),
+    ],
+)
+def test_simple_unicode_case_equivalence_is_preserved(value: str, shown: str) -> None:
+    assert Redactor([secret(value)]).redact(shown) == MARKER
+
+
+def test_markers_are_not_rescanned_and_limits_follow_replacement() -> None:
+    redactor = Redactor([secret("fake", "FAKE"), secret("SECRET", "OTHER")])
+    assert redactor.redact("fakeSECRET") == "[SECRET:FAKE][SECRET:OTHER]"
+    assert redactor.redact("fake", limit=0) == ""
+    assert redactor.redact("fake", limit=-1) == "[SECRET:FAKE"
+
+
+def reference_forms(parts: tuple[str, ...]) -> set[str]:
+    spellings = {
+        "%": ("%", "%25"),
+        "2": ("2", "%32"),
+        "\u200b": ("", "\u200b", "%E2%80%8B"),
+        " ": (" ", "  ", "   ", "+", "%20", " +"),
+    }
+    return {
+        "fake-" + "".join(choice) + "!"
+        for choice in product(*(spellings[part] for part in parts))
+    }
+
+
+def test_short_paths_match_an_independent_finite_language() -> None:
+    for parts in product(("%", "2", "\u200b", " "), repeat=2):
+        forms = reference_forms(parts)
+        redactor = Redactor([secret("fake-" + "".join(parts) + "!")])
+        for shown in forms:
+            assert redactor.redact(f"<{shown}>{shown}") == f"<{MARKER}>{MARKER}"
+            near_match = shown[:-1] + "?"
+            assert redactor.redact(near_match) == near_match
