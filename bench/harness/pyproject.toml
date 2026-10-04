@@ -9,7 +9,7 @@
 name = "aqa-bench-harness"
 version = "0.1.0"
 requires-python = ">=3.14"
-dependencies = ["aqa-core", "playwright==1.63.0"]
+dependencies = ["aqa-core", "aqa-runner", "playwright==1.63.0"]
 
 [tool.uv]
 package = false
