@@ -10,7 +10,7 @@ every document they touch (ADR-0026's amendments on document origins)."""
 import asyncio
 import re
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Literal, assert_never, overload
 
 from aqa_core.compiled import (
@@ -21,6 +21,9 @@ from aqa_core.compiled import (
     Navigate,
     NotVisible,
     Press,
+    ProbeBaseline,
+    ProbeEquals,
+    ProbeEqualsBaseline,
     Reload,
     Select,
     Target,
@@ -29,10 +32,11 @@ from aqa_core.compiled import (
     UrlMatches,
 )
 from aqa_core.config import ProjectConfig
-from aqa_core.project import SpecError, path_on_origin, start_url
+from aqa_core.project import SpecError, path_on_origin, probe_url, start_url
 from aqa_core.spec import Spec, secret_references
 from playwright.async_api import BrowserType, ElementHandle, Error
 
+from aqa_runner import probes
 from aqa_runner.bound_secrets import BoundSecret, bound_secrets
 from aqa_runner.browser_session import BrowserSession, one_key, open_browser_session
 from aqa_runner.document_origins import (
@@ -40,7 +44,12 @@ from aqa_runner.document_origins import (
     PolicyEvent,
     PolicyEventError,
 )
-from aqa_runner.egress import EgressGate, InfrastructureEvent
+from aqa_runner.egress import (
+    EgressGate,
+    EgressRefusedError,
+    EgressUpstreamError,
+    InfrastructureEvent,
+)
 from aqa_runner.egress_proxy import EgressBlocks, EgressProxy
 from aqa_runner.invariants import InvariantResult, invariant_results
 from aqa_runner.locators import Absent, Miss, Resolved, Unresolved, Use
@@ -80,7 +89,14 @@ type Targeted = Click | Fill | FillSecret | Select
 type Untargeted = Navigate | Reload | Press
 
 # The checks M1 evaluates; #48 adds the others (DATA_MODEL §7).
-type Evaluated = TextVisible | TextInTarget | NotVisible | UrlMatches
+type Evaluated = (
+    TextVisible
+    | TextInTarget
+    | NotVisible
+    | UrlMatches
+    | ProbeEquals
+    | ProbeEqualsBaseline
+)
 
 # How a step ended: dispatched and settled; its target never resolved, so
 # nothing was dispatched; or dispatching or settling raised, so its outcome
@@ -114,12 +130,15 @@ class RunSetup:
 
 @dataclass(frozen=True)
 class _Replay:
-    """What every step of one replay shares: its setup, the script's targets,
-    and the test secrets its steps fill, by name, bound for this run."""
+    """State belonging to one replay. Captured baselines stay in memory;
+    they never enter the result or the run record."""
 
     setup: RunSetup
     targets: Mapping[str, Target]
     secrets: Mapping[str, BoundSecret]
+    gate: EgressGate
+    baseline_definitions: Mapping[str, ProbeBaseline]
+    baseline_values: dict[str, probes.JsonValue] = field(default_factory=dict)
 
     @property
     def withheld(self) -> bool:
@@ -230,6 +249,8 @@ async def replay(
             for step in runnable
             if isinstance(step, FillSecret)
         },
+        gate,
+        script.probe_baselines,
     )
     record = setup.record
     steps: list[StepResult] = []
@@ -314,7 +335,8 @@ def _accepted(
     """`script`'s steps and assertions, or `SpecError` naming each step and
     check M1 can't run, before anything is opened (ADR-0024's #46
     amendment), and each `fill_secret` naming a secret `spec` doesn't
-    reference, which has no binding in the run."""
+    reference, which has no binding in the run. Probe assertions and baseline
+    definitions must name probes declared by the spec."""
     referenced = {name for _, name in secret_references(spec.frontmatter)}
     runnable: list[Targeted | Untargeted] = []
     checks: list[Evaluated] = []
@@ -333,14 +355,35 @@ def _accepted(
             )
         else:
             runnable.append(step)
+    declared = spec.frontmatter.preconditions.probes
     for index, assertion in enumerate(script.assertions):
-        if isinstance(assertion, TextVisible | TextInTarget | NotVisible | UrlMatches):
+        if (
+            isinstance(assertion, ProbeEquals | ProbeEqualsBaseline)
+            and assertion.probe not in declared
+        ):
+            problems.append(
+                f"assertions[{index}] ({assertion.id}): probe {assertion.probe} is not declared by the spec"
+            )
+        if isinstance(
+            assertion,
+            TextVisible
+            | TextInTarget
+            | NotVisible
+            | UrlMatches
+            | ProbeEquals
+            | ProbeEqualsBaseline,
+        ):
             checks.append(assertion)
         else:
             problems.append(
                 f"assertions[{index}] ({assertion.id}): {assertion.check} is not "
                 "evaluated until #48"
             )
+    problems.extend(
+        f"probe_baselines[{name}]: probe {name} is not declared by the spec"
+        for name in script.probe_baselines
+        if name not in declared
+    )
     if problems:
         raise SpecError(problems)
     return runnable, checks
@@ -381,17 +424,16 @@ async def _evaluate_each(
             results.append(AssertionResult(check.id, "not_evaluated", error=reason))
             continue
         try:
-            results.append(await _evaluate(session, check, run.targets, budget))
+            results.append(await _evaluate(session, check, run, budget))
         except (
             Error,
             PolicyEventError,
             DocumentChangedError,
             _UnansweredError,
+            probes.ProbeError,
+            EgressRefusedError,
+            EgressUpstreamError,
         ) as error:
-            # Playwright's general error type (a crashed page, or a css value
-            # that isn't CSS), a page off the allowed origins, one that
-            # changed under every read within the budget, or one that didn't
-            # answer: the look raised, so the check can't be evaluated.
             raised = check.id
             results.append(
                 AssertionResult(
@@ -406,13 +448,13 @@ async def _evaluate_each(
 async def _evaluate(
     session: BrowserSession,
     check: Evaluated,
-    targets: Mapping[str, Target],
+    run: _Replay,
     budget: float,
 ) -> AssertionResult:
     """`check`'s outcome (DATA_MODEL §7, Replay outcomes)."""
     try:
-        held = await _held(session, check, targets, budget)
-    except SearchTimeoutError:
+        held = await _held(session, check, run, budget)
+    except SearchTimeoutError, probes.ProbeUnstableError:
         return AssertionResult(check.id, "check_timed_out")
     if isinstance(held, Unresolved):
         return AssertionResult(check.id, "binding_unresolved", held.misses)
@@ -422,7 +464,7 @@ async def _evaluate(
 async def _held(
     session: BrowserSession,
     check: Evaluated,
-    targets: Mapping[str, Target],
+    run: _Replay,
     budget: float,
 ) -> bool | Unresolved:
     """Whether `check` holds, through the session's observations and the
@@ -436,16 +478,44 @@ async def _held(
         case UrlMatches(pattern=pattern):
             return await url_matches(pattern, await _bounded(session.url(), budget))
         case TextInTarget(target=name):
-            seen = await _bounded(_target_text(session, targets[name], budget), budget)
+            seen = await _bounded(
+                _target_text(session, run.targets[name], budget), budget
+            )
             return (
                 seen
                 if isinstance(seen, Unresolved)
                 else await text_matches(check, seen)
             )
         case NotVisible(target=name):
-            return await _bounded(_absent(session, targets[name], budget), budget)
+            return await _bounded(_absent(session, run.targets[name], budget), budget)
+        case ProbeEquals() | ProbeEqualsBaseline():
+            expected: probes.JsonValue
+            if isinstance(check, ProbeEquals):
+                path, expected = check.json_path, check.value
+            else:
+                path = run.baseline_definitions[check.probe].json_path
+                expected = run.baseline_values[check.probe]
+            value = await _read_probe(run, check.probe, path)
+            return probes.same(value, expected)
         case _:
             assert_never(check)
+
+
+async def _read_probe(run: _Replay, name: str, path: str) -> probes.JsonValue:
+    try:
+        return await probes.read_stable(
+            run.gate, probe_url(run.setup.spec, name, run.setup.start), path
+        )
+    except ValueError:
+        raise probes.ProbeError("the probe could not be read") from None
+
+
+async def _capture_baselines(run: _Replay, seq: int) -> None:
+    for name, definition in run.baseline_definitions.items():
+        if definition.capture_before_seq == seq:
+            run.baseline_values[name] = await _read_probe(
+                run, name, definition.json_path
+            )
 
 
 async def _bounded[T](look: Awaitable[T], budget: float) -> T:
@@ -517,9 +587,18 @@ async def _run(
     step: Targeted | Untargeted,
     interrupted: Callable[[], bool],
 ) -> StepResult | None:
-    """Resolve `step`'s target, if it has one, then record, dispatch and
-    settle it. None when the run was `interrupted` while the target was
-    looked for: nothing is dispatched after that."""
+    """Capture baselines before resolving, recording or dispatching `step`.
+    None when the run was interrupted during capture or resolution, so no
+    next action is dispatched."""
+    try:
+        await _capture_baselines(run, step.seq)
+    except (
+        probes.ProbeError,
+        probes.ProbeUnstableError,
+        EgressRefusedError,
+        EgressUpstreamError,
+    ) as error:
+        return StepResult(step.seq, "failed", error=run.reason(error))
     setup = run.setup
     budget = setup.config.budgets.resolve_seconds
     action = step.model_dump(
@@ -527,11 +606,15 @@ async def _run(
     )
     if isinstance(step, Navigate | Reload | Press):
         wait = budget if isinstance(step, Press) else NAVIGATION_SECONDS
-        return await _dispatched(
-            session,
-            run,
-            _Dispatch(step.seq, action, step.side_effect, wait),
-            lambda: _untargeted(session, step, setup.start),
+        return (
+            None
+            if interrupted()
+            else await _dispatched(
+                session,
+                run,
+                _Dispatch(step.seq, action, step.side_effect, wait),
+                lambda: _untargeted(session, step, setup.start),
+            )
         )
     try:
         found = await _resolve(session, run.targets[step.target], "action", budget)
@@ -684,6 +767,10 @@ type _Raised = (
     | DocumentChangedError
     | _UnansweredError
     | SecretRefusedError
+    | probes.ProbeError
+    | probes.ProbeUnstableError
+    | EgressRefusedError
+    | EgressUpstreamError
 )
 
 
@@ -699,6 +786,17 @@ def _described(error: _Raised, *, withheld: bool) -> str:
     message is left out altogether, keeping only its error type and the call
     it names: a page handed a value can throw it back from any later call,
     encoded as it likes (ADR-0026's fill_secret amendment)."""
+    for kind, reason in (
+        (probes.ProbeError, "the probe could not be read"),
+        (
+            probes.ProbeUnstableError,
+            "the probe value did not stabilize within its read bound",
+        ),
+        (EgressRefusedError, "the probe request was refused by the egress policy"),
+        (EgressUpstreamError, "the probe request could not reach its allowed origin"),
+    ):
+        if isinstance(error, kind):
+            return reason
     if isinstance(
         error,
         PolicyEventError

@@ -174,7 +174,7 @@ The Decision's step readiness, as the browser session builds it (`aqa_runner.set
 
 ### The executor
 `aqa_runner.executor.replay(script, setup, *, chromium, proxy, gate)` runs a compiled script once, with no model. `RunSetup(spec, config, start, record)` carries the spec and project config the run is for, its start origin and its record: four inputs that travel together, bundled to keep within Ruff's argument limit.
-- **What M1 can't run is refused first.** The `network_none`, `network_seen`, `probe_equals_baseline` and `visible_unoccluded` checks (#48), and a `press` key the session would refuse (not one key after modifiers, ADR-0026's amendment on actions) are a `SpecError` (exit 5), one problem naming each, before the browser opens (coordinator's ruling), so no intent is written for a step that can't be dispatched. *Rejected:* running the rest and leaving those out, which would report a run that never checked what the spec claims.
+- **What M1 can't run is refused first.** The `network_none`, `network_seen` and `visible_unoccluded` checks (pending #48's final executor slice), and a `press` key the session would refuse (not one key after modifiers, ADR-0026's amendment on actions) are a `SpecError` (exit 5), one problem naming each, before the browser opens (coordinator's ruling), so no intent is written for a step that can't be dispatched. *Rejected:* running the rest and leaving those out, which would report a run that never checked what the spec claims.
   - *Since #49:* `fill_secret` steps run (ADR-0026's fill_secret amendment). One naming a secret the spec doesn't reference is refused the same way, and `replay` binds the test secrets before the browser opens: a missing value raises `MissingSecretError` (exit 12).
 - **One session, the script's settings:** `script.browser`, never the project's or the spec's (ADR-0025, "Browser settings").
 - **Seq 0 is the start URL** (`aqa_core.project.start_url`), recorded and settled as a step. Each compiled `navigate` joins its path to the start origin (`path_on_origin`).
@@ -289,6 +289,15 @@ Evaluating the rest of M1's checks (#48) settled what the Decision's "Probes. Re
   - A response the reader refuses, a JSON path that selects nothing and a probe that didn't answer raise `ProbeError`, whose message is ours and holds nothing of the body: not a repeated key, not a number's text (#48's doubt review).
   - *Residual:* nothing caps a response body's size (ADR-0026's #42 amendment). The bound caps the time to receive it, but not the time `json.loads` then takes, which no timeout can interrupt.
 - **Compared as canonical JSON.** One comparison serves the stable read, `probe_equals` and `probe_equals_baseline`, so `2.0`, `true` and `"2"` never pass for `2` (#48's review folded a separate type-and-value check into it: for an integer or a string they agree).
+
+### Probe execution
+
+- **Preflight validates every probe name.** Assertions and baseline definitions, unused definitions included, must name a spec-declared probe. Problems are aggregated before the browser opens. Structural references remain the compiled loader's responsibility.
+- **Baselines precede the named step.** Capture uses the actual `seq`, before resolution, intent or dispatch, through `read_stable`. Successful values belong to that replay in memory only, including JSON null. A capture error or unstable value fails that step without an intent or action; every assertion is then `not_evaluated` at its sequence.
+- **Interruption is checked after capture.** A browser egress block during a probe wait cannot allow the following action to dispatch. This applies to targeted and untargeted steps and preserves #47's egress precedence and invariant results.
+- **Assertions reuse the same canonical comparison.** `probe_equals` reads its own JSON path and compares with its compiled value. `probe_equals_baseline` reads the baseline definition's path and compares with its capture after the final step. An unstable assertion is `check_timed_out`, and later assertions still run. No model is involved.
+- **Request failures stop evaluation.** An unreadable, refused or unreachable probe makes the assertion and those after it `not_evaluated`, and the run `errored`. The result reason is respectively `the probe could not be read`, `the probe request was refused by the egress policy` or `the probe request could not reach its allowed origin`. The documented request-URL `ValueError` is converted only at the probe-read boundary. Raw request exception text is never used in those reasons. An unstable baseline uses `the probe value did not stabilize within its read bound`.
+- **Cost.** No paid resource or model call. Probes perform the already declared GET reads under their existing stabilization bound.
 
 ### Network checks
 

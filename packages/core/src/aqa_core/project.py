@@ -508,6 +508,12 @@ def path_on_origin(start: str, path: str) -> str:
     return start + path
 
 
+def probe_url(spec: Spec, name: str, start: str) -> str:
+    """The declared probe's validated GET path on this run's start origin."""
+    path = spec.frontmatter.preconditions.probes[name].removeprefix("GET ")
+    return path_on_origin(start, path)
+
+
 def start_url(spec: Spec, start: str) -> str:
     """Where the run's first navigation goes: `start`, the run's start origin
     as start_origin gives it, followed by the spec's start_url as written

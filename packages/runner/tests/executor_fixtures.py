@@ -56,6 +56,10 @@ SHOPS = {
 
 # The fixture app's pages, by name.
 PAGES = SHOPS | {
+    "probe-cookies": """<script>
+        document.cookie = "fake-browser=value; path=/";
+        fetch('/did/cookie');
+    </script>""",
     "start": """<a href="/page/form">Form</a>""",
     # A write 1 s after a click, and a button that appears 1.5 s after it.
     "late": """<button id="save">Save</button><script>
@@ -345,6 +349,9 @@ class App:
     records: list[tuple[str, str, list[dict[str, Any]]]] = field(default_factory=list)
     # Each POST's path and body, in order.
     bodies: list[tuple[str, bytes]] = field(default_factory=list)
+    probes: dict[str, list[object]] = field(default_factory=dict)
+    probe_reads: dict[str, int] = field(default_factory=dict)
+    cookies: list[tuple[str, str | None]] = field(default_factory=list)
 
     def hold(self, key: str) -> threading.Event:
         with self.arrived:
@@ -383,11 +390,14 @@ class _Handler(BaseHTTPRequestHandler):
         steps = [] if record is None else read_steps(record)
         with self.app.arrived:
             self.app.seen.append((self.command, self.path))
+            self.app.cookies.append((self.path, self.headers.get("Cookie")))
             self.app.records.append((self.command, urlsplit(self.path).path, steps))
             self.app.arrived.notify_all()
         kind, _, name = urlsplit(self.path).path.removeprefix("/").partition("/")
         if kind == "page" and name in PAGES:
             self._page(PAGES[name])
+        elif kind == "probe":
+            self._probe(name)
         elif kind == "raw":
             self._page("<p>Raw</p>")
         elif kind == "held":
@@ -407,6 +417,21 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._empty(HTTPStatus.NOT_FOUND)
 
+    def _probe(self, name: str) -> None:
+        if name == "malformed":
+            self.wfile.write(b"HTTP/1.1 fake-sensitive\r\n\r\n")
+            return
+        with self.app.arrived:
+            index = self.app.probe_reads.get(name, 0)
+            self.app.probe_reads[name] = index + 1
+            values = self.app.probes[name]
+            value = values[min(index, len(values) - 1)] if values else index
+        self._send(
+            "application/json",
+            json.dumps({"count": value}).encode(),
+            cookie="fake-probe=value; path=/",
+        )
+
     def _image(self, name: str) -> None:
         if name == "ok":
             self._send("image/gif", GIF)
@@ -418,9 +443,13 @@ class _Handler(BaseHTTPRequestHandler):
     def _page(self, body: str) -> None:
         self._send("text/html", f"<!doctype html><title>app</title>{body}".encode())
 
-    def _send(self, content_type: str, data: bytes) -> None:
+    def _send(
+        self, content_type: str, data: bytes, *, cookie: str | None = None
+    ) -> None:
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
+        if cookie is not None:
+            self.send_header("Set-Cookie", cookie)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -478,6 +507,7 @@ def compiled(
     targets: dict[str, Any] | None = None,
     browser: dict[str, Any] | None = None,
     assertions: list[dict[str, Any]] | None = None,
+    probe_baselines: dict[str, Any] | None = None,
 ) -> CompiledScript:
     """A hand-written compiled script with these steps, targets and
     assertions; one `url_matches` assertion when it names none."""
@@ -511,7 +541,7 @@ def compiled(
                     "requires": [],
                 },
                 "targets": targets or {},
-                "probe_baselines": {},
+                "probe_baselines": probe_baselines or {},
                 "steps": steps,
                 "assertions": checks,
             }
@@ -520,7 +550,12 @@ def compiled(
 
 
 def a_spec(
-    tmp_path: Path, config: ProjectConfig, *, start_url: str, extra: str = ""
+    tmp_path: Path,
+    config: ProjectConfig,
+    *,
+    start_url: str,
+    extra: str = "",
+    probes: dict[str, str] | None = None,
 ) -> Spec:
     """A spec whose start_url is `start_url`, read as the loader reads one."""
     path = tmp_path / "qa" / "replay.spec.md"
@@ -530,6 +565,7 @@ def a_spec(
         "id: replay\n"
         "goal: A reader saves the form.\n"
         f"preconditions:\n  start_url: '{start_url}'\n"
+        f"  probes: {json.dumps(probes or {})}\n"
         "expect:\n  - The form is saved\n"
         f"{extra}---\n"
     )
