@@ -202,12 +202,6 @@ def test_unsupported_steps_and_checks_are_refused_by_name_before_the_browser_ope
                 "status_class": "2xx",
             },
             {
-                "id": "a4",
-                "expect_index": 0,
-                "check": "probe_equals_baseline",
-                "probe": "count",
-            },
-            {
                 "id": "a5",
                 "expect_index": 0,
                 "check": "visible_unoccluded",
@@ -232,8 +226,7 @@ def test_unsupported_steps_and_checks_are_refused_by_name_before_the_browser_ope
         "steps[1] (seq 3): press takes one key, with only modifiers held before it: 'Tab+a'",
         "assertions[1] (a2): network_none is not evaluated until #48",
         "assertions[2] (a3): network_seen is not evaluated until #48",
-        "assertions[3] (a4): probe_equals_baseline is not evaluated until #48",
-        "assertions[4] (a5): visible_unoccluded is not evaluated until #48",
+        "assertions[3] (a5): visible_unoccluded is not evaluated until #48",
     )
     assert opened == []
     assert app.paths() == []
