@@ -7,7 +7,9 @@ import json
 import os
 import runpy
 import subprocess
+import sys
 import time
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -23,8 +25,11 @@ from aqa_core.project import load_project
 from aqa_core.spec import Spec
 from aqa_runner.anthropic_client import AnthropicClient, ProviderError
 from aqa_runner.coverage_plan import make_plan
-from aqa_runner.model_router import ModelRouter, Routed
-from langchain_core.messages import HumanMessage
+from aqa_runner.model_router import ModelCallError, ModelRouter, Routed
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.outputs import ChatGeneration
+from langchain_core.utils.json import parse_json_markdown
+from vcr.persisters.filesystem import FilesystemPersister
 
 from packages.runner.tests.conftest import CASSETTES, REDIRECTS, _canonical, _vcr
 from packages.runner.tests.test_anthropic_client import (
@@ -73,6 +78,52 @@ def observed_usage(body: bytes | str) -> Usage | None:
     )
 
 
+def contains_credential(value: Any, key: str) -> bool:
+    if isinstance(value, str):
+        return bool(key and key in value) or any(
+            pattern.search(value) for _, pattern in SECRET_FORMATS
+        )
+    if isinstance(value, dict):
+        return any(
+            contains_credential(item, key) for pair in value.items() for item in pair
+        )
+    if isinstance(value, list):
+        return any(contains_credential(item, key) for item in value)
+    return False
+
+
+def inspect_response(
+    response: dict[str, Any], key: str, *, structured: bool
+) -> str | None:
+    """Inspect wire, adapter text and the structured parser's decoded values."""
+    if contains_credential(json.dumps(response, default=str), key):
+        return "credential"
+    try:
+        decoded = json.loads(response["body"]["string"])
+        if contains_credential(decoded, key):
+            return "credential"
+        if not isinstance(decoded, dict) or not isinstance(
+            decoded.get("content"), list
+        ):
+            return "uninspectable"
+        return inspect_text(decoded["content"], key, structured=structured)
+    except ValueError, TypeError:
+        return "uninspectable"
+
+
+def inspect_text(content: list[Any], key: str, *, structured: bool) -> str | None:
+    text = ChatGeneration(message=AIMessage(content=content)).text
+    if contains_credential(text, key):
+        return "credential"
+    if structured:
+        parsed = parse_json_markdown(text)
+        if contains_credential(parsed, key):
+            return "credential"
+        if not isinstance(parsed, dict):
+            return "uninspectable"
+    return None
+
+
 @dataclass
 class Capture:
     """Keep credential-bearing responses out of even the private recording."""
@@ -80,7 +131,8 @@ class Capture:
     key: str
     filter_response: Callable[[dict[str, Any]], dict[str, Any]]
     attempt: Path
-    withheld: bool = False
+    structured: bool
+    withheld: str | None = None
     responses: list[dict[str, Any]] = field(default_factory=list)
     previous: float = field(default_factory=time.perf_counter)
 
@@ -88,62 +140,141 @@ class Capture:
         response = self.filter_response(response)
         now = time.perf_counter()
         usage = observed_usage(response["body"]["string"])
-        text = json.dumps(response, default=str)
-        unsafe = self.key in text or any(
-            pattern.search(text) for _, pattern in SECRET_FORMATS
-        )
         identifiers = response["headers"].get("request-id", [])
+        safe_id = identifiers[0] if identifiers else None
+        if contains_credential(safe_id, self.key):
+            safe_id = None
         observed = {
-            "request_id": None if unsafe or not identifiers else identifiers[0],
+            "request_id": safe_id,
             "status_code": response["status"]["code"],
             "usage": usage.model_dump() if usage else None,
             "response_interval_ms": round((now - self.previous) * 1000),
         }
         self.previous = now
         self.responses.append(observed)
+        unsafe = inspect_response(response, self.key, structured=self.structured)
+        if unsafe:
+            self.withheld = (
+                "credential" if "credential" in (unsafe, self.withheld) else unsafe
+            )
         with (self.attempt / "responses.jsonl").open("a") as stream:
             stream.write(json.dumps(observed) + "\n")
         if unsafe:
-            self.withheld = True
             return {
                 "status": {"code": response["status"]["code"], "message": "withheld"},
                 "headers": {},
-                "body": {"string": '{"withheld": "credential detected"}'},
+                "body": {
+                    "string": json.dumps(
+                        {
+                            "withheld": "credential detected"
+                            if unsafe == "credential"
+                            else "response uninspectable"
+                        }
+                    )
+                },
             }
         return response
 
 
 def accounted(
     responses: list[dict[str, Any]], calls: tuple[CostRecord, ...], model: RoutedModel
-) -> tuple[CostRecord, ...]:
-    """Price SDK responses that did not reach the router, without counting twice."""
-    extra = len(responses) - len(calls)
-    records = []
-    for index, response in enumerate(responses):
-        if response["usage"] is None:
-            continue
-        if index >= extra:
-            record = calls[index - extra]
-            if (
-                record.model_dump(
-                    include={"input_tokens", "cached_input_tokens", "output_tokens"}
-                )
-                != response["usage"]
-            ):
-                raise ValueError("response usage disagrees with the router record")
-            records.append(record)
+) -> tuple[tuple[CostRecord, ...], bool]:
+    """Price every usable observation; ambiguous router associations fail closed."""
+    matched: dict[int, CostRecord] = {}
+    failed = False
+    for call in calls:
+        usage = call.model_dump(
+            include={"input_tokens", "cached_input_tokens", "output_tokens"}
+        )
+        candidates = [
+            index
+            for index, response in enumerate(responses)
+            if response["status_code"] == 200 and response["usage"] == usage
+        ]
+        if len(candidates) != 1 or candidates[0] in matched:
+            failed = True
         else:
-            records.append(
-                cost_record(
-                    role="navigator",
-                    mode="explore",
-                    model=model,
-                    usage=Usage.model_validate(response["usage"]),
-                    latency_ms=response["response_interval_ms"],
-                    status="invalid",
-                )
-            )
-    return tuple(records)
+            matched[candidates[0]] = call
+    records = tuple(
+        matched[index]
+        if index in matched
+        else cost_record(
+            role="navigator",
+            mode="explore",
+            model=model,
+            usage=Usage.model_validate(response["usage"]),
+            latency_ms=response["response_interval_ms"],
+            status="invalid",
+        )
+        for index, response in enumerate(responses)
+        if response["usage"] is not None
+    )
+    return (records if responses else calls), failed
+
+
+@dataclass
+class AttemptState:
+    calls: tuple[CostRecord, ...] = ()
+    costs: tuple[CostRecord, ...] = ()
+    outcome: str = "error"
+    primary_failure: str | None = None
+    finalization_failures: list[str] = field(default_factory=list)
+    receipt_attempted: bool = False
+    receipt_written: bool = False
+    promoting: bool = False
+
+    def call_failed(self, error: BaseException | None) -> None:
+        if error is None:
+            return
+        if isinstance(error, ModelCallError):
+            self.calls = error.records
+        self.primary_failure = "call_error"
+        for kind in (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+            if isinstance(error, kind):
+                self.primary_failure = kind.__name__
+                break
+        self.outcome = "provider_error" if isinstance(error, ProviderError) else "error"
+
+    def diagnostic(self) -> dict[str, Any]:
+        return {
+            "primary_failure": self.primary_failure,
+            "finalization_failures": list(self.finalization_failures),
+            "receipt_attempted": self.receipt_attempted,
+            "receipt_written": self.receipt_written,
+            "cost_records": [item.model_dump(mode="json") for item in self.costs],
+        }
+
+    def safe_error(self) -> BaseException:
+        controls: dict[str, BaseException] = {
+            "KeyboardInterrupt": KeyboardInterrupt(),
+            "SystemExit": SystemExit(1),
+            "CancelledError": asyncio.CancelledError(),
+        }
+        error = controls.get(
+            self.primary_failure or "",
+            ValueError(
+                f"recording rejected: {self.outcome}; inspect the attempt receipt"
+            ),
+        )
+        vars(error)["capture_state"] = self.diagnostic()
+        return error
+
+
+@dataclass
+class DeferredPersister:
+    """Let VCR unpatch transports before serialization or filesystem I/O."""
+
+    pending: tuple[Any, Any, Any] | None = None
+
+    def load_cassette(self, path: str, serializer: Any) -> Any:
+        return FilesystemPersister.load_cassette(path, serializer)
+
+    def save_cassette(self, path: str, cassette_dict: Any, serializer: Any) -> None:
+        self.pending = path, cassette_dict, serializer
+
+    def flush(self) -> None:
+        if self.pending is not None:
+            FilesystemPersister.save_cassette(*self.pending)
 
 
 async def ask(name: str, router: ModelRouter, spec: Spec) -> tuple[Routed, bool]:
@@ -180,44 +311,126 @@ def finish(
     name: str,
     attempt: Path,
     capture: Capture,
-    calls: tuple[CostRecord, ...],
+    state: AttemptState,
     model: RoutedModel,
-    *,
-    outcome: str,
-) -> tuple[CostRecord, ...]:
-    """Persist returned records even when reconciling observed responses fails."""
-    router_records = [item.model_dump(mode="json") for item in calls]
-    try:
-        calls = accounted(capture.responses, calls, model)
-    except ValueError:
-        outcome = "accounting_error"
-    if outcome == "accepted" and (
-        len(capture.responses) != 1 or not capture.responses[0]["request_id"]
-    ):
-        outcome = "rejected"
+) -> None:
+    """Attempt a priced receipt even when other evidence could not be saved."""
+    state.costs, mismatch = accounted(capture.responses, state.calls, model)
     unpriced = [
         index
         for index, response in enumerate(capture.responses)
         if response["usage"] is None
     ]
-    if unpriced:
-        outcome = "missing_usage"
+    if mismatch:
+        state.finalization_failures.append("accounting_error")
+        state.outcome = "accounting_error"
+    if state.outcome == "accepted" and (
+        len(capture.responses) != 1 or not capture.responses[0]["request_id"]
+    ):
+        state.outcome = "rejected"
     if capture.withheld:
-        outcome = "credential"
+        state.outcome = capture.withheld
+    if unpriced and capture.withheld != "credential":
+        state.outcome = "missing_usage"
+    if any(reason != "accounting_error" for reason in state.finalization_failures):
+        state.outcome = "error"
+    state.receipt_attempted = True
     receipt = {
         "case": name,
         "finished_at": datetime.now(UTC).isoformat(),
-        "outcome": outcome,
-        "cost_records": [item.model_dump(mode="json") for item in calls],
-        "router_records": router_records,
+        "outcome": state.outcome,
+        **state.diagnostic(),
+        "receipt_written": True,
+        "router_records": [item.model_dump(mode="json") for item in state.calls],
         "responses": capture.responses,
         "unpriced_responses": unpriced,
         "no_response": not capture.responses,
     }
-    (attempt / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
-    if outcome != "accepted":
-        raise ValueError(f"recording {outcome}; see the attempt receipt")
-    return calls
+    try:
+        (attempt / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+        state.receipt_written = True
+    finally:
+        if not state.receipt_written:
+            state.finalization_failures.append("receipt_write")
+
+
+def persist_capture(
+    attempt: Path, persister: DeferredPersister, state: AttemptState
+) -> None:
+    cassette_written = hashes_written = False
+    try:
+        try:
+            persister.flush()
+            cassette_written = True
+        finally:
+            if not cassette_written:
+                state.finalization_failures.append("cassette_write")
+    finally:
+        try:
+            requests = persister.pending[1]["requests"] if persister.pending else []
+            hashes = [
+                hashlib.sha256(_canonical(request.body).encode()).hexdigest()
+                for request in requests
+            ]
+            (attempt / "request-hashes.json").write_text(
+                json.dumps(hashes, indent=2) + "\n"
+            )
+            hashes_written = True
+        finally:
+            if not hashes_written:
+                state.finalization_failures.append("request_hashes")
+
+
+def capture_attempt(
+    name: str,
+    attempt: Path,
+    library: Path,
+    router: ModelRouter,
+    spec: Spec,
+    *,
+    key: str,
+) -> tuple[CostRecord, ...]:
+    vcr = _vcr(attempt, recording_now=True)
+    capture = Capture(
+        key,
+        vcr.before_record_response,
+        attempt,
+        name in {"coverage_plan", "structured_output"},
+    )
+    vcr.before_record_response = capture.response
+    persister = DeferredPersister()
+    vcr.register_persister(persister)
+    state = AttemptState()
+    config = load_project(spec.path.parent).config
+    model = resolve_roles(config, vendored())["navigator"].model
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            try:
+                try:
+                    with vcr.use_cassette(f"{name}.yaml"):
+                        try:
+                            routed, accepted = asyncio.run(ask(name, router, spec))
+                            state.calls = routed.calls
+                            state.outcome = "accepted" if accepted else "rejected"
+                        finally:
+                            state.call_failed(sys.exception())
+                finally:
+                    persist_capture(attempt, persister, state)
+            finally:
+                finish(name, attempt, capture, state, model)
+            if state.outcome == "accepted":
+                state.promoting = True
+                promotion = attempt / "promotion.yaml"
+                promotion.write_bytes((attempt / f"{name}.yaml").read_bytes())
+                promotion.replace(library / f"{name}.yaml")
+    finally:
+        error = sys.exception()
+        if error is not None or state.outcome != "accepted":
+            if error is not None and state.promoting:
+                state.finalization_failures.append("promotion_failed")
+            raise state.safe_error() from None
+    return state.costs
 
 
 def record(
@@ -250,33 +463,7 @@ def record(
         "effort": role.effort,
     }
     (attempt / "intent.json").write_text(json.dumps(intent, indent=2) + "\n")
-    vcr = _vcr(attempt, recording_now=True)
-    capture = Capture(key, vcr.before_record_response, attempt)
-    vcr.before_record_response = capture.response
-    calls: tuple[CostRecord, ...] = ()
-    outcome = "error"
-    with vcr.use_cassette(f"{name}.yaml") as cassette:
-        try:
-            routed, accepted = asyncio.run(ask(name, router, spec))
-            calls = routed.calls
-            outcome = "accepted" if accepted else "rejected"
-        except ProviderError:
-            outcome = "provider_error"
-        except ValueError, UserWarning:
-            # Malformed provider usage can fail SDK serialization under the
-            # strict warning policy. Keep its observed response and fail capture.
-            outcome = "error"
-    hashes = [
-        hashlib.sha256(_canonical(request.body).encode()).hexdigest()
-        for request in cassette.requests
-    ]
-    (attempt / "request-hashes.json").write_text(json.dumps(hashes, indent=2) + "\n")
-    calls = finish(name, attempt, capture, calls, role.model, outcome=outcome)
-    candidate = attempt / f"{name}.yaml"
-    promotion = attempt / "promotion.yaml"
-    promotion.write_bytes(candidate.read_bytes())
-    promotion.replace(library / candidate.name)
-    return calls
+    return capture_attempt(name, attempt, library, router, spec, key=key)
 
 
 def main() -> None:
