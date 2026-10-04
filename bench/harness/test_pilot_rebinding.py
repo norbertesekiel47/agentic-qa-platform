@@ -1,5 +1,3 @@
-"""A human patch may replace bindings without weakening compiled checks."""
-
 import json
 import tempfile
 import unittest
@@ -156,11 +154,20 @@ class RebindingTests(unittest.TestCase):
 
     def test_valid_rebinding_and_explicit_noop_preserve_the_original(self) -> None:
         before = self.original.model_dump_json()
+        positive_target = "pay_button"
+        self.assertEqual(
+            [
+                (assertion.id, assertion.check)
+                for assertion in self.original.assertions
+                if getattr(assertion, "target", None) == positive_target
+            ],
+            [("a6", "visible_unoccluded")],
+        )
         replacements: dict[str, list[dict[str, object]]] = {
             "payment_error": [
                 {"testid": "new-error", "scope": {"css": "app-payment-step"}}
             ],
-            "cart_items": [{"css": ".cart"}],
+            positive_target: [{"css": ".pay"}],
         }
         for target, values in replacements.items():
             with self.subTest(target=target):
