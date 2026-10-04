@@ -403,6 +403,7 @@ def capture_attempt(
     state = AttemptState()
     config = load_project(spec.path.parent).config
     model = resolve_roles(config, vendored())["navigator"].model
+    call_completed = completed = False
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
@@ -413,8 +414,10 @@ def capture_attempt(
                             routed, accepted = asyncio.run(ask(name, router, spec))
                             state.calls = routed.calls
                             state.outcome = "accepted" if accepted else "rejected"
+                            call_completed = True
                         finally:
-                            state.call_failed(sys.exception())
+                            if not call_completed:
+                                state.call_failed(sys.exception())
                 finally:
                     persist_capture(attempt, persister, state)
             finally:
@@ -424,8 +427,9 @@ def capture_attempt(
                 promotion = attempt / "promotion.yaml"
                 promotion.write_bytes((attempt / f"{name}.yaml").read_bytes())
                 promotion.replace(library / f"{name}.yaml")
+            completed = True
     finally:
-        error = sys.exception()
+        error = sys.exception() if not completed else None
         if error is not None or state.outcome != "accepted":
             if error is not None and state.promoting:
                 state.finalization_failures.append("promotion_failed")
