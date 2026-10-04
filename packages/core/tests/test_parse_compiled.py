@@ -1,5 +1,3 @@
-"""File and in-memory compiled inputs enforce the same strict contract."""
-
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime
