@@ -570,6 +570,11 @@ def test_returned_records_survive_later_failures(
     assert receipt["outcome"] == (
         "accepted" if phase.startswith("promotion") else "error"
     )
+    if phase.startswith("promotion"):
+        state = vars(raised.value)["capture_state"]
+        assert state["finalization_failures"] == ["promotion_failed"]
+        assert (state["primary_failure"], state.get("first_interrupt")) == (None, None)
+        assert (state["receipt_attempted"], state["receipt_written"]) == (True, True)
 
 
 @pytest.mark.parametrize("failure", ["sdk", "finalization", "promotion"])
@@ -797,6 +802,199 @@ def test_successful_capture_ignores_a_callers_active_exception(
     receipt = json.loads((attempt / "receipt.json").read_text())
     assert receipt["outcome"] == "accepted"
     assert receipt["primary_failure"] is None
+    assert (library / "coverage_plan.yaml").read_bytes() == (
+        attempt / "coverage_plan.yaml"
+    ).read_bytes()
+
+
+@pytest.fixture
+def late_capture(
+    monkeypatch: pytest.MonkeyPatch, serve: Callable[..., Endpoint], tmp_path: Path
+) -> tuple[Path, Path, Endpoint]:
+    answer = HELLO | {"content": [{"type": "text", "text": PLAN.model_dump_json()}]}
+    endpoint = serve(json.dumps(answer).encode(), {"request-id": "req_fake_late"})
+    monkeypatch.setenv("ANTHROPIC_API_KEY", RECORDING_KEY)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", endpoint.url)
+    monkeypatch.delenv("ANTHROPIC_API_URL", raising=False)
+    library = tmp_path / "library"
+    library.mkdir()
+    (library / "coverage_plan.yaml").write_text("previous cassette\n")
+    return tmp_path / "attempt", library, endpoint
+
+
+def interrupt_value(kind: str) -> BaseException:
+    return {
+        "keyboard": KeyboardInterrupt(RECORDING_KEY),
+        "cancel": asyncio.CancelledError(RECORDING_KEY),
+        "exit_none": SystemExit(),
+        "exit_zero": SystemExit(0),
+        "exit_seven": SystemExit(7),
+        "exit_text": SystemExit(RECORDING_KEY),
+    }[kind]
+
+
+def interrupt_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    attempt: Path,
+    failures: Mapping[str, BaseException],
+) -> None:
+    def patch(method: str, phases: Mapping[str, str]) -> None:
+        original = getattr(Path, method)
+
+        def call(path: Path, *args: Any, **kwargs: Any) -> Any:
+            phase = phases.get(path.name, "")
+            if path.parent == attempt and phase in failures:
+                raise failures[phase]
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, method, call)
+
+    patch("open", {"coverage_plan.yaml": "cassette_write"})
+    patch(
+        "write_text",
+        {"request-hashes.json": "request_hashes", "receipt.json": "receipt_write"},
+    )
+    patch("write_bytes", {"promotion.yaml": "promotion_copy"})
+    patch("replace", {"promotion.yaml": "promotion_replace"})
+
+
+def check_interrupted_capture(
+    prepared: tuple[Path, Path, Endpoint],
+    expected: BaseException,
+    failures: list[str],
+    primary: str | None = None,
+) -> None:
+    attempt, library, endpoint = prepared
+    transports = (
+        http.client.HTTPConnection,
+        http.client.HTTPSConnection,
+        httpx.HTTPTransport.handle_request,
+        httpx.AsyncHTTPTransport.handle_async_request,
+    )
+    filters = list(warnings.filters)
+    with pytest.raises(type(expected)) as raised:
+        record("coverage_plan", attempt, library=library)
+    error = raised.value
+    assert type(error) is type(expected)
+    assert error.__traceback__ is not None
+    assert error.__suppress_context__
+    assert RECORDING_KEY not in "".join(traceback.format_exception(error))
+    if isinstance(error, SystemExit):
+        assert type(error.code) is int
+        assert error.code == 1
+    else:
+        assert error.args == ()
+    state = vars(error)["capture_state"]
+    assert state["primary_failure"] == primary
+    assert state["first_interrupt"] == type(expected).__name__
+    assert state["finalization_failures"] == failures
+    assert state["receipt_attempted"] is True
+    assert state["receipt_written"] == ("receipt_write" not in failures)
+    assert [item["cost_usd"] for item in state["cost_records"]] == ["0.000048"]
+    assert (library / "coverage_plan.yaml").read_text() == "previous cassette\n"
+    assert len(endpoint.requests) == 1
+    assert filters == warnings.filters
+    assert transports == (
+        http.client.HTTPConnection,
+        http.client.HTTPSConnection,
+        httpx.HTTPTransport.handle_request,
+        httpx.AsyncHTTPTransport.handle_async_request,
+    )
+    if "receipt_write" not in failures:
+        receipt = json.loads((attempt / "receipt.json").read_text())
+        assert receipt["cost_records"] == state["cost_records"]
+        assert receipt["unpriced_responses"] == []
+        assert receipt["primary_failure"] == primary
+        assert receipt["outcome"] == (
+            "accepted" if failures == ["promotion_failed"] else "error"
+        )
+    else:
+        assert not (attempt / "receipt.json").exists()
+
+
+@pytest.mark.parametrize(
+    "kind", ["keyboard", "cancel", "exit_none", "exit_zero", "exit_seven", "exit_text"]
+)
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "cassette_write",
+        "request_hashes",
+        "receipt_write",
+        "promotion_copy",
+        "promotion_replace",
+    ],
+)
+def test_first_later_interrupt_preserves_control_flow(
+    late_capture: tuple[Path, Path, Endpoint],
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    phase: str,
+) -> None:
+    error = interrupt_value(kind)
+    interrupt_writes(monkeypatch, late_capture[0], {phase: error})
+    failure = "promotion_failed" if phase.startswith("promotion") else phase
+    check_interrupted_capture(late_capture, error, [failure])
+
+
+@pytest.mark.parametrize("kind", ["keyboard", "cancel", "exit_zero"])
+@pytest.mark.parametrize(
+    ("first", "later"),
+    [
+        ("cassette_write", "request_hashes"),
+        ("cassette_write", "receipt_write"),
+        ("request_hashes", "receipt_write"),
+    ],
+)
+def test_first_later_interrupt_survives_write_failure(
+    late_capture: tuple[Path, Path, Endpoint],
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    first: str,
+    later: str,
+) -> None:
+    error = interrupt_value(kind)
+    interrupt_writes(
+        monkeypatch, late_capture[0], {first: error, later: OSError(RECORDING_KEY)}
+    )
+    check_interrupted_capture(late_capture, error, [first, later])
+
+
+@pytest.mark.parametrize("kind", ["keyboard", "cancel", "exit_zero"])
+def test_call_failure_and_later_interrupt_stay_distinct(
+    late_capture: tuple[Path, Path, Endpoint],
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    original = recorder.ask
+
+    async def failed(name: str, router: ModelRouter, spec: Spec) -> tuple[Routed, bool]:
+        await original(name, router, spec)
+        raise TypeError(RECORDING_KEY)
+
+    monkeypatch.setattr(recorder, "ask", failed)
+    error = interrupt_value(kind)
+    interrupt_writes(monkeypatch, late_capture[0], {"cassette_write": error})
+    check_interrupted_capture(late_capture, error, ["cassette_write"], "call_error")
+
+
+@pytest.mark.parametrize("kind", ["keyboard", "cancel", "exit_zero"])
+def test_capture_ignores_callers_active_interrupt(
+    late_capture: tuple[Path, Path, Endpoint],
+    kind: str,
+) -> None:
+    attempt, library, endpoint = late_capture
+    try:
+        raise interrupt_value(kind)
+    except KeyboardInterrupt, SystemExit, asyncio.CancelledError:
+        costs = record("coverage_plan", attempt, library=library)
+    receipt = json.loads((attempt / "receipt.json").read_text())
+    assert [str(item.cost_usd) for item in costs] == ["0.000048"]
+    assert receipt["primary_failure"] is None
+    assert receipt["first_interrupt"] is None
+    assert receipt["finalization_failures"] == []
+    assert receipt["outcome"] == "accepted"
+    assert len(endpoint.requests) == 1
     assert (library / "coverage_plan.yaml").read_bytes() == (
         attempt / "coverage_plan.yaml"
     ).read_bytes()

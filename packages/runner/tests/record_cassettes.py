@@ -218,26 +218,33 @@ class AttemptState:
     costs: tuple[CostRecord, ...] = ()
     outcome: str = "error"
     primary_failure: str | None = None
+    first_interrupt: str | None = None
     finalization_failures: list[str] = field(default_factory=list)
     receipt_attempted: bool = False
     receipt_written: bool = False
     promoting: bool = False
+
+    def remember_interrupt(self, error: BaseException | None) -> None:
+        if self.first_interrupt is not None:
+            return
+        for kind in (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+            if isinstance(error, kind):
+                self.first_interrupt = kind.__name__
+                break
 
     def call_failed(self, error: BaseException | None) -> None:
         if error is None:
             return
         if isinstance(error, ModelCallError):
             self.calls = error.records
-        self.primary_failure = "call_error"
-        for kind in (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
-            if isinstance(error, kind):
-                self.primary_failure = kind.__name__
-                break
+        self.remember_interrupt(error)
+        self.primary_failure = self.first_interrupt or "call_error"
         self.outcome = "provider_error" if isinstance(error, ProviderError) else "error"
 
     def diagnostic(self) -> dict[str, Any]:
         return {
             "primary_failure": self.primary_failure,
+            "first_interrupt": self.first_interrupt,
             "finalization_failures": list(self.finalization_failures),
             "receipt_attempted": self.receipt_attempted,
             "receipt_written": self.receipt_written,
@@ -251,7 +258,7 @@ class AttemptState:
             "CancelledError": asyncio.CancelledError(),
         }
         error = controls.get(
-            self.primary_failure or "",
+            self.first_interrupt or "",
             ValueError(
                 f"recording rejected: {self.outcome}; inspect the attempt receipt"
             ),
@@ -351,6 +358,7 @@ def finish(
         state.receipt_written = True
     finally:
         if not state.receipt_written:
+            state.remember_interrupt(sys.exception())
             state.finalization_failures.append("receipt_write")
 
 
@@ -364,6 +372,7 @@ def persist_capture(
             cassette_written = True
         finally:
             if not cassette_written:
+                state.remember_interrupt(sys.exception())
                 state.finalization_failures.append("cassette_write")
     finally:
         try:
@@ -378,6 +387,7 @@ def persist_capture(
             hashes_written = True
         finally:
             if not hashes_written:
+                state.remember_interrupt(sys.exception())
                 state.finalization_failures.append("request_hashes")
 
 
@@ -403,7 +413,7 @@ def capture_attempt(
     state = AttemptState()
     config = load_project(spec.path.parent).config
     model = resolve_roles(config, vendored())["navigator"].model
-    call_completed = completed = False
+    call_completed = capture_completed = completed = False
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
@@ -418,7 +428,10 @@ def capture_attempt(
                         finally:
                             if not call_completed:
                                 state.call_failed(sys.exception())
+                    capture_completed = True
                 finally:
+                    if not capture_completed:
+                        state.remember_interrupt(sys.exception())
                     persist_capture(attempt, persister, state)
             finally:
                 finish(name, attempt, capture, state, model)
@@ -431,6 +444,7 @@ def capture_attempt(
     finally:
         error = sys.exception() if not completed else None
         if error is not None or state.outcome != "accepted":
+            state.remember_interrupt(error)
             if error is not None and state.promoting:
                 state.finalization_failures.append("promotion_failed")
             raise state.safe_error() from None
