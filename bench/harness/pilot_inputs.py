@@ -57,8 +57,9 @@ def load_pilots(
     qa_root: Path, compiled_dir: Path, selected_ids: Sequence[str]
 ) -> tuple[PilotInput, ...]:
     """Every selected pilot, or every pilot by ID when none is selected, each
-    from `<compiled_dir>/<id>.json`. Raises ValueError naming the file and a
-    fixed category, never the problem's text, unless all are admitted."""
+    from `<compiled_dir>/<id>.json`. Unless all are admitted, raises
+    ValueError naming `qa_root` or the script's path and a fixed category,
+    never the problem's text."""
     project = _quietly(partial(load_project, qa_root), OSError, SpecError)
     if project is None:
         raise ValueError(f"{qa_root}: invalid pilot input")
