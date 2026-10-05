@@ -215,3 +215,52 @@ class LinearCommandTests(unittest.TestCase):
         for command, expected in cases:
             with self.subTest(command=command):
                 self.assertEqual(self.decision(command), expected)
+
+    def test_message_masking_finishes_on_long_adversarial_input(self) -> None:
+        n = 100_000
+        opened = "cat <<EOF\n" * n
+        distinct = "<<Z\n" + "".join(f"L{i}\n" for i in range(n))
+        cases = (
+            (opened, opened),
+            (opened + "EOF", "cat \n"),
+            (opened + "EOF\r\n", opened + "EOF\r\n"),
+            ("<<A " * n, "<<A " * n),
+            ("<<A\n" * n, "<<A\n" * n),
+            ("<<" + "A" * n + "\n", "<<" + "A" * n + "\n"),
+            ("<<" + "A" * n + "\nA", "A" * (n - 1) + "\n"),
+            (distinct, distinct),
+            ("".join(f"<<L{i}x\nL{i}\n" for i in range(n)), "x\n\n" * n),
+            ('"' + '\\"' * n + "\\\n", '"' + "''" * n + "\\\n"),
+            ("$'" * n, "''" * (n // 2)),
+            ('"\\\n' * n, '"\\\n' * n),
+            ("'" * (2 * n + 1), "'" * (2 * n + 1)),
+            ("\\" * n, "''" * (n // 2)),
+        )
+        for index, (command, expected) in enumerate(cases):
+            with self.subTest(case=index, start=command[:12]):
+                result = self.child(
+                    ["-c", _MEASURE], json.dumps(["mask_messages", command])
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                masked, seconds = json.loads(result.stdout)
+                self.assertEqual(masked, expected)
+                self.assertLess(seconds, 0.5)
+
+    def test_long_messages_keep_their_decisions(self) -> None:
+        n = 100_000
+        rm = "rm tests/test_a.py"
+        for command, expected in (
+            ("git commit -F - " + "cat <<EOF\n" * n + rm, "ask"),
+            ("git commit -F - " + "cat <<EOF\n" * n + "EOF\n" + rm, "ask"),
+            ("git commit -F - <<'EOF'\n" + (rm + "\n") * n + "EOF", "allow"),
+            ("git commit -F - " + "<<A " * n + "\n" + rm, "ask"),
+            ("git commit -F - " + "<<A\n" * n + rm, "ask"),
+            ("git commit -F - <<" + "A" * n + "\n" + rm + "\nA", "allow"),
+            (
+                "git commit -F - " + "".join(f"<<L{i}x\nL{i}\n" for i in range(n)) + rm,
+                "ask",
+            ),
+            ("git commit -F - <<EOF\n" + "x\n" * n + rm + "\nEOF\r\n", "ask"),
+        ):
+            with self.subTest(start=command[:24], length=len(command)):
+                self.assertEqual(self.decision(command), expected)

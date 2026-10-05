@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from policy_rules import DIRECT_INSTALLER, DIRECT_MUTATOR, DIRECT_WRITE
 
@@ -94,10 +95,98 @@ def add_noqa(command: str) -> bool:
 
 
 # A message quotes patterns and paths: blank it, but judge a heredoc's first line.
-_MESSAGE = re.compile(
-    r"""(?m)\\.|\$'(?:\\.|[^'\\])*'|'[^']*'|"(?:\\.|[^"\\])*"|<<-?[ \t]*(['"]?)(\w+)\1([^\n]*\n)(?:[^\n]*\n)*?[ \t]*\2[ \t]*$"""
+# A heredoc opener's closing line comes from _Closings, not a search per opener.
+_TOKEN = re.compile(
+    r"""\\.|\$'(?:\\.|[^'\\])*'|'[^']*'|"(?:\\.|[^"\\])*"|<<-?[ \t]*(['"]?)(\w+)"""
 )
+_CLOSING_LINE = re.compile(r"^[ \t]*(\w+)[ \t]*$", re.MULTILINE)
+
+
+class _Closings:
+    """The lines that could close a heredoc, by the one word each holds. Openers
+    arrive in order, so a word's next usable line only moves forward."""
+
+    def __init__(self, command: str) -> None:
+        self.ends: dict[str, list[int]] = {}
+        for line in _CLOSING_LINE.finditer(command):
+            self.ends.setdefault(line[1], []).append(line.end())
+        self.seen: dict[str, int] = {}
+        self.prefixes: dict[str, Any] | None = None
+
+    def after(self, word: str, newline: int) -> int | None:
+        """The end of the first line after `newline` that holds just `word`."""
+        ends = self.ends.get(word, [])
+        index = self.seen.get(word, 0)
+        while index < len(ends) and ends[index] <= newline:
+            index += 1
+        self.seen[word] = index
+        return ends[index] if index < len(ends) else None
+
+    def longest(self, word: str, newline: int) -> tuple[int, int] | None:
+        """The longest prefix of `word` that closes after `newline`, as its length
+        and closing line's end: an unquoted `<<ABC` closes on a later `AB` line."""
+        if self.prefixes is None:
+            self.prefixes = {}
+            for candidate in self.ends:
+                node = self.prefixes
+                for char in candidate:
+                    node = node.setdefault(char, {})
+                node[""] = candidate
+        node, found = self.prefixes, []
+        for char in word:
+            child = node.get(char)
+            if child is None:
+                break
+            node = child
+            if "" in node:
+                found.append(node[""])
+        for candidate in reversed(found):
+            end = self.after(candidate, newline)
+            if end is not None:
+                return len(candidate), end
+        return None
+
+
+def _closed(
+    token: re.Match[str], newline: int, closings: _Closings
+) -> tuple[int, int] | None:
+    """Where a heredoc opener's kept text starts and where its heredoc ends, or
+    None if no later line closes it."""
+    quote, word, after = token[1], token[2], token.end()
+    if quote:
+        end = closings.after(word, newline) if token.string[after] == quote else None
+        return None if end is None else (after + 1, end)
+    end = closings.after(word, newline)
+    if end is not None:
+        return after, end
+    prefix = closings.longest(word, newline)
+    return None if prefix is None else (token.start(2) + prefix[0], prefix[1])
 
 
 def mask_messages(command: str) -> str:
-    return _MESSAGE.sub(lambda m: m[3] or "''", command)
+    """`command` with each quoted string blanked to `''` and each heredoc's body
+    dropped, keeping the rest of its opening line."""
+    parts: list[str] = []
+    closings: _Closings | None = None
+    done = position = 0
+    newline = -1
+    while token := _TOKEN.search(command, position):
+        start = token.start()
+        if token[2] is None:
+            parts += (command[done:start], "''")
+            done = position = token.end()
+            continue
+        position = start + 1
+        if newline < token.end():
+            found = command.find("\n", token.end())
+            newline = found if found >= 0 else len(command)
+        if newline == len(command):
+            continue
+        closings = closings or _Closings(command)
+        closed = _closed(token, newline, closings)
+        if closed is not None:
+            kept, end = closed
+            parts += (command[done:start], command[kept : newline + 1])
+            done = position = end
+    parts.append(command[done:])
+    return "".join(parts)
