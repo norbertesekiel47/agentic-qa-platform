@@ -1,8 +1,9 @@
 """The selected pilots' inputs, each admitted before any of them is used
 (ADR-0023, #51). Manifest answers never enter."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 from aqa_core.compiled import (
@@ -58,10 +59,9 @@ def load_pilots(
     """Every selected pilot, or every pilot by ID when none is selected, each
     from `<compiled_dir>/<id>.json`. Raises ValueError naming the file and a
     fixed category, never the problem's text, unless all are admitted."""
-    try:
-        project = load_project(qa_root)
-    except (OSError, SpecError):
-        raise ValueError(f"{qa_root}: invalid pilot input") from None
+    project = _quietly(partial(load_project, qa_root), OSError, SpecError)
+    if project is None:
+        raise ValueError(f"{qa_root}: invalid pilot input")
     ids = tuple(selected_ids) or tuple(sorted(project.specs))
     if not ids or len(set(ids)) < len(ids) or not set(ids) <= project.specs.keys():
         raise ValueError(f"{qa_root}: invalid selection")
@@ -69,15 +69,15 @@ def load_pilots(
     pilots: list[PilotInput] = []
     for spec_id in ids:
         source = compiled_dir / f"{spec_id}.json"
-        refused = ValueError(f"{source}: invalid compiled input")
         # Read where the check looked, so a link can't lead outside the root.
         path = source.resolve()
-        if not path.is_relative_to(root):
-            raise refused
-        try:
-            script = load_compiled(path, project.config)
-        except (OSError, SpecError):
-            raise refused from None
+        script = (
+            _quietly(partial(load_compiled, path, project.config), OSError, SpecError)
+            if path.is_relative_to(root)
+            else None
+        )
+        if script is None:
+            raise ValueError(f"{source}: invalid compiled input")
         spec = project.specs[spec_id]
         pilots.append(validate_pilot(spec, project.config, script, source=source))
     return tuple(pilots)
@@ -92,19 +92,32 @@ def validate_pilot(
     every test secret the spec references bound for this run. The secrets'
     values are read to check them, never kept. Otherwise raises ValueError
     naming `source` and a fixed category."""
-    refused = ValueError(f"{source}: invalid pilot input")
-    try:
-        start = start_origin(None, config)
-        reset = _reset(spec, start)
-        bound_secrets(spec, start)
-    # ValueError covers _reset's refusals, and a secret value os.environ decoded
-    # with surrogates, which fails to encode with a message quoting part of it.
-    except (SpecError, ValueError, MissingSecretError, SecretLoggedError):
-        raise refused from None
-    side_effects = any(step.side_effect for step in script.steps)
-    if (side_effects and reset is None) or not _admitted(spec, script):
-        raise refused
+    # ValueError: _reset's refusals, and a secret value os.environ decoded with
+    # surrogates, which fails to encode with a message quoting it.
+    refusals = (SpecError, ValueError, MissingSecretError, SecretLoggedError)
+    prepared = _quietly(partial(_prepare, spec, config), *refusals)
+    if prepared is None or not _admitted(spec, script):
+        raise ValueError(f"{source}: invalid pilot input")
+    start, reset = prepared
     return PilotInput(spec, config, script, start, reset)
+
+
+def _quietly[T](read: Callable[[], T], *errors: type[Exception]) -> T | None:
+    """What `read` returns, or None when it raises one of `errors`. The error
+    is dropped here, so a refusal raised later carries neither its text nor
+    the error itself on `__context__`, where it could hold a secret value."""
+    try:
+        return read()
+    except errors:
+        return None
+
+
+def _prepare(spec: Spec, config: ProjectConfig) -> tuple[str, ResetRequest | None]:
+    """The run's start origin, once every test secret the spec references is
+    bound for it (`bound_secrets`), and the spec's reset hook on it."""
+    start = start_origin(None, config)
+    bound_secrets(spec, start)
+    return start, _reset(spec, start)
 
 
 def _reset(spec: Spec, start: str) -> ResetRequest | None:
@@ -123,8 +136,9 @@ def _reset(spec: Spec, start: str) -> ResetRequest | None:
 def _admitted(spec: Spec, script: CompiledScript) -> bool:
     """Whether `script` records `spec` as it is now, lists each expectation
     once, in order, with exactly the assertions that name it, realizes every
-    required condition, and holds only the steps and checks the executor
-    runs (`aqa_runner.executor`, #48)."""
+    required condition, declares a reset hook if a step has side effects, and
+    holds only the steps and checks the executor runs (`aqa_runner.executor`,
+    #48)."""
     frontmatter = spec.frontmatter
     probes = frontmatter.preconditions.probes
     referenced = {name for _, name in secret_references(frontmatter)}
@@ -148,4 +162,8 @@ def _admitted(spec: Spec, script: CompiledScript) -> bool:
         )
         and script.probe_baselines.keys() <= probes.keys()
         and all(c.in_viewport for c in checks if isinstance(c, VisibleUnoccluded))
+        and (
+            frontmatter.preconditions.reset is not None
+            or not any(step.side_effect for step in steps)
+        )
     )
