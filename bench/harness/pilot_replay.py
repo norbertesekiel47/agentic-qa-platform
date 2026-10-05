@@ -46,6 +46,7 @@ type Failure = Literal[
 # cancellation.
 type Cleanup = Literal["completed", "failed", "incomplete"]
 type Resources = Literal["closed", "unknown"]
+type _Owned = Literal["driver", "proxy"]
 
 
 @dataclass(frozen=True)
@@ -94,8 +95,8 @@ class _State:
     interrupted: bool = False
     reset_completed: bool = False
     browser: Literal["unopened", "unknown", "closed"] = "unopened"
-    opened: set[str] = field(default_factory=set)
-    closed: set[str] = field(default_factory=set)
+    opened: set[_Owned] = field(default_factory=set)
+    closed: set[_Owned] = field(default_factory=set)
     incomplete: bool = False
 
     def refuse(self, failure: Failure) -> _RefusedError:
@@ -149,7 +150,7 @@ async def replay_pilot(
                 record.write("cleanup-incomplete.json", incomplete)
             finally:
                 await _waited(attempt, None, state)
-    return _finished(pilot, record, attempt, state)
+    return _conclude(pilot, record, attempt, state)
 
 
 async def _waited(
@@ -220,7 +221,7 @@ async def _reset(gate: EgressGate, url: str, seconds: float, state: _State) -> N
 
 @asynccontextmanager
 async def _owned[T](
-    resource: AbstractAsyncContextManager[T], name: str, state: _State
+    resource: AbstractAsyncContextManager[T], name: _Owned, state: _State
 ) -> AsyncIterator[T]:
     """`resource`, entered, then exited however the body ends. It counts as
     closed only once its exit returns."""
@@ -229,11 +230,13 @@ async def _owned[T](
     try:
         yield value
     finally:
+        # Exited as on success: the state records any failure, and neither
+        # resource reads the error or suppresses it.
         await resource.__aexit__(None, None, None)
         state.closed.add(name)
 
 
-def _finished(
+def _conclude(
     pilot: PilotInput,
     record: RunRecord,
     attempt: asyncio.Task[RunResult],

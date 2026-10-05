@@ -85,16 +85,20 @@ class Handler(BaseHTTPRequestHandler):
         self.answer(200, PAGE + image)
 
     def do_POST(self) -> None:
-        status = self.server.reset if self.path == "/reset" else 200
+        status = self.server.reset if self.route == "/reset" else 200
         if status == 0:
-            self.server.log.append(f"POST {self.path}")
+            self.server.log.append(f"POST {self.route}")
             self.server.release.wait(10)
             return
         self.answer(status, PAGE)
 
+    @property
+    def route(self) -> str:
+        return self.path.partition("?")[0]
+
     def answer(self, status: int, page: str) -> None:
-        if self.path != "/favicon.ico":
-            self.server.log.append(f"{self.command} {self.path}")
+        if self.route != "/favicon.ico":
+            self.server.log.append(f"{self.command} {self.route}")
         body = page.encode()
         self.send_response(status)
         self.send_header("Location", "/")
@@ -266,6 +270,8 @@ class PilotReplayTests(unittest.TestCase):
 
     def test_a_failed_or_hanging_reset_dispatches_nothing(self) -> None:
         self.config["budgets"] = {"resolve_seconds": 0.3}
+        self.spec["preconditions"]["reset"] = {"http": "POST /reset?fake-sensitive"}
+        self.steps = [SEND | {"side_effect_basis": "posts the form"}]
         cases: tuple[tuple[int, str, str, list[str]], ...] = (
             (302, self.origin, "reset_rejected", ["POST /reset"]),
             (500, self.origin, "reset_rejected", ["POST /reset"]),
@@ -280,6 +286,8 @@ class PilotReplayTests(unittest.TestCase):
                 self.assertEqual(self.failed(attempt), (failure, "completed", "closed"))
                 self.assertEqual(self.server.log, log)
                 self.assertFalse((attempt.record / "steps.jsonl").exists())
+                receipts = (path.read_text() for path in attempt.record.glob("*"))
+                self.assertNotIn("fake-sensitive", repr(attempt) + "".join(receipts))
 
     def test_a_replay_refusal_starts_no_browser(self) -> None:
         self.spec["preconditions"]["account"] = {
@@ -301,7 +309,12 @@ class PilotReplayTests(unittest.TestCase):
         self.assertEqual(
             self.failed(attempt), ("script_refused", "completed", "closed")
         )
-        self.assertEqual(self.server.log, ["POST /reset"] * 2)
+        with patch.dict(os.environ, SECRET | {"DEBUGP": ""}):
+            attempt = self.replay(pilot)
+        self.assertEqual(
+            self.failed(attempt), ("secret_unusable", "completed", "closed")
+        )
+        self.assertEqual(self.server.log, ["POST /reset"] * 3)
         self.assertEqual(refused.call_count, 0)
 
     def test_a_replay_builds_no_model_client_and_reads_no_manifest(self) -> None:
