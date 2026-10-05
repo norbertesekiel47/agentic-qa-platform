@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import runpy
+import shutil
 import subprocess
 import sys
 import time
@@ -18,6 +19,7 @@ from re import Pattern
 from typing import Any, cast
 
 from aqa_core.config import ModelRole
+from aqa_core.coverage_plan import uncovered
 from aqa_core.model_costs import CostRecord, Usage, cost_record
 from aqa_core.model_roles import RoutedModel, resolve_roles
 from aqa_core.price_map import vendored
@@ -41,8 +43,19 @@ from packages.runner.tests.test_anthropic_client import (
 )
 from packages.runner.tests.test_coverage_plan import checkout
 
-CASES = ("coverage_plan", "tools", "structured_output", "plain_with_effort")
 ROOT = Path(__file__).resolve().parents[3]
+PILOTS = ROOT / "bench/apps/conduit/qa"
+CASES = (
+    "coverage_plan",
+    "tools",
+    "structured_output",
+    "plain_with_effort",
+    "plan_login",
+    "plan_read-article",
+    "plan_post-comment",
+    "plan_favorite-article",
+    "plan_publish-article",
+)
 SECRET_FORMATS = cast(
     tuple[tuple[str, Pattern[str]], ...],
     runpy.run_path(str(ROOT / ".claude/hooks/policy_rules.py"))["SECRET_FORMATS"],
@@ -285,9 +298,14 @@ class DeferredPersister:
 
 
 async def ask(name: str, router: ModelRouter, spec: Spec) -> tuple[Routed, bool]:
-    if name == "coverage_plan":
+    if name == "coverage_plan" or name.startswith("plan_"):
         planned = await make_plan(router, spec)
-        return planned.routed, planned.plan is not None and not planned.misfits
+        if planned.plan is None or planned.misfits:
+            return planned.routed, False
+        # Every pilot expectation has an M1 check in REVIEW.md.
+        return planned.routed, name == "coverage_plan" or not uncovered(
+            planned.plan, spec.frontmatter
+        )
     prompt = {
         "tools": CLICK_PROMPT,
         "structured_output": VERDICT_PROMPT,
@@ -405,7 +423,7 @@ def capture_attempt(
         key,
         vcr.before_record_response,
         attempt,
-        name in {"coverage_plan", "structured_output"},
+        name in {"coverage_plan", "structured_output"} or name.startswith("plan_"),
     )
     vcr.before_record_response = capture.response
     persister = DeferredPersister()
@@ -451,6 +469,15 @@ def capture_attempt(
     return state.costs
 
 
+def pilot(spec_id: str, root: Path) -> Spec:
+    """A copy of a committed pilot spec and its project config, so the
+    recording reads exactly what it hashes and writes nothing under bench."""
+    root.mkdir()
+    for source in (PILOTS / "config.yaml", PILOTS / f"{spec_id}.spec.md"):
+        shutil.copyfile(source, root / source.name)
+    return load_project(root).specs[spec_id]
+
+
 def record(
     name: str, attempt: Path, *, library: Path = CASSETTES
 ) -> tuple[CostRecord, ...]:
@@ -461,7 +488,10 @@ def record(
     if not key:
         raise ValueError("recording needs ANTHROPIC_API_KEY")
     attempt.mkdir(parents=True)
-    spec = checkout(attempt / "qa")
+    if name.startswith("plan_"):
+        spec = pilot(name.removeprefix("plan_"), attempt / "qa")
+    else:
+        spec = checkout(attempt / "qa")
     config = load_project(spec.path.parent).config
     if name == "plain_with_effort":
         config = config.model_copy(
@@ -479,6 +509,10 @@ def record(
         "provider": role.model.provider,
         "model": role.model.name,
         "effort": role.effort,
+        "inputs": {
+            path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(spec.path.parent.iterdir())
+        },
     }
     (attempt / "intent.json").write_text(json.dumps(intent, indent=2) + "\n")
     return capture_attempt(name, attempt, library, router, spec, key=key)
