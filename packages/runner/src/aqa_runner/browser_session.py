@@ -671,8 +671,8 @@ class BrowserSession:
         opener = await popup.opener()
         self.popups.add(
             Popup(
-                self._recorded(url),
-                None if opener is None else self._recorded(opener.url),
+                self._scanned_url(url),
+                None if opener is None else self._scanned_url(opener.url),
             )
         )
         origin = document_origin(url, None)
@@ -847,13 +847,13 @@ class BrowserSession:
         scanned (ADR-0026's A2 amendment), and return what was recorded."""
         recorded = PolicyEvent(
             event.kind,
-            self._recorded(event.url),
-            None if event.origin is None else self._recorded(event.origin),
+            self._scanned_url(event.url),
+            None if event.origin is None else self._scanned_url(event.origin),
         )
         self.policy_events.add(recorded)
         return recorded
 
-    def _recorded(self, url: str) -> str:
+    def _scanned_url(self, url: str) -> str:
         return settling.recorded_url(self.redactor, url)
 
 
