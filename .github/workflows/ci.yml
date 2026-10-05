@@ -55,7 +55,7 @@ jobs:
   python:
     name: python
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 25
+    timeout-minutes: 40
     env:
       # uv runs the gates on setup-python's interpreter, or fails if it doesn't
       # match .python-version; it never downloads another.
