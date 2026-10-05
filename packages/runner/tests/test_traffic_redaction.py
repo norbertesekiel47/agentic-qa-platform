@@ -313,6 +313,8 @@ def test_a_failed_scan_records_nothing_of_its_request(app: App) -> None:
     assert requests(window) == [("POST", "/did/plain")]
     assert responses(window) == [("POST", "/did/plain", 204)]
     assert window.open == set()
+    # The routing's continuation of that request met the error and dropped it.
+    assert ("POST", "/did/fail-scan") not in app.seen
 
 
 HELD_VALUE = "fake-held-secret-50"
