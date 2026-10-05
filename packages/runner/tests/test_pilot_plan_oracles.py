@@ -286,11 +286,9 @@ def test_each_review_proxy_fails_as_replacement_and_addition(
     spec_id: str, index: int, proxy: list[PlannedCheck], addition: bool
 ) -> None:
     plan = EXAMPLES[spec_id]
-    checks = list(plan.expectations[index].checks) if addition else []
-    if spec_id == "publish-article" and index == 0 and not addition:
-        checks = [text("article banner title heading", "Benchmarks we trust")]
-    changed = replace_checks(plan, index, checks + proxy)
     if spec_id == "favorite-article":
+        # REVIEW's favorite proxy is the same check without the reload.
+        assert proxy == list(plan.expectations[index].checks)
         conflicting = RequiredCondition(
             id="optimistic",
             condition="Check the button and count before reloading the article",
@@ -298,15 +296,18 @@ def test_each_review_proxy_fails_as_replacement_and_addition(
         changed = plan.model_copy(
             update={"requires": (*plan.requires, conflicting) if addition else ()}
         )
-        changed = CoveragePlan.model_validate(changed.model_dump(mode="json"))
-        assert f"{spec_id}/{index}: reload condition differs" in plan_problems(
-            spec_id, changed
+        expected: tuple[str, ...] = (
+            "favorite-article/0: reload condition differs",
+            "favorite-article/1: reload condition differs",
         )
     else:
-        changed = CoveragePlan.model_validate(changed.model_dump(mode="json"))
-        assert plan_problems(spec_id, changed) == (
-            f"{spec_id}/{index}: establishing checks differ",
-        )
+        checks = list(plan.expectations[index].checks) if addition else []
+        if spec_id == "publish-article" and index == 0 and not addition:
+            checks = [text("article banner title heading", "Benchmarks we trust")]
+        changed = replace_checks(plan, index, checks + proxy)
+        expected = (f"{spec_id}/{index}: establishing checks differ",)
+    changed = CoveragePlan.model_validate(changed.model_dump(mode="json"))
+    assert plan_problems(spec_id, changed) == expected
 
 
 @pytest.mark.parametrize("spec_id", EXAMPLES)
