@@ -1,6 +1,7 @@
 import inspect
 import json
 import os
+import pkgutil
 import tempfile
 import traceback
 import unittest
@@ -173,7 +174,7 @@ class PilotInputTests(unittest.TestCase):
         self.assertEqual(self.load()[0].script.browser.locale, "en-US")
 
     def test_current_expectations_are_covered_bidirectionally(self) -> None:
-        for change in ("drop", "extra", "reorder", "swap", "unlisted", "duplicate"):
+        for change in ("drop", "extra", "reorder", "label", "swap", "orphan", "twice"):
             with self.subTest(change=change):
                 self.data = json.loads(COMPILED)
                 rows = self.data["coverage"]["expectations"]
@@ -185,9 +186,11 @@ class PilotInputTests(unittest.TestCase):
                     rows.append(rows[1] | {"expect_index": 2})
                 elif change == "reorder":
                     rows.reverse()
+                elif change == "label":
+                    rows[0]["expect_index"], rows[1]["expect_index"] = 1, 0
                 elif change == "swap":
                     assertions[0]["expect_index"] = 1
-                elif change == "unlisted":
+                elif change == "orphan":
                     assertions.append(assertions[0] | {"id": "a2"})
                 else:
                     rows[1]["assertions"].append("a0")
@@ -400,9 +403,9 @@ class PilotInputTests(unittest.TestCase):
             raise AssertionError("resource mutation trap")
 
         for seam in seams:
-            patched = self.enterContext(patch(seam, new=trap))
+            self.enterContext(patch(seam, new=trap))
             with self.assertRaisesRegex(AssertionError, "resource mutation trap"):
-                patched()
+                pkgutil.resolve_name(seam)()
         self.assertEqual(len(calls), 7)
         calls.clear()
         self.assertEqual(self.load()[0].start, "http://127.0.0.1:4100")
