@@ -107,9 +107,10 @@ class Traffic:
     the error and that request stalls (LAB_NOTES, 2026-10-05).
 
     The windows hold the page-chosen methods and URLs scanned with
-    `redactor`. Network checks read each kept response's complete method and
-    URL instead, which stay here, so a bound value that collides with them
-    can't hide a response (ADR-0026's A2 amendment)."""
+    `redactor`, once per request, when it starts. Network checks read each
+    kept response's complete method and URL instead, which stay here, so a
+    bound value that collides with them can't hide a response (ADR-0026's A2
+    amendment)."""
 
     def __init__(self, page: Page, redactor: Redactor) -> None:
         self.windows: list[Window] = []
@@ -118,6 +119,11 @@ class Traffic:
         self._response_requests: dict[Window, list[Request]] = {}
         self._complete_responses: dict[Window, Records[Exchange]] = {}
         self._request_windows: weakref.WeakKeyDictionary[Request, Window] = (
+            weakref.WeakKeyDictionary()
+        )
+        # Each request as its window records it, scanned once, for its
+        # response's record too.
+        self._sent: weakref.WeakKeyDictionary[Request, PageRequest] = (
             weakref.WeakKeyDictionary()
         )
         self._window = self.next_window()
@@ -149,9 +155,11 @@ class Traffic:
         hop = request.redirected_from
         window = self._window if hop is None else self._request_windows[hop]
         sent = PageRequest(
-            self._method(request), recorded_url(self._redactor, request.url)
+            str(self._redactor.redact(request.method)),
+            recorded_url(self._redactor, request.url),
         )
         self._request_windows[request] = window
+        self._sent[request] = sent
         window.requests.add(sent)
         # https://playwright.dev/python/docs/api/class-request#request-resource-type
         if request.resource_type not in STREAMS:
@@ -162,19 +170,13 @@ class Traffic:
     def _responded(self, response: Response) -> None:
         request = response.request
         window = self._request_windows[request]
+        sent = self._sent[request]
         complete = Exchange(request.method, request.url, response.status)
-        scanned = Exchange(
-            self._method(request),
-            recorded_url(self._redactor, request.url),
-            response.status,
-        )
+        scanned = Exchange(sent.method, sent.url, response.status)
         window.responses.add(scanned)
         self._complete_responses[window].add(complete)
         if window.responses.total == len(window.responses.kept):
             self._response_requests[window].append(request)
-
-    def _method(self, request: Request) -> str:
-        return str(self._redactor.redact(request.method))
 
     def _ended(self, request: Request) -> None:
         window = self._request_windows[request]
