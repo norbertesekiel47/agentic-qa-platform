@@ -137,3 +137,81 @@ class LinearCommandTests(unittest.TestCase):
         ):
             with self.subTest(trigger=trigger):
                 self.assertEqual(self.decision(trigger * 100_000 + tail), expected)
+
+    def masked(self, commands: list[str]) -> list[str]:
+        script = (
+            "import json, sys\nfrom policy_commands import mask_messages\n"
+            "print(json.dumps([mask_messages(c) for c in json.load(sys.stdin)]))"
+        )
+        result = self.child(["-c", script], json.dumps(commands))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return list(json.loads(result.stdout))
+
+    def test_message_masking_preserves_quotes_and_heredocs(self) -> None:
+        cases = (
+            ("-m 'rm tests/a'", "-m ''"),
+            ('-m "a \\"b\\" c"', "-m ''"),
+            ("-m $'it\\'s' && rm x", "-m '' && rm x"),
+            ("echo it\\'s && rm x", "echo it''s && rm x"),
+            ('-m "a\\\nb" && rm x', '-m "a\\\nb" && rm x'),
+            ("-m 'a && rm x", "-m 'a && rm x"),
+            ("<<'EOF'\nfix\nEOF\nrm x", "\n\nrm x"),
+            ("<<'EOF' && rm x\nmsg\nEOF", " && rm x\n"),
+            ("<<'EOF'x\nmsg\nEOF\nrm x", "x\n\nrm x"),
+            ('<<- "EOF"\nmsg\n\tEOF\nrm x', "\n\nrm x"),
+            ("<<-EOF\nmsg\n\tEOF\nrm x", "\n\nrm x"),
+            ("<<\tEOF\nmsg\nEOF\nrm x", "\n\nrm x"),
+            ("<<EOF\nmsg\n \tEOF \t\nrm x", "\n\nrm x"),
+            ("<<EOF\nmsg\nEOF\t", "\n"),
+            ("<<EOF\nEOF\nrm x", "\n\nrm x"),
+            ("<<EOF\nrm x\nEOF\r\n", "<<EOF\nrm x\nEOF\r\n"),
+            ("<<EOF\nrm x\n\xa0EOF\n", "<<EOF\nrm x\n\xa0EOF\n"),
+            ("<<EOF\nEOFX\nrm x\nEOF", "\n"),
+            ("<<ABCDE\nA\nrm x\nABC\n", "DE\n\n"),
+            ("<<ABC\nAB\nrm x\n", "C\n\nrm x\n"),
+            ("AB\n<<ABC\nA\nrm x\n", "AB\nBC\n\nrm x\n"),
+            ("A\n<<AB\nrm x\n", "A\n<<AB\nrm x\n"),
+            ("<<AB\nAB\n<<AB\nA\nrm x", "\n\nB\n\nrm x"),
+            ("<<'ABC'\nAB\nrm x\n", "<<''\nAB\nrm x\n"),
+            ("<<'EOF\"\nmsg\nEOF\nrm x", "<<'EOF\"\nmsg\nEOF\nrm x"),
+            ("<<'EOF'\nmsg", "<<''\nmsg"),
+            ("<<''\nrm x\n", "<<''\nrm x\n"),
+            ("<<\nrm x\n", "<<\nrm x\n"),
+            ("<<EOF", "<<EOF"),
+            ("<<EOF\nmsg\nrm x", "<<EOF\nmsg\nrm x"),
+            ("<<EOF\na\nEOF\nrm x\nEOF\n", "\n\nrm x\nEOF\n"),
+            ("<<EOF\na\nEOF\nrm x\ncat <<EOF\nb\nEOF", "\n\nrm x\ncat \n"),
+            ("<<A <<B\nx\nB\nA\nrm x", " <<B\n\nrm x"),
+            ("<<A <<B\nx\nB\nrm x", "<<A \n\nrm x"),
+            ("<<<EOF\nmsg\nEOF\nrm x", "<\n\nrm x"),
+            ("\\<<EOF\nmsg\nEOF\nrm x", "''<EOF\nmsg\nEOF\nrm x"),
+            ("'<<EOF'\nEOF\nrm x", "''\nEOF\nrm x"),
+            ("-m \"$(cat <<'EOF'\nfix\nEOF\n)\" && rm x", "-m '' && rm x"),
+            ("<<EOF\nit's\nEOF\nrm 'x'", "\n\nrm ''"),
+            ("<<_X1\nmsg\n_X1\nrm x", "\n\nrm x"),
+            ("<<ÉOF\nmsg\nÉOF\nrm x", "\n\nrm x"),
+            ("<<EOF\nmsg\n  EOF\nrm x", "\n\nrm x"),
+            ("<<A\nA\n<<B\nx\nB", "\n\n\n"),
+        )
+        masked = self.masked([command for command, _ in cases])
+        for (command, expected), actual in zip(cases, masked, strict=True):
+            with self.subTest(command=command):
+                self.assertEqual(actual, expected)
+
+    def test_message_decisions_match_the_preserved_corpus(self) -> None:
+        cases = (
+            ("git commit -F - <<ABCDE\nA\nrm tests/test_a.py\nABC\n", "allow"),
+            ("git commit -F - <<EOF\nrm tests/test_a.py\nEOF\r\n", "ask"),
+            ("git commit -F - <<EOF\nrm tests/test_a.py\nEOF\n", "allow"),
+            ("git commit -F - <<'ABC'\nAB\nrm tests/test_a.py\n", "ask"),
+            ("git commit -F - <<'EOF'\nrm tests/test_a.py\nEOF", "allow"),
+            ("git commit -F - <<A <<B\nx\nB\nrm tests/test_a.py", "ask"),
+            ("git commit -F - <<A\nrm tests/test_a.py\nA\n", "allow"),
+            ("git commit -F - <<EOF\nmsg\nEOF\nrm tests/test_a.py", "ask"),
+            ("git commit -F - <<EOF\nrm tests/test_a.py", "ask"),
+            ("git commit -m 'x' <<EOF\nmsg\n  EOF\nsed -i pyproject.toml", "ask"),
+            ("cat <<EOF\nrm tests/test_a.py\nEOF", "ask"),
+        )
+        for command, expected in cases:
+            with self.subTest(command=command):
+                self.assertEqual(self.decision(command), expected)

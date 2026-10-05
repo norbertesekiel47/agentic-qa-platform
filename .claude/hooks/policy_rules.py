@@ -502,10 +502,6 @@ BROWSER_LAUNCH = re.compile(
 TEXT_BODY = re.compile(
     r"\bgit\s+commit\b|\bgh\s+(?:pr|issue|release)\s+(?:create|edit|comment)\b"
 )
-# A message quotes patterns and paths: blank it, but judge a heredoc's first line.
-MESSAGE = re.compile(
-    r"""(?m)\\.|\$'(?:\\.|[^'\\])*'|'[^']*'|"(?:\\.|[^"\\])*"|<<-?[ \t]*(['"]?)(\w+)\1([^\n]*\n)(?:[^\n]*\n)*?[ \t]*\2[ \t]*$"""
-)
 
 # --- tree scan ------------------------------------------------------------------------
 
