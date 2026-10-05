@@ -4,7 +4,8 @@ from typing import Literal
 import pytest
 from aqa_core.compiled import NetworkNone, NetworkSeen
 from aqa_runner import network
-from aqa_runner.settling import Exchange, Window
+from aqa_runner.document_origins import Records
+from aqa_runner.settling import Exchange
 
 
 def check(
@@ -23,10 +24,10 @@ def check(
     )
 
 
-def window(*responses: Exchange) -> Window:
-    made = Window()
+def window(*responses: Exchange) -> Records[Exchange]:
+    made = Records[Exchange]()
     for response in responses:
-        made.responses.add(response)
+        made.add(response)
     return made
 
 
@@ -72,7 +73,7 @@ def test_no_browser_responses_establishes_absence(
     kind: Literal["network_seen", "network_none"],
     held: bool,
 ) -> None:
-    assert asyncio.run(network.held(check(kind), (Window(),))) is held
+    assert asyncio.run(network.held(check(kind), (window(),))) is held
 
 
 @pytest.mark.parametrize("kind", ["network_seen", "network_none"])
@@ -81,12 +82,12 @@ def test_a_check_the_kept_responses_dont_decide_raises_when_a_window_kept_too_fe
 ) -> None:
     overflowed = window()
     for _ in range(101):
-        overflowed.responses.add(Exchange("GET", "https://app.test/cart", 200))
+        overflowed.add(Exchange("GET", "https://app.test/cart", 200))
 
     with pytest.raises(
         network.WindowsOverflowError, match="window 1 kept 100 of 101 responses"
     ):
-        asyncio.run(network.held(check(kind), (Window(), overflowed)))
+        asyncio.run(network.held(check(kind), (window(), overflowed)))
 
 
 @pytest.mark.parametrize(
@@ -98,7 +99,7 @@ def test_a_kept_match_decides_even_when_an_earlier_window_overflowed(
 ) -> None:
     overflowed = window()
     for _ in range(101):
-        overflowed.responses.add(Exchange("GET", "https://app.test/cart", 200))
+        overflowed.add(Exchange("GET", "https://app.test/cart", 200))
     matching = window(Exchange("POST", "https://app.test/api/orders", 201))
 
     assert asyncio.run(network.held(check(kind), (overflowed, matching))) is held

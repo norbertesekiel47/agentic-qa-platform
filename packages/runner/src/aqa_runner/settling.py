@@ -9,9 +9,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
+from aqa_core.compiled import NetworkNone, NetworkSeen
 from playwright.async_api import Page, Request, Response
 
+from aqa_runner import network
 from aqa_runner.document_origins import Records
+from aqa_runner.redaction import Redactor
 
 # How long settling may take, how long a window must have been quiet to be
 # idle, and how often it is looked at (ADR-0024 and its amendment, Settling).
@@ -24,6 +27,11 @@ POLL_SECONDS = 0.1
 # WebSocket at all (measured on 1.63). What their messages do to the page
 # shows as DOM changes.
 STREAMS = frozenset({"eventsource"})
+
+# The most of a page-chosen URL a record keeps, counted after its scan, so
+# the cut never leaves part of a value the scan would replace (ADR-0026's
+# A2 amendment).
+URL_CHARS = 2048
 
 # How settling ended.
 type Settled = Literal["idle", "timeout"]
@@ -81,19 +89,34 @@ class Window:
     changed_at: float = field(default_factory=time.monotonic)
 
 
+def recorded_url(redactor: Redactor, url: str) -> str:
+    """`url` scanned with `redactor`, then cut to `URL_CHARS`, as a record's
+    plain text."""
+    return str(redactor.redact(url, limit=URL_CHARS))
+
+
 class Traffic:
     """Puts each request `page` sends into the window of the latest action,
     and a redirect's next hop into the window of the request it continues.
 
     Made before the page sends anything, so every request it hears of has
     started in a window. A handler's error reaches the next Playwright call
-    the session makes (Playwright 1.63 keeps it for that call), so a request
-    it never heard start fails loudly rather than leaving a window open."""
+    (Playwright 1.63 keeps it for that call) and raises there when the call
+    is the session's. When it is the routing's continuation of a request,
+    which a request handler's own error always meets first, Playwright drops
+    the error and that request stalls (LAB_NOTES, 2026-10-05).
 
-    def __init__(self, page: Page) -> None:
+    The windows hold the page-chosen methods and URLs scanned with
+    `redactor`. Network checks read each kept response's complete method and
+    URL instead, which stay here, so a bound value that collides with them
+    can't hide a response (ADR-0026's A2 amendment)."""
+
+    def __init__(self, page: Page, redactor: Redactor) -> None:
         self.windows: list[Window] = []
+        self._redactor = redactor
         self._open_requests: set[Request] = set()
         self._response_requests: dict[Window, list[Request]] = {}
+        self._complete_responses: dict[Window, Records[Exchange]] = {}
         self._request_windows: weakref.WeakKeyDictionary[Request, Window] = (
             weakref.WeakKeyDictionary()
         )
@@ -109,7 +132,15 @@ class Traffic:
         self._window = Window()
         self.windows.append(self._window)
         self._response_requests[self._window] = []
+        self._complete_responses[self._window] = Records()
         return self._window
+
+    async def network_held(self, check: NetworkNone | NetworkSeen) -> bool:
+        """Whether every window's complete responses establish `check`
+        (`aqa_runner.network.held`)."""
+        return await network.held(
+            check, [self._complete_responses[window] for window in self.windows]
+        )
 
     def _started(self, request: Request) -> None:
         # A redirect finishes its hop and starts the next one as a new
@@ -117,8 +148,11 @@ class Traffic:
         # https://playwright.dev/python/docs/api/class-request#request-redirected-from
         hop = request.redirected_from
         window = self._window if hop is None else self._request_windows[hop]
+        sent = PageRequest(
+            self._method(request), recorded_url(self._redactor, request.url)
+        )
         self._request_windows[request] = window
-        window.requests.add(PageRequest(request.method, request.url))
+        window.requests.add(sent)
         # https://playwright.dev/python/docs/api/class-request#request-resource-type
         if request.resource_type not in STREAMS:
             self._open_requests.add(request)
@@ -128,9 +162,19 @@ class Traffic:
     def _responded(self, response: Response) -> None:
         request = response.request
         window = self._request_windows[request]
-        window.responses.add(Exchange(request.method, request.url, response.status))
+        complete = Exchange(request.method, request.url, response.status)
+        scanned = Exchange(
+            self._method(request),
+            recorded_url(self._redactor, request.url),
+            response.status,
+        )
+        window.responses.add(scanned)
+        self._complete_responses[window].add(complete)
         if window.responses.total == len(window.responses.kept):
             self._response_requests[window].append(request)
+
+    def _method(self, request: Request) -> str:
+        return str(self._redactor.redact(request.method))
 
     def _ended(self, request: Request) -> None:
         window = self._request_windows[request]

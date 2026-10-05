@@ -567,3 +567,22 @@ Let `N` be input length, `P` the total token positions, `U` the distinct spellin
 Every needle matches in any case, base64 in page text included: browser hosts are lowercased and CSS can transform reflected text. This accepts harmless over-redaction. The rough four-character case-insensitive core collision estimate is about one per two million positions (38⁻⁴), an approximation, not a measured benchmark. Short values are refused instead of accepting still smaller cores.
 
 This remains SECURITY §5's best-effort reflection defense. Double percent encoding, base64 of percent encoding, other page-chosen encodings, Unicode normalization, locale-specific case mappings, truncated/fragmented values and pixels remain outside this scan. A2 owns result/error and recorded-URL redaction; later slices own saved evidence and screenshot masking. #49's error withholding remains in force. There is no new dependency, paid resource or model call.
+
+## Amendment (2026-10-05): recorded traffic and policy metadata (#50 A2)
+
+### Context and options
+
+Settle windows, policy events and popups keep the methods and URLs a page chose, and a replay result carries them in `StepResult.window` and `RunResult.policy_events`. A page can reflect a bound value into any of them (#49 B, #44, #46 C1). Network checks (ADR-0024's #48 amendment) compare exact methods and search complete URLs. Over scanned records, a bound value that collides with a method or URL, or a match past a cut, hides a real response, so `network_none` passes falsely (measured: the replay regression in `test_traffic_redaction.py` saw `network_none` pass for a response it had just made).
+
+Rejected: scanning only when a result is exported, which leaves the session's windows raw; evaluating checks over scanned or cut text; recovering raw text from exported fields or a hidden `Window` field, which a result can still reach; reading `Request.response()` again for each check, which adds awaits and request lifetimes; and making collided checks inconclusive, which changes what an assertion means.
+
+### Decision
+
+- `Traffic` takes the session's redactor, built from every bound value. A request's or response's method is scanned in full. Its URL is scanned, then cut to `URL_CHARS` (2048), so the cut never leaves part of a value. Records hold plain `str`.
+- `Traffic` keeps a private `Records[Exchange]` per window with the complete method, URL and status of the same responses: the first 100, every one counted, in window and response order. The response callback builds both copies before publishing either. No listener, `Request` or body is added.
+- `Traffic.network_held(check)` and `BrowserSession.network_held(check)` return only the check's result, or the existing `WindowsOverflowError`. `network.held` takes each window's complete records, and the executor calls `session.network_held`. Nothing exported reaches the matcher.
+- A policy decision reads the raw URL and origin. A policy event's URL and origin, and a popup's URL and opener, are scanned and cut the same way when recorded; `None` stays `None`. `PolicyEventError` holds the recorded event, so its message names the scanned origin.
+
+### Consequences and limits
+
+Complete metadata stays in process memory, private to `Traffic`: underscore privacy is no boundary against code in the same process. Each kept response costs a second `Exchange`. A cut can keep a marker's prefix, and A1's over-redaction applies. A handler's scan failure is not caught: it reaches Playwright's next call, and when that call is the routing's continuation of a request, Playwright 1.63 drops the error and the request stalls (LAB_NOTES, 2026-10-05). Error reasons and infrastructure events are A2's next PR; egress hosts and invariant texts stay slice D's; saved evidence is B's.

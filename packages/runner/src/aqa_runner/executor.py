@@ -476,7 +476,7 @@ async def _held(
                 _visual(session, run.targets[name], check, budget), budget
             )
         case NetworkNone() | NetworkSeen():
-            return await network.held(check, session.windows())
+            return await session.network_held(check)
         case ProbeEquals() | ProbeEqualsBaseline():
             expected: probes.JsonValue
             if isinstance(check, ProbeEquals):

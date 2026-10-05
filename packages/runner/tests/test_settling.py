@@ -23,6 +23,7 @@ from aqa_runner import browser_session, settling
 from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.document_origins import PolicyEvent, PolicyEventError
 from aqa_runner.locators import Resolved
+from aqa_runner.redaction import Redactor
 from aqa_runner.settling import Settled, Window
 from playwright.async_api import ElementHandle, Error, Page, async_playwright
 
@@ -780,8 +781,8 @@ class RetainedTraffic(settling.Traffic):
 def retained_traffic(monkeypatch: pytest.MonkeyPatch) -> list[RetainedTraffic]:
     traffic: list[RetainedTraffic] = []
 
-    def observed(page: Page) -> RetainedTraffic:
-        seen = RetainedTraffic(page)
+    def observed(page: Page, redactor: Redactor) -> RetainedTraffic:
+        seen = RetainedTraffic(page, redactor)
         traffic.append(seen)
         return seen
 
