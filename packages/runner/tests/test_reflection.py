@@ -10,12 +10,20 @@ from aqa_core.project import SecretDestination
 from aqa_runner import snapshot_refs
 from aqa_runner.bound_secrets import BoundSecret, bound_secrets
 from aqa_runner.browser_session import BrowserSession, RefError
+from aqa_runner.document_origins import PolicyEvent, PolicyEventError, Popup
 from aqa_runner.locators import Resolved
 from aqa_runner.redaction import NO_SECRETS, Redacted, Redactor
 from playwright.async_api import ElementHandle, Page
 from pydantic import SecretStr
 
-from packages.runner.tests.document_fixtures import Sites, browsing
+from packages.runner.tests.document_fixtures import (
+    APP,
+    CDN,
+    EVIL,
+    OTHER,
+    Sites,
+    browsing,
+)
 from packages.runner.tests.reflection_fixtures import reflecting
 from packages.runner.tests.secret_fixtures import FAKE_VALUE, copies, secret_spec
 
@@ -227,3 +235,118 @@ def test_snapshot_with_many_refs_finishes_within_regression_budget(
             assert elapsed < 2.0
 
     asyncio.run(scenario())
+
+
+PATH_VALUE = "fake-path-secret-50"
+
+
+def test_policy_events_scan_url_and_origin_after_the_policy_decision(
+    sites: Sites,
+) -> None:
+    # The start host is bound too: the decision reads the raw origin, so the
+    # session still navigates there.
+    redactor = Redactor(
+        [
+            BoundSecret(
+                "FAKE_" + name,
+                SecretStr(value),
+                SecretDestination((sites.app,), "password"),
+            )
+            for name, value in [("APP", APP), ("EVIL", EVIL), ("PATH", PATH_VALUE)]
+        ]
+    )
+    port = sites.port
+    long_tail = "q" * 3000
+
+    async def scenario() -> tuple[list[PolicyEventError], list[PolicyEvent]]:
+        async with browsing(sites, redactor=redactor) as session:
+            await session.navigate(f"{sites.app}/doc")
+            assert session.policy_events.total == 0
+            refused: list[PolicyEventError] = []
+            for url in (
+                f"{sites.evil}/doc?x={PATH_VALUE}",
+                f"data:text/html,{PATH_VALUE}{long_tail}",
+            ):
+                with pytest.raises(PolicyEventError) as navigation:
+                    await session.navigate(url)
+                refused.append(navigation.value)
+            await session.page.goto(f"{sites.cdn}/doc?x={PATH_VALUE}")
+            with pytest.raises(PolicyEventError) as document:
+                await session.snapshot()
+            refused.append(document.value)
+            await session.navigate(f"{sites.app}/doc")
+            assert "Planted" in await session.snapshot()
+            return refused, session.policy_events.kept
+
+    refused, events = asyncio.run(scenario())
+
+    assert events == [
+        PolicyEvent(
+            "navigation",
+            f"http://[SECRET:FAKE_EVIL]:{port}/doc?x=[SECRET:FAKE_PATH]",
+            f"http://[SECRET:FAKE_EVIL]:{port}",
+        ),
+        PolicyEvent(
+            "navigation",
+            f"data:text/html,[SECRET:FAKE_PATH]{long_tail}"[:2048],
+            None,
+        ),
+        PolicyEvent("document", f"{sites.cdn}/doc?x=[SECRET:FAKE_PATH]", sites.cdn),
+    ]
+    assert [error.event for error in refused] == events
+    assert all(
+        error.event is event for error, event in zip(refused, events, strict=True)
+    )
+    assert "[SECRET:FAKE_EVIL]" in str(refused[0])
+    assert EVIL not in str(refused[0])
+    assert all(PATH_VALUE not in repr(event) for event in events)
+
+
+def test_popup_url_and_opener_are_scanned_and_the_popup_closes(sites: Sites) -> None:
+    # The other allowed host is bound too: the popup's decision reads its raw
+    # origin, so opening it there is no policy event.
+    redactor = Redactor(
+        [
+            BoundSecret(
+                "FAKE_" + name,
+                SecretStr(value),
+                SecretDestination((sites.app,), "password"),
+            )
+            for name, value in [("OTHER", OTHER), ("CDN", CDN), ("PATH", PATH_VALUE)]
+        ]
+    )
+    opener = f"{sites.app}/doc?x=[SECRET:FAKE_PATH]"
+
+    async def scenario() -> tuple[list[Popup], list[PolicyEvent], int]:
+        async with browsing(sites, redactor=redactor) as session:
+            await session.navigate(f"{sites.app}/doc?x={PATH_VALUE}")
+            for url in (
+                f"{sites.other}/doc?y={PATH_VALUE}",
+                f"{sites.cdn}/doc?y={PATH_VALUE}",
+                "",
+            ):
+                async with session.page.context.expect_page() as opened:
+                    await session.page.evaluate("url => { window.open(url); }", url)
+                popup = await opened.value
+                if not popup.is_closed():
+                    await popup.wait_for_event("close", timeout=5000)
+            return (
+                session.popups.kept,
+                session.policy_events.kept,
+                len(session.page.context.pages),
+            )
+
+    popups, events, pages = asyncio.run(scenario())
+
+    other = f"http://[SECRET:FAKE_OTHER]:{sites.port}/doc?y=[SECRET:FAKE_PATH]"
+    cdn = "http://[SECRET:FAKE_CDN]/doc?y=[SECRET:FAKE_PATH]"
+    assert popups == [
+        Popup(other, opener),
+        Popup(cdn, opener),
+        Popup("about:blank", opener),
+    ]
+    assert events == [
+        PolicyEvent("popup", cdn, "http://[SECRET:FAKE_CDN]"),
+        PolicyEvent("popup", "about:blank", None),
+    ]
+    assert pages == 1, "a popup was left open"

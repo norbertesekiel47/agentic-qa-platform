@@ -12,7 +12,7 @@ from aqa_core import project
 from aqa_core.compiled import Target
 from aqa_core.config import ProjectConfig
 from aqa_core.spec import Spec
-from aqa_runner import executor, probes
+from aqa_runner import browser_session, executor, probes, settling
 from aqa_runner.anthropic_client import AnthropicClient
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.egress import (
@@ -24,9 +24,10 @@ from aqa_runner.egress import (
 )
 from aqa_runner.locators import Resolved, Use
 from aqa_runner.model_router import ModelRouter
-from aqa_runner.settling import Exchange, Window
+from aqa_runner.redaction import Redactor
+from aqa_runner.settling import Exchange
 from langchain_anthropic import ChatAnthropic
-from playwright.async_api import ElementHandle
+from playwright.async_api import ElementHandle, Page
 
 from packages.runner.tests.executor_fixtures import (
     FORM_TARGETS,
@@ -521,15 +522,16 @@ def test_network_overflow_errors_only_when_kept_responses_cannot_decide(
     kind: str,
     matched: bool,
 ) -> None:
-    windows = BrowserSession.windows
-    overflow = Window()
-    for _ in range(101):
-        overflow.responses.add(Exchange("GET", app.origin + "/unrelated", 200))
+    class OverflowingTraffic(settling.Traffic):
+        def __init__(self, page: Page, redactor: Redactor) -> None:
+            super().__init__(page, redactor)
+            first = self.windows[0]
+            for _ in range(101):
+                exchange = Exchange("GET", app.origin + "/unrelated", 200)
+                first.responses.add(exchange)
+                self._complete_responses[first].add(exchange)
 
-    def overflowing(session: BrowserSession) -> tuple[Window, ...]:
-        return (overflow, *windows(session))
-
-    monkeypatch.setattr(BrowserSession, "windows", overflowing)
+    monkeypatch.setattr(browser_session, "Traffic", OverflowingTraffic)
     result = run(
         app,
         tmp_path,

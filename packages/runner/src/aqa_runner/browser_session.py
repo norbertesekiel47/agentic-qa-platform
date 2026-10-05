@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from typing import Literal, overload
 
 from aqa_core.browser import BrowserSettings
-from aqa_core.compiled import Target
+from aqa_core.compiled import NetworkNone, NetworkSeen, Target
 from playwright.async_api import ElementHandle, Error, Frame, Page
 
 from aqa_runner import settling, snapshot_refs
@@ -248,7 +248,7 @@ class BrowserSession:
         page.context.on("page", self._close_popup)
         # Before the page's first navigation: `open_browser_session` hands
         # over a blank page.
-        self._traffic = Traffic(page)
+        self._traffic = Traffic(page, redactor)
         # https://playwright.dev/python/docs/api/class-page#page-event-crash
         self._crashed = False
         page.on("crash", self._note_crash)
@@ -507,6 +507,12 @@ class BrowserSession:
         """Every settle window in this session, starting before navigation."""
         return tuple(self._traffic.windows)
 
+    async def network_held(self, check: NetworkNone | NetworkSeen) -> bool:
+        """Whether this session's responses establish `check`, read from
+        their complete methods and URLs, which the windows hold scanned
+        (`aqa_runner.settling.Traffic`)."""
+        return await self._traffic.network_held(check)
+
     async def settle(self, window: Window) -> Settled:
         """Wait until the action whose settle window is `window` has settled
         (`aqa_runner.settling.settle`): `"idle"` once its requests have
@@ -663,10 +669,15 @@ class BrowserSession:
         may be a subresource host's."""
         url = popup.url
         opener = await popup.opener()
-        self.popups.add(Popup(url, None if opener is None else opener.url))
+        self.popups.add(
+            Popup(
+                self._recorded(url),
+                None if opener is None else self._recorded(opener.url),
+            )
+        )
         origin = document_origin(url, None)
         if origin not in self._policy.allowed_origins:
-            self.policy_events.add(PolicyEvent("popup", url, origin))
+            self._record(PolicyEvent("popup", url, origin))
         await popup.close()
 
     async def _fill_where_bound(
@@ -827,9 +838,23 @@ class BrowserSession:
             raise self._refuse(PolicyEvent(kind, frame.url, origin))
 
     def _refuse(self, event: PolicyEvent) -> PolicyEventError:
-        """Record `event`, and the error to raise for it."""
-        self.policy_events.add(event)
-        return PolicyEventError(event)
+        """Record `event`, and the error to raise for it, which holds the
+        recorded event."""
+        return PolicyEventError(self._record(event))
+
+    def _record(self, event: PolicyEvent) -> PolicyEvent:
+        """Record `event`, decided on its raw URL and origin, with both
+        scanned (ADR-0026's A2 amendment), and return what was recorded."""
+        recorded = PolicyEvent(
+            event.kind,
+            self._recorded(event.url),
+            None if event.origin is None else self._recorded(event.origin),
+        )
+        self.policy_events.add(recorded)
+        return recorded
+
+    def _recorded(self, url: str) -> str:
+        return settling.recorded_url(self.redactor, url)
 
 
 def one_key(key: str) -> bool:
