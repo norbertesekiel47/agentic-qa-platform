@@ -66,11 +66,16 @@ reload condition in requires, or a probe.
 "the payment step's submit button", never its current label or the text the \
 check looks for. Use the subject when the check reads the subject itself. \
 When the claim names several elements, write one check per element, each \
-naming its own.
+naming its own. When a page may show the same thing in more than one place, \
+such as an item's details repeated above and below it, name the one the \
+claim is about by where it sits, such as "the price in the product summary \
+under the product name".
 - text is a literal, matched as whole words and ignoring case: prefer it. \
 Use pattern, a Python regular expression searched with re.search, only when \
 a literal can't say it, and write its flags inline, such as (?i). A URL is \
-matched as it is, so write (?i) when its case may vary.
+matched as it is, so write (?i) when its case may vary. A pattern must still \
+require every part of the claim the expectation states, in order, not only \
+some of its words.
 - Assert nothing the spec can't tell you, such as a generated part of a URL \
 or the order of items.
 - requires lists the conditions the goal or the expectations need before \
