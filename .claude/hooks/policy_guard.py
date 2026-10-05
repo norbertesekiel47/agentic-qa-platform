@@ -150,7 +150,13 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
-from policy_commands import add_noqa, agent_config_installer, file_mutator, shell_write
+from policy_commands import (
+    add_noqa,
+    agent_config_installer,
+    file_mutator,
+    mask_messages,
+    shell_write,
+)
 from policy_diff import changed_files, diff_asks, merge_base, texts
 from policy_rules import (
     ADR_HINT,
@@ -173,7 +179,6 @@ from policy_rules import (
     GUIDANCE,
     LOCAL_HOSTS,
     MAX_SCAN_BYTES,
-    MESSAGE,
     NON_SECRET_SUFFIX,
     PACKAGE_GATE_SCRIPT,
     PACKAGE_MANIFEST,
@@ -487,7 +492,7 @@ def judge_change(rel: str, before: str, after: str, project: Path) -> Verdict:
 def check_bash(command: str, project: Path) -> Verdict:
     verdict = Verdict(target="", secrets=find_secrets(command))
     if TEXT_BODY.search(command):
-        command = MESSAGE.sub(lambda m: m[3] or "''", command)
+        command = mask_messages(command)
     if add_noqa(command):
         verdict.findings.append(("`ruff --add-noqa`", SUPPRESSION, ""))
     writes = shell_write(command)

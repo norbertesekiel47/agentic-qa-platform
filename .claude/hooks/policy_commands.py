@@ -91,3 +91,13 @@ def agent_config_installer(command: str) -> bool:
 
 def add_noqa(command: str) -> bool:
     return _following(command, _RUFF, _NOQA)
+
+
+# A message quotes patterns and paths: blank it, but judge a heredoc's first line.
+_MESSAGE = re.compile(
+    r"""(?m)\\.|\$'(?:\\.|[^'\\])*'|'[^']*'|"(?:\\.|[^"\\])*"|<<-?[ \t]*(['"]?)(\w+)\1([^\n]*\n)(?:[^\n]*\n)*?[ \t]*\2[ \t]*$"""
+)
+
+
+def mask_messages(command: str) -> str:
+    return _MESSAGE.sub(lambda m: m[3] or "''", command)
