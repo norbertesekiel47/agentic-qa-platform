@@ -211,6 +211,11 @@ class LinearCommandTests(unittest.TestCase):
             ("git commit -F - <<EOF\nrm tests/test_a.py", "ask"),
             ("git commit -m 'x' <<EOF\nmsg\n  EOF\nsed -i pyproject.toml", "ask"),
             ("cat <<EOF\nrm tests/test_a.py\nEOF", "ask"),
+            ("git commit -m 'key " + "sk-" + "ant-" + "a1B2" * 10 + "'", "deny"),
+            (
+                "git commit -F - <<'EOF'\n" + "sk-" + "ant-" + "a1B2" * 10 + "\nEOF",
+                "deny",
+            ),
         )
         for command, expected in cases:
             with self.subTest(command=command):
