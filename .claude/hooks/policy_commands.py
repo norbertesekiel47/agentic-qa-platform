@@ -131,7 +131,7 @@ class _Closings:
                 node = self.prefixes
                 for char in candidate:
                     node = node.setdefault(char, {})
-                node[""] = candidate
+                node[""] = candidate  # "" is no word character
         node, found = self.prefixes, []
         for char in word:
             child = node.get(char)
@@ -160,7 +160,10 @@ def _closed(
     if end is not None:
         return after, end
     prefix = closings.longest(word, newline)
-    return None if prefix is None else (token.start(2) + prefix[0], prefix[1])
+    if prefix is None:
+        return None
+    length, end = prefix
+    return token.start(2) + length, end
 
 
 def mask_messages(command: str) -> str:
@@ -168,13 +171,13 @@ def mask_messages(command: str) -> str:
     dropped, keeping the rest of its opening line."""
     parts: list[str] = []
     closings: _Closings | None = None
-    done = position = 0
+    copied = position = 0
     newline = -1
     while token := _TOKEN.search(command, position):
         start = token.start()
         if token[2] is None:
-            parts += (command[done:start], "''")
-            done = position = token.end()
+            parts += (command[copied:start], "''")
+            copied = position = token.end()
             continue
         position = start + 1
         if newline < token.end():
@@ -186,7 +189,7 @@ def mask_messages(command: str) -> str:
         closed = _closed(token, newline, closings)
         if closed is not None:
             kept, end = closed
-            parts += (command[done:start], command[kept : newline + 1])
-            done = position = end
-    parts.append(command[done:])
+            parts += (command[copied:start], command[kept : newline + 1])
+            copied = position = end
+    parts.append(command[copied:])
     return "".join(parts)
