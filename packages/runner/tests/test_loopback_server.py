@@ -1017,3 +1017,44 @@ def test_cleanup_failure_after_a_finished_handler_is_reported_once(
             assert seen.sockets[0].fileno() == -1
 
     asyncio.run(scenario())
+
+
+def test_a_failing_stream_connection_lost_still_ends_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        async with observe(monkeypatch) as seen:
+            error, received = RuntimeError("connection_lost failed"), []
+
+            class Failing(asyncio.StreamReaderProtocol):
+                def connection_lost(self, exc: Exception | None) -> None:
+                    super().connection_lost(exc)
+                    raise error
+
+            async def handle(
+                _reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+            ) -> None:
+                writer.write(b"served")
+
+            async def run() -> None:
+                async with LoopbackServer(handle) as server:
+                    reader, writer = await asyncio.open_connection(
+                        "127.0.0.1", server.port
+                    )
+                    received.append(await reader.read())
+                    writer.close()
+                    await writer.wait_closed()
+
+            monkeypatch.setattr(asyncio, "StreamReaderProtocol", Failing)
+            owner = asyncio.create_task(run())
+            try:
+                assert await asyncio.wait({owner}, timeout=2) == ({owner}, set())
+                assert received == [b"served"]
+                assert [item["exception"] for item in seen.errors] == [error]
+                assert seen.sockets[0].fileno() == -1
+            finally:
+                for task in seen.tasks:
+                    task.cancel()
+                await asyncio.gather(owner, return_exceptions=True)
+
+    asyncio.run(scenario())

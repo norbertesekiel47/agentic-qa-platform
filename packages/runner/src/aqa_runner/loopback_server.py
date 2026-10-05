@@ -213,8 +213,8 @@ class LoopbackServer:
                         if writer.is_closing():
                             await protocol.closed.wait()
                 except BaseException as error:
-                    # Keep the cleanup outcome for _finished to report, and
-                    # let the handler's own exception end the task.
+                    # Keep any cleanup outcome, cancellation included, for
+                    # _finished; the handler's own exception still ends the task.
                     connection.cleanup_error = error
                     if primary is not None:
                         raise primary from error
