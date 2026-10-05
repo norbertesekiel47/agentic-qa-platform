@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import FrozenInstanceError, fields
 from functools import partial
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from aqa_core.project import load_project, parse_compiled
@@ -43,6 +44,7 @@ CHECKS = json.loads("""[
 {"check":"visible_unoccluded","target":"article","min_size_px":[1,1],"in_viewport":true}]""")
 ACCOUNT = {"password": {"secret": "TEST_PASSWORD"}}
 SECRET = {"AQA_SECRET_TEST_PASSWORD": "fake-password-value"}
+RELOAD = {"seq": 2, "action": "reload", "side_effect": False}
 
 
 class PilotInputTests(unittest.TestCase):
@@ -88,7 +90,7 @@ class PilotInputTests(unittest.TestCase):
             call()
         error = caught.exception
         self.assertEqual(str(error), f"{source or self.source}: {category}")
-        self.assertTrue(error.__context__ is None or error.__suppress_context__)
+        self.assertIsNone(error.__context__)
 
     def test_selection_is_complete_and_explicit(self) -> None:
         spec = (self.qa / "pilot.spec.md").read_text()
@@ -115,7 +117,10 @@ class PilotInputTests(unittest.TestCase):
     def test_selected_compiled_inputs_must_exist_under_root(self) -> None:
         spec = (self.qa / "pilot.spec.md").read_text()
         (self.qa / "missing.spec.md").write_text(spec.replace('"pilot"', '"missing"'))
-        self.assertEqual(self.ids(("pilot",)), ("pilot",))
+        alias = self.root / "alias"
+        alias.symlink_to(self.compiled)
+        pilots = load_pilots(self.qa, alias, ("pilot",))
+        self.assertEqual([pilot.spec.frontmatter.id for pilot in pilots], ["pilot"])
         missing = self.compiled / "missing.json"
         self.refuses(self.load, "invalid compiled input", missing)
         outside = self.root / "outside.json"
@@ -131,10 +136,7 @@ class PilotInputTests(unittest.TestCase):
             ('"schema_version": 1', '"schema_version": 1, "schema_version": 1'),
             ('"navigate"', '"unknown-action"'),
             ('"text_visible"', '"unknown-check"'),
-            (
-                '"text_visible", "text": "Title"',
-                '"text_in_target", "target": "missing", "text": "Title"',
-            ),
+            ('"navigate", "url": "/"', '"click", "target": "missing"'),
             ('"id": "a1"', '"id": "a0"'),
             ('"assertions": ["a0"]', '"assertions": ["missing"]'),
             ('"capture_before_seq": 1', '"capture_before_seq": 99'),
@@ -174,26 +176,21 @@ class PilotInputTests(unittest.TestCase):
         self.assertEqual(self.load()[0].script.browser.locale, "en-US")
 
     def test_current_expectations_are_covered_bidirectionally(self) -> None:
-        for change in ("drop", "extra", "reorder", "label", "swap", "orphan", "twice"):
-            with self.subTest(change=change):
+        changes: dict[str, Callable[[Any, Any], object]] = {
+            "drop": lambda rows, checks: (rows.pop(), checks.pop()),
+            "extra": lambda rows, _: rows.append(rows[1] | {"expect_index": 2}),
+            "reorder": lambda rows, _: rows.reverse(),
+            "label": lambda rows, _: [
+                r.update(expect_index=1 - i) for i, r in enumerate(rows)
+            ],
+            "swap": lambda _, checks: checks[0].update(expect_index=1),
+            "orphan": lambda _, checks: checks.append(checks[0] | {"id": "a2"}),
+            "twice": lambda rows, _: rows[1]["assertions"].append("a0"),
+        }
+        for name, change in changes.items():
+            with self.subTest(change=name):
                 self.data = json.loads(COMPILED)
-                rows = self.data["coverage"]["expectations"]
-                assertions = self.data["assertions"]
-                if change == "drop":
-                    rows.pop()
-                    assertions.pop()
-                elif change == "extra":
-                    rows.append(rows[1] | {"expect_index": 2})
-                elif change == "reorder":
-                    rows.reverse()
-                elif change == "label":
-                    rows[0]["expect_index"], rows[1]["expect_index"] = 1, 0
-                elif change == "swap":
-                    assertions[0]["expect_index"] = 1
-                elif change == "orphan":
-                    assertions.append(assertions[0] | {"id": "a2"})
-                else:
-                    rows[1]["assertions"].append("a0")
+                change(self.data["coverage"]["expectations"], self.data["assertions"])
                 self.save()
                 self.refuses(self.memory, "invalid pilot input")
         self.data = json.loads(COMPILED)
@@ -208,9 +205,9 @@ class PilotInputTests(unittest.TestCase):
         self.data["coverage"]["requires"] = required
         self.save()
         self.refuses(self.memory, "invalid pilot input")
-        self.data["steps"][0]["satisfies"] = ["loaded"]
+        self.data["steps"].append(RELOAD | {"satisfies": ["loaded"]})
         self.save()
-        self.assertEqual(self.memory().script.steps[0].satisfies, ("loaded",))
+        self.assertEqual(self.memory().script.steps[1].satisfies, ("loaded",))
 
     def test_press_requires_one_key(self) -> None:
         press = {"seq": 1, "action": "press", "side_effect": False}
@@ -314,7 +311,8 @@ class PilotInputTests(unittest.TestCase):
         del self.spec["preconditions"]["reset"]
         self.save()
         self.assertIsNone(self.memory().reset)
-        self.data["steps"][0] |= {"side_effect": True, "side_effect_basis": "posts"}
+        posting = RELOAD | {"side_effect": True, "side_effect_basis": "posts"}
+        self.data["steps"].append(posting)
         self.save()
         self.refuses(self.memory, "invalid pilot input")
         self.spec = json.loads(SPEC)
