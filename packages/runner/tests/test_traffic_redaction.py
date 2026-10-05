@@ -266,37 +266,38 @@ class ScanFailedError(Exception):
     pass
 
 
-class FailingResponseScan(Redactor):
-    """A scan that fails the second time it reads a text naming `fail-scan`:
-    the request's URL scans, and its response's doesn't."""
+class FailingScan(Redactor):
+    """A scan that fails on any text naming `fail-scan`, and notes it."""
 
     def __init__(self) -> None:
         super().__init__([])
-        self.scanned = 0
+        self.failed = False
 
     def redact(self, text: str, *, limit: int | None = None) -> Redacted:
         if "fail-scan" in text:
-            self.scanned += 1
-            if self.scanned == 2:
-                raise ScanFailedError("fake callback scan failure")
+            self.failed = True
+            raise ScanFailedError("fake callback scan failure")
         return super().redact(text, limit=limit)
 
 
-def test_a_failed_response_scan_reaches_the_next_call_and_records_neither_copy(
-    app: App,
-) -> None:
+def test_a_failed_scan_records_nothing_of_its_request(app: App) -> None:
+    scan = FailingScan()
+
     async def scenario() -> tuple[Window, list[bool], list[bool]]:
-        async with browsing(app, FailingResponseScan()) as session:
+        async with browsing(app, scan) as session:
             await session.navigate(f"{app.origin}/page/start")
             window = await session.press("a")
             await session.page.evaluate(
                 """async () => {
                     await fetch('/did/plain', {method: 'POST'});
-                    await fetch('/did/fail-scan', {method: 'POST'});
+                    fetch('/did/fail-scan', {method: 'POST'});
                 }"""
             )
-            with pytest.raises(ScanFailedError, match="fake callback scan failure"):
-                await session.page.evaluate("1")
+            for _ in range(250):
+                if scan.failed:
+                    break
+                await asyncio.sleep(0.02)
+            assert scan.failed
             plain = [
                 await session.network_held(network(k, "/did/plain$")) for k in KINDS
             ]
@@ -309,10 +310,9 @@ def test_a_failed_response_scan_reaches_the_next_call_and_records_neither_copy(
 
     assert plain == [True, False]
     assert failed == [False, True]
-    assert requests(window) == [("POST", "/did/plain"), ("POST", "/did/fail-scan")]
+    assert requests(window) == [("POST", "/did/plain")]
     assert responses(window) == [("POST", "/did/plain", 204)]
-    assert window.responses.total == 1
-    assert ("POST", "/did/fail-scan") in app.seen
+    assert window.open == set()
 
 
 HELD_VALUE = "fake-held-secret-50"
