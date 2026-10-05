@@ -124,9 +124,11 @@ def test_recorded_urls_are_scanned_before_their_bound(app: App) -> None:
     assert [response.status for response in window.responses.kept] == [204] * 5
 
 
-def network(
-    kind: Literal["network_seen", "network_none"], pattern: str
-) -> NetworkSeen | NetworkNone:
+type NetworkKind = Literal["network_seen", "network_none"]
+KINDS: tuple[NetworkKind, NetworkKind] = ("network_seen", "network_none")
+
+
+def network(kind: NetworkKind, pattern: str) -> NetworkSeen | NetworkNone:
     model = NetworkSeen if kind == "network_seen" else NetworkNone
     return model.model_validate(
         {
@@ -178,16 +180,12 @@ def test_network_checks_match_complete_metadata_while_exports_are_scanned(
                 "async (path) => { await fetch(path, {method: 'POST'}); }", path
             )
             assert await session.settle(window) == "idle"
-            kinds: list[Literal["network_seen", "network_none"]] = [
-                "network_seen",
-                "network_none",
-            ]
             held = [
-                await session.network_held(network(kind, pattern)) for kind in kinds
+                await session.network_held(network(kind, pattern)) for kind in KINDS
             ]
             absent = [
                 await session.network_held(network(kind, "/did/absent$"))
-                for kind in kinds
+                for kind in KINDS
             ]
             return window, held, absent
 
@@ -299,15 +297,11 @@ def test_a_failed_response_scan_reaches_the_next_call_and_records_neither_copy(
             )
             with pytest.raises(ScanFailedError, match="fake callback scan failure"):
                 await session.page.evaluate("1")
-            kinds: list[Literal["network_seen", "network_none"]] = [
-                "network_seen",
-                "network_none",
-            ]
             plain = [
-                await session.network_held(network(k, "/did/plain$")) for k in kinds
+                await session.network_held(network(k, "/did/plain$")) for k in KINDS
             ]
             failed = [
-                await session.network_held(network(k, "/did/fail-scan$")) for k in kinds
+                await session.network_held(network(k, "/did/fail-scan$")) for k in KINDS
             ]
             return window, plain, failed
 

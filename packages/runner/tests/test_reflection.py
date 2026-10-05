@@ -240,21 +240,21 @@ def test_snapshot_with_many_refs_finishes_within_regression_budget(
 PATH_VALUE = "fake-path-secret-50"
 
 
+def scanning(sites: Sites, **values: str) -> Redactor:
+    """A scan for fake test secrets, each bound to password fields on the
+    start origin."""
+    return Redactor(
+        BoundSecret(name, SecretStr(value), SecretDestination((sites.app,), "password"))
+        for name, value in values.items()
+    )
+
+
 def test_policy_events_scan_url_and_origin_after_the_policy_decision(
     sites: Sites,
 ) -> None:
     # The start host is bound too: the decision reads the raw origin, so the
     # session still navigates there.
-    redactor = Redactor(
-        [
-            BoundSecret(
-                "FAKE_" + name,
-                SecretStr(value),
-                SecretDestination((sites.app,), "password"),
-            )
-            for name, value in [("APP", APP), ("EVIL", EVIL), ("PATH", PATH_VALUE)]
-        ]
-    )
+    redactor = scanning(sites, FAKE_APP=APP, FAKE_EVIL=EVIL, FAKE_PATH=PATH_VALUE)
     port = sites.port
     long_tail = "q" * 3000
 
@@ -305,16 +305,7 @@ def test_policy_events_scan_url_and_origin_after_the_policy_decision(
 def test_popup_url_and_opener_are_scanned_and_the_popup_closes(sites: Sites) -> None:
     # The other allowed host is bound too: the popup's decision reads its raw
     # origin, so opening it there is no policy event.
-    redactor = Redactor(
-        [
-            BoundSecret(
-                "FAKE_" + name,
-                SecretStr(value),
-                SecretDestination((sites.app,), "password"),
-            )
-            for name, value in [("OTHER", OTHER), ("CDN", CDN), ("PATH", PATH_VALUE)]
-        ]
-    )
+    redactor = scanning(sites, FAKE_OTHER=OTHER, FAKE_CDN=CDN, FAKE_PATH=PATH_VALUE)
     opener = f"{sites.app}/doc?x=[SECRET:FAKE_PATH]"
 
     async def scenario() -> tuple[list[Popup], list[PolicyEvent], int]:
