@@ -103,8 +103,9 @@ class Traffic:
     started in a window. A handler's error reaches the next Playwright call
     (Playwright 1.63 keeps it for that call) and raises there when the call
     is the session's. When it is the routing's continuation of a request,
-    which a request handler's own error always meets first, Playwright drops
-    the error and that request stalls (LAB_NOTES, 2026-10-05).
+    which a routed request's own handler error meets first, Playwright drops
+    the error and that request stalls. A redirect hop isn't routed: it
+    reaches the server unrecorded (LAB_NOTES, 2026-10-05).
 
     The windows hold the page-chosen methods and URLs scanned with
     `redactor`, once per request, when it starts. Network checks read each
@@ -121,11 +122,11 @@ class Traffic:
         self._request_windows: weakref.WeakKeyDictionary[Request, Window] = (
             weakref.WeakKeyDictionary()
         )
-        # Each request as its window records it, scanned once, for its
-        # response's record too.
-        self._sent: weakref.WeakKeyDictionary[Request, PageRequest] = (
-            weakref.WeakKeyDictionary()
-        )
+        # Each request's complete method and URL, and the scan of them its
+        # window records, read once when it starts, for its response too.
+        self._sent: weakref.WeakKeyDictionary[
+            Request, tuple[PageRequest, PageRequest]
+        ] = weakref.WeakKeyDictionary()
         self._window = self.next_window()
         # https://playwright.dev/python/docs/api/class-page#page-event-request
         page.on("request", self._started)
@@ -154,12 +155,13 @@ class Traffic:
         # https://playwright.dev/python/docs/api/class-request#request-redirected-from
         hop = request.redirected_from
         window = self._window if hop is None else self._request_windows[hop]
+        complete = PageRequest(request.method, request.url)
         sent = PageRequest(
-            str(self._redactor.redact(request.method)),
-            recorded_url(self._redactor, request.url),
+            str(self._redactor.redact(complete.method)),
+            recorded_url(self._redactor, complete.url),
         )
         self._request_windows[request] = window
-        self._sent[request] = sent
+        self._sent[request] = complete, sent
         window.requests.add(sent)
         # https://playwright.dev/python/docs/api/class-request#request-resource-type
         if request.resource_type not in STREAMS:
@@ -170,11 +172,11 @@ class Traffic:
     def _responded(self, response: Response) -> None:
         request = response.request
         window = self._request_windows[request]
-        sent = self._sent[request]
-        complete = Exchange(request.method, request.url, response.status)
-        scanned = Exchange(sent.method, sent.url, response.status)
-        window.responses.add(scanned)
-        self._complete_responses[window].add(complete)
+        complete, sent = self._sent[request]
+        window.responses.add(Exchange(sent.method, sent.url, response.status))
+        self._complete_responses[window].add(
+            Exchange(complete.method, complete.url, response.status)
+        )
         if window.responses.total == len(window.responses.kept):
             self._response_requests[window].append(request)
 
