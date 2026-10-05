@@ -608,3 +608,412 @@ def test_shutdown_joins_cleanup_already_started_by_handler_completion(
                     await writer.wait_closed()
 
     asyncio.run(scenario())
+
+
+async def turns(count: int) -> None:
+    for _ in range(count):
+        await asyncio.sleep(0)
+
+
+def test_caller_cancellation_during_exit_is_delivered_after_closing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        async with observe(monkeypatch) as seen:
+            loop = asyncio.get_running_loop()
+            finished, ended = asyncio.Event(), asyncio.Event()
+            peers: list[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = []
+
+            async def handle(
+                _reader: asyncio.StreamReader, _writer: asyncio.StreamWriter
+            ) -> None:
+                finished.set()
+                loop.call_soon(owner.cancel)
+
+            async def run() -> None:
+                async with LoopbackServer(handle) as server:
+                    peers.append(
+                        await asyncio.open_connection("127.0.0.1", server.port)
+                    )
+                    await finished.wait()
+                    ended.set()
+
+            owner = asyncio.create_task(run())
+            try:
+                with pytest.raises(asyncio.CancelledError):
+                    await owner
+                assert ended.is_set()
+                assert seen.sockets[0].fileno() == -1
+                assert all(task.done() for task in seen.tasks)
+                assert await peers[0][0].read() == b""
+                assert seen.errors == []
+            finally:
+                for _reader, writer in peers:
+                    writer.close()
+                    await writer.wait_closed()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("cancellations", [1, 2])
+def test_caller_cancellation_waits_for_cleanup_already_in_progress(
+    monkeypatch: pytest.MonkeyPatch, cancellations: int
+) -> None:
+    async def scenario() -> None:
+        async with observe(monkeypatch) as seen:
+            started, held, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+            interrupted: list[asyncio.CancelledError] = []
+            peers: list[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = []
+
+            async def handle(
+                reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+            ) -> None:
+                close = writer.wait_closed
+
+                async def held_close() -> None:
+                    await close()
+                    held.set()
+                    try:
+                        await release.wait()
+                    except asyncio.CancelledError as cancellation:
+                        interrupted.append(cancellation)
+                        raise
+
+                monkeypatch.setattr(writer, "wait_closed", held_close)
+                started.set()
+                await reader.read()
+
+            async def run() -> None:
+                async with LoopbackServer(handle) as server:
+                    peers.append(
+                        await asyncio.open_connection("127.0.0.1", server.port)
+                    )
+                    await started.wait()
+
+            owner = asyncio.create_task(run())
+            try:
+                await held.wait()
+                for _ in range(cancellations):
+                    owner.cancel()
+                    await turns(2)
+                assert interrupted == []
+                assert not owner.done()
+                release.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await owner
+                assert interrupted == []
+                assert seen.sockets[0].fileno() == -1
+                assert await peers[0][0].read() == b""
+                assert seen.errors == []
+            finally:
+                release.set()
+                for _reader, writer in peers:
+                    writer.close()
+                    await writer.wait_closed()
+
+    asyncio.run(scenario())
+
+
+def test_cleanup_closes_the_connection_without_a_new_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        async with observe(monkeypatch) as seen:
+            loop, started = asyncio.get_running_loop(), asyncio.Event()
+            refused: list[Any] = []
+
+            def no_task(coroutine: Any, **_kwargs: Any) -> Any:
+                refused.append(coroutine)
+                coroutine.close()
+                raise MemoryError("cleanup task refused")
+
+            async def handle(
+                reader: asyncio.StreamReader, _writer: asyncio.StreamWriter
+            ) -> None:
+                started.set()
+                await reader.read()
+
+            with monkeypatch.context() as denial:
+                async with LoopbackServer(handle) as server:
+                    reader, writer = await asyncio.open_connection(
+                        "127.0.0.1", server.port
+                    )
+                    await started.wait()
+                    denial.setattr(loop, "create_task", no_task)
+            try:
+                assert refused == []
+                assert seen.sockets[0].fileno() == -1
+                assert await reader.read() == b""
+                assert seen.errors == []
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("closes", [False, True])
+def test_shutdown_while_the_handler_awaits_closure_is_not_a_failure(
+    monkeypatch: pytest.MonkeyPatch, closes: bool
+) -> None:
+    async def scenario() -> None:
+        async with observe(monkeypatch) as seen:
+            started = asyncio.Event()
+
+            async def handle(
+                _reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+            ) -> None:
+                started.set()
+                if closes:
+                    writer.close()
+                await writer.wait_closed()
+
+            async with LoopbackServer(handle) as server:
+                reader, writer = await asyncio.open_connection("127.0.0.1", server.port)
+                await started.wait()
+            try:
+                assert seen.tasks[0].cancelled()
+                assert seen.sockets[0].fileno() == -1
+                assert await reader.read() == b""
+                assert seen.errors == []
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+    asyncio.run(scenario())
+
+
+PAYLOAD, REQUEST = b"0123456789abcdef" * (1024 * 1024), b"half-closed"
+
+
+@dataclass
+class BufferedExchange:
+    """A handler's payload queued behind a peer that has stopped reading."""
+
+    wrote: asyncio.Event = field(default_factory=asyncio.Event)
+    buffered: list[int] = field(default_factory=list)
+    served: list[asyncio.StreamWriter] = field(default_factory=list)
+    peers: list[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = field(
+        default_factory=list
+    )
+
+    async def serve(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        self.served.append(writer)
+        assert await reader.read() == REQUEST
+        writer.get_extra_info("socket").setsockopt(
+            socket.SOL_SOCKET, socket.SO_SNDBUF, 4096
+        )
+        writer.transport.set_write_buffer_limits(high=1024, low=512)
+        writer.write(PAYLOAD)
+        self.buffered.append(writer.transport.get_write_buffer_size())
+        self.wrote.set()
+
+    async def connect(self, port: int) -> None:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        self.peers.append((reader, writer))
+        assert isinstance(writer.transport, asyncio.Transport)
+        writer.transport.pause_reading()
+        writer.write(REQUEST)
+        writer.write_eof()
+        await self.wrote.wait()
+
+    async def receive(self) -> bytes:
+        reader, writer = self.peers[0]
+        assert isinstance(writer.transport, asyncio.Transport)
+        writer.transport.resume_reading()
+        return await reader.read()
+
+    async def release(self, owner: asyncio.Task[None]) -> None:
+        for writer in self.served:
+            if writer.get_extra_info("socket").fileno() >= 0:
+                writer.transport.abort()
+        for _reader, writer in self.peers:
+            writer.close()
+            await writer.wait_closed()
+        await asyncio.gather(owner, return_exceptions=True)
+
+
+@pytest.mark.parametrize("closes", [False, True])
+def test_exit_delivers_buffered_output_after_the_close_waiter_is_cancelled(
+    monkeypatch: pytest.MonkeyPatch, closes: bool
+) -> None:
+    async def scenario() -> None:
+        async with observe(monkeypatch) as seen:
+            exchange, ended = BufferedExchange(), asyncio.Event()
+
+            async def handle(
+                reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+            ) -> None:
+                await exchange.serve(reader, writer)
+                if closes:
+                    writer.close()
+                await writer.wait_closed()
+
+            async def run() -> None:
+                async with LoopbackServer(handle) as server:
+                    await exchange.connect(server.port)
+                    ended.set()
+
+            owner = asyncio.create_task(run())
+            try:
+                await ended.wait()
+                await turns(16)
+                assert exchange.buffered[0] > 0
+                assert not owner.done()
+                assert seen.sockets[0].fileno() >= 0
+                assert seen.errors == []
+                assert await exchange.receive() == PAYLOAD
+                await owner
+                assert seen.sockets[0].fileno() == -1
+                assert seen.errors == []
+            finally:
+                await exchange.release(owner)
+
+    asyncio.run(scenario())
+
+
+def test_drain_waits_for_a_paused_peer_and_resumes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        async with observe(monkeypatch) as seen:
+            exchange, drained = BufferedExchange(), asyncio.Event()
+
+            async def handle(
+                reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+            ) -> None:
+                await exchange.serve(reader, writer)
+                await writer.drain()
+                drained.set()
+
+            async def run() -> None:
+                async with LoopbackServer(handle) as server:
+                    await exchange.connect(server.port)
+                    await drained.wait()
+
+            owner = asyncio.create_task(run())
+            try:
+                await exchange.wrote.wait()
+                assert exchange.buffered[0] > 0
+                assert not drained.is_set()
+                assert await exchange.receive() == PAYLOAD
+                await owner
+                assert drained.is_set()
+                assert seen.sockets[0].fileno() == -1
+                assert seen.errors == []
+            finally:
+                await exchange.release(owner)
+
+    asyncio.run(scenario())
+
+
+def test_close_notice_allocation_failure_closes_the_accepted_socket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        async with observe(monkeypatch) as seen:
+            error, event = MemoryError("close notice refused"), asyncio.Event
+
+            def notice() -> asyncio.Event:
+                if seen.sockets:
+                    raise error
+                return event()
+
+            async def handle(
+                reader: asyncio.StreamReader, _writer: asyncio.StreamWriter
+            ) -> None:
+                await reader.read()
+
+            async with LoopbackServer(handle) as server:
+                monkeypatch.setattr(asyncio, "Event", notice)
+                reader, writer = await asyncio.open_connection("127.0.0.1", server.port)
+                try:
+                    await seen.reported.wait()
+                    assert await reader.read() == b""
+                    assert seen.sockets[0].fileno() == -1
+                    assert [item["exception"] for item in seen.errors] == [error]
+                    assert seen.tasks == []
+                    with pytest.raises(RuntimeError, match="not listening"):
+                        _ = server.port
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+
+    asyncio.run(scenario())
+
+
+def test_unexpected_accept_error_retires_the_listener_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        async with observe(monkeypatch) as seen:
+            loop, failure = asyncio.get_running_loop(), ValueError("accept failed")
+            register, callbacks, listeners, handled = loop.add_reader, [], [], []
+
+            def registration(fd: int, callback: Any) -> None:
+                callbacks.append((fd, callback))
+                register(fd, callback)
+
+            def failed(listener: socket.socket) -> Any:
+                listeners.append(listener)
+                raise failure
+
+            async def handle(
+                _reader: asyncio.StreamReader, _writer: asyncio.StreamWriter
+            ) -> None:
+                handled.append(True)
+
+            monkeypatch.setattr(loop, "add_reader", registration)
+            async with LoopbackServer(handle) as server:
+                monkeypatch.setattr(socket.socket, "accept", failed)
+                fd, callback = callbacks[0]
+                loop.call_soon(callback)
+                await seen.reported.wait()
+                assert listeners[0].fileno() == -1
+                assert not loop.remove_reader(fd)
+                with pytest.raises(RuntimeError, match="not listening"):
+                    _ = server.port
+                for _ in range(3):
+                    loop.call_soon(callback)
+                await turns(3)
+                assert len(listeners) == 1
+                assert [item["exception"] for item in seen.errors] == [failure]
+                assert handled == []
+
+    asyncio.run(scenario())
+
+
+def test_cleanup_failure_after_a_finished_handler_is_reported_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        async with observe(monkeypatch) as seen:
+            cleanup, close = ValueError("cleanup"), asyncio.StreamWriter.wait_closed
+
+            async def handle(
+                _reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+            ) -> None:
+                writer.write(b"served")
+
+            async def close_failure(writer: asyncio.StreamWriter) -> None:
+                await close(writer)
+                if writer.transport.get_extra_info("sockname")[1] == port:
+                    raise cleanup
+
+            async with LoopbackServer(handle) as server:
+                port = server.port
+                monkeypatch.setattr(asyncio.StreamWriter, "wait_closed", close_failure)
+                reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                try:
+                    assert await reader.read() == b"served"
+                    await seen.reported.wait()
+                    assert server.port == port
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+            assert [item["exception"] for item in seen.errors] == [cleanup]
+            assert seen.sockets[0].fileno() == -1
+
+    asyncio.run(scenario())

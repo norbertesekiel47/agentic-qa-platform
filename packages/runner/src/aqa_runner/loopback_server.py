@@ -2,6 +2,7 @@
 
 import asyncio
 import socket
+import sys
 from collections.abc import Awaitable, Callable
 from contextlib import ExitStack, suppress
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ class _Connection:
     writer: asyncio.StreamWriter | None = None
     task: asyncio.Task[None] | None = None
     closing: bool = False
+    cleanup_error: BaseException | None = None
 
     def connected(
         self, _reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -28,6 +30,35 @@ class _Connection:
         if self.raw is not None:
             self.raw.close()
             self.raw = None
+
+
+class _ClosingStream(asyncio.Protocol):
+    """A stream protocol whose loss stays observable after its waiter is cancelled."""
+
+    def __init__(self, stream: asyncio.StreamReaderProtocol) -> None:
+        self.stream = stream
+        self.closed = asyncio.Event()
+
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        self.stream.connection_made(transport)
+
+    def data_received(self, data: bytes) -> None:
+        self.stream.data_received(data)
+
+    def eof_received(self) -> bool | None:
+        return self.stream.eof_received()
+
+    def pause_writing(self) -> None:
+        self.stream.pause_writing()
+
+    def resume_writing(self) -> None:
+        self.stream.resume_writing()
+
+    def connection_lost(self, exc: Exception | None) -> None:
+        try:
+            self.stream.connection_lost(exc)
+        finally:
+            self.closed.set()
 
 
 class LoopbackServer:
@@ -66,10 +97,21 @@ class LoopbackServer:
     ) -> None:
         self._stop()
         tasks = [c.task for c in self._connections if c.task is not None]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        joined = asyncio.gather(*tasks, return_exceptions=True)
+        cancelled: asyncio.CancelledError | None = None
+        # A caller's cancellation waits for the join, so it never abandons a
+        # transferred connection before its transport has closed.
+        while not joined.done():
+            try:
+                await asyncio.shield(joined)
+            except asyncio.CancelledError as cancellation:
+                if cancelled is None:
+                    cancelled = cancellation
         for connection in tuple(self._connections):
             if connection.task is not None:
                 self._finished(connection, connection.task)
+        if cancelled is not None:
+            raise cancelled
 
     def _stop(self) -> None:
         if self._socket is not None:
@@ -94,6 +136,8 @@ class LoopbackServer:
             self._fail(error)
             return
         except Exception:
+            # An unexpected readiness error retires the listener, then reaches
+            # the loop's callback error handler unchanged.
             self._stop()
             raise
         try:
@@ -101,6 +145,8 @@ class LoopbackServer:
         except (OSError, RuntimeError, ValueError, MemoryError) as error:
             self._fail(error)
         except Exception:
+            # Likewise for an unexpected setup error; rollback or _stop closes
+            # the accepted socket.
             self._stop()
             raise
 
@@ -116,13 +162,16 @@ class LoopbackServer:
             raw.setblocking(False)
             connection = _Connection(raw)
             reader = asyncio.StreamReader()
-            protocol = asyncio.StreamReaderProtocol(reader, connection.connected)
+            protocol = _ClosingStream(
+                asyncio.StreamReaderProtocol(reader, connection.connected)
+            )
             self._connections.add(connection)
             rollback.pop_all()
         coroutine = self._serve(connection, raw, reader, protocol)
         try:
             connection.task = asyncio.create_task(coroutine)
         except BaseException:
+            # Close the coroutine no task will run, whatever stopped submission.
             coroutine.close()
             raise
         try:
@@ -130,6 +179,8 @@ class LoopbackServer:
                 lambda task: self._finished(connection, task)
             )
         except BaseException:
+            # No done callback will release this record: cancel the task and
+            # close the socket now.
             connection.task.cancel()
             connection.close_raw()
             raise
@@ -139,7 +190,7 @@ class LoopbackServer:
         connection: _Connection,
         raw: socket.socket,
         reader: asyncio.StreamReader,
-        protocol: asyncio.StreamReaderProtocol,
+        protocol: _ClosingStream,
     ) -> None:
         try:
             await asyncio.get_running_loop().connect_accepted_socket(
@@ -150,26 +201,36 @@ class LoopbackServer:
         finally:
             connection.closing = True
             if connection.writer is not None:
-                results = await asyncio.gather(
-                    self._close_writer(connection.writer), return_exceptions=True
-                )
-                if isinstance(results[0], BaseException):
-                    asyncio.get_running_loop().call_exception_handler(
-                        {"message": "loopback cleanup failed", "exception": results[0]}
-                    )
-
-    @staticmethod
-    async def _close_writer(writer: asyncio.StreamWriter) -> None:
-        writer.close()
-        with suppress(ConnectionError):
-            await writer.wait_closed()
+                writer, primary = connection.writer, sys.exception()
+                try:
+                    try:
+                        writer.close()
+                        with suppress(ConnectionError):
+                            await writer.wait_closed()
+                    finally:
+                        # The handler may have cancelled wait_closed's shared
+                        # waiter; the transport's loss still proves closure.
+                        if writer.is_closing():
+                            await protocol.closed.wait()
+                except BaseException as error:
+                    # Keep the cleanup outcome for _finished to report, and
+                    # let the handler's own exception end the task.
+                    connection.cleanup_error = error
+                    if primary is not None:
+                        raise primary from error
+                    raise
 
     def _finished(self, connection: _Connection, task: asyncio.Task[None]) -> None:
         if connection not in self._connections:
             return
         connection.close_raw()
-        self._connections.discard(connection)
-        if not task.cancelled() and (error := task.exception()) is not None:
+        error = None if task.cancelled() else task.exception()
+        cleanup = connection.cleanup_error
+        if cleanup is not None and not isinstance(cleanup, asyncio.CancelledError):
+            asyncio.get_running_loop().call_exception_handler(
+                {"message": "loopback cleanup failed", "exception": cleanup}
+            )
+        if error is not None and error is not cleanup:
             asyncio.get_running_loop().call_exception_handler(
                 {
                     "message": "loopback connection failed",
@@ -177,3 +238,4 @@ class LoopbackServer:
                     "task": task,
                 }
             )
+        self._connections.discard(connection)
