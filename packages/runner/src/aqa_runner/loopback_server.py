@@ -2,7 +2,6 @@
 
 import asyncio
 import socket
-import sys
 from collections.abc import Awaitable, Callable
 from contextlib import ExitStack, suppress
 from dataclasses import dataclass
@@ -114,15 +113,18 @@ class LoopbackServer:
             raise cancelled
 
     def _stop(self) -> None:
-        if self._socket is not None:
-            asyncio.get_running_loop().remove_reader(self._socket.fileno())
-            self._socket.close()
-            self._socket = None
+        # Runs once. Each handler is cancelled by the owner even when its own
+        # timeout is cancelling it too, so that timeout cannot swallow shutdown.
+        if self._socket is None:
+            return
+        asyncio.get_running_loop().remove_reader(self._socket.fileno())
+        self._socket.close()
+        self._socket = None
         for connection in tuple(self._connections):
             if connection.task is None:
                 connection.close_raw()
                 self._connections.discard(connection)
-            elif not connection.closing and not connection.task.cancelling():
+            elif not connection.closing:
                 connection.task.cancel()
 
     def _accept(self) -> None:
@@ -192,16 +194,23 @@ class LoopbackServer:
         reader: asyncio.StreamReader,
         protocol: _ClosingStream,
     ) -> None:
+        transport: asyncio.Transport | None = None
+        primary: BaseException | None = None
         try:
-            await asyncio.get_running_loop().connect_accepted_socket(
+            transport, _ = await asyncio.get_running_loop().connect_accepted_socket(
                 lambda: protocol, raw
             )
             if self._socket is not None and connection.writer is not None:
                 await self._handler(reader, connection.writer)
+        except BaseException as error:
+            # The connection's own outcome, cancellation included, which a
+            # cleanup failure must not replace.
+            primary = error
+            raise
         finally:
             connection.closing = True
             if connection.writer is not None:
-                writer, primary = connection.writer, sys.exception()
+                writer = connection.writer
                 try:
                     try:
                         writer.close()
@@ -219,6 +228,12 @@ class LoopbackServer:
                     if primary is not None:
                         raise primary from error
                     raise
+            elif transport is not None:
+                # The stream failed before recording its writer, so the
+                # transport owns the socket: close it there, not as raw.
+                connection.raw = None
+                transport.close()
+                await protocol.closed.wait()
 
     def _finished(self, connection: _Connection, task: asyncio.Task[None]) -> None:
         if connection not in self._connections:
