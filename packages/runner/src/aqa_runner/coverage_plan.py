@@ -73,12 +73,13 @@ under the product name".
 - A target_meaning never quotes or contains the text its check asserts: it \
 names what the element is and where it sits, not what it says. A target \
 that names a tag "news", or a tab called "Home", gives the check away.
-- A claim about the page's address, or about which page is shown, is checked \
-with url_matches on the address, in addition to any check on the page's \
-content.
-- A claim about a collection, such as a list of comments, tags or links, \
-names the collection as the target, never one item of it, and the text is \
-searched for inside the collection.
+- A claim that a particular page is shown, such as an item's page or a \
+profile page, includes a url_matches check on the page's address, in \
+addition to any check of what the page shows.
+- A claim about what a collection holds, such as a list of comments, tags \
+or links, names the collection as the target, and the text is searched for \
+inside it. A claim about a property of one item, such as who wrote the item \
+just added, targets that item, not its whole collection.
 - text is a literal, matched as whole words and ignoring case: prefer it. \
 Use pattern, a Python regular expression searched with re.search, only when \
 a literal can't say it, and write its flags inline, such as (?i). A URL is \
