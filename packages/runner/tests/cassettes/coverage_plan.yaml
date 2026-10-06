@@ -76,15 +76,22 @@ interactions:
       element, each naming its own. When a page may show the same thing in more than
       one place, such as an item's details repeated above and below it, name the one
       the claim is about by where it sits, such as \\\"the price in the product summary
-      under the product name\\\".\\n- text is a literal, matched as whole words and
-      ignoring case: prefer it. Use pattern, a Python regular expression searched
-      with re.search, only when a literal can't say it, and write its flags inline,
-      such as (?i). A URL is matched as it is, so write (?i) when its case may vary.
-      A pattern must still require every part of the claim the expectation states,
-      in order, not only some of its words.\\n- Assert nothing the spec can't tell
-      you, such as a generated part of a URL or the order of items.\\n- requires lists
-      the conditions the goal or the expectations need before the checks run, each
-      with an id (\\\"c1\\\", \\\"c2\\\", ...), such as \\\"checked after reloading
+      under the product name\\\".\\n- A target_meaning never quotes or contains the
+      text its check asserts: it names what the element is and where it sits, not
+      what it says. A target that names a tag \\\"news\\\", or a tab called \\\"Home\\\",
+      gives the check away.\\n- A claim about the page's address, or about which page
+      is shown, is checked with url_matches on the address, in addition to any check
+      on the page's content.\\n- A claim about a collection, such as a list of comments,
+      tags or links, names the collection as the target, never one item of it, and
+      the text is searched for inside the collection.\\n- text is a literal, matched
+      as whole words and ignoring case: prefer it. Use pattern, a Python regular expression
+      searched with re.search, only when a literal can't say it, and write its flags
+      inline, such as (?i). A URL is matched as it is, so write (?i) when its case
+      may vary. A pattern must still require every part of the claim the expectation
+      states, in order, not only some of its words.\\n- Assert nothing the spec can't
+      tell you, such as a generated part of a URL or the order of items.\\n- requires
+      lists the conditions the goal or the expectations need before the checks run,
+      each with an id (\\\"c1\\\", \\\"c2\\\", ...), such as \\\"checked after reloading
       the order page\\\". Leave it empty when there are none.\\n\"}"
     headers:
       anthropic-version:
@@ -95,18 +102,18 @@ interactions:
     uri: https://api.anthropic.com/v1/messages
   response:
     body:
-      string: '{"model":"claude-sonnet-5-5","id":"msg_011CfiUjVLRJVBZFBSDMipC4","type":"message","role":"assistant","content":[{"type":"text","text":"{\"expectations\":[{\"expect_index\":0,\"subject\":\"the
+      string: '{"model":"claude-sonnet-5-5","id":"msg_011CfkJnfRpur3KPs2T9tNY5","type":"message","role":"assistant","content":[{"type":"text","text":"{\"expectations\":[{\"expect_index\":0,\"subject\":\"the
         error message shown after the payment attempt\",\"claim\":\"The error message
         states that the card has expired\",\"checks\":[{\"check\":\"text_in_target\",\"target_meaning\":\"the
-        payment error message shown after the failed payment attempt\",\"pattern\":\"(?i)card.*expired|expired.*card\"}]},{\"expect_index\":1,\"subject\":\"the
+        error message shown after the payment attempt\",\"pattern\":\"(?i)expired\"}]},{\"expect_index\":1,\"subject\":\"the
         Pay button\",\"claim\":\"The Pay button is visible in the viewport and not
         covered by another element\",\"checks\":[{\"check\":\"visible_unoccluded\",\"target_meaning\":\"the
-        Pay button that submits the payment\"}]}],\"requires\":[]}"}],"container":null,"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":3798,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":207,"output_tokens_details":{"thinking_tokens":0},"service_tier":"standard","inference_geo":"global"},"diagnostics":null}'
+        button that submits the payment\"}]}],\"requires\":[]}"}],"container":null,"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":3956,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":191,"output_tokens_details":{"thinking_tokens":0},"service_tier":"standard","inference_geo":"global"},"diagnostics":null}'
     headers:
       content-type:
       - application/json
       request-id:
-      - req_011CfiUjU7G4DE5DfvQkcCQi
+      - req_011CfkJneHchfsjBrqzeGaND
     status:
       code: 200
       message: OK
