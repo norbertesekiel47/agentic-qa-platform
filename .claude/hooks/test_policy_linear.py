@@ -192,6 +192,12 @@ class LinearCommandTests(unittest.TestCase):
             ("<<ÉOF\nmsg\nÉOF\nrm x", "\n\nrm x"),
             ("<<EOF\nmsg\n  EOF\nrm x", "\n\nrm x"),
             ("<<A\nA\n<<B\nx\nB", "\n\n\n"),
+            ("<<A\nA\nA\n<<A\nx\nA\ny rm x", "\n\nA\n\n\ny rm x"),
+            ("<<A\nA\nA\nrm x\n<<A\nx\nA", "\n\nA\nrm x\n\n"),
+            ("<<AXB\nx\nAB\nrm x", "<<AXB\nx\nAB\nrm x"),
+            ("<<'EOF", "<<'EOF"),
+            ('<<"EOF', '<<"EOF'),
+            ("x <<'A", "x <<'A"),
         )
         masked = self.masked([command for command, _ in cases])
         for (command, expected), actual in zip(cases, masked, strict=True):
@@ -240,6 +246,7 @@ class LinearCommandTests(unittest.TestCase):
             ('"\\\n' * n, '"\\\n' * n),
             ("'" * (2 * n + 1), "'" * (2 * n + 1)),
             ("\\" * n, "''" * (n // 2)),
+            ("<<A\nA\n" * n, "\n\n" * n),
         )
         for index, (command, expected) in enumerate(cases):
             with self.subTest(case=index, start=command[:12]):

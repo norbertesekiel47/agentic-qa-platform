@@ -154,7 +154,11 @@ def _closed(
     None if no later line closes it."""
     quote, word, after = token[1], token[2], token.end()
     if quote:
-        end = closings.after(word, newline) if token.string[after] == quote else None
+        end = (
+            closings.after(word, newline)
+            if token.string.startswith(quote, after)
+            else None
+        )
         return None if end is None else (after + 1, end)
     end = closings.after(word, newline)
     if end is not None:
