@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from packages.runner.tests.pilot_plan_oracles import (
     LOGIN_ROOT_FRAGMENT_KEY,
+    LOGIN_ROOT_KEY,
     PROMPT,
     PROMPT_WITH_COMMENT,
     PROMPT_WITH_JOINER,
@@ -634,9 +635,6 @@ def test_unrelated_review_prose_does_not_change_completeness(
     changed = review.replace(anchor, prose + "\n\n" + anchor, 1)
     specs = tuple(s.frontmatter for s in load_project(QA).specs.values())
     assert source_problems(changed, specs) == ()
-
-
-LOGIN_ROOT_KEY = r"^https?://[^/]+/?(?:[?#].*)?$"
 
 
 def test_login_accepts_the_reviewed_second_root_pattern() -> None:
