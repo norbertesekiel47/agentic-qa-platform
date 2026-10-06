@@ -1,7 +1,6 @@
-"""One pilot attempt (ADR-0023, #51): a fresh run record, egress gate, proxy,
-Playwright driver and browser, the spec's reset hook sent on that gate, then
-the strict replay. Manifest answers never enter; the caller scores what this
-returns."""
+"""One pilot attempt (ADR-0023, #51): a fresh run record, egress gate, proxy
+and Playwright driver, the spec's reset hook sent on that gate, then the
+strict replay. Manifest answers never enter; the caller scores the result."""
 
 import asyncio
 from collections.abc import AsyncIterator
@@ -30,11 +29,10 @@ from pilot_inputs import PilotInput
 from pilot_results import Observation, observe
 from playwright.async_api import async_playwright
 
-# What stopped an attempt first: a test secret that can't be bound; its reset
-# refused, unreachable, answered with anything but a 2xx (a redirect is never
-# followed) or unanswered within resolve_seconds; replay refusing the script
-# before its browser; the attempt outlasting `minutes`; or, after a replay
-# that returned, a resource that failed to close.
+# What stopped an attempt first: a secret that can't be bound; the reset
+# refused, unreachable, not a 2xx (redirects aren't followed) or unanswered
+# within resolve_seconds; a script replay refuses; the attempt outlasting
+# `minutes`; or, after a replay that returned, a resource failing to close.
 type Failure = Literal[
     "reset_unreachable",
     "reset_rejected",
@@ -44,8 +42,8 @@ type Failure = Literal[
     "operation_timeout",
     "cleanup_failed",
 ]
-# Whether every resource opened was closed: each exit returned, one raised,
-# or they weren't done within resolve_seconds of cancellation.
+# Whether every resource opened closed: each exit returned, one raised, or
+# they outlasted resolve_seconds.
 type Cleanup = Literal["completed", "failed", "incomplete"]
 type Resources = Literal["closed", "unknown"]
 type _Owned = Literal["driver", "proxy"]
@@ -62,8 +60,7 @@ class AttemptHealth:
 
 @dataclass(frozen=True)
 class ObservedAttempt:
-    """A replay that returned, with every resource closed and its receipts
-    written."""
+    """A replay that returned, every resource closed, receipts written."""
 
     run_id: str
     record: Path
@@ -73,9 +70,8 @@ class ObservedAttempt:
 
 @dataclass(frozen=True)
 class FailedAttempt:
-    """An attempt that ended without a usable replay. Its resources are
-    `closed` only when its browser never opened or replay returned, and
-    every exit returned."""
+    """An attempt without a usable replay. Resources are `closed` only when
+    its browser never opened or replay returned, and every exit returned."""
 
     run_id: str
     record: Path
@@ -90,8 +86,7 @@ class _RefusedError(Exception):
 
 @dataclass
 class _State:
-    """One attempt's progress, shared by its coordinator and its task. The
-    first failure stays first."""
+    """One attempt's progress, shared by coordinator and task; first wins."""
 
     failure: Failure | None = None
     error: BaseException | None = None
@@ -108,13 +103,21 @@ class _State:
         return _RefusedError()
 
     def latch(self, error: Exception) -> None:
-        """Note the first `error` nothing expected, before the resources
-        unwind, so a stalled cleanup can't stand in for it. Once the attempt
-        was stopped, it is its cleanup failing."""
+        """Note the first unexpected `error` before the resources unwind, so a
+        stalled cleanup can't stand in for it. After a stop, it is cleanup."""
         if self.failure is None and self.error is None and not self.interrupted:
             self.error = error
         else:
             self.cleanup_raised = True
+
+    def exit_failed(self) -> None:
+        """An exit raised: after a replay that returned and no earlier stop,
+        the failure, which a later timeout can't replace."""
+        self.cleanup_raised = True
+        if self.browser == "closed" and not (
+            self.failure or self.error or self.interrupted
+        ):
+            self.failure = "cleanup_failed"
 
     @property
     def cleanup(self) -> Cleanup:
@@ -133,14 +136,12 @@ async def replay_pilot(
     pilot: PilotInput, record_root: Path
 ) -> ObservedAttempt | FailedAttempt:
     """One attempt at `pilot`, in a new run record under `record_root`, its
-    resources owned by a task of its own. The attempt may take the config's
-    `minutes`; then it, or an interrupt, cancels the task once. If the
-    task's cleanup outlasts `resolve_seconds`, `cleanup-incomplete.json`
-    says so, and this waits for the task however long it takes: nothing may
-    act on the app while its browser may still be open. Later cancellations
-    of this coroutine are recorded, never passed on; a second Ctrl-C under
-    `asyncio.run`'s own SIGINT handling is not one of them. The final
-    receipt is `attempt.json`."""
+    resources owned by a task of its own. At `minutes`, or on an interrupt,
+    the task is cancelled once. If its cleanup outlasts `resolve_seconds`,
+    `cleanup-incomplete.json` says so and this waits for it however long it
+    takes: nothing may act on the app while its browser may be open. Later
+    cancellations of this coroutine are recorded, never passed on (a second
+    Ctrl-C under `asyncio.run` is not one). The final receipt is `attempt.json`."""
     record = RunRecord.create(record_root)
     record.write("attempt-start.json", {"spec_id": pilot.spec.frontmatter.id})
     state = _State()
@@ -197,8 +198,7 @@ async def _waited(
 
 async def _attempt(pilot: PilotInput, record: RunRecord, state: _State) -> RunResult:
     """The attempt's own task, which opens, uses and closes its resources."""
-    if (refusal := _unbound(pilot)) is not None:
-        raise state.refuse(refusal)
+    _check_secrets(pilot, state)
     gate = EgressGate(egress_policy(pilot.spec, pilot.config, pilot.start))
     if pilot.reset is not None:
         await _reset(gate, pilot.reset.url, pilot.config.budgets.resolve_seconds, state)
@@ -216,10 +216,13 @@ async def _attempt(pilot: PilotInput, record: RunRecord, state: _State) -> RunRe
                 proxy=proxy,
                 gate=gate,
             )
-        # Replay checks the script before its browser starts (its docstring).
+        # Replay checks the script and binds secrets before its browser starts.
         except SpecError:
             state.browser = "unopened"
             raise state.refuse("script_refused") from None
+        except (MissingSecretError, SecretLoggedError, UnicodeEncodeError):
+            state.browser = "unopened"
+            raise state.refuse("secret_unusable") from None
         except Exception as error:
             state.latch(error)
             raise
@@ -227,23 +230,21 @@ async def _attempt(pilot: PilotInput, record: RunRecord, state: _State) -> RunRe
         return result
 
 
-def _unbound(pilot: PilotInput) -> Failure | None:
-    """Why the spec's test secrets can't be bound, checked before the reset
-    as replay checks them before its browser. The error is dropped: a value
-    with surrogates fails to encode with a ValueError quoting it."""
+def _check_secrets(pilot: PilotInput, state: _State) -> None:
+    """Refuse before the reset what replay refuses before its browser. The
+    error is dropped: a value with surrogates fails to encode with a
+    ValueError quoting it."""
     try:
         bound_secrets(pilot.spec, pilot.start)
     except (MissingSecretError, SecretLoggedError, ValueError):
-        return "secret_unusable"
+        raise state.refuse("secret_unusable") from None
     except SpecError:
-        return "script_refused"
-    return None
+        raise state.refuse("script_refused") from None
 
 
 async def _reset(gate: EgressGate, url: str, seconds: float, state: _State) -> None:
-    """POST the spec's reset hook through `gate`, the attempt's, so the reset
-    and the replay share its pins. Anything but a 2xx within `seconds` stops
-    the attempt before its browser starts."""
+    """POST the spec's reset hook through the attempt's `gate`, so reset and
+    replay share its pins. Anything but a 2xx within `seconds` stops the attempt."""
     try:
         async with asyncio.timeout(seconds):
             response = await runner_request(gate, "POST", url)
@@ -260,8 +261,8 @@ async def _reset(gate: EgressGate, url: str, seconds: float, state: _State) -> N
 async def _owned[T](
     resource: AbstractAsyncContextManager[T], name: _Owned, state: _State
 ) -> AsyncIterator[T]:
-    """`resource`, entered, then exited however the body ends. It counts as
-    closed only once its exit returns."""
+    """`resource`, entered, then exited however the body ends; closed only
+    once its exit returns."""
     state.opened.add(name)
     try:
         value = await resource.__aenter__()
@@ -272,7 +273,11 @@ async def _owned[T](
         yield value
     finally:
         # Exited as on success: the state records failures; neither reads them.
-        await resource.__aexit__(None, None, None)
+        try:
+            await resource.__aexit__(None, None, None)
+        except Exception:
+            state.exit_failed()
+            raise
         state.closed.add(name)
 
 
@@ -285,11 +290,6 @@ def _conclude(
     """The ended attempt, once `attempt.json` records it. An interrupt wins
     over any failure and is raised again, as is an unexpected error."""
     error = None if attempt.cancelled() else attempt.exception()
-    if error is not None and state.failure is None and state.error is None:
-        if state.browser == "closed":
-            state.failure = "cleanup_failed"
-        else:
-            state.error = error
     if state.interrupted:
         _receipt(record, state, "interrupted")
         raise asyncio.CancelledError
@@ -298,9 +298,9 @@ def _conclude(
         return FailedAttempt(
             record.run_id, record.path, state.failure, state.cleanup, state.resources
         )
-    if state.error is not None:
+    if (error := state.error or error) is not None:
         _receipt(record, state, "unexpected")
-        raise state.error
+        raise error
     result = attempt.result()
     observation = observe(
         pilot.script, result, invariants=pilot.spec.frontmatter.invariants
