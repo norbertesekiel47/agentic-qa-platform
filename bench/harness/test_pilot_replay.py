@@ -18,7 +18,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anthropic
-import pilot_replay
 from aqa_core.compiled import Press
 from aqa_core.project import load_project
 from aqa_runner import browser_session
@@ -36,6 +35,7 @@ from pilot_replay import (
     ObservedAttempt,
     replay_pilot,
 )
+from playwright.async_api import async_playwright
 
 PAGE = "<!doctype html><h1>Title</h1><form method=post action=/submit><button>Send</button></form>"
 COMPILED = """{
@@ -509,7 +509,7 @@ class PilotReplayTests(unittest.TestCase):
     def test_a_cleanup_failure_outranks_a_later_operation_timeout(self) -> None:
         self.config["budgets"] = {"minutes": 0.1}
         self.fail_proxy_exits()
-        real = pilot_replay.async_playwright
+        real = async_playwright
 
         @asynccontextmanager
         async def stalling() -> AsyncIterator[Any]:
