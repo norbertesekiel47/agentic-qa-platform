@@ -54,7 +54,25 @@ def row(
 #   second key is `text_in_target` on the comment list, the target row 0 uses.
 #   It is stricter (the text must sit in the list, not anywhere), still
 #   establishes "is still shown", and REVIEW lists no proxy for the row.
+# - login/0, third key `^https?://[^/]+/?(#/?)?$`: a strict subset of the
+#   second key (root path, with an optional empty or "/" fragment, no query).
+#   It admits no URL whose path is not the root, so no proxy.
+# - login/1: REVIEW's check is `text_visible` "Your Feed". The alternative is
+#   `text_in_target` on the feed tabs: scoped, hence stricter (the text must sit
+#   in the tabs, not anywhere), by the same reasoning as post-comment/2. The
+#   target role is "feed tabs", which names no label.
+# - read-article/6: REVIEW's check is the whole prompt sentence. R6-B accepts
+#   the pattern PROMPT_WITH_JOINER, which needs both links' words with "or" or
+#   "and" between them. The maintainer also accepts PROMPT_WITHOUT_JOINER, which
+#   needs both links' words with nothing required between them, so it accepts
+#   "Sign in Sign up" too. Both are scoped to the signed-out comment prompt and
+#   both leave "to add comments" unchecked. Neither passes REVIEW's rejected
+#   proxies ("to add comments on this article" alone, or "Sign in" alone).
 LOGIN_ROOT_KEY = r"^https?://[^/]+/?(?:[?#].*)?$"
+LOGIN_ROOT_FRAGMENT_KEY = r"^https?://[^/]+/?(#/?)?$"
+PROMPT = "signed-out comment prompt"
+PROMPT_WITH_JOINER = r"(?i)sign in.*(or|and).*sign up|sign up.*(or|and).*sign in"
+PROMPT_WITHOUT_JOINER = r"(?i)sign in.*sign up|sign up.*sign in"
 
 
 ROWS = {
@@ -64,9 +82,13 @@ ROWS = {
             forbidden=("Global Feed heading",),
             alternatives=(
                 (PlannedCheck(check="url_matches", pattern=LOGIN_ROOT_KEY),),
+                (PlannedCheck(check="url_matches", pattern=LOGIN_ROOT_FRAGMENT_KEY),),
             ),
         ),
-        row(PlannedCheck(check="text_visible", text="Your Feed")),
+        row(
+            PlannedCheck(check="text_visible", text="Your Feed"),
+            alternatives=((scoped("feed tabs", "Your Feed"),),),
+        ),
         row(
             *tuple(
                 scoped("header nav", label)
@@ -149,6 +171,14 @@ ROWS = {
                 "Sign in or sign up to add comments on this article",
             ),
             forbidden=("partial comment prompt", "global Sign in text"),
+            alternatives=tuple(
+                (
+                    PlannedCheck(
+                        check="text_in_target", target_meaning=PROMPT, pattern=pattern
+                    ),
+                )
+                for pattern in (PROMPT_WITH_JOINER, PROMPT_WITHOUT_JOINER)
+            ),
         ),
     ),
 }

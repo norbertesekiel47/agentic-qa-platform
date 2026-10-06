@@ -17,6 +17,10 @@ from aqa_runner.text_search import url_matches
 from pydantic import ValidationError
 
 from packages.runner.tests.pilot_plan_oracles import (
+    LOGIN_ROOT_FRAGMENT_KEY,
+    PROMPT,
+    PROMPT_WITH_JOINER,
+    PROMPT_WITHOUT_JOINER,
     ROWS,
     plan_problems,
     source_problems,
@@ -644,7 +648,7 @@ def test_login_accepts_the_reviewed_second_root_pattern() -> None:
 @pytest.mark.parametrize(
     "pattern",
     [
-        r"^https?://[^/]+/?(#/?)?$",
+        r"^https?://[^/]+/?(#/?)?",
         r"^https?://[^/]+",
         r"^https?://[^/]+/?(?:[?#].*)?",
         r"https?://[^/]+/?(?:[?#].*)?$",
@@ -709,3 +713,69 @@ def test_a_second_key_widens_only_its_own_row() -> None:
     assert plan_problems("post-comment", plan) == (
         "post-comment/0: establishing checks differ",
     )
+
+
+def prompt_pattern(pattern: str, target: str = PROMPT) -> PlannedCheck:
+    return PlannedCheck(check="text_in_target", target_meaning=target, pattern=pattern)
+
+
+def test_login_accepts_the_reviewed_fragment_root_pattern() -> None:
+    plan = replace_checks(
+        login(),
+        0,
+        [PlannedCheck(check="url_matches", pattern=LOGIN_ROOT_FRAGMENT_KEY)],
+    )
+    assert plan_problems("login", plan) == ()
+
+
+def test_login_accepts_the_feed_tabs_check_for_your_feed() -> None:
+    plan = replace_checks(login(), 1, [text("feed tabs", "Your Feed")])
+    assert plan_problems("login", plan) == ()
+
+
+@pytest.mark.parametrize(
+    "checks",
+    [
+        [text("header nav", "Your Feed")],
+        [text("feed tabs", "Global Feed")],
+        [
+            PlannedCheck(check="text_visible", text="Your Feed"),
+            text("feed tabs", "Your Feed"),
+        ],
+    ],
+)
+def test_login_row_one_has_no_other_second_key(checks: list[PlannedCheck]) -> None:
+    plan = replace_checks(login(), 1, checks)
+    assert plan_problems("login", plan) == ("login/1: establishing checks differ",)
+
+
+@pytest.mark.parametrize("pattern", [PROMPT_WITH_JOINER, PROMPT_WITHOUT_JOINER])
+def test_read_article_accepts_both_reviewed_prompt_patterns(pattern: str) -> None:
+    plan = replace_checks(article(), 6, [prompt_pattern(pattern)])
+    assert plan_problems("read-article", plan) == ()
+
+
+@pytest.mark.parametrize(
+    "check",
+    [
+        prompt_pattern(r"(?i)sign in|sign up"),
+        prompt_pattern(r"(?i)to add comments on this article"),
+        prompt_pattern(PROMPT_WITHOUT_JOINER, "header nav"),
+        prompt_pattern(PROMPT_WITHOUT_JOINER.replace("(?i)", "")),
+    ],
+)
+def test_read_article_row_six_has_no_other_pattern_key(check: PlannedCheck) -> None:
+    plan = replace_checks(article(), 6, [check])
+    assert plan_problems("read-article", plan) == (
+        "read-article/6: establishing checks differ",
+    )
+
+
+def test_the_prompt_patterns_require_both_links_and_the_joiner_one_a_joiner() -> None:
+    both = "Sign in or sign up to add comments on this article"
+    for pattern in (PROMPT_WITH_JOINER, PROMPT_WITHOUT_JOINER):
+        assert asyncio.run(url_matches(pattern, both)) is True
+        for proxy in ("to add comments on this article", "Sign in", "Sign up"):
+            assert asyncio.run(url_matches(pattern, proxy)) is False
+    assert asyncio.run(url_matches(PROMPT_WITHOUT_JOINER, "Sign in Sign up")) is True
+    assert asyncio.run(url_matches(PROMPT_WITH_JOINER, "Sign in Sign up")) is False
