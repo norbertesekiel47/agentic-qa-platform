@@ -15,6 +15,9 @@ from aqa_core.spec import SpecFrontmatter, canonical_hash
 class Row:
     required: tuple[PlannedCheck, ...]
     forbidden: tuple[str, ...] = ()
+    # Reviewed second keys: other complete check sets that establish the same
+    # row (see the review notes beside ROWS). Nothing else is widened.
+    alternatives: tuple[tuple[PlannedCheck, ...], ...] = ()
 
 
 def scoped(target: str, literal: str) -> PlannedCheck:
@@ -31,8 +34,27 @@ HEADER_LINKS = {
 }
 
 
-def row(*checks: PlannedCheck, forbidden: tuple[str, ...] = ()) -> Row:
-    return Row(checks, forbidden)
+def row(
+    *checks: PlannedCheck,
+    forbidden: tuple[str, ...] = (),
+    alternatives: tuple[tuple[PlannedCheck, ...], ...] = (),
+) -> Row:
+    return Row(checks, forbidden, alternatives)
+
+
+# Second keys, maintainer-approved 2026-10-05, each reviewed:
+# - login/0: REVIEW's check is `url_matches` on the page's path `^/$`. The
+#   first key needs a trailing slash and no query or fragment. This one
+#   accepts the same root path with or without the slash and with any query or
+#   fragment; it still refuses every URL whose path is not empty or "/" (for
+#   example /login or /article/x), so it admits no REVIEW "Not acceptable"
+#   proxy (REVIEW lists none for this row, and "Global Feed heading" is not a
+#   URL check).
+# - post-comment/2: REVIEW's check is `text_visible` for jake's comment. The
+#   second key is `text_in_target` on the comment list, the target row 0 uses.
+#   It is stricter (the text must sit in the list, not anywhere), still
+#   establishes "is still shown", and REVIEW lists no proxy for the row.
+LOGIN_ROOT_KEY = r"^https?://[^/]+/?(?:[?#].*)?$"
 
 
 ROWS = {
@@ -40,6 +62,9 @@ ROWS = {
         row(
             PlannedCheck(check="url_matches", pattern=ROOT_PATTERN),
             forbidden=("Global Feed heading",),
+            alternatives=(
+                (PlannedCheck(check="url_matches", pattern=LOGIN_ROOT_KEY),),
+            ),
         ),
         row(PlannedCheck(check="text_visible", text="Your Feed")),
         row(
@@ -69,7 +94,10 @@ ROWS = {
             scoped("new comment card author link", "reader"),
             forbidden=("global reader text",),
         ),
-        row(PlannedCheck(check="text_visible", text="Glad to be here.")),
+        row(
+            PlannedCheck(check="text_visible", text="Glad to be here."),
+            alternatives=((scoped("article comment list", "Glad to be here."),),),
+        ),
         row(
             PlannedCheck(check="probe_equals", probe="comment_count", value=2),
             forbidden=("optimistic comment UI",),
@@ -201,8 +229,10 @@ def plan_problems(spec_id: str, plan: CoveragePlan) -> tuple[str, ...]:
             zip(rows, plan.expectations, strict=True)
         )
         if expectation.unsupported is not None
-        or Counter(map(check_key, row.required))
-        != Counter(map(check_key, expectation.checks))
+        or Counter(map(check_key, expectation.checks))
+        not in [
+            Counter(map(check_key, keys)) for keys in (row.required, *row.alternatives)
+        ]
     ]
     conditions = tuple(phrase(condition.condition) for condition in plan.requires)
     if spec_id == "favorite-article" and conditions != (phrase(RELOAD),):

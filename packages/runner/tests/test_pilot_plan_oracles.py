@@ -629,3 +629,83 @@ def test_unrelated_review_prose_does_not_change_completeness(
     changed = review.replace(anchor, prose + "\n\n" + anchor, 1)
     specs = tuple(s.frontmatter for s in load_project(QA).specs.values())
     assert source_problems(changed, specs) == ()
+
+
+LOGIN_ROOT_KEY = r"^https?://[^/]+/?(?:[?#].*)?$"
+
+
+def test_login_accepts_the_reviewed_second_root_pattern() -> None:
+    plan = replace_checks(
+        login(), 0, [PlannedCheck(check="url_matches", pattern=LOGIN_ROOT_KEY)]
+    )
+    assert plan_problems("login", plan) == ()
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        r"^https?://[^/]+/?(#/?)?$",
+        r"^https?://[^/]+",
+        r"^https?://[^/]+/?(?:[?#].*)?",
+        r"https?://[^/]+/?(?:[?#].*)?$",
+        r"(?i)^https?://[^/]+/?(?:[?#].*)?$",
+    ],
+)
+def test_login_rejects_any_other_root_pattern(pattern: str) -> None:
+    plan = replace_checks(
+        login(), 0, [PlannedCheck(check="url_matches", pattern=pattern)]
+    )
+    assert plan_problems("login", plan) == ("login/0: establishing checks differ",)
+
+
+def test_login_second_root_pattern_admits_only_the_root_path() -> None:
+    admitted = [
+        "http://h",
+        "http://h/",
+        "http://h:3000/",
+        "http://h/?a=1",
+        "http://h/#frag",
+    ]
+    refused = ["http://h/login", "http://h/article/x", "http://h//"]
+    assert [asyncio.run(url_matches(LOGIN_ROOT_KEY, url)) for url in admitted] == [
+        True
+    ] * len(admitted)
+    assert [asyncio.run(url_matches(LOGIN_ROOT_KEY, url)) for url in refused] == [
+        False
+    ] * len(refused)
+
+
+def test_post_comment_accepts_a_scoped_check_for_the_earlier_comment() -> None:
+    plan = replace_checks(post(), 2, [text("article comment list", "Glad to be here.")])
+    assert plan_problems("post-comment", plan) == ()
+
+
+@pytest.mark.parametrize(
+    "checks",
+    [
+        [text("article comment list", "Someone else")],
+        [text("header nav", "Glad to be here.")],
+        [
+            PlannedCheck(check="text_visible", text="Glad to be here."),
+            text("article comment list", "Glad to be here."),
+        ],
+    ],
+)
+def test_post_comment_row_two_has_no_other_second_key(
+    checks: list[PlannedCheck],
+) -> None:
+    plan = replace_checks(post(), 2, checks)
+    assert plan_problems("post-comment", plan) == (
+        "post-comment/2: establishing checks differ",
+    )
+
+
+def test_a_second_key_widens_only_its_own_row() -> None:
+    plan = replace_checks(
+        post(),
+        0,
+        [PlannedCheck(check="text_visible", text="Thanks for the warm welcome!")],
+    )
+    assert plan_problems("post-comment", plan) == (
+        "post-comment/0: establishing checks differ",
+    )
