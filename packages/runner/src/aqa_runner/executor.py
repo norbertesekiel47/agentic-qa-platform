@@ -134,9 +134,9 @@ class _Replay:
 
     def reason(self, error: _Raised) -> str:
         """`error` as a failed step's or an unevaluated assertion's reason
-        (`_described`, then `error_text`: scanned for every bound value,
-        the ones the script never fills too). When the script fills a test secret, Playwright's
-        message is withheld for the whole run, the steps before the first
+        (`_owned`, then `error_text`: scanned for every bound value, the
+        ones the script never fills too). When the script fills a test
+        secret, Playwright's message is withheld for the whole run, the steps before the first
         fill included: a page handed a value can throw it back in any later
         error, and the run never needs to know which steps came after it."""
         return error_text(

@@ -72,7 +72,8 @@ def probing_account(endpoint: str) -> str:
 @contextmanager
 def raw_http_server(reply: bytes) -> Iterator[str]:
     """The origin of a loopback server that answers every request with
-    `reply`, bytes as given, so a status line can be malformed."""
+    `reply`, bytes as given, so a status line can be malformed. A thread,
+    not egress_fixtures' async `raw_upstream`: `run` owns its event loop."""
 
     class Handler(socketserver.BaseRequestHandler):
         def handle(self) -> None:

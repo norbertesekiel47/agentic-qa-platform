@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from aqa_core.config import ProjectConfig
 from aqa_runner.executor import RunResult
+from aqa_runner.redaction import REASON_CHARS
 
 from packages.runner.tests.executor_fixtures import (
     FORM_TARGETS,
@@ -252,3 +253,77 @@ def test_a_join_spanning_bound_value_is_scanned_after_a_secret_fill(
         "test secret"
     )
     assert FAKE_VALUE not in everything(result)
+
+
+def test_a_valid_status_line_reaches_the_normal_result(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "fäke-sénsitive")
+    reply = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    with raw_http_server(reply) as origin:
+        spec = secret_spec(tmp_path, start_url="/")
+        result = run(app, tmp_path, compiled([]), spec=spec, origins=(origin,)).result
+
+    assert result.infrastructure_events == ()
+
+
+def test_a_join_spanning_bound_value_is_scanned_in_a_run_with_no_fill(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
+    monkeypatch.setenv("AQA_SECRET_TEST_NAME", "Error: ElementHandle.evaluate")
+    monkeypatch.setitem(
+        PAGES,
+        "throws-bound",
+        "<label>Name <input></label><script>document.execCommand = () => "
+        '{ throw new Error("fake page text"); };</script>',
+    )
+    spec = secret_spec(
+        tmp_path, TWO_SECRETS, account=TWO_ACCOUNTS, start_url="/page/throws-bound"
+    )
+    fill = {
+        "seq": 1,
+        "action": "fill",
+        "target": "name",
+        "value": "Ada",
+        "side_effect": False,
+    }
+
+    result = run(
+        app, tmp_path, compiled([fill], targets=FORM_TARGETS), spec=spec
+    ).result
+
+    # Playwright's message shows in a run that fills no secret: its class
+    # and call are the bound value, scanned across their join.
+    assert result.steps[1].error == "[SECRET:TEST_NAME]: Error: fake page text"
+
+
+def test_an_owned_message_is_one_line_of_at_most_the_reason_bound(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A refused fill_secret names the page's origin and the field, and the
+    # origins the secret allows after it: what runs past the bound is cut.
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
+    origins = ", ".join(f"https://long-{n}.example.test" for n in range(12))
+    spec = secret_spec(
+        tmp_path,
+        f"TEST_PASSWORD: {{ origins: [{origins}], field: password }}",
+        start_url="/page/form",
+        allowed_origins=tuple(f"https://long-{n}.example.test" for n in range(12)),
+    )
+    fill = {
+        "seq": 1,
+        "action": "fill_secret",
+        "target": "name",
+        "secret": "TEST_PASSWORD",
+        "side_effect": False,
+    }
+
+    result = run(
+        app, tmp_path, compiled([fill], targets=FORM_TARGETS), spec=spec
+    ).result
+
+    error = result.steps[1].error or ""
+    assert error.startswith("fill_secret refused TEST_PASSWORD: the page is on ")
+    assert len(error) == REASON_CHARS
+    assert "\n" not in error
