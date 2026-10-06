@@ -313,14 +313,7 @@ async def replay(
         "errored" if errored else "passed" if passed else "failed",
         tuple(steps),
         assertions,
-        tuple(
-            replace(
-                event,
-                host=redactor.redact(event.host),
-                cause=redactor.redact(event.cause),
-            )
-            for event in gate.infrastructure_events
-        ),
+        tuple(_scanned(event, redactor) for event in gate.infrastructure_events),
         policy_events,
         invariants,
         blocks,
@@ -833,6 +826,15 @@ def _owned(error: _Raised) -> str | None:
     ):
         return str(error)
     return None
+
+
+def _scanned(event: InfrastructureEvent, redactor: Redactor) -> InfrastructureEvent:
+    """A copy of the gate's event with its host and cause scanned: h11's
+    text for a malformed reply holds the upstream's status line. The gate's
+    own list keeps the raw event."""
+    return replace(
+        event, host=redactor.redact(event.host), cause=redactor.redact(event.cause)
+    )
 
 
 def _egress_record(blocks: EgressBlocks, *, withheld: bool) -> dict[str, object]:

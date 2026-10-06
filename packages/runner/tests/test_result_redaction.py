@@ -131,7 +131,7 @@ def test_an_unbound_malformed_status_line_keeps_its_diagnostic(
     assert "[SECRET" not in event.cause
 
 
-def test_a_non_ascii_status_line_is_redacted_whatever_its_escaping(
+def test_a_non_ascii_utf8_status_line_is_redacted_as_h11_escapes_it(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     value = "fäke-sénsitive"
@@ -327,3 +327,42 @@ def test_an_owned_message_is_one_line_of_at_most_the_reason_bound(
     assert error.startswith("fill_secret refused TEST_PASSWORD: the page is on ")
     assert len(error) == REASON_CHARS
     assert "\n" not in error
+
+
+def test_a_bound_value_in_an_infrastructure_events_host_is_scanned(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The fixture app's loopback address is both the allowed host and, here,
+    # a bound value.
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "127.0.0.1")
+    spec = secret_spec(
+        tmp_path, start_url="/page/form", account=probing_account("/probe/malformed")
+    )
+
+    result = run(app, tmp_path, compiled([], assertions=[PROBE]), spec=spec).result
+
+    (event,) = result.infrastructure_events
+    assert event.host == "[SECRET:TEST_PASSWORD]"
+    assert "127.0.0.1" not in event.cause
+
+
+def test_the_action_timeout_reason_is_scanned(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "didn't finish within")
+    config = ProjectConfig.model_validate({"budgets": {"resolve_seconds": 1}})
+    spec = secret_spec(tmp_path, start_url="/page/stall")
+    fill = {
+        "seq": 1,
+        "action": "fill",
+        "target": "name",
+        "value": "Ada",
+        "side_effect": False,
+    }
+
+    result = run(
+        app, tmp_path, compiled([fill], targets=FORM_TARGETS), config=config, spec=spec
+    ).result
+
+    # The run's one second and the executor's one second of margin.
+    assert result.steps[1].error == "the action [SECRET:TEST_PASSWORD] 2 s"
