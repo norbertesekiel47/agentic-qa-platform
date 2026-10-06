@@ -586,3 +586,20 @@ Rejected: scanning only when a result is exported, which leaves the session's wi
 ### Consequences and limits
 
 Complete metadata stays in process memory, private to `Traffic`: underscore privacy is no boundary against code in the same process. `network_held` answers a caller's regex over those complete URLs, so it must stay out of reach of model-facing tools and results: one question at a time, a model could read a reflected value back. Each kept response costs a second `Exchange`, whose complete URL is as long as Chromium allows. The scan covers the whole URL before the cut, with A1's lack of any time ceiling: with one bound value it measured 0.002 s for 2,048 characters and 2.5 s for 2 MB, so a page's long URLs cost the run time. A cut can keep a marker's prefix, and A1's over-redaction applies. A scan failure is not caught, and the scan has no failure a page can cause. Playwright 1.63 keeps it for its next protocol call. For a routed request, that call is the routing's continuation of the same request, which drops it, so the request stalls. A redirect hop isn't routed: it reaches the server unrecorded, and the error waits for the next protocol call, which a network check doesn't make (LAB_NOTES, 2026-10-05). Error reasons and infrastructure events are A2's next PR; egress hosts and invariant texts stay slice D's; saved evidence is B's.
+
+## Amendment (2026-10-05): error presentation and infrastructure events (#50 A2, second part)
+
+### Context and options
+
+A failed step's reason carried Playwright's first line, which a page can write, and a bound value the script never fills was never scanned in it. The gate's infrastructure events carry h11's text for a malformed reply, with the page's status line escaped as bytes (#48's security review). Options: scan each component of a presentation, scan the finished text once, or scan at each stage a transformation can create a value. A component scan misses a value spanning a join, such as the class name and the call; a single scan before escaping misses one that escaping writes (`\x01`); a scan after the cut finds nothing of a value the cut split.
+
+### Decision
+
+- `redaction.error_text(error, redactor, *, ours, withheld)` is the one presenter; the executor calls it for every reason, and #53 will for its own. `ours` is the caller's own complete message for an error it owns, even empty; None marks Playwright's, which the page may have chosen. The constants `REASON_CHARS` and `PLAYWRIGHT_CALL` move into the redaction module with it.
+- Exactly three scans, never a loop: the complete selected message, before a line, a call, an escape or a cut is taken from it; the complete assembly, class and message or call and fixed wording, so a join is covered; the escaped first line, with the cut to `REASON_CHARS` applied by `Redactor.redact` after its scan. When `withheld`, the call is recognised on the scanned message, never on the raw one.
+- Every reason is therefore one printable line of at most 200 characters, an owned message too. The direct strings the executor builds (an assertion left unevaluated, an action that timed out) are scanned whole.
+- `RunResult.infrastructure_events` holds copies with host and cause scanned; port, order and count are unchanged, and `egress_peers.py` and the gate's own events are untouched.
+
+### Consequences and limits
+
+A marker, an over-redaction or a cut marker prefix can appear in a reason; a matcher's accepted limits (A1) apply. `error_text` is not proof against an arbitrary downstream encoding. Egress-block hosts, invariant texts and `egress.json` stay slice D's; the cause keeps the text of the upstream's status line unless a bound value is in it, and removing the unbound text is a follow-up that records only h11's error class.
