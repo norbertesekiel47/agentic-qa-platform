@@ -18,6 +18,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anthropic
+import pilot_replay
 from aqa_core.compiled import Press
 from aqa_core.project import load_project
 from aqa_runner import browser_session
@@ -57,6 +58,7 @@ BINDING = {"TEST_PASSWORD": {"origins": ["start"], "field": "password"}}
 OUTCOME = json.loads(
     '{"outcome":"failed","failure":null,"interrupted":false,"reset_completed":false,"cleanup":"completed","resources":"unknown"}'
 )
+HOLD_RECEIPTS = ("cleanup-incomplete.json", "attempt.json")
 CLIENTS: list[type] = [
     ModelRouter,
     AnthropicClient,
@@ -171,7 +173,10 @@ class PilotReplayTests(unittest.TestCase):
         latest = max(self.root.glob(".aqa/runs/*"))
         return json.loads((latest / name).read_text())
 
-    def fake_browser(self, release: asyncio.Event) -> tuple[dict[str, int], AsyncMock]:
+    def fake_browser(self, held: bool = False) -> tuple[dict[str, int], AsyncMock]:
+        release = self.release = asyncio.Event()
+        if not held:
+            release.set()
         calls = {"close": 0, "close_cancelled": 0}
         self.entered, self.closing = asyncio.Event(), asyncio.Event()
         self.close_error: Exception | None = None
@@ -307,6 +312,13 @@ class PilotReplayTests(unittest.TestCase):
         self.assertEqual(
             self.failed(attempt), ("script_refused", "completed", "closed")
         )
+
+        async def changing(*_: object) -> None:
+            os.environ.update(surrogate)
+
+        with patch.dict(os.environ, SECRET), patch("pilot_replay._reset", changing):
+            attempt = self.replay(pilot)
+        self.assertEqual(self.failed(attempt), closed)
         self.assertEqual(self.server.log, ["POST /reset"])
         self.assertEqual(refused.call_count, 0)
 
@@ -353,9 +365,7 @@ class PilotReplayTests(unittest.TestCase):
     def test_the_operation_limit_cancels_once_and_keeps_its_cause(self) -> None:
         del self.spec["preconditions"]["reset"]
         self.config["budgets"] = {"minutes": 0.005}
-        release = asyncio.Event()
-        release.set()
-        calls, launch = self.fake_browser(release)
+        calls, launch = self.fake_browser()
         attempt = self.replay(self.pilot())
         self.assertEqual(
             self.failed(attempt), ("operation_timeout", "completed", "unknown")
@@ -388,8 +398,7 @@ class PilotReplayTests(unittest.TestCase):
     def test_hung_cleanup_writes_its_receipt_and_holds_the_attempt(self) -> None:
         del self.spec["preconditions"]["reset"]
         self.config["budgets"] = {"minutes": 0.005, "resolve_seconds": 0.1}
-        release = asyncio.Event()
-        calls, _ = self.fake_browser(release)
+        calls, _ = self.fake_browser(held=True)
         pilot = self.pilot()
 
         async def held() -> list[object]:
@@ -403,15 +412,18 @@ class PilotReplayTests(unittest.TestCase):
                     attempt.cancel()
                     await asyncio.sleep(0.2)
                     seen += [attempt.done(), dict(calls)]
-                    release.set()
+                    run = max(self.root.glob(".aqa/runs/*"))
+                    seen += [(run / n).exists() for n in HOLD_RECEIPTS]
+                    self.release.set()
                     with self.assertRaises(asyncio.CancelledError):
                         await attempt
                     return seen
             finally:
-                release.set()
+                self.release.set()
 
         closing = {"close": 1, "close_cancelled": 0}
-        self.assertEqual(asyncio.run(held()), [False, closing, False, closing])
+        seen = [False, closing, False, closing, True, False]
+        self.assertEqual(asyncio.run(held()), seen)
         self.assertEqual(
             self.receipt("cleanup-incomplete.json"),
             {
@@ -432,8 +444,7 @@ class PilotReplayTests(unittest.TestCase):
     def test_a_failed_incomplete_receipt_still_holds_the_attempt(self) -> None:
         del self.spec["preconditions"]["reset"]
         self.config["budgets"] = {"resolve_seconds": 0.1}
-        release = asyncio.Event()
-        self.fake_browser(release)
+        self.fake_browser(held=True)
         original = RunRecord.write
 
         def write(record: RunRecord, name: str, document: object) -> Path:
@@ -451,20 +462,18 @@ class PilotReplayTests(unittest.TestCase):
                     await self.closing.wait()
                     await asyncio.sleep(0.3)
                     live = not attempt.done()
-                    release.set()
+                    self.release.set()
                     with self.assertRaisesRegex(OSError, "fake full disk"):
                         await attempt
                     return live
             finally:
-                release.set()
+                self.release.set()
 
         self.assertTrue(asyncio.run(held()))
 
     def test_an_interrupt_outranks_a_later_cleanup_error(self) -> None:
         del self.spec["preconditions"]["reset"]
-        release = asyncio.Event()
-        release.set()
-        self.fake_browser(release)
+        self.fake_browser()
         self.fail_proxy_exits()
         pilot = self.pilot()
 
@@ -496,3 +505,18 @@ class PilotReplayTests(unittest.TestCase):
         self.assertEqual(
             self.server.log, ["POST /reset"] * 2 + ["GET /", "POST /reset"]
         )
+
+    def test_a_cleanup_failure_outranks_a_later_operation_timeout(self) -> None:
+        self.config["budgets"] = {"minutes": 0.1}
+        self.fail_proxy_exits()
+        real = pilot_replay.async_playwright
+
+        @asynccontextmanager
+        async def stalling() -> AsyncIterator[Any]:
+            async with real() as driver:
+                yield driver
+                await asyncio.Event().wait()
+
+        self.enterContext(patch("pilot_replay.async_playwright", stalling))
+        attempt = self.replay(self.pilot())
+        self.assertEqual(self.failed(attempt), ("cleanup_failed", "failed", "unknown"))
