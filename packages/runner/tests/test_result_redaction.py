@@ -214,3 +214,41 @@ def test_an_assertion_reason_holding_a_bound_value_is_scanned(
         result.assertions[1].error
         == "[SECRET:TEST_PASSWORD] a1's look at the page raised"
     )
+
+
+def test_a_join_spanning_bound_value_is_scanned_after_a_secret_fill(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # TEST_NAME is never filled, but the page was handed TEST_PASSWORD, so a
+    # later reason keeps only Playwright's class and call, which together
+    # are TEST_NAME's value.
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
+    monkeypatch.setenv("AQA_SECRET_TEST_NAME", "Error: ElementHandle.evaluate")
+    spec = secret_spec(
+        tmp_path, TWO_SECRETS, account=TWO_ACCOUNTS, start_url="/page/signin-rethrows"
+    )
+    fill = {
+        "seq": 1,
+        "action": "fill_secret",
+        "target": "password",
+        "secret": "TEST_PASSWORD",
+        "side_effect": False,
+    }
+    click = {"seq": 2, "action": "click", "target": "password", "side_effect": False}
+    targets = {
+        "password": {
+            "semantic": "the password field",
+            "locators": [{"css": "input[type=password]"}],
+        }
+    }
+
+    result = run(
+        app, tmp_path, compiled([fill, click], targets=targets), spec=spec
+    ).result
+
+    assert result.steps[2].outcome == "failed"
+    assert result.steps[2].error == (
+        "[SECRET:TEST_NAME]: the rest is withheld, since the page was handed a "
+        "test secret"
+    )
+    assert FAKE_VALUE not in everything(result)
