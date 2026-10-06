@@ -407,9 +407,33 @@ The Conduit REVIEW table requires checks that establish each expectation. A chec
 
 ## Amendment (2026-10-05): recorded pilot plans and the prompt's three rounds (#41 B2b)
 
-B2b records the five pilot plans live and replays them offline against the B2a oracle (above). Source SHA 4844fe7; every recording's request ID, tokens and cost are in `.scratch/ticket-41/log.md`, and the six round-3 requests are `req_011CfkKff7PeiR9AVLXFjGLR` (generic), `req_011CfkKhDTc4QDEEMoJa1wtK` (read-article), `req_011CfkKi2W4xiJVx8LFT3zGK` (favorite-article), `req_011CfkKiUkdgrXF34nsdG7bQ` (publish-article), `req_011CfkKj57bwkTVvXPpFwg2c` (post-comment) and `req_011CfkKjegDWR1WQ7zWM8rsP` (login). The live spend across B1 and B2b's three rounds is USD 0.260434 in total (USD 0.011932 of it B1's four captures).
+B2b records the five pilot plans live and replays them offline against the B2a oracle (above). The final cassettes are the round-3 recordings at source SHA 4844fe7, made with the named recorder (TESTING.md section 4). Every B2b call used model `claude-sonnet-5-5`, the pinned price map and no cached input; the `coverage_plan` rows are the generic cassette's re-records after each prompt change:
 
-- **Why the prompt changed.** The first recordings named elements the oracle could not accept: an ambiguous copy of a repeated element, a pattern that left out part of the claim, labels inside target meanings, a claim about a page's address with no `url_matches`, a collection claim turned into one item. Three rounds of general rules in `INSTRUCTIONS` (no pilot, REVIEW or Conduit text) addressed these: name the instance of a repeated element by where it sits and keep every part of a claim in a pattern (round 1); keep the asserted text out of a target meaning, check a shown page's address, name a collection whole (round 2); target one item for its own property, and add `url_matches` to a claim that a particular page is shown (round 3). The rules are not asserted by wording: a changed prompt fails the cassette replays until the generic `coverage_plan` cassette is re-recorded. Each round re-recorded the generic cassette and the five pilots, and the maintainer ruled the third the last paid round.
+| Round | Case | Request ID | Tokens in / out | CostRecord (USD) |
+|---|---|---|---|---|
+| 1 | plan_read-article | `req_011CfiUB8A4qGchFN3JKxw5J` | 3874 / 710 | 0.014848 |
+| 1 | coverage_plan-002 | `req_011CfiUjU7G4DE5DfvQkcCQi` | 3798 / 207 | 0.009666 |
+| 1 | plan_read-article-002 | `req_011CfiUmfMz68f721NMkdYsz` | 3961 / 721 | 0.015132 |
+| 1 | plan_favorite-article-001 | `req_011CfiXn6TwhNqX7AN92fXiM` | 3834 / 229 | 0.009958 |
+| 1 | plan_publish-article-001 | `req_011CfiY73RezGmMUBaj4o2WF` | 4018 / 521 | 0.013246 |
+| 1 | plan_post-comment-001 | `req_011CfkGaRd3ByrRGf8GPc357` | 3947 / 418 | 0.012074 |
+| 1 | plan_login-001 | `req_011CfkGdJJarNgJXYc6RzMqn` | 3918 / 685 | 0.014686 |
+| 2 | coverage_plan-003 | `req_011CfkJneHchfsjBrqzeGaND` | 3956 / 191 | 0.009822 |
+| 2 | plan_read-article-r2 | `req_011CfkJpWny4Mq9quxVmUdjx` | 4119 / 717 | 0.015408 |
+| 2 | plan_favorite-article-r2 | `req_011CfkJqaguRvqN5EaGsoafi` | 3992 / 777 | 0.015754 |
+| 2 | plan_publish-article-r2 | `req_011CfkJrTd28dxu4Yz1hHBLc` | 4176 / 520 | 0.013552 |
+| 2 | plan_post-comment-r2 | `req_011CfkJt5c15LvGXo23qbFHN` | 4105 / 384 | 0.012050 |
+| 2 | plan_login-r2 | `req_011CfkJtp7dMKR7eYAezaUye` | 4076 / 677 | 0.014922 |
+| 3 | coverage_plan-004 | `req_011CfkKff7PeiR9AVLXFjGLR` | 3994 / 201 | 0.009998 |
+| 3 | plan_read-article-r3 | `req_011CfkKhDTc4QDEEMoJa1wtK` | 4157 / 746 | 0.015774 |
+| 3 | plan_favorite-article-r3 | `req_011CfkKi2W4xiJVx8LFT3zGK` | 4030 / 237 | 0.010430 |
+| 3 | plan_publish-article-r3 | `req_011CfkKiUkdgrXF34nsdG7bQ` | 4214 / 532 | 0.013748 |
+| 3 | plan_post-comment-r3 | `req_011CfkKj57bwkTVvXPpFwg2c` | 4143 / 392 | 0.012206 |
+| 3 | plan_login-r3 | `req_011CfkKjegDWR1WQ7zWM8rsP` | 4114 / 700 | 0.015228 |
+
+B2b's calls cost USD 0.248502 over three rounds; with B1's four captures (USD 0.011932) the live total is USD 0.260434. Only the round-3 recordings are kept as cassettes; the earlier attempts stay in the ignored `.scratch` evidence.
+
+- **Why the prompt changed.** The first recordings named elements the oracle could not accept: an ambiguous copy of a repeated element, a pattern that left out part of the claim, labels inside target meanings, a claim about a page's address with no `url_matches`, a collection claim turned into one item. Three rounds of general rules in `INSTRUCTIONS` (no pilot or REVIEW text; the examples are generic) addressed these: name the instance of a repeated element by where it sits and keep every part of a claim in a pattern (round 1); keep the asserted text out of a target meaning, check a shown page's address, name a collection whole (round 2); target one item for its own property, and add `url_matches` to a claim that a particular page is shown (round 3). The rules are not asserted by wording: a changed prompt fails the cassette replays until the generic `coverage_plan` cassette is re-recorded. Each round re-recorded the generic cassette and the five pilots, and the maintainer ruled the third the last paid round.
 - **Reviewed oracle keys.** The oracle's rows accept a second complete check set where an independent review found it means REVIEW's row and admits none of its rejected proxies: login/0 (two more root patterns, `^https?://[^/]+/?(?:[?#].*)?$` and `^https?://[^/]+/?(#/?)?$`), login/1 and post-comment/2 (`text_in_target` on the feed tabs or the comment list, scoped, where REVIEW names `text_visible`), and read-article/6 (three patterns scoped to the signed-out comment prompt: R6-B's `(or|and)` pattern, the pattern with nothing required between the links, and `(?i)sign in.*sign up.*comment`; none checks "to add comments"). The written reviews are the comment above `ROWS`.
 - **Reviewed aliases.** A recorded phrase maps to its oracle role when it names the same element, carries no label and selects nothing REVIEW rejects (`ALIASES`); the favorite plan's recorded reload wording is an alias of the reload condition. Rows whose element renders twice (REVIEW.md:62: the author meta, the favorite button, the byline) take a page-level meaning: which copy it resolves to is #53's binding, to the banner copy, and until then a change in only one copy is caught only if #53 binds the banner.
 - **Open rows (criterion 4 stays open).** 19 of the 23 expectations pass. read-article/0 (an extra `url_matches`), read-article/5 (an extra weaker author check), publish-article/0 (`url_matches` matches any article URL) and post-comment/1 (the signed-in reader named in the meaning) do not, are not tested, and are written up as follow-ups.

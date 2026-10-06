@@ -61,8 +61,8 @@ def row(
 #   `text_in_target` on the feed tabs: scoped, hence stricter (the text must sit
 #   in the tabs, not anywhere), by the same reasoning as post-comment/2. The
 #   target role is "feed tabs", which names no label.
-# - read-article/6: REVIEW's check is the whole prompt sentence. R6-B accepts
-#   the pattern PROMPT_WITH_JOINER, which needs both links' words with "or" or
+# - read-article/6: REVIEW's check is the whole prompt sentence. The first
+#   accepted pattern is PROMPT_WITH_JOINER, which needs both links' words with "or" or
 #   "and" between them. The maintainer also accepts PROMPT_WITHOUT_JOINER, which
 #   needs both links' words with nothing required between them, so it accepts
 #   "Sign in Sign up" too. Both are scoped to the signed-out comment prompt and
@@ -76,6 +76,7 @@ def row(
 LOGIN_ROOT_KEY = r"^https?://[^/]+/?(?:[?#].*)?$"
 LOGIN_ROOT_FRAGMENT_KEY = r"^https?://[^/]+/?(#/?)?$"
 PROMPT = "signed-out comment prompt"
+# `(or|and)` has no word boundaries, so "Sign in for sign up" also matches.
 PROMPT_WITH_JOINER = r"(?i)sign in.*(or|and).*sign up|sign up.*(or|and).*sign in"
 PROMPT_WITHOUT_JOINER = r"(?i)sign in.*sign up|sign up.*sign in"
 PROMPT_WITH_COMMENT = r"(?i)sign in.*sign up.*comment"
@@ -238,7 +239,7 @@ SPEC_FINGERPRINTS = {
 }
 
 
-# Reviewed aliases (independent review, accepted 2026-10-05): the exact phrase
+# Reviewed aliases (accepted 2026-10-05 after an independent review): the exact phrase
 # a recorded plan used for a target, folded as `phrase` folds it, and the role
 # in ROWS it means. Each phrase names the same element as its role, carries no
 # label, and selects no copy that REVIEW's "Not acceptable" column rejects. The

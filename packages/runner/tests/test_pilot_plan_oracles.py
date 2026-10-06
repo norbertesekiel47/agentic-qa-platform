@@ -17,6 +17,7 @@ from aqa_runner.text_search import url_matches
 from pydantic import ValidationError
 
 from packages.runner.tests.pilot_plan_oracles import (
+    ALIASES,
     LOGIN_ROOT_FRAGMENT_KEY,
     LOGIN_ROOT_KEY,
     PROMPT,
@@ -24,6 +25,7 @@ from packages.runner.tests.pilot_plan_oracles import (
     PROMPT_WITH_JOINER,
     PROMPT_WITHOUT_JOINER,
     ROWS,
+    phrase,
     plan_problems,
     source_problems,
 )
@@ -776,6 +778,9 @@ def test_the_prompt_patterns_require_both_links_and_the_joiner_one_a_joiner() ->
         assert asyncio.run(url_matches(pattern, both)) is True
         for proxy in ("to add comments on this article", "Sign in", "Sign up"):
             assert asyncio.run(url_matches(pattern, proxy)) is False
+    for pattern in (PROMPT_WITH_JOINER, PROMPT_WITHOUT_JOINER):
+        assert asyncio.run(url_matches(pattern, "Sign up or sign in")) is True
+        assert asyncio.run(url_matches(pattern, "Sign up and sign in")) is True
     assert asyncio.run(url_matches(PROMPT_WITHOUT_JOINER, "Sign in Sign up")) is True
     assert asyncio.run(url_matches(PROMPT_WITH_JOINER, "Sign in Sign up")) is False
 
@@ -870,3 +875,14 @@ def test_the_favorite_reload_condition_has_one_reviewed_wording() -> None:
         "favorite-article/0: reload condition differs",
         "favorite-article/1: reload condition differs",
     )
+
+
+def test_every_reviewed_alias_names_a_role_some_row_requires() -> None:
+    roles = {
+        phrase(check.target_meaning or "")
+        for rows in ROWS.values()
+        for row in rows
+        for keys in (row.required, *row.alternatives)
+        for check in keys
+    }
+    assert set(ALIASES.values()) <= roles
