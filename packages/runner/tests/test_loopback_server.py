@@ -803,9 +803,10 @@ class BufferedExchange:
     ) -> None:
         self.served.append(writer)
         assert await reader.read() == REQUEST
-        # Linux doubles this and counts unacknowledged bytes against it. Below
-        # two 64 KiB loopback segments, each segment waits about 40 ms for a
-        # delayed ACK, and the payload then outlasts observe's deadline.
+        # Bounded so the payload queues behind the paused peer. Linux doubles
+        # this and charges unacknowledged bytes to it; with room for only one
+        # 64 KiB loopback segment in flight, each segment waits about 40 ms for
+        # a delayed ACK and the payload outlasts observe's deadline.
         writer.get_extra_info("socket").setsockopt(
             socket.SOL_SOCKET, socket.SO_SNDBUF, 128 * 1024
         )
