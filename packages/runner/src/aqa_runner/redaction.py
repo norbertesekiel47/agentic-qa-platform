@@ -241,9 +241,10 @@ _WITHHELD = "the rest is withheld, since the page was handed a test secret"
 def error_text(
     error: Exception, redactor: Redactor, *, ours: str | None, withheld: bool
 ) -> Redacted:
-    """`error` as text a result may carry: `ours`, the caller's own complete
-    message for an error it owns (even an empty one), or else the error's
-    class and the first line of its message, which the page may have chosen.
+    """`error` as text a result may carry: `ours`, the caller's own message
+    for an error it owns (even an empty one), or else the error's class and
+    its message, which the page may have chosen. Either is cut to its first
+    line and `REASON_CHARS`.
     When `withheld`, an untrusted message keeps only the call it names.
 
     Three scans, never a loop, each over the complete text of its stage

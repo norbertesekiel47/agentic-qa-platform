@@ -99,6 +99,13 @@ CASES = {
         False,
         "Error: Page.goto: [SECRET:FAKE_NEWLINE] leftover",
     ),
+    "prefix_and_newline_span_the_value": Case(
+        ("FAKE_NL", "Error: fake\nsecret"),
+        "fake\nsecret leftover",
+        None,
+        False,
+        "[SECRET:FAKE_NL] leftover",
+    ),
     "escape_created_literal": Case(
         ("FAKE_ESCAPE", "fake\\x01tail"),
         "Page.goto: fake\x01tail",
