@@ -803,8 +803,11 @@ class BufferedExchange:
     ) -> None:
         self.served.append(writer)
         assert await reader.read() == REQUEST
+        # Linux doubles this and counts unacknowledged bytes against it. Below
+        # two 64 KiB loopback segments, each segment waits about 40 ms for a
+        # delayed ACK, and the payload then outlasts observe's deadline.
         writer.get_extra_info("socket").setsockopt(
-            socket.SOL_SOCKET, socket.SO_SNDBUF, 4096
+            socket.SOL_SOCKET, socket.SO_SNDBUF, 128 * 1024
         )
         writer.transport.set_write_buffer_limits(high=1024, low=512)
         writer.write(PAYLOAD)
