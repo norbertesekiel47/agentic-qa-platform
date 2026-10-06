@@ -70,6 +70,15 @@ naming its own. When a page may show the same thing in more than one place, \
 such as an item's details repeated above and below it, name the one the \
 claim is about by where it sits, such as "the price in the product summary \
 under the product name".
+- A target_meaning never quotes or contains the text its check asserts: it \
+names what the element is and where it sits, not what it says. A target \
+that names a tag "news", or a tab called "Home", gives the check away.
+- A claim about the page's address, or about which page is shown, is checked \
+with url_matches on the address, in addition to any check on the page's \
+content.
+- A claim about a collection, such as a list of comments, tags or links, \
+names the collection as the target, never one item of it, and the text is \
+searched for inside the collection.
 - text is a literal, matched as whole words and ignoring case: prefer it. \
 Use pattern, a Python regular expression searched with re.search, only when \
 a literal can't say it, and write its flags inline, such as (?i). A URL is \
