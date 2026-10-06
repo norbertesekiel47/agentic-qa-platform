@@ -407,7 +407,7 @@ The Conduit REVIEW table requires checks that establish each expectation. A chec
 
 ## Amendment (2026-10-05): recorded pilot plans and the prompt's three rounds (#41 B2b)
 
-B2b records the five pilot plans live and replays them offline against the B2a oracle (above). The final cassettes are the round-3 recordings at source SHA 4844fe7, made with the named recorder (TESTING.md section 4). Every B2b call used model `claude-sonnet-5-5`, the pinned price map and no cached input; the `coverage_plan` rows are the generic cassette's re-records after each prompt change:
+B2b records the five pilot plans live and replays them offline against the B2a oracle (above). The final cassettes are the round-3 recordings at source commit f9f17b0 (4844fe7 when recorded, before the rebase onto main), made with the named recorder (TESTING.md section 4). Every B2b call used model `claude-sonnet-5-5`, the pinned price map and no cached input; the `coverage_plan` rows are the generic cassette's re-records after each prompt change:
 
 | Round | Case | Request ID | Tokens in / out | CostRecord (USD) |
 |---|---|---|---|---|
