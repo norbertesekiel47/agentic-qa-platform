@@ -4,8 +4,10 @@ secrets, and a walk over everything a replay result holds. Imported by its
 path, as pytest names the runner's test modules (TESTING.md §1, Shared
 egress fixtures)."""
 
-from collections.abc import AsyncIterator, Mapping
-from contextlib import asynccontextmanager
+import socketserver
+import threading
+from collections.abc import AsyncIterator, Iterator, Mapping
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import fields, is_dataclass
 
 from aqa_core.project import SecretDestination
@@ -55,3 +57,31 @@ def leaves(value: object) -> list[object]:
     if isinstance(value, (tuple, list, set, frozenset)):
         return [leaf for item in value for leaf in leaves(item)]
     return [value]
+
+
+def probing_account(endpoint: str) -> str:
+    """A `secret_spec` account whose spec also declares the probe `count`,
+    reading `endpoint` of the fixture app: the account text is the last of
+    the preconditions' keys, so one more follows it."""
+    return (
+        "{ email: reader@example.test, password: { secret: TEST_PASSWORD } }\n"
+        f'  probes: {{"count": "GET {endpoint}"}}'
+    )
+
+
+@contextmanager
+def raw_http_server(reply: bytes) -> Iterator[str]:
+    """The origin of a loopback server that answers every request with
+    `reply`, bytes as given, so a status line can be malformed."""
+
+    class Handler(socketserver.BaseRequestHandler):
+        def handle(self) -> None:
+            self.request.recv(65536)
+            self.request.sendall(reply)
+
+    with socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler) as server:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            yield f"http://127.0.0.1:{server.server_address[1]}"
+        finally:
+            server.shutdown()

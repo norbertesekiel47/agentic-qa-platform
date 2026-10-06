@@ -223,3 +223,46 @@ def _paths(value: str) -> tuple[tuple[_Token, ...], ...]:
 
 
 NO_SECRETS = Redactor(())
+
+# The most of an error's presentation kept: the rest of Playwright's message
+# can hold what the page chose.
+REASON_CHARS = 200
+
+# The call a Playwright error's message names first, such as
+# `ElementHandle.evaluate`: Playwright's own words, never the page's, since
+# its client puts every API call's name first (1.63's `wrap_api_call`,
+# `f"{apiName}: {error}"`). Bounded, so even a line that broke that rule
+# could give at most a short name of letters.
+PLAYWRIGHT_CALL = re.compile(r"[A-Z][A-Za-z]{0,40}\.[a-z][A-Za-z]{0,40}(?=: )")
+
+_WITHHELD = "the rest is withheld, since the page was handed a test secret"
+
+
+def error_text(
+    error: Exception, redactor: Redactor, *, ours: str | None, withheld: bool
+) -> Redacted:
+    """`error` as text a result may carry: `ours`, the caller's own complete
+    message for an error it owns (even an empty one), or else the error's
+    class and the first line of its message, which the page may have chosen.
+    When `withheld`, an untrusted message keeps only the call it names.
+
+    Three scans, never a loop, each over the complete text of its stage
+    (ADR-0026's A2 amendment): the selected message, before any line, call,
+    escape or cut is taken from it; the whole assembly, so a value spanning
+    a join is found; and the escaped first line, since escaping can write a
+    bound value's characters, before the cut to `REASON_CHARS`."""
+    selected = redactor.redact(str(error) if ours is None else ours)
+    if ours is not None:
+        assembled = str(selected)
+    elif withheld:
+        call = PLAYWRIGHT_CALL.match(selected)
+        named = f"{call[0]}: " if call else ""
+        assembled = f"{type(error).__name__}: {named}{_WITHHELD}"
+    else:
+        assembled = f"{type(error).__name__}: {selected}"
+    line = redactor.redact(assembled).split("\n", 1)[0]
+    escaped = "".join(
+        char if char.isprintable() else char.encode("unicode_escape").decode("ascii")
+        for char in line
+    )
+    return redactor.redact(escaped, limit=REASON_CHARS)

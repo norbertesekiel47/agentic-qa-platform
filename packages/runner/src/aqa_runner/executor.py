@@ -8,7 +8,6 @@ Browser observations use the session methods, which check every document
 they touch (ADR-0026). Probe reads use the same egress gate as the browser."""
 
 import asyncio
-import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Literal, assert_never, overload
@@ -62,7 +61,7 @@ from aqa_runner.egress import (
 from aqa_runner.egress_proxy import EgressBlocks, EgressProxy
 from aqa_runner.invariants import InvariantResult, invariant_results
 from aqa_runner.locators import Absent, Miss, Resolved, Unresolved, Use
-from aqa_runner.redaction import Redactor
+from aqa_runner.redaction import Redactor, error_text
 from aqa_runner.run_record import RunRecord
 from aqa_runner.secret_fields import SecretNotFilledError, SecretRefusedError
 from aqa_runner.settling import Settled, Window
@@ -81,17 +80,6 @@ NAVIGATION_SECONDS = 30
 # first, and this catches what Playwright doesn't time, such as a page script
 # that never returns while a field is filled.
 MARGIN_SECONDS = 1
-
-# The most of a failed step's reason kept: the rest of Playwright's message
-# can hold what the page chose.
-REASON_CHARS = 200
-
-# The call a Playwright error's first line names before its message, such as
-# `ElementHandle.evaluate`: Playwright's own words, never the page's, since
-# its client puts every API call's name first (1.63's `wrap_api_call`,
-# `f"{apiName}: {error}"`). Bounded, so even a line that broke that rule
-# could give at most a short name of letters.
-PLAYWRIGHT_CALL = re.compile(r"[A-Z][A-Za-z]{0,40}\.[a-z][A-Za-z]{0,40}(?=: )")
 
 # The steps the executor runs: those that act on a target, and the rest.
 type Targeted = Click | Fill | FillSecret | Select
@@ -136,6 +124,7 @@ class _Replay:
     targets: Mapping[str, Target]
     secrets: Mapping[str, BoundSecret]
     gate: EgressGate
+    redactor: Redactor
     baseline_definitions: Mapping[str, ProbeBaseline]
     baseline_values: dict[str, probes.JsonValue] = field(default_factory=dict)
 
@@ -145,11 +134,14 @@ class _Replay:
 
     def reason(self, error: _Raised) -> str:
         """`error` as a failed step's or an unevaluated assertion's reason
-        (`_described`). When the script fills a test secret, Playwright's
+        (`_described`, then `error_text`: scanned for every bound value,
+        the ones the script never fills too). When the script fills a test secret, Playwright's
         message is withheld for the whole run, the steps before the first
         fill included: a page handed a value can throw it back in any later
         error, and the run never needs to know which steps came after it."""
-        return _described(error, withheld=self.withheld)
+        return error_text(
+            error, self.redactor, ours=_owned(error), withheld=self.withheld
+        )
 
 
 @dataclass(frozen=True)
@@ -249,6 +241,7 @@ async def replay(
             if isinstance(step, FillSecret)
         },
         gate,
+        redactor,
         script.probe_baselines,
     )
     record = setup.record
@@ -320,7 +313,14 @@ async def replay(
         "errored" if errored else "passed" if passed else "failed",
         tuple(steps),
         assertions,
-        tuple(gate.infrastructure_events),
+        tuple(
+            replace(
+                event,
+                host=redactor.redact(event.host),
+                cause=redactor.redact(event.cause),
+            )
+            for event in gate.infrastructure_events
+        ),
         policy_events,
         invariants,
         blocks,
@@ -411,7 +411,9 @@ async def _evaluate_each(
     raised: str | None = None
     for check in checks:
         if raised is not None:
-            reason = f"not evaluated after {raised}'s look at the page raised"
+            reason = run.redactor.redact(
+                f"not evaluated after {raised}'s look at the page raised"
+            )
             results.append(AssertionResult(check.id, "not_evaluated", error=reason))
             continue
         try:
@@ -772,7 +774,9 @@ async def _dispatched(
         if not limit.expired():
             raise  # not the action's own limit
         return StepResult(
-            seq, "failed", error=f"the action didn't finish within {seconds:g} s"
+            seq,
+            "failed",
+            error=run.redactor.redact(f"the action didn't finish within {seconds:g} s"),
         )
     record.step_completed(seq, locator_used=index, settled=settled)
     return StepResult(seq, "completed", window, index, settled)
@@ -794,18 +798,15 @@ type _Raised = (
 )
 
 
-def _described(error: _Raised, *, withheld: bool) -> str:
-    """What raised, as a failed step's or an unevaluated assertion's reason:
-    the executor's or the session's own message (a policy event's names
-    only an origin, a fill_secret refusal only the secret, origins and
-    field); or the first line of Playwright's, with what isn't printable
-    escaped, at most `REASON_CHARS` in all. The rest of Playwright's message
-    can hold what the page chose.
-
-    When `withheld`, in a run whose script fills a test secret, Playwright's
-    message is left out altogether, keeping only its error type and the call
-    it names: a page handed a value can throw it back from any later call,
-    encoded as it likes (ADR-0026's fill_secret amendment)."""
+def _owned(error: _Raised) -> str | None:
+    """The executor's or the session's own message for an error it owns (a
+    policy event's names only an origin, a fill_secret refusal only the
+    secret, origins and field), or its fixed diagnostic for a probe's; None
+    for Playwright's, which the page may have chosen. `error_text` presents
+    either, and withholds the rest of Playwright's message in a run whose
+    script fills a test secret: a page handed a value can throw it back from
+    any later call, encoded as it likes (ADR-0026's fill_secret
+    amendment)."""
     for kind, reason in (
         (probes.ProbeError, "the probe could not be read"),
         (
@@ -831,19 +832,7 @@ def _described(error: _Raised, *, withheld: bool) -> str:
         | network.WindowsOverflowError,
     ):
         return str(error)
-    line = str(error).split("\n", 1)[0]
-    if withheld:
-        call = PLAYWRIGHT_CALL.match(line)
-        named = f"{call[0]}: " if call else ""
-        return (
-            f"{type(error).__name__}: {named}the rest is withheld, since the page "
-            "was handed a test secret"
-        )
-    shown = "".join(
-        char if char.isprintable() else char.encode("unicode_escape").decode("ascii")
-        for char in line
-    )
-    return f"{type(error).__name__}: {shown}"[:REASON_CHARS]
+    return None
 
 
 def _egress_record(blocks: EgressBlocks, *, withheld: bool) -> dict[str, object]:
