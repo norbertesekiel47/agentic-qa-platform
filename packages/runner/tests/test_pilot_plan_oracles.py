@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from packages.runner.tests.pilot_plan_oracles import (
     LOGIN_ROOT_FRAGMENT_KEY,
     PROMPT,
+    PROMPT_WITH_COMMENT,
     PROMPT_WITH_JOINER,
     PROMPT_WITHOUT_JOINER,
     ROWS,
@@ -779,3 +780,95 @@ def test_the_prompt_patterns_require_both_links_and_the_joiner_one_a_joiner() ->
             assert asyncio.run(url_matches(pattern, proxy)) is False
     assert asyncio.run(url_matches(PROMPT_WITHOUT_JOINER, "Sign in Sign up")) is True
     assert asyncio.run(url_matches(PROMPT_WITH_JOINER, "Sign in Sign up")) is False
+
+
+@pytest.mark.parametrize(
+    ("sample", "expected"),
+    [
+        ("Sign in or sign up to add comments on this article.", True),
+        ("Sign in Sign up", False),
+        ("Sign in", False),
+        ("to add comments on this article", False),
+        ("Sign in or sign up", False),
+    ],
+)
+def test_the_third_prompt_pattern_needs_both_links_then_the_comment_words(
+    sample: str, expected: bool
+) -> None:
+    assert asyncio.run(url_matches(PROMPT_WITH_COMMENT, sample)) is expected
+
+
+def test_read_article_accepts_the_third_reviewed_prompt_pattern() -> None:
+    plan = replace_checks(article(), 6, [prompt_pattern(PROMPT_WITH_COMMENT)])
+    assert plan_problems("read-article", plan) == ()
+
+
+def test_the_third_prompt_pattern_is_scoped_to_the_prompt() -> None:
+    plan = replace_checks(
+        article(), 6, [prompt_pattern(PROMPT_WITH_COMMENT, "header nav")]
+    )
+    assert plan_problems("read-article", plan) == (
+        "read-article/6: establishing checks differ",
+    )
+
+
+@pytest.mark.parametrize(
+    ("spec_id", "index", "phrase", "role", "literal"),
+    [
+        (
+            "read-article",
+            3,
+            "the article body content",
+            "article body",
+            "Most flaky tests are really flaky data.",
+        ),
+        (
+            "post-comment",
+            0,
+            "the list of comments under the article",
+            "article comment list",
+            "Thanks for the warm welcome!",
+        ),
+    ],
+)
+def test_a_reviewed_recorded_phrase_means_its_oracle_role(
+    spec_id: str, index: int, phrase: str, role: str, literal: str
+) -> None:
+    plan = {"read-article": article(), "post-comment": post()}[spec_id]
+    recorded = replace_checks(plan, index, [text(phrase, literal)])
+    assert plan_problems(spec_id, recorded) == ()
+    assert (
+        plan_problems(spec_id, replace_checks(plan, index, [text(role, literal)])) == ()
+    )
+
+
+def test_a_reviewed_phrase_names_one_role_only() -> None:
+    plan = replace_checks(
+        article(),
+        3,
+        [
+            text(
+                "the list of comments under the article",
+                "Most flaky tests are really flaky data.",
+            )
+        ],
+    )
+    assert plan_problems("read-article", plan) == (
+        "read-article/3: establishing checks differ",
+    )
+
+
+def test_the_favorite_reload_condition_has_one_reviewed_wording() -> None:
+    plan = favorite()
+    wording = "checked after reloading the article page, so the favorite has persisted"
+    reworded = plan.model_copy(
+        update={"requires": (RequiredCondition(id="c1", condition=wording),)}
+    )
+    assert plan_problems("favorite-article", reworded) == ()
+    other = plan.model_copy(
+        update={"requires": (RequiredCondition(id="c1", condition="after a reload"),)}
+    )
+    assert plan_problems("favorite-article", other) == (
+        "favorite-article/0: reload condition differs",
+        "favorite-article/1: reload condition differs",
+    )
