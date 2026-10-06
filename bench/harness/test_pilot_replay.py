@@ -46,17 +46,17 @@ COMPILED = """{
 "targets":{"send":{"semantic":"send button","locators":[{"role":"button","name":"Send"}]}},
 "probe_baselines":{},"steps":[],"assertions":[{"id":"a0","expect_index":0,"check":"text_visible","text":"Title"}]}
 """
-SEND = {"seq": 1, "action": "click", "target": "send", "side_effect": True}
+SEND = json.loads(
+    '{"seq":1,"action":"click","target":"send","side_effect":true,"side_effect_basis":"posts"}'
+)
+PRESS = Press(seq=1, action="press", key="a+b", side_effect=False)
 SECRET = {"AQA_SECRET_TEST_PASSWORD": "fake-password-value"}
+ACCOUNT = {"password": {"secret": "TEST_PASSWORD"}}
+FAILED = {"cleanup": "failed"}
 BINDING = {"TEST_PASSWORD": {"origins": ["start"], "field": "password"}}
-OUTCOME = {
-    "outcome": "failed",
-    "failure": None,
-    "interrupted": False,
-    "reset_completed": False,
-    "cleanup": "completed",
-    "resources": "unknown",
-}
+OUTCOME = json.loads(
+    '{"outcome":"failed","failure":null,"interrupted":false,"reset_completed":false,"cleanup":"completed","resources":"unknown"}'
+)
 CLIENTS: list[type] = [
     ModelRouter,
     AnthropicClient,
@@ -174,6 +174,7 @@ class PilotReplayTests(unittest.TestCase):
     def fake_browser(self, release: asyncio.Event) -> tuple[dict[str, int], AsyncMock]:
         calls = {"close": 0, "close_cancelled": 0}
         self.entered, self.closing = asyncio.Event(), asyncio.Event()
+        self.close_error: Exception | None = None
 
         async def close() -> None:
             calls["close"] += 1
@@ -183,6 +184,8 @@ class PilotReplayTests(unittest.TestCase):
             except asyncio.CancelledError:
                 calls["close_cancelled"] += 1
                 raise
+            if self.close_error is not None:
+                raise self.close_error
 
         async def goto(*_: object) -> None:
             self.entered.set()
@@ -236,7 +239,7 @@ class PilotReplayTests(unittest.TestCase):
         self.assertEqual(attempt.health, AttemptHealth(True, False, False))
 
     def test_each_attempt_has_fresh_resources_and_its_own_reset(self) -> None:
-        self.steps = [SEND | {"side_effect_basis": "posts the form"}]
+        self.steps = [SEND]
         pilot = self.pilot()
         gates = self.enterContext(patch("pilot_replay.EgressGate", wraps=EgressGate))
         proxies = self.enterContext(
@@ -256,24 +259,20 @@ class PilotReplayTests(unittest.TestCase):
         with malformed, self.assertRaisesRegex(ValueError, "fake"):
             self.replay(pilot)
         self.assertFalse((max(self.root.glob(".aqa/runs/*")) / "attempt.json").exists())
-        self.assertEqual(
-            json.loads((second.record / "attempt.json").read_text()),
-            {
-                "outcome": "observed",
-                "failure": None,
-                "interrupted": False,
-                "reset_completed": True,
-                "cleanup": "completed",
-                "resources": "closed",
-            },
-        )
+        observed = {
+            "outcome": "observed",
+            "reset_completed": True,
+            "resources": "closed",
+        }
+        receipt = json.loads((second.record / "attempt.json").read_text())
+        self.assertEqual(receipt, OUTCOME | observed)
 
     def test_a_failed_or_hanging_reset_dispatches_nothing(self) -> None:
         self.config["budgets"] = {"resolve_seconds": 0.3}
         self.spec["preconditions"]["reset"] = {"http": "POST /reset?fake-sensitive"}
-        self.steps = [SEND | {"side_effect_basis": "posts the form"}]
+        self.steps = [SEND]
         cases: tuple[tuple[int, str, str, list[str]], ...] = (
-            (302, self.origin, "reset_rejected", ["POST /reset"]),
+            (300, self.origin, "reset_rejected", ["POST /reset"]),
             (500, self.origin, "reset_rejected", ["POST /reset"]),
             (0, self.origin, "reset_timeout", ["POST /reset"]),
             (200, closed_origin(), "reset_unreachable", []),
@@ -290,31 +289,25 @@ class PilotReplayTests(unittest.TestCase):
                 self.assertNotIn("fake-sensitive", repr(attempt) + "".join(receipts))
 
     def test_a_replay_refusal_starts_no_browser(self) -> None:
-        self.spec["preconditions"]["account"] = {
-            "password": {"secret": "TEST_PASSWORD"}
-        }
+        self.spec["preconditions"]["account"] = ACCOUNT
         self.config["secrets"] = BINDING
         with patch.dict(os.environ, SECRET):
             pilot = self.pilot()
         refused = AsyncMock(side_effect=AssertionError("a browser was launched"))
         self.enterContext(patch.object(browser_session, "launch", refused))
-        attempt = self.replay(pilot)
-        self.assertEqual(
-            self.failed(attempt), ("secret_unusable", "completed", "closed")
-        )
-        press = Press(seq=1, action="press", key="a+b", side_effect=False)
-        script = pilot.script.model_copy(update={"steps": (press,)})
+        surrogate = {"AQA_SECRET_TEST_PASSWORD": "fake-\udcff"}
+        for env in ({}, SECRET | {"DEBUGP": ""}, surrogate):
+            with self.subTest(env=env), patch.dict(os.environ, env):
+                attempt = self.replay(pilot)
+                closed = ("secret_unusable", "completed", "closed")
+                self.assertEqual(self.failed(attempt), closed)
+        script = pilot.script.model_copy(update={"steps": (PRESS,)})
         with patch.dict(os.environ, SECRET):
             attempt = self.replay(replace(pilot, script=script))
         self.assertEqual(
             self.failed(attempt), ("script_refused", "completed", "closed")
         )
-        with patch.dict(os.environ, SECRET | {"DEBUGP": ""}):
-            attempt = self.replay(pilot)
-        self.assertEqual(
-            self.failed(attempt), ("secret_unusable", "completed", "closed")
-        )
-        self.assertEqual(self.server.log, ["POST /reset"] * 3)
+        self.assertEqual(self.server.log, ["POST /reset"])
         self.assertEqual(refused.call_count, 0)
 
     def test_a_replay_builds_no_model_client_and_reads_no_manifest(self) -> None:
@@ -370,16 +363,31 @@ class PilotReplayTests(unittest.TestCase):
         self.assertEqual(calls, {"close": 1, "close_cancelled": 0})
         receipt = self.receipt("attempt.json")
         self.assertEqual(receipt, OUTCOME | {"failure": "operation_timeout"})
-        launch.side_effect = RuntimeError("fake launch failure")
-        with self.assertRaisesRegex(RuntimeError, "fake launch failure"):
-            self.replay(self.pilot())
+        self.close_error = OSError("fake close failure")
+        attempt = self.replay(self.pilot())
         self.assertEqual(
-            self.receipt("attempt.json"), OUTCOME | {"outcome": "unexpected"}
+            self.failed(attempt), ("operation_timeout", "failed", "unknown")
         )
+        launch.side_effect = OSError("fake evidence failure")
+        original = EgressProxy.__aexit__
+
+        async def stalled(proxy: EgressProxy, *args: Any) -> None:
+            try:
+                await asyncio.Event().wait()
+            finally:
+                await original(proxy, *args)
+
+        with (
+            patch.object(EgressProxy, "__aexit__", stalled),
+            self.assertRaisesRegex(OSError, "fake evidence failure"),
+        ):
+            self.replay(self.pilot())
+        unexpected = {"outcome": "unexpected"}
+        self.assertEqual(self.receipt("attempt.json"), OUTCOME | unexpected | FAILED)
 
     def test_hung_cleanup_writes_its_receipt_and_holds_the_attempt(self) -> None:
         del self.spec["preconditions"]["reset"]
-        self.config["budgets"] = {"resolve_seconds": 0.1}
+        self.config["budgets"] = {"minutes": 0.005, "resolve_seconds": 0.1}
         release = asyncio.Event()
         calls, _ = self.fake_browser(release)
         pilot = self.pilot()
@@ -387,7 +395,7 @@ class PilotReplayTests(unittest.TestCase):
         async def held() -> list[object]:
             try:
                 async with asyncio.timeout(20):
-                    attempt = await self.interrupt(pilot)
+                    attempt = asyncio.create_task(replay_pilot(pilot, self.root))
                     await self.closing.wait()
                     # Past the 0.1 s cleanup window, which began before close did.
                     await asyncio.sleep(0.3)
@@ -407,8 +415,8 @@ class PilotReplayTests(unittest.TestCase):
         self.assertEqual(
             self.receipt("cleanup-incomplete.json"),
             {
-                "failure": None,
-                "interrupted": True,
+                "failure": "operation_timeout",
+                "interrupted": False,
                 "resources": "unknown",
                 "reservation_release": "forbidden",
             },
@@ -418,7 +426,8 @@ class PilotReplayTests(unittest.TestCase):
             "interrupted": True,
             "cleanup": "incomplete",
         }
-        self.assertEqual(self.receipt("attempt.json"), OUTCOME | outcome)
+        cause = {"failure": "operation_timeout"}
+        self.assertEqual(self.receipt("attempt.json"), OUTCOME | outcome | cause)
 
     def test_a_failed_incomplete_receipt_still_holds_the_attempt(self) -> None:
         del self.spec["preconditions"]["reset"]
@@ -470,15 +479,20 @@ class PilotReplayTests(unittest.TestCase):
 
     def test_a_cleanup_error_never_replaces_the_first_failure(self) -> None:
         self.fail_proxy_exits()
-        self.spec["preconditions"]["account"] = {
-            "password": {"secret": "TEST_PASSWORD"}
-        }
-        self.config["secrets"] = BINDING
-        with patch.dict(os.environ, SECRET):
-            pilot = self.pilot()
+        pilot = self.pilot()
+        script = pilot.script.model_copy(update={"steps": (PRESS,)})
+        attempt = self.replay(replace(pilot, script=script))
+        self.assertEqual(self.failed(attempt), ("script_refused", "failed", "unknown"))
         attempt = self.replay(pilot)
-        self.assertEqual(self.failed(attempt), ("secret_unusable", "failed", "unknown"))
-        with patch.dict(os.environ, SECRET):
-            attempt = self.replay(pilot)
         self.assertEqual(self.failed(attempt), ("cleanup_failed", "failed", "unknown"))
-        self.assertEqual(self.server.log, ["POST /reset", "POST /reset", "GET /"])
+        entering = AsyncMock(side_effect=OSError("fake proxy start failure"))
+        with (
+            patch.object(EgressProxy, "__aenter__", entering),
+            self.assertRaisesRegex(OSError, "fake proxy start failure"),
+        ):
+            self.replay(pilot)
+        started = {"outcome": "unexpected", "reset_completed": True}
+        self.assertEqual(self.receipt("attempt.json"), OUTCOME | started | FAILED)
+        self.assertEqual(
+            self.server.log, ["POST /reset"] * 2 + ["GET /", "POST /reset"]
+        )
