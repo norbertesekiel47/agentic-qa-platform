@@ -79,20 +79,22 @@ interactions:
       under the product name\\\".\\n- A target_meaning never quotes or contains the
       text its check asserts: it names what the element is and where it sits, not
       what it says. A target that names a tag \\\"news\\\", or a tab called \\\"Home\\\",
-      gives the check away.\\n- A claim about the page's address, or about which page
-      is shown, is checked with url_matches on the address, in addition to any check
-      on the page's content.\\n- A claim about a collection, such as a list of comments,
-      tags or links, names the collection as the target, never one item of it, and
-      the text is searched for inside the collection.\\n- text is a literal, matched
-      as whole words and ignoring case: prefer it. Use pattern, a Python regular expression
-      searched with re.search, only when a literal can't say it, and write its flags
-      inline, such as (?i). A URL is matched as it is, so write (?i) when its case
-      may vary. A pattern must still require every part of the claim the expectation
-      states, in order, not only some of its words.\\n- Assert nothing the spec can't
-      tell you, such as a generated part of a URL or the order of items.\\n- requires
-      lists the conditions the goal or the expectations need before the checks run,
-      each with an id (\\\"c1\\\", \\\"c2\\\", ...), such as \\\"checked after reloading
-      the order page\\\". Leave it empty when there are none.\\n\"}"
+      gives the check away.\\n- A claim that a particular page is shown, such as an
+      item's page or a profile page, includes a url_matches check on the page's address,
+      in addition to any check of what the page shows.\\n- A claim about what a collection
+      holds, such as a list of comments, tags or links, names the collection as the
+      target, and the text is searched for inside it. A claim about a property of
+      one item, such as who wrote the item just added, targets that item, not its
+      whole collection.\\n- text is a literal, matched as whole words and ignoring
+      case: prefer it. Use pattern, a Python regular expression searched with re.search,
+      only when a literal can't say it, and write its flags inline, such as (?i).
+      A URL is matched as it is, so write (?i) when its case may vary. A pattern must
+      still require every part of the claim the expectation states, in order, not
+      only some of its words.\\n- Assert nothing the spec can't tell you, such as
+      a generated part of a URL or the order of items.\\n- requires lists the conditions
+      the goal or the expectations need before the checks run, each with an id (\\\"c1\\\",
+      \\\"c2\\\", ...), such as \\\"checked after reloading the order page\\\". Leave
+      it empty when there are none.\\n\"}"
     headers:
       anthropic-version:
       - '2023-06-01'
@@ -102,18 +104,18 @@ interactions:
     uri: https://api.anthropic.com/v1/messages
   response:
     body:
-      string: '{"model":"claude-sonnet-5-5","id":"msg_011CfkJnfRpur3KPs2T9tNY5","type":"message","role":"assistant","content":[{"type":"text","text":"{\"expectations\":[{\"expect_index\":0,\"subject\":\"the
+      string: '{"model":"claude-sonnet-5-5","id":"msg_011CfkKfgA9mgLfNREtvwwhe","type":"message","role":"assistant","content":[{"type":"text","text":"{\"expectations\":[{\"expect_index\":0,\"subject\":\"the
         error message shown after the payment attempt\",\"claim\":\"The error message
         states that the card has expired\",\"checks\":[{\"check\":\"text_in_target\",\"target_meaning\":\"the
-        error message shown after the payment attempt\",\"pattern\":\"(?i)expired\"}]},{\"expect_index\":1,\"subject\":\"the
+        payment error message shown after the payment attempt\",\"pattern\":\"(?i)\\\\bexpired\\\\b\"}]},{\"expect_index\":1,\"subject\":\"the
         Pay button\",\"claim\":\"The Pay button is visible in the viewport and not
         covered by another element\",\"checks\":[{\"check\":\"visible_unoccluded\",\"target_meaning\":\"the
-        button that submits the payment\"}]}],\"requires\":[]}"}],"container":null,"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":3956,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":191,"output_tokens_details":{"thinking_tokens":0},"service_tier":"standard","inference_geo":"global"},"diagnostics":null}'
+        payment form''s Pay button\"}]}],\"requires\":[]}"}],"container":null,"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":3994,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":201,"output_tokens_details":{"thinking_tokens":0},"service_tier":"standard","inference_geo":"global"},"diagnostics":null}'
     headers:
       content-type:
       - application/json
       request-id:
-      - req_011CfkJneHchfsjBrqzeGaND
+      - req_011CfkKff7PeiR9AVLXFjGLR
     status:
       code: 200
       message: OK
