@@ -68,11 +68,17 @@ def row(
 #   "Sign in Sign up" too. Both are scoped to the signed-out comment prompt and
 #   both leave "to add comments" unchecked. Neither passes REVIEW's rejected
 #   proxies ("to add comments on this article" alone, or "Sign in" alone).
+# - read-article/6, third key `(?i)sign in.*sign up.*comment`, accepted by the
+#   maintainer 2026-10-05: it matches the rendered prompt and refuses "Sign in
+#   Sign up", "Sign in" alone and "to add comments on this article" alone, so
+#   it admits no REVIEW proxy; it needs both links' words, in order, then
+#   "comment". Scoped to the signed-out comment prompt.
 LOGIN_ROOT_KEY = r"^https?://[^/]+/?(?:[?#].*)?$"
 LOGIN_ROOT_FRAGMENT_KEY = r"^https?://[^/]+/?(#/?)?$"
 PROMPT = "signed-out comment prompt"
 PROMPT_WITH_JOINER = r"(?i)sign in.*(or|and).*sign up|sign up.*(or|and).*sign in"
 PROMPT_WITHOUT_JOINER = r"(?i)sign in.*sign up|sign up.*sign in"
+PROMPT_WITH_COMMENT = r"(?i)sign in.*sign up.*comment"
 
 
 ROWS = {
@@ -177,7 +183,11 @@ ROWS = {
                         check="text_in_target", target_meaning=PROMPT, pattern=pattern
                     ),
                 )
-                for pattern in (PROMPT_WITH_JOINER, PROMPT_WITHOUT_JOINER)
+                for pattern in (
+                    PROMPT_WITH_JOINER,
+                    PROMPT_WITHOUT_JOINER,
+                    PROMPT_WITH_COMMENT,
+                )
             ),
         ),
     ),
@@ -228,6 +238,39 @@ SPEC_FINGERPRINTS = {
 }
 
 
+# Reviewed aliases (independent review, accepted 2026-10-05): the exact phrase
+# a recorded plan used for a target, folded as `phrase` folds it, and the role
+# in ROWS it means. Each phrase names the same element as its role, carries no
+# label, and selects no copy that REVIEW's "Not acceptable" column rejects. The
+# duplicated-element rows (the author meta, the favorite button and its count,
+# the byline) take a page-level meaning (REVIEW.md:62): which of the two
+# rendered copies it resolves to is #53's binding, to the banner copy.
+ALIASES = {
+    "the author name in the article header's byline": "article banner author link",
+    "the publication date in the article header's byline": "article banner publication date",
+    "the article body content": "article body",
+    "the article body content area on the article page": "article body",
+    "the list of tags for the article": "article tag list",
+    "the list of tags on the article page": "article tag list",
+    "the prompt in the comments area where the comment form would be": PROMPT,
+    "the favorite button for the article": "article banner favorite button",
+    "the favorites count on the article's favorite button": "article banner favorites count",
+    "the author name in the article's byline on the article page": "article banner author link",
+    "the list of comments under the article": "article comment list",
+    "the feed tab list on the home page above the article list": "feed tabs",
+    "the header navigation bar at the top of the page": "header nav",
+    "the link in the header navigation bar that leads to the sign-in page": "header sign-in link",
+    "the link in the header navigation bar that leads to the registration page": "header sign-up link",
+    "the header navigation link that leads to the new article editor": "header new-article link",
+    "the header navigation link that leads to the user's settings page": "header settings link",
+    "the header navigation link that leads to the signed-in user's profile page": "header current-user profile link",
+}
+# The favorite plan's reload condition, as recorded (an alias of RELOAD).
+RELOAD_RECORDED = (
+    "checked after reloading the article page, so the favorite has persisted"
+)
+
+
 def phrase(value: str) -> str:
     return " ".join(value.split()).casefold()
 
@@ -235,7 +278,8 @@ def phrase(value: str) -> str:
 def check_key(check: PlannedCheck) -> str:
     fields = check.model_dump(mode="json")
     if check.target_meaning is not None:
-        fields["target_meaning"] = phrase(check.target_meaning)
+        meaning = phrase(check.target_meaning)
+        fields["target_meaning"] = ALIASES.get(meaning, meaning)
     if check.text is not None:
         fields["text"] = check.text.casefold()
     if check.check == "text_in_target" and fields["target_meaning"] == HEADER_LINKS.get(
@@ -265,7 +309,10 @@ def plan_problems(spec_id: str, plan: CoveragePlan) -> tuple[str, ...]:
         ]
     ]
     conditions = tuple(phrase(condition.condition) for condition in plan.requires)
-    if spec_id == "favorite-article" and conditions != (phrase(RELOAD),):
+    if spec_id == "favorite-article" and conditions not in (
+        (phrase(RELOAD),),
+        (phrase(RELOAD_RECORDED),),
+    ):
         problems.extend(
             f"{spec_id}/{index}: reload condition differs" for index in range(len(rows))
         )
