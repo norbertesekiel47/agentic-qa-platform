@@ -1,0 +1,216 @@
+"""A replay's errors and infrastructure events, scanned for every bound test
+secret (#50 A2, ADR-0026's A2 amendment): what a failed step, an unevaluated
+assertion and an egress failure carry into a `RunResult`, through the real
+transport and the real browser. The pure presenter's literals are in
+test_error_text.py."""
+
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+import pytest
+from aqa_core.config import ProjectConfig
+from aqa_runner.executor import RunResult
+
+from packages.runner.tests.executor_fixtures import (
+    FORM_TARGETS,
+    PAGES,
+    App,
+    a_spec,
+    compiled,
+    run,
+    serving_app,
+)
+from packages.runner.tests.result_redaction_fixtures import (
+    PLAIN,
+    leaves,
+    probing_account,
+    raw_http_server,
+)
+from packages.runner.tests.secret_fixtures import (
+    BOUND_AT_START,
+    FAKE_VALUE,
+    OTHER_FAKE_VALUE,
+    secret_spec,
+)
+
+# What the fixture app's malformed probe sends as a status line, and the
+# fake test secret that text is bound as (#48's regression, A2's repair).
+MALFORMED = "fake-sensitive"
+PROBE: dict[str, Any] = {
+    "id": "a1",
+    "expect_index": 0,
+    "check": "probe_equals",
+    "probe": "count",
+    "json_path": "$.count",
+    "value": 2,
+}
+BASELINE: dict[str, Any] = {
+    "id": "a1",
+    "expect_index": 0,
+    "check": "probe_equals_baseline",
+    "probe": "count",
+}
+CLICK = {
+    "seq": 9,
+    "action": "click",
+    "target": "save",
+    "side_effect": True,
+    "side_effect_basis": "network: POST /write/save",
+}
+TWO_SECRETS = (
+    f"{BOUND_AT_START}, TEST_NAME: "
+    "{ origins: [start], field: { role: textbox, name: Name } }"
+)
+TWO_ACCOUNTS = "{ email: { secret: TEST_NAME }, password: { secret: TEST_PASSWORD } }"
+
+
+@pytest.fixture
+def app() -> Iterator[App]:
+    with serving_app() as served:
+        yield served
+
+
+def everything(result: RunResult) -> str:
+    """The result's `repr`, and every string and number reachable in it,
+    which `repr` alone can leave out; plain data only."""
+    found = leaves(result)
+    assert all(isinstance(leaf, PLAIN) for leaf in found)
+    return repr(result) + "\n".join(str(leaf) for leaf in found)
+
+
+@pytest.mark.parametrize("baseline", [False, True])
+def test_a_malformed_status_line_is_redacted_in_the_infrastructure_event(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, baseline: bool
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", MALFORMED)
+    spec = secret_spec(
+        tmp_path, start_url="/page/form", account=probing_account("/probe/malformed")
+    )
+    script = compiled(
+        [CLICK] if baseline else [],
+        targets=FORM_TARGETS,
+        assertions=[BASELINE if baseline else PROBE],
+        probe_baselines={"count": {"capture_before_seq": 9, "json_path": "$.count"}}
+        if baseline
+        else {},
+    )
+
+    result = run(app, tmp_path, script, spec=spec).result
+
+    (event,) = result.infrastructure_events
+    assert event.host == "127.0.0.1"
+    assert event.port == int(app.origin.rsplit(":", 1)[1])
+    assert event.cause.startswith("the exchange broke off: ")
+    assert "[SECRET:TEST_PASSWORD]" in event.cause
+    assert result.outcome == "errored"
+    if not baseline:
+        assert result.assertions[0].error == (
+            "the probe request could not reach its allowed origin"
+        )
+    assert MALFORMED not in everything(result)
+    # The baseline's capture failed before the click was dispatched.
+    assert ("POST", "/write/save") not in app.seen
+
+
+def test_an_unbound_malformed_status_line_keeps_its_diagnostic(
+    app: App, tmp_path: Path
+) -> None:
+    spec = a_spec(
+        tmp_path,
+        ProjectConfig(),
+        start_url="/page/form",
+        probes={"count": "GET /probe/malformed"},
+    )
+
+    result = run(app, tmp_path, compiled([], assertions=[PROBE]), spec=spec).result
+
+    (event,) = result.infrastructure_events
+    assert MALFORMED in event.cause
+    assert "[SECRET" not in event.cause
+
+
+def test_a_non_ascii_status_line_is_redacted_whatever_its_escaping(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    value = "fäke-sénsitive"
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", value)
+    reply = f"HTTP/1.1 {value}\r\n\r\n".encode()
+    with raw_http_server(reply) as origin:
+        spec = secret_spec(tmp_path, start_url="/")
+        result = run(app, tmp_path, compiled([]), spec=spec, origins=(origin,)).result
+
+    (event,) = result.infrastructure_events
+    assert (event.host, event.port) == ("127.0.0.1", int(origin.rsplit(":", 1)[1]))
+    assert "[SECRET:TEST_PASSWORD]" in event.cause
+    assert result.outcome == "errored"
+    text = everything(result)
+    assert value not in text
+    assert "\\xc3\\xa4" not in text
+
+
+def test_an_unfilled_bound_value_is_scanned_in_a_step_reason(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
+    monkeypatch.setenv("AQA_SECRET_TEST_NAME", OTHER_FAKE_VALUE)
+    monkeypatch.setitem(
+        PAGES,
+        "throws-bound",
+        "<label>Name <input></label><script>document.execCommand = () => "
+        f'{{ throw new Error("{OTHER_FAKE_VALUE}"); }};</script>',
+    )
+    spec = secret_spec(
+        tmp_path, TWO_SECRETS, account=TWO_ACCOUNTS, start_url="/page/throws-bound"
+    )
+    fill = {
+        "seq": 1,
+        "action": "fill",
+        "target": "name",
+        "value": "Ada",
+        "side_effect": False,
+    }
+
+    result = run(
+        app, tmp_path, compiled([fill], targets=FORM_TARGETS), spec=spec
+    ).result
+
+    step = result.steps[1]
+    assert step.outcome == "failed"
+    # No fill_secret step, so Playwright's own reason shows: scanned.
+    assert step.error == "Error: ElementHandle.evaluate: Error: [SECRET:TEST_NAME]"
+    assert OTHER_FAKE_VALUE not in everything(result)
+
+
+def test_an_assertion_reason_holding_a_bound_value_is_scanned(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The reason after a stopped look names the assertion that raised it.
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "not evaluated after")
+    spec = secret_spec(tmp_path, start_url="/page/leaves")
+    script = compiled(
+        [],
+        targets={
+            "never": {
+                "semantic": "text that never comes",
+                "locators": [{"css": "#never"}],
+            }
+        },
+        assertions=[
+            {
+                "id": "a1",
+                "expect_index": 0,
+                "check": "text_in_target",
+                "target": "never",
+                "text": "never",
+            },
+            {"id": "a2", "expect_index": 0, "check": "url_matches", "pattern": "/"},
+        ],
+    )
+
+    result = run(app, tmp_path, script, spec=spec).result
+
+    assert (
+        result.assertions[1].error
+        == "[SECRET:TEST_PASSWORD] a1's look at the page raised"
+    )
