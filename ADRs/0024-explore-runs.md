@@ -441,7 +441,7 @@ B2b's calls cost USD 0.248502 over three rounds; with B1's four captures (USD 0.
 
 ## Amendment (2026-10-07): a target that holds its check's text, one retry, and the last pilot rows (#161)
 
-#161 closes the four pilot rows B2b left open (above). Its census of B2b's three rounds, scored by today's oracle, found that each prompt round fixed some rows and moved others: read-article/5 passed in round 2 and failed in round 3, and post-comment/1 failed a different way in each round. So the circular-target rule moves from prose into structure, and no fourth prompt round was paid for.
+#161 settles the four pilot rows B2b left open (above): post-comment/1 now passes, and the other three are documented residuals (below). Its census of B2b's three rounds, scored by today's oracle, found that each prompt round fixed some rows and moved others: read-article/5 passed in round 2 and failed in round 3, and post-comment/1 failed a different way in each round. So the circular-target rule moves from prose into structure, and no fourth prompt round was paid for.
 
 ### A target that holds what its check asserts
 - **Rule.** A plan can't be used when a check's `target_meaning` holds what the check asserts: its literal, found as the check finds text (`aqa_core.text.has_text`, whole words, ignoring case), or its pattern, matched against the meaning. A meaning never carries its label (ADR-0025). A binder that finds an element by the text it must verify turns a wrong text into a missing element, so a failure reads as drift. post-comment/1's round-3 recording named the author "the one just posted by the signed-in reader" and asserted "reader".
@@ -457,3 +457,29 @@ B2b's calls cost USD 0.248502 over three rounds; with B1's four captures (USD 0.
 - **Cost impact** (AGENTS.md rule 9): at most one more plan call per explore, and only when the plan can't be used. It resends the first answer's tokens and the reasons, so it costs a little more than the first call.
 - **Costs survive failure.** Both answers' cost records are kept. A retry that gets no response raises `ModelCallError` holding the first answer's record, as a failed fallback holds its refusal's. Explore then exits 11 and keeps that record in the run record; its reason now reads "no response after a billed answer", which covers both cases.
 - **The recorder.** A plan case is promoted with two priced `ok` responses when its first plan couldn't be used (`answers_expected`), and with one otherwise. A refusal with its fallback still stays private. Re-recording a pilot whose request didn't change is still refused for wording (TESTING §4). A changed call sequence counts as a changed request: the retry is a request the cassette doesn't hold, so replay fails until it is recorded.
+
+### The re-records
+Each was recorded with the named recorder (TESTING §4) under a scratch cap that refused any call past the package's limit before sending it. Model `claude-sonnet-5-5`, the pinned price map, no cached input:
+
+| Case | Source | Request ID | Tokens in / out | CostRecord (USD) | Outcome |
+|---|---|---|---|---|---|
+| plan_post-comment, first answer | 417d033 | `req_011Cfoa7RbAfsXNntkwy95LX` | 4143 / 398 | 0.012266 | Can't be used: "the author name on the newly posted comment under the article, the comment by the signed-in reader" holds "reader" |
+| plan_post-comment, retry | 417d033 | `req_011Cfoa7uSyR9EkRdMyW6QGL` | 4647 / 387 | 0.013164 | "the author name on the most recently posted comment under the article"; rows 0, 2 and 3 as in round 3 |
+| plan_publish-article | 08faf54 | `req_011CfoaPQNvon28Pd7ZzaK9D` | 4250 / 569 | 0.014190 | Expectation 0 checks `(?i)/article/benchmarks-we-trust-` and the title |
+
+#161's calls cost USD 0.039620. With B1 (USD 0.011932) and B2b (USD 0.248502), the live total is USD 0.300054. The retry cost USD 0.013164, against the first answer's USD 0.012266: it resends that answer.
+
+- **The spec change (D3(a), maintainer, 2026-10-07).** publish-article/0's establishing check needs the new page's path prefix, which REVIEW.md's findings take from the app's slug scheme, and a plan written from the spec alone couldn't know it. The goal now says the page's path starts with /article/benchmarks-we-trust- in any letter case and ends in a generated suffix. Only the goal changed. The expectations, the REVIEW rows and fingerprints, `bench/manifest.v1.json` and its split hash are as they were, checked before recording.
+- **Reviewed aliases and keys.** Three phrases were accepted, each after an independent review:
+  - "the article title heading at the top of the article page", for the banner title heading;
+  - "the author name on the most recently posted comment under the article", for the new comment card's author link (the frontend puts a posted comment first, but the phrase relies on posting time, not position);
+  - "the list of tags of the article on the article page", for the article's tag list. publish-article/2 was a passing row whose wording changed in the re-record.
+
+  The reviewer rejected `(?i)/article/benchmarks-we-trust-` as a second key for publish-article/0. It isn't anchored, so a URL holding the slug in its query or fragment, or under a path prefix, also matches it. That weakness is theoretical on this app's final page, but the pattern isn't one of the exact reviewed patterns (B2a, above), and the maintainer kept that rule.
+- **Residuals (maintainer, 2026-10-07).** Three rows are documented residuals, and this ruling amends #41's criterion 4 for them. 20 of the 23 expectations pass the oracle from recorded plans. Each residual is pinned to exactly the checks its recording holds, and to the oracle refusing it (`test_each_open_row_replays_exactly_its_recorded_checks`), so neither a re-record nor an oracle change can alter one silently.
+  - read-article/0: an extra `url_matches` `(?i)/article/` beside the title check.
+  - read-article/5: an extra `text_in_target` "reader" on the comment list, a check REVIEW dropped (#31).
+  - publish-article/0: the unanchored path pattern above, beside the title check.
+
+  Each holds REVIEW's establishing check plus an extra or looser URL check. Closing them would take a fourth prompt round, which would resample all five pilots, or an oracle rule the maintainer declined.
+- **Consequences:** a plan that can't be used costs at most one more plan call, and explore names why it can't be used. The pilot cassettes for post-comment and publish-article pair with the source SHAs above. post-comment's holds two interactions. Before planning a fix for a refused row, repair its named defect alone in an offline probe (LAB_NOTES, 2026-10-07).
