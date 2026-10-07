@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+import pilot_inputs
 from aqa_core.project import contracts_fingerprint, load_project, parse_compiled
 from aqa_core.spec import canonical_hash
 from pilot_inputs import PilotInput, ResetRequest, load_pilots, validate_pilot
@@ -340,7 +341,13 @@ class PilotInputTests(unittest.TestCase):
         logged = ({"DEBUGP": ""}, {"DEBUG": "pw:protocol"}, {"DEBUG": "pw:browser"})
         for env in unusable + [SECRET | each for each in logged]:
             with self.subTest(env=env), patch.dict(os.environ, env, clear=True):
-                self.refuses(self.load, "invalid pilot input")
+                self.refuses(self.load, "unusable test secret")
+                self.assertRaises(pilot_inputs.UnusableSecretError, self.load)
+        self.spec["expect"], expect = ["Changed"], self.spec["expect"]
+        self.save(fresh=False)
+        self.refuses(self.load, "invalid pilot input")
+        self.spec["expect"] = expect
+        self.save()
         with patch.dict(os.environ, SECRET):
             self.assertEqual(self.ids(), ("pilot",))
             self.config["secrets"]["TEST_PASSWORD"]["origins"] = ["https://evil.test"]

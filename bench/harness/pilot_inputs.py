@@ -35,6 +35,11 @@ from pydantic import TypeAdapter
 _PATH: TypeAdapter[str] = TypeAdapter(StartPath)
 
 
+class UnusableSecretError(ValueError):
+    """`<source>: unusable test secret`: a referenced test secret is unset,
+    too short or unencodable, or protocol logging is on (API.md §7's 12)."""
+
+
 @dataclass(frozen=True)
 class ResetRequest:
     """The spec's reset hook: a POST to this URL on the run's start origin."""
@@ -90,16 +95,15 @@ def validate_pilot(
     """`script`, already read strictly, admitted for `spec`: compiled from the
     spec as it is now, covering each of its expectations, runnable by the
     executor, reset by a valid hook when a step has side effects, and with
-    every test secret the spec references bound for this run. The secrets'
-    values are read to check them, never kept. Otherwise raises ValueError
-    naming `source` and a fixed category."""
-    # ValueError: _reset's refusals, and a secret value os.environ decoded with
-    # surrogates, which fails to encode with a message quoting it.
-    refusals = (SpecError, ValueError, MissingSecretError, SecretLoggedError)
-    prepared = _quietly(partial(_prepare, spec, config), *refusals)
+    every test secret the spec references bound for this run; values are
+    read to check, never kept. Otherwise raises ValueError naming `source`
+    and a fixed category (UnusableSecretError for the environment's)."""
+    prepared = _quietly(partial(_prepare, spec, config), SpecError, ValueError)
     if prepared is None or not _admitted(spec, script):
         raise ValueError(f"{source}: invalid pilot input")
-    start, reset = prepared
+    start, reset, usable = prepared
+    if not usable:
+        raise UnusableSecretError(f"{source}: unusable test secret")
     return PilotInput(spec, config, script, start, reset)
 
 
@@ -113,12 +117,18 @@ def _quietly[T](read: Callable[[], T], *errors: type[Exception]) -> T | None:
         return None
 
 
-def _prepare(spec: Spec, config: ProjectConfig) -> tuple[str, ResetRequest | None]:
-    """The run's start origin, once every test secret the spec references is
-    bound for it (`bound_secrets`), and the spec's reset hook on it."""
+def _prepare(
+    spec: Spec, config: ProjectConfig
+) -> tuple[str, ResetRequest | None, bool]:
+    """The run's start origin, the spec's reset hook on it, and whether each
+    test secret the spec references binds for it (`bound_secrets`; a binding
+    it refuses is a SpecError). A value with surrogates fails to encode with
+    a ValueError quoting it, so the environment's errors are dropped."""
     start = start_origin(None, config)
-    bound_secrets(spec, start)
-    return start, _reset(spec, start)
+    reset = _reset(spec, start)
+    environment = (MissingSecretError, SecretLoggedError, ValueError)
+    bound = _quietly(partial(bound_secrets, spec, start), *environment)
+    return start, reset, bound is not None
 
 
 def _reset(spec: Spec, start: str) -> ResetRequest | None:
