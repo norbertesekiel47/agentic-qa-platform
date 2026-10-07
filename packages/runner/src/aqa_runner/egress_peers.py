@@ -82,7 +82,7 @@ class Upstream(Peer):
             raise self.gate.record_failure(
                 self.host, self.port, "the exchange broke off: h11.RemoteProtocolError"
             ) from error
-        # A reset, an unreachable host or a timeout: the system's own text.
+        # A reset or a TLS failure: the system's or OpenSSL's own text.
         except OSError as error:
             raise self.gate.record_failure(
                 self.host, self.port, f"the exchange broke off: {error}"
