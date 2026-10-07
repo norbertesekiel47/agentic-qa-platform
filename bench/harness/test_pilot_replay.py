@@ -8,10 +8,11 @@ import tempfile
 import threading
 import unittest
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, redirect_stderr, redirect_stdout
 from dataclasses import replace
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import StringIO
 from ipaddress import IPv4Address, IPv6Address, ip_address
 from pathlib import Path
 from typing import Any
@@ -663,3 +664,95 @@ class PilotReplayTests(unittest.TestCase):
         self.assertFalse(asyncio.run(held()))
         incomplete = OUTCOME | INTERRUPTED | {"cleanup": "incomplete"}
         self.assertEqual(self.receipt("attempt.json"), incomplete)
+
+    def test_a_late_enter_error_after_timeout_keeps_its_cause_and_text_private(
+        self,
+    ) -> None:
+        self.late_enter_error(interrupted=False)
+
+    def test_a_late_enter_error_after_interrupt_keeps_its_cause_and_text_private(
+        self,
+    ) -> None:
+        self.late_enter_error(interrupted=True)
+
+    def late_enter_error(self, *, interrupted: bool) -> None:
+        del self.spec["preconditions"]["reset"]
+        self.config["budgets"] = {"minutes": 0.005, "resolve_seconds": 0.1}
+        pilot = self.pilot()
+        stdout, stderr = StringIO(), StringIO()
+        driver = MagicMock(__aexit__=AsyncMock())
+
+        async def run() -> None:
+            started, release, incomplete = (
+                asyncio.Event(),
+                asyncio.Event(),
+                asyncio.Event(),
+            )
+            original = RunRecord.write
+
+            def write(record: RunRecord, name: str, document: object) -> Path:
+                path = original(record, name, document)
+                if name == "cleanup-incomplete.json":
+                    incomplete.set()
+                return path
+
+            async def enter() -> None:
+                started.set()
+                await release.wait()
+                raise ValueError("https://fake-sensitive.invalid/driver?fake-token")
+
+            driver.__aenter__ = AsyncMock(side_effect=enter)
+            with (
+                patch("pilot_replay.async_playwright", lambda: driver),
+                patch.object(RunRecord, "write", write),
+            ):
+                task = asyncio.create_task(replay_pilot(pilot, self.root))
+                try:
+                    async with asyncio.timeout(20):
+                        await started.wait()
+                        if interrupted:
+                            task.cancel()
+                        await incomplete.wait()
+                        self.assertFalse(task.done())
+                        release.set()
+                        if interrupted:
+                            with self.assertRaises(asyncio.CancelledError):
+                                await task
+                        else:
+                            attempt = await task
+                            self.assertEqual(
+                                self.failed(attempt),
+                                ("operation_timeout", "incomplete", "unknown"),
+                            )
+                            self.assertNotIn("fake-sensitive", repr(attempt))
+                finally:
+                    release.set()
+                    await asyncio.wait({task})
+                    if not task.cancelled():
+                        task.exception()
+                self.assertEqual(asyncio.all_tasks(), {asyncio.current_task()})
+
+        with (
+            self.assertNoLogs("asyncio"),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            asyncio.run(run())
+        fields = {
+            "failure": None if interrupted else "operation_timeout",
+            "interrupted": interrupted,
+        }
+        self.assertEqual(
+            self.receipt("attempt.json"),
+            OUTCOME
+            | fields
+            | ({"outcome": "interrupted"} if interrupted else {})
+            | {"cleanup": "incomplete"},
+        )
+        hold = fields | {"resources": "unknown", "reservation_release": "forbidden"}
+        self.assertEqual(self.receipt("cleanup-incomplete.json"), hold)
+        self.assertEqual(driver.__aexit__.await_count, 0)
+        records = "".join(p.read_text() for p in self.root.glob(".aqa/runs/*/*"))
+        self.assertNotIn(
+            "fake-sensitive", records + stdout.getvalue() + stderr.getvalue()
+        )
