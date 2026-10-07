@@ -9,6 +9,7 @@ they touch (ADR-0026). Probe reads use the same egress gate as the browser."""
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from typing import Literal, assert_never, overload
 
@@ -59,9 +60,10 @@ from aqa_runner.egress import (
     InfrastructureEvent,
 )
 from aqa_runner.egress_proxy import EgressBlocks, EgressProxy
+from aqa_runner.evidence import capture_evidence
 from aqa_runner.invariants import InvariantResult, invariant_results
 from aqa_runner.locators import Absent, Miss, Resolved, Unresolved, Use
-from aqa_runner.redaction import Redactor, error_text
+from aqa_runner.redaction import Redacted, Redactor, error_text
 from aqa_runner.run_record import RunRecord
 from aqa_runner.secret_fields import SecretNotFilledError, SecretRefusedError
 from aqa_runner.settling import Settled, Window
@@ -74,6 +76,9 @@ LOOK_SECONDS = 0.1
 # session's lock: Playwright's default, made explicit. An action's wait is
 # bounded by the run's `resolve_seconds` instead (ADR-0024's #46 amendment).
 NAVIGATION_SECONDS = 30
+
+# How many times evidence looks at a page that changed under its look.
+EVIDENCE_LOOKS = 3
 
 # How long past those bounds the executor waits for an action before it stops
 # waiting: Playwright's own error, which says what it waited for, comes
@@ -226,12 +231,17 @@ async def replay(
     `MissingSecretError`, Playwright's protocol logging `SecretLoggedError`,
     and a binding the run doesn't allow `SpecError`. When the script fills a
     test secret, every reason keeps nothing of Playwright's messages, for the
-    whole run (`_Replay.reason`)."""
+    whole run (`_Replay.reason`).
+
+    After every step it keeps, it saves the step's evidence in the record,
+    which scans what it writes with the session's redactor
+    (`aqa_runner.evidence`)."""
     # The script's own problems first, so a spec error wins over a missing
     # value (exit 5 before 12).
     runnable, checks = _accepted(script, setup.spec)
     bound = bound_secrets(setup.spec, setup.start)
     redactor = Redactor(bound.values())
+    setup = replace(setup, record=setup.record.redacting(redactor))
     run = _Replay(
         setup,
         script.targets,
@@ -264,7 +274,10 @@ async def replay(
         # Seq 0 is no compiled step: a compiled script's steps start at 1.
         first = start_url(setup.spec, setup.start)
         path = setup.spec.frontmatter.preconditions.start_url
-        steps.append(
+        await _kept(
+            session,
+            run,
+            steps,
             await _dispatched(
                 session,
                 run,
@@ -272,7 +285,7 @@ async def replay(
                     0, {"action": "navigate", "url": path}, False, NAVIGATION_SECONDS
                 ),
                 lambda: session.navigate(first),
-            )
+            ),
         )
         for step in runnable:
             if steps[-1].outcome != "completed" or interrupted():
@@ -280,7 +293,7 @@ async def replay(
             result = await _run(session, run, step, interrupted)
             if result is None:
                 break
-            steps.append(result)
+            await _kept(session, run, steps, result)
         if steps[-1].outcome != "completed" or interrupted():
             assertions = tuple(
                 AssertionResult(check.id, "not_evaluated", stopped_at=steps[-1].seq)
@@ -319,6 +332,37 @@ async def replay(
         blocks,
         "egress_blocked" if blocks.blocked else None,
     )
+
+
+async def _kept(
+    session: BrowserSession, run: _Replay, steps: list[StepResult], step: StepResult
+) -> None:
+    """Keep `step`, then save its evidence with the page's snapshot as the
+    step left it."""
+    steps.append(step)
+    budget = run.setup.config.budgets.resolve_seconds
+    snapshot = await _observed(session, budget)
+    await capture_evidence(run.setup.record, session, step.seq, step.window, snapshot)
+
+
+async def _observed(session: BrowserSession, budget: float) -> Redacted | None:
+    """The page's snapshot for evidence, within `budget` seconds and
+    `MARGIN_SECONDS` past them, or None. Its refusal records no policy event
+    (`snapshot(record_refusal=False)`), so evidence leaves the result as it
+    was; a page off the allowed origins, one that stopped answering or
+    crashed, or one that changed under every look, gets none."""
+    try:
+        return await _bounded(_unrecorded_snapshot(session), budget)
+    except Error, PolicyEventError, DocumentChangedError, _UnansweredError:
+        # The page couldn't be looked at: its evidence goes without a snapshot.
+        return None
+
+
+async def _unrecorded_snapshot(session: BrowserSession) -> Redacted:
+    for _ in range(EVIDENCE_LOOKS - 1):
+        with suppress(DocumentChangedError):  # the page changed: look again
+            return await session.snapshot(record_refusal=False)
+    return await session.snapshot(record_refusal=False)
 
 
 def _accepted(

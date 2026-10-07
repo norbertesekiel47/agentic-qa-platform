@@ -10,10 +10,10 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from aqa_core.compiled import NetworkNone, NetworkSeen
-from playwright.async_api import Page, Request, Response
+from playwright.async_api import ConsoleMessage, Error, Page, Request, Response
 
 from aqa_runner import network
-from aqa_runner.document_origins import Records
+from aqa_runner.document_origins import RECORD_LIMIT, Records
 from aqa_runner.redaction import Redactor
 
 # How long settling may take, how long a window must have been quiet to be
@@ -32,6 +32,13 @@ STREAMS = frozenset({"eventsource"})
 # the cut never leaves part of a value the scan would replace (ADR-0026's
 # A2 amendment).
 URL_CHARS = 2048
+
+# The most of a console message an entry keeps, counted after its scan.
+CONSOLE_CHARS = 2000
+
+# How long a network log waits for Playwright's size metadata, for all of a
+# window's finished requests together: a size not read by then is None.
+SIZE_SECONDS = 1
 
 # How settling ended.
 type Settled = Literal["idle", "timeout"]
@@ -89,6 +96,31 @@ class Window:
     changed_at: float = field(default_factory=time.monotonic)
 
 
+@dataclass(frozen=True)
+class ConsoleEntry:
+    """A console message of the page's frames or workers: its type, and its
+    text, scanned, then cut to `CONSOLE_CHARS`."""
+
+    type: str
+    text: str
+
+
+@dataclass(frozen=True)
+class NetworkEntry:
+    """A request in a network log (ADR-0026, Evidence): its page-chosen
+    method and URL as its window records them, its response's status, when
+    it started (Playwright's `startTime`, ms since the epoch) and how long
+    after that its response ended, and its response body's size. Each is
+    None when Playwright gave none, as for a request still open."""
+
+    method: str
+    url: str
+    status: int | None
+    start: float | None
+    duration_ms: float | None
+    size: int | None
+
+
 def recorded_url(redactor: Redactor, url: str) -> str:
     """`url` scanned with `redactor`, then cut to `URL_CHARS`, as a record's
     plain text."""
@@ -117,7 +149,16 @@ class Traffic:
         self.windows: list[Window] = []
         self._redactor = redactor
         self._open_requests: set[Request] = set()
-        self._response_requests: dict[Window, list[Request]] = {}
+        # Each window's kept requests, in the order they started, and what
+        # their `response` and `requestfinished` events said.
+        self._kept_requests: dict[Window, list[Request]] = {}
+        self._statuses: weakref.WeakKeyDictionary[Request, int] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._finished: weakref.WeakSet[Request] = weakref.WeakSet()
+        # Each window's console messages: its own, never on the window, which
+        # a result exports (ADR-0026's #50 B amendment).
+        self._console: dict[Window, Records[ConsoleEntry]] = {}
         self._complete_responses: dict[Window, Records[Exchange]] = {}
         self._request_windows: weakref.WeakKeyDictionary[Request, Window] = (
             weakref.WeakKeyDictionary()
@@ -131,14 +172,17 @@ class Traffic:
         # https://playwright.dev/python/docs/api/class-page#page-event-request
         page.on("request", self._started)
         page.on("response", self._responded)
-        page.on("requestfinished", self._ended)
+        page.on("requestfinished", self._finished_request)
         page.on("requestfailed", self._ended)
+        # https://playwright.dev/python/docs/api/class-page#page-event-console
+        page.on("console", self._logged)
 
     def next_window(self) -> Window:
         """A new window, which every request from now on joins."""
         self._window = Window()
         self.windows.append(self._window)
-        self._response_requests[self._window] = []
+        self._kept_requests[self._window] = []
+        self._console[self._window] = Records()
         self._complete_responses[self._window] = Records()
         return self._window
 
@@ -147,6 +191,39 @@ class Traffic:
         (`aqa_runner.network.held`)."""
         return await network.held(
             check, [self._complete_responses[window] for window in self.windows]
+        )
+
+    def console_log(self, window: Window) -> Records[ConsoleEntry]:
+        """`window`'s console messages as they stand now: the first
+        `RECORD_LIMIT` it kept, and how many it had."""
+        logged = self._console[window]
+        return Records(list(logged.kept), logged.total)
+
+    async def network_log(self, window: Window) -> tuple[NetworkEntry, ...]:
+        """`window`'s network log as it stands now: each request it keeps,
+        in the order they started. A status is the one the request's
+        `response` event gave. A size is read only for a request that
+        finished, all of them within `SIZE_SECONDS`, and is None when it
+        isn't read by then. Nothing here waits for a request: Playwright's
+        `Request.response()` waits for the response or a failure, and
+        `sizes()` waits for it too (1.63)."""
+        requests = self._kept_requests[window]
+        sizes = await _sizes(
+            [request for request in requests if request in self._finished]
+        )
+        return tuple(self._entry(request, sizes.get(request)) for request in requests)
+
+    def _entry(self, request: Request, size: int | None) -> NetworkEntry:
+        _, sent = self._sent[request]
+        # https://playwright.dev/python/docs/api/class-request#request-timing
+        start, end = request.timing["startTime"], request.timing["responseEnd"]
+        return NetworkEntry(
+            sent.method,
+            sent.url,
+            self._statuses.get(request),
+            start if start > 0 else None,
+            end if end > 0 else None,
+            size,
         )
 
     def _started(self, request: Request) -> None:
@@ -163,6 +240,8 @@ class Traffic:
         self._request_windows[request] = window
         self._sent[request] = complete, sent
         window.requests.add(sent)
+        if window.requests.total == len(window.requests.kept):
+            self._kept_requests[window].append(request)
         # https://playwright.dev/python/docs/api/class-request#request-resource-type
         if request.resource_type not in STREAMS:
             self._open_requests.add(request)
@@ -173,18 +252,60 @@ class Traffic:
         request = response.request
         window = self._request_windows[request]
         complete, sent = self._sent[request]
+        self._statuses[request] = response.status
         window.responses.add(Exchange(sent.method, sent.url, response.status))
         self._complete_responses[window].add(
             Exchange(complete.method, complete.url, response.status)
         )
-        if window.responses.total == len(window.responses.kept):
-            self._response_requests[window].append(request)
+
+    def _logged(self, message: ConsoleMessage) -> None:
+        """A console message, which joins the window of the latest action.
+        Only a message the window keeps is scanned: one past `RECORD_LIMIT`
+        is only counted."""
+        logged = self._console[self._window]
+        if len(logged.kept) == RECORD_LIMIT:
+            logged.total += 1
+            return
+        # https://playwright.dev/python/docs/api/class-consolemessage
+        text = self._redactor.redact(message.text, limit=CONSOLE_CHARS)
+        logged.add(ConsoleEntry(message.type, str(text)))
+
+    def _finished_request(self, request: Request) -> None:
+        self._finished.add(request)
+        self._ended(request)
 
     def _ended(self, request: Request) -> None:
         window = self._request_windows[request]
         self._open_requests.discard(request)
         window.open.discard(id(request))
         window.changed_at = time.monotonic()
+
+
+async def _sizes(requests: list[Request]) -> dict[Request, int]:
+    """The response body size of each of `requests` that Playwright gives
+    within `SIZE_SECONDS`, for all of them together."""
+    sizes: dict[Request, int] = {}
+    limit = asyncio.timeout(SIZE_SECONDS)
+    try:
+        async with limit:
+            for request in requests:
+                size = await _size(request)
+                if size is not None:
+                    sizes[request] = size
+    except TimeoutError:
+        if not limit.expired():
+            raise  # not this read's own limit
+    return sizes
+
+
+async def _size(request: Request) -> int | None:
+    """`request`'s response body size, or None when Playwright can't read
+    it, as when the page closed meanwhile: a size is optional."""
+    try:
+        # https://playwright.dev/python/docs/api/class-request#request-sizes
+        return (await request.sizes())["responseBodySize"]
+    except Error:
+        return None
 
 
 async def settle(window: Window, dom_changed: Callable[[], Awaitable[bool]]) -> Settled:

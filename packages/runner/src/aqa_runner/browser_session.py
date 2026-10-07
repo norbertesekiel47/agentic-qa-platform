@@ -52,7 +52,7 @@ from aqa_runner.secret_fields import (
     describe_field,
     field_matches,
 )
-from aqa_runner.settling import Settled, Traffic, Window
+from aqa_runner.settling import ConsoleEntry, NetworkEntry, Settled, Traffic, Window
 
 # The settings every run uses unless the caller passes its own (ADR-0025).
 PINNED_SETTINGS = BrowserSettings()
@@ -258,13 +258,16 @@ class BrowserSession:
         """The scan for all secrets bound to this run."""
         return self._redactor
 
-    async def snapshot(self) -> Redacted:
+    async def snapshot(self, *, record_refusal: bool = True) -> Redacted:
         """The page's accessibility snapshot in Playwright's AI mode
         (https://playwright.dev/python/docs/api/class-page#page-aria-snapshot),
         with this session's refs and secrets redacted. It retires every earlier
         snapshot's refs, and page text that imitates a ref reads `(ref=…`.
         A frame on an origin the run doesn't allow shows only its iframe's
-        line, with no ref (`LEFT_OUT`).
+        line, with no ref (`LEFT_OUT`). Without `record_refusal`, a page off
+        the allowed origins raises the same `PolicyEventError`, its event
+        scanned, but isn't added to `policy_events`: evidence's own look
+        leaves the run's result as it was (`aqa_runner.evidence`).
 
         If any frame navigates or is removed between the page's check and the
         last frame's, the snapshot could hold a document no check saw, so it
@@ -277,7 +280,7 @@ class BrowserSession:
             # Counted from before the page's check, so a navigation during it
             # counts too.
             changes = self._frame_changes
-            await self._require_allowed_page()
+            await self._require_allowed_page(record=record_refusal)
             taken = await self.page.aria_snapshot(mode="ai")
             try:
                 left_out = await self._frames_left_out(taken)
@@ -506,6 +509,18 @@ class BrowserSession:
     def windows(self) -> tuple[Window, ...]:
         """Every settle window in this session, starting before navigation."""
         return tuple(self._traffic.windows)
+
+    def console_log(self, window: Window) -> Records[ConsoleEntry]:
+        """`window`'s console messages as they stand now
+        (`aqa_runner.settling.Traffic.console_log`). It reads what the
+        session recorded, not the page, so the page isn't checked."""
+        return self._traffic.console_log(window)
+
+    async def network_log(self, window: Window) -> tuple[NetworkEntry, ...]:
+        """`window`'s network log as it stands now
+        (`aqa_runner.settling.Traffic.network_log`). It reads what the
+        session recorded, not the page, so the page isn't checked."""
+        return await self._traffic.network_log(window)
 
     async def network_held(self, check: NetworkNone | NetworkSeen) -> bool:
         """Whether this session's responses establish `check`, read from
@@ -827,15 +842,19 @@ class BrowserSession:
                 return child
         return None
 
-    async def _require_allowed_page(self) -> None:
-        await self._require_allowed(self.page.main_frame, "document")
+    async def _require_allowed_page(self, *, record: bool = True) -> None:
+        await self._require_allowed(self.page.main_frame, "document", record=record)
 
-    async def _require_allowed(self, frame: Frame, kind: PolicyEventKind) -> None:
-        """Record and raise a policy event of `kind` unless `frame` is on one
-        of the run's allowed origins."""
+    async def _require_allowed(
+        self, frame: Frame, kind: PolicyEventKind, *, record: bool = True
+    ) -> None:
+        """Raise a policy event of `kind`, recorded unless `record` is false,
+        unless `frame` is on one of the run's allowed origins."""
         origin = await frame_origin(frame)
-        if origin not in self._policy.allowed_origins:
-            raise self._refuse(PolicyEvent(kind, frame.url, origin))
+        if origin in self._policy.allowed_origins:
+            return
+        event = PolicyEvent(kind, frame.url, origin)
+        raise self._refuse(event) if record else PolicyEventError(self._scanned(event))
 
     def _refuse(self, event: PolicyEvent) -> PolicyEventError:
         """Record `event`, and the error to raise for it, which holds the
@@ -843,15 +862,19 @@ class BrowserSession:
         return PolicyEventError(self._record(event))
 
     def _record(self, event: PolicyEvent) -> PolicyEvent:
-        """Record `event`, decided on its raw URL and origin, with both
-        scanned (ADR-0026's A2 amendment), and return what was recorded."""
-        recorded = PolicyEvent(
+        """Record `event`, scanned, and return what was recorded."""
+        recorded = self._scanned(event)
+        self.policy_events.add(recorded)
+        return recorded
+
+    def _scanned(self, event: PolicyEvent) -> PolicyEvent:
+        """`event`, decided on its raw URL and origin, with both scanned
+        (ADR-0026's A2 amendment)."""
+        return PolicyEvent(
             event.kind,
             self._scanned_url(event.url),
             None if event.origin is None else self._scanned_url(event.origin),
         )
-        self.policy_events.add(recorded)
-        return recorded
 
     def _scanned_url(self, url: str) -> str:
         return settling.recorded_url(self.redactor, url)
