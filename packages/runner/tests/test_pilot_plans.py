@@ -57,14 +57,6 @@ OPEN_ROWS: dict[tuple[str, int], tuple[PlannedCheck, ...]] = {
             check="text_in_target", target_meaning=TITLE, text="Benchmarks we trust"
         ),
     ),
-    ("post-comment", 1): (
-        PlannedCheck(
-            check="text_in_target",
-            target_meaning="the author name on the newly added comment, "
-            "the one just posted by the signed-in reader",
-            text="reader",
-        ),
-    ),
 }
 
 
@@ -112,32 +104,44 @@ def test_each_recorded_pilot_establishes_every_expectation(
 
 
 @pytest.mark.parametrize("pilot", EXPECTATIONS)
-def test_each_pilot_cassette_is_one_real_answer_priced_as_it_was_billed(
+def test_each_pilot_cassette_holds_real_answers_priced_as_they_were_billed(
     cassette: Cassette, pilot: str
 ) -> None:
+    # One answer, or two when the first plan couldn't be used and was asked
+    # for once more (ADR-0024's #161 amendment).
     project = load_project(QA)
-    [interaction] = yaml.safe_load((CASSETTES / f"plan_{pilot}.yaml").read_text())[
+    interactions = yaml.safe_load((CASSETTES / f"plan_{pilot}.yaml").read_text())[
         "interactions"
     ]
-    sent = json.loads(interaction["request"]["body"])
-    answer = json.loads(interaction["response"]["body"]["string"])
-    assert sent["model"] == "claude-sonnet-5-5"
-    assert sent["messages"] == [
+    sent = [json.loads(interaction["request"]["body"]) for interaction in interactions]
+    answers = [
+        json.loads(interaction["response"]["body"]["string"])
+        for interaction in interactions
+    ]
+    assert {request["model"] for request in sent} == {"claude-sonnet-5-5"}
+    assert sent[0]["messages"] == [
         {"role": "user", "content": plan_request(project.specs[pilot])[1].content}
     ]
-    assert answer["stop_reason"] == "end_turn"
-    assert interaction["response"]["headers"]["request-id"][0].startswith("req_")
+    assert [request["messages"][:1] for request in sent[1:]] == [
+        sent[0]["messages"]
+    ] * (len(sent) - 1)
+    assert {answer["stop_reason"] for answer in answers} == {"end_turn"}
+    assert all(
+        interaction["response"]["headers"]["request-id"][0].startswith("req_")
+        for interaction in interactions
+    )
     router = ModelRouter.from_config(project.config, AnthropicClient)
 
     with cassette(f"plan_{pilot}", replay_only=True):
         planned = asyncio.run(make_plan(router, project.specs[pilot]))
 
-    [call] = planned.routed.calls
-    assert (call.status, call.input_tokens, call.output_tokens) == (
-        "ok",
-        answer["usage"]["input_tokens"],
-        answer["usage"]["output_tokens"],
-    )
+    assert [
+        (call.status, call.input_tokens, call.output_tokens)
+        for call in planned.routed.calls
+    ] == [
+        ("ok", answer["usage"]["input_tokens"], answer["usage"]["output_tokens"])
+        for answer in answers
+    ]
 
 
 @pytest.mark.parametrize("pilot", EXPECTATIONS)

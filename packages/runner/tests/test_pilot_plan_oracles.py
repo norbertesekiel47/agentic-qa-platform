@@ -839,6 +839,13 @@ def test_the_third_prompt_pattern_is_scoped_to_the_prompt() -> None:
             "article banner title heading",
             "Testing without flakes",
         ),
+        (
+            "post-comment",
+            1,
+            "the author name on the most recently posted comment under the article",
+            "new comment card author link",
+            "reader",
+        ),
     ],
 )
 def test_a_reviewed_recorded_phrase_means_its_oracle_role(

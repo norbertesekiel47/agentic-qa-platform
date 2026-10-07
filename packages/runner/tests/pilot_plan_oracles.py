@@ -249,8 +249,14 @@ SPEC_FINGERPRINTS = {
 # The title phrase was accepted 2026-10-07 after an independent review (#161):
 # an article page renders one heading, the banner h1 (the editor's title is an
 # input on another page), so it names that h1 and carries no title or label.
+# The newest comment's author phrase was accepted 2026-10-07 after an
+# independent review (#161): the name link of the newest comment card (its
+# image link holds no text, and the article's author meta lies outside every
+# card), named by when it was posted and what it is for. The frontend puts a
+# posted comment first, but the phrase relies on posting time, not position.
 ALIASES = {
     "the article title heading at the top of the article page": "article banner title heading",
+    "the author name on the most recently posted comment under the article": "new comment card author link",
     "the author name in the article header's byline": "article banner author link",
     "the publication date in the article header's byline": "article banner publication date",
     "the article body content": "article body",

@@ -110,24 +110,173 @@ interactions:
     uri: https://api.anthropic.com/v1/messages
   response:
     body:
-      string: '{"model":"claude-sonnet-5-5","id":"msg_011CfkKj5VRwdX4nPvV4GT27","type":"message","role":"assistant","content":[{"type":"text","text":"{\"expectations\":[{\"expect_index\":0,\"subject\":\"the
+      string: '{"model":"claude-sonnet-5-5","id":"msg_011Cfoa7Sht5m1yvN4xSHagr","type":"message","role":"assistant","content":[{"type":"text","text":"{\"expectations\":[{\"expect_index\":0,\"subject\":\"the
         comments list under the article\",\"claim\":\"The comment text \\\"Thanks
         for the warm welcome!\\\" is shown in the comments under the article\",\"checks\":[{\"check\":\"text_in_target\",\"target_meaning\":\"the
         list of comments under the article\",\"text\":\"Thanks for the warm welcome!\"}]},{\"expect_index\":1,\"subject\":\"the
-        newly added comment under the article\",\"claim\":\"The new comment''s author
-        is reader\",\"checks\":[{\"check\":\"text_in_target\",\"target_meaning\":\"the
-        author name on the newly added comment, the one just posted by the signed-in
-        reader\",\"text\":\"reader\"}]},{\"expect_index\":2,\"subject\":\"the comments
-        list under the article\",\"claim\":\"jake''s earlier comment \\\"Glad to be
-        here.\\\" is still shown\",\"checks\":[{\"check\":\"text_in_target\",\"target_meaning\":\"the
+        author of the newly added comment\",\"claim\":\"The new comment shows reader
+        as its author\",\"checks\":[{\"check\":\"text_in_target\",\"target_meaning\":\"the
+        author name on the newly posted comment under the article, the comment by
+        the signed-in reader\",\"text\":\"reader\"}]},{\"expect_index\":2,\"subject\":\"the
+        comments list under the article\",\"claim\":\"jake''s earlier comment \\\"Glad
+        to be here.\\\" is still shown in the comments\",\"checks\":[{\"check\":\"text_in_target\",\"target_meaning\":\"the
         list of comments under the article\",\"text\":\"Glad to be here.\"}]},{\"expect_index\":3,\"subject\":\"the
-        number of comments saved for the article\",\"claim\":\"The comment was saved
-        once, so the total comment count is exactly 2\",\"checks\":[{\"check\":\"probe_equals\",\"probe\":\"comment_count\",\"value\":2}]}],\"requires\":[]}"}],"container":null,"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":4143,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":392,"output_tokens_details":{"thinking_tokens":0},"service_tier":"standard","inference_geo":"global"},"diagnostics":null}'
+        total number of saved comments\",\"claim\":\"The comment was saved once, so
+        the total comment count is exactly 2\",\"checks\":[{\"check\":\"probe_equals\",\"probe\":\"comment_count\",\"value\":2}]}],\"requires\":[]}"}],"container":null,"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":4143,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":398,"output_tokens_details":{"thinking_tokens":0},"service_tier":"standard","inference_geo":"global"},"diagnostics":null}'
     headers:
       content-type:
       - application/json
       request-id:
-      - req_011CfkKj57bwkTVvXPpFwg2c
+      - req_011Cfoa7RbAfsXNntkwy95LX
+    status:
+      code: 200
+      message: OK
+- request:
+    body: "{\"max_tokens\":4096,\"messages\":[{\"role\":\"user\",\"content\":\"{\\n
+      \ \\\"expect\\\": [\\n    {\\n      \\\"text\\\": \\\"The comment \\\\\\\"Thanks
+      for the warm welcome!\\\\\\\" is shown under the article\\\"\\n    },\\n    {\\n
+      \     \\\"text\\\": \\\"The new comment is shown with reader as its author\\\"\\n
+      \   },\\n    {\\n      \\\"text\\\": \\\"jake's earlier comment \\\\\\\"Glad
+      to be here.\\\\\\\" is still shown\\\"\\n    },\\n    {\\n      \\\"text\\\":
+      \\\"The comment is saved once, so the article now has exactly 2 comments\\\"\\n
+      \   }\\n  ],\\n  \\\"goal\\\": \\\"A signed-in reader adds a comment to an article
+      and sees it posted under their name.\\\",\\n  \\\"id\\\": \\\"post-comment\\\",\\n
+      \ \\\"invariants\\\": {\\n    \\\"inherit\\\": true\\n  },\\n  \\\"preconditions\\\":
+      {\\n    \\\"probes\\\": {\\n      \\\"comment_count\\\": \\\"GET /test-api/comments/count\\\"\\n
+      \   },\\n    \\\"start_url\\\": \\\"/login\\\"\\n  },\\n  \\\"steps\\\": [\\n
+      \   \\\"Sign in\\\",\\n    \\\"Open \\\\\\\"Welcome to Conduit\\\\\\\" from
+      the global feed\\\",\\n    \\\"Write the comment \\\\\\\"Thanks for the warm
+      welcome!\\\\\\\" and post it\\\"\\n  ]\\n}\"},{\"role\":\"assistant\",\"content\":\"{\\\"expectations\\\":[{\\\"expect_index\\\":0,\\\"subject\\\":\\\"the
+      comments list under the article\\\",\\\"claim\\\":\\\"The comment text \\\\\\\"Thanks
+      for the warm welcome!\\\\\\\" is shown in the comments under the article\\\",\\\"checks\\\":[{\\\"check\\\":\\\"text_in_target\\\",\\\"target_meaning\\\":\\\"the
+      list of comments under the article\\\",\\\"text\\\":\\\"Thanks for the warm
+      welcome!\\\"}]},{\\\"expect_index\\\":1,\\\"subject\\\":\\\"the author of the
+      newly added comment\\\",\\\"claim\\\":\\\"The new comment shows reader as its
+      author\\\",\\\"checks\\\":[{\\\"check\\\":\\\"text_in_target\\\",\\\"target_meaning\\\":\\\"the
+      author name on the newly posted comment under the article, the comment by the
+      signed-in reader\\\",\\\"text\\\":\\\"reader\\\"}]},{\\\"expect_index\\\":2,\\\"subject\\\":\\\"the
+      comments list under the article\\\",\\\"claim\\\":\\\"jake's earlier comment
+      \\\\\\\"Glad to be here.\\\\\\\" is still shown in the comments\\\",\\\"checks\\\":[{\\\"check\\\":\\\"text_in_target\\\",\\\"target_meaning\\\":\\\"the
+      list of comments under the article\\\",\\\"text\\\":\\\"Glad to be here.\\\"}]},{\\\"expect_index\\\":3,\\\"subject\\\":\\\"the
+      total number of saved comments\\\",\\\"claim\\\":\\\"The comment was saved once,
+      so the total comment count is exactly 2\\\",\\\"checks\\\":[{\\\"check\\\":\\\"probe_equals\\\",\\\"probe\\\":\\\"comment_count\\\",\\\"value\\\":2}]}],\\\"requires\\\":[]}\"},{\"role\":\"user\",\"content\":\"That
+      plan can't be used:\\n- expect[1]: the target \\\"the author name on the newly
+      posted comment under the article, the comment by the signed-in reader\\\" holds
+      \\\"reader\\\", the text its check asserts: a target says what the element is
+      for and where it sits, never what it says\\nWrite the whole plan again: fix
+      each of these, and keep the rest as it is.\"}],\"model\":\"claude-sonnet-5-5\",\"output_config\":{\"format\":{\"type\":\"json_schema\",\"schema\":{\"$defs\":{\"DistinctListOf_PlannedCheck_\":{\"$ref\":\"#/$defs/ListOf_PlannedCheck_\"},\"ListOf_PlannedCheck_\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/PlannedCheck\"}},\"ListOf_PlannedExpectation_\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/PlannedExpectation\"}},\"ListOf_RequiredCondition_\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/RequiredCondition\"}},\"PlannedCheck\":{\"type\":\"object\",\"description\":\"One
+      check that establishes all or part of an expectation's claim. Its\\ntype decides
+      which of the other fields it has (DATA_MODEL \xA77).\",\"title\":\"PlannedCheck\",\"properties\":{\"check\":{\"type\":\"string\",\"enum\":[\"text_visible\",\"text_in_target\",\"not_visible\",\"url_matches\",\"network_none\",\"network_seen\",\"probe_equals\",\"probe_equals_baseline\",\"visible_unoccluded\"],\"title\":\"Check\"},\"target_meaning\":{\"anyOf\":[{\"type\":\"string\",\"description\":\"{minLength:
+      1}\"},{\"type\":\"null\"}],\"title\":\"Target Meaning\",\"description\":\"{default:
+      None}\"},\"text\":{\"anyOf\":[{\"type\":\"string\",\"description\":\"{minLength:
+      1}\"},{\"type\":\"null\"}],\"title\":\"Text\",\"description\":\"{default: None}\"},\"pattern\":{\"anyOf\":[{\"type\":\"string\",\"description\":\"{minLength:
+      1}\"},{\"type\":\"null\"}],\"title\":\"Pattern\",\"description\":\"{default:
+      None}\"},\"probe\":{\"anyOf\":[{\"type\":\"string\",\"description\":\"{minLength:
+      1}\"},{\"type\":\"null\"}],\"title\":\"Probe\",\"description\":\"{default: None}\"},\"value\":{\"anyOf\":[{\"type\":\"integer\"},{\"type\":\"string\",\"description\":\"{minLength:
+      1}\"},{\"type\":\"null\"}],\"title\":\"Value\",\"description\":\"{default: None}\"},\"method\":{\"anyOf\":[{\"type\":\"string\",\"enum\":[\"GET\",\"HEAD\",\"POST\",\"PUT\",\"PATCH\",\"DELETE\",\"OPTIONS\"]},{\"type\":\"null\"}],\"title\":\"Method\",\"description\":\"{default:
+      None}\"},\"url_pattern\":{\"anyOf\":[{\"type\":\"string\",\"description\":\"{minLength:
+      1}\"},{\"type\":\"null\"}],\"title\":\"Url Pattern\",\"description\":\"{default:
+      None}\"},\"status_class\":{\"anyOf\":[{\"type\":\"string\",\"enum\":[\"1xx\",\"2xx\",\"3xx\",\"4xx\",\"5xx\"]},{\"type\":\"null\"}],\"title\":\"Status
+      Class\",\"description\":\"{default: None}\"}},\"additionalProperties\":false,\"required\":[\"check\"]},\"PlannedExpectation\":{\"type\":\"object\",\"description\":\"One
+      expectation of the spec: what it is about, what it claims, and the\\nchecks
+      that establish the claim, or why none can.\",\"title\":\"PlannedExpectation\",\"properties\":{\"expect_index\":{\"type\":\"integer\",\"title\":\"Expect
+      Index\",\"description\":\"{minimum: 0}\"},\"subject\":{\"type\":\"string\",\"title\":\"Subject\",\"description\":\"{minLength:
+      1}\"},\"claim\":{\"type\":\"string\",\"title\":\"Claim\",\"description\":\"{minLength:
+      1}\"},\"checks\":{\"$ref\":\"#/$defs/DistinctListOf_PlannedCheck_\"},\"unsupported\":{\"anyOf\":[{\"$ref\":\"#/$defs/Unsupported\"},{\"type\":\"null\"}],\"description\":\"{default:
+      None}\"}},\"additionalProperties\":false,\"required\":[\"expect_index\",\"subject\",\"claim\"]},\"RequiredCondition\":{\"type\":\"object\",\"description\":\"A
+      condition the goal or an expectation needs, such as a reload.\",\"title\":\"RequiredCondition\",\"properties\":{\"id\":{\"type\":\"string\",\"title\":\"Id\",\"description\":\"{minLength:
+      1}\"},\"condition\":{\"type\":\"string\",\"title\":\"Condition\",\"description\":\"{minLength:
+      1}\"}},\"additionalProperties\":false,\"required\":[\"id\",\"condition\"]},\"Unsupported\":{\"type\":\"object\",\"description\":\"Why
+      no M1 check can establish an expectation's claim, and the M2 check\\nit needs,
+      if one would.\",\"title\":\"Unsupported\",\"properties\":{\"reason\":{\"type\":\"string\",\"title\":\"Reason\",\"description\":\"{minLength:
+      1}\"},\"needs\":{\"anyOf\":[{\"type\":\"string\",\"enum\":[\"pixel_diff\",\"contrast_min\",\"model_verify\"]},{\"type\":\"null\"}],\"title\":\"Needs\",\"description\":\"{default:
+      None}\"}},\"additionalProperties\":false,\"required\":[\"reason\"]}},\"type\":\"object\",\"description\":\"Every
+      expectation's plan, and the conditions the goal or the\\nexpectations require,
+      such as a reload before the checks.\",\"title\":\"CoveragePlan\",\"properties\":{\"expectations\":{\"$ref\":\"#/$defs/ListOf_PlannedExpectation_\"},\"requires\":{\"$ref\":\"#/$defs/ListOf_RequiredCondition_\"}},\"additionalProperties\":false,\"required\":[\"expectations\",\"requires\"]}}},\"system\":\"You
+      write the coverage plan for one spec of an end-to-end test of a web app. For
+      each of the spec's expectations, you say which checks establish everything it
+      claims, or why no check can. You see only the spec, never the app, so you plan
+      from the spec's words alone.\\n\\nThe spec is the JSON in the user's message.
+      Its goal is what the user does; steps are optional hints; preconditions.probes
+      are read-only endpoints that report the app's state, by name; expect lists the
+      expectations, numbered from 0 in order. Invariants and browser settings are
+      checked apart from the plan: they are not expectations.\\n\\nFor each expectation,
+      in order, write one entry:\\n- expect_index: its position in expect, from 0.\\n-
+      subject: what it is about, such as \\\"the line items in the cart summary\\\".\\n-
+      claim: everything it says about its subject: its text, state, destination or
+      count.\\n- checks: the checks that together establish all of the claim. When
+      no check can, leave checks out and write unsupported instead: a reason, and
+      in needs the check that would establish it: pixel_diff (how a region looks),
+      contrast_min (colour contrast) or model_verify (a judgement only a model can
+      make). Leave needs out when none would.\\n\\nEvery check runs once, after the
+      last step, on the final page:\\n- text_visible: text anywhere on the page.\\n-
+      text_in_target: text inside one element, the one target_meaning names.\\n- not_visible:
+      the element target_meaning names is not shown.\\n- url_matches: a pattern found
+      in the page's URL.\\n- network_none, network_seen: no request, or a request,
+      from the browser itself, by method, url_pattern and status_class (1xx to 5xx).\\n-
+      probe_equals: the probe the spec declares under that name reads value, an integer
+      or a string.\\n- probe_equals_baseline: the probe reads what it read before
+      the run's actions.\\n- visible_unoccluded: the element target_meaning names
+      is in the viewport, not tiny, and not covered by another element.\\n\\nRules:\\n-
+      Never a weaker proxy. A check must establish the claim itself, not something
+      that usually goes with it. Use text_visible only when the text could appear
+      nowhere else on the final page; otherwise use text_in_target on the element
+      the claim is about.\\n- A claim about a count, such as \\\"exactly 2\\\" or
+      \\\"now has 6\\\", needs probe_equals on a probe the spec declares: seeing an
+      item on the page proves neither how many exist nor that it was saved.\\n- A
+      claim that something persisted needs the final state to show it: a reload condition
+      in requires, or a probe.\\n- target_meaning says what the element is for and
+      where it sits, such as \\\"the payment step's submit button\\\", never its current
+      label or the text the check looks for. Use the subject when the check reads
+      the subject itself. When the claim names several elements, write one check per
+      element, each naming its own. When a page may show the same thing in more than
+      one place, such as an item's details repeated above and below it, name the one
+      the claim is about by where it sits, such as \\\"the price in the product summary
+      under the product name\\\".\\n- A target_meaning never quotes or contains the
+      text its check asserts: it names what the element is and where it sits, not
+      what it says. A target that names a tag \\\"news\\\", or a tab called \\\"Home\\\",
+      gives the check away.\\n- A claim that a particular page is shown, such as an
+      item's page or a profile page, includes a url_matches check on the page's address,
+      in addition to any check of what the page shows.\\n- A claim about what a collection
+      holds, such as a list of comments, tags or links, names the collection as the
+      target, and the text is searched for inside it. A claim about a property of
+      one item, such as who wrote the item just added, targets that item, not its
+      whole collection.\\n- text is a literal, matched as whole words and ignoring
+      case: prefer it. Use pattern, a Python regular expression searched with re.search,
+      only when a literal can't say it, and write its flags inline, such as (?i).
+      A URL is matched as it is, so write (?i) when its case may vary. A pattern must
+      still require every part of the claim the expectation states, in order, not
+      only some of its words.\\n- Assert nothing the spec can't tell you, such as
+      a generated part of a URL or the order of items.\\n- requires lists the conditions
+      the goal or the expectations need before the checks run, each with an id (\\\"c1\\\",
+      \\\"c2\\\", ...), such as \\\"checked after reloading the order page\\\". Leave
+      it empty when there are none.\\n\"}"
+    headers:
+      anthropic-version:
+      - '2023-06-01'
+      content-type:
+      - application/json
+    method: POST
+    uri: https://api.anthropic.com/v1/messages
+  response:
+    body:
+      string: '{"model":"claude-sonnet-5-5","id":"msg_011Cfoa7usGAAEiScz4DpT9E","type":"message","role":"assistant","content":[{"type":"text","text":"{\"expectations\":[{\"expect_index\":0,\"subject\":\"the
+        comments list under the article\",\"claim\":\"The comment text \\\"Thanks
+        for the warm welcome!\\\" is shown in the comments under the article\",\"checks\":[{\"check\":\"text_in_target\",\"target_meaning\":\"the
+        list of comments under the article\",\"text\":\"Thanks for the warm welcome!\"}]},{\"expect_index\":1,\"subject\":\"the
+        author of the newly added comment\",\"claim\":\"The new comment shows reader
+        as its author\",\"checks\":[{\"check\":\"text_in_target\",\"target_meaning\":\"the
+        author name on the most recently posted comment under the article\",\"text\":\"reader\"}]},{\"expect_index\":2,\"subject\":\"the
+        comments list under the article\",\"claim\":\"jake''s earlier comment \\\"Glad
+        to be here.\\\" is still shown in the comments\",\"checks\":[{\"check\":\"text_in_target\",\"target_meaning\":\"the
+        list of comments under the article\",\"text\":\"Glad to be here.\"}]},{\"expect_index\":3,\"subject\":\"the
+        total number of saved comments\",\"claim\":\"The comment was saved once, so
+        the total comment count is exactly 2\",\"checks\":[{\"check\":\"probe_equals\",\"probe\":\"comment_count\",\"value\":2}]}],\"requires\":[]}"}],"container":null,"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":4647,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":387,"output_tokens_details":{"thinking_tokens":0},"service_tier":"standard","inference_geo":"global"},"diagnostics":null}'
+    headers:
+      content-type:
+      - application/json
+      request-id:
+      - req_011Cfoa7uSyR9EkRdMyW6QGL
     status:
       code: 200
       message: OK
