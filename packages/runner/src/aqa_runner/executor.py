@@ -77,7 +77,8 @@ LOOK_SECONDS = 0.1
 # bounded by the run's `resolve_seconds` instead (ADR-0024's #46 amendment).
 NAVIGATION_SECONDS = 30
 
-# How many times evidence looks at a page that changed under its look.
+# How many times evidence looks at a page that changed under its look: one
+# changing under three looks in a row changes faster than a look can follow.
 EVIDENCE_LOOKS = 3
 
 # How long past those bounds the executor waits for an action before it stops
@@ -274,7 +275,7 @@ async def replay(
         # Seq 0 is no compiled step: a compiled script's steps start at 1.
         first = start_url(setup.spec, setup.start)
         path = setup.spec.frontmatter.preconditions.start_url
-        await _kept(
+        await _keep_with_evidence(
             session,
             run,
             steps,
@@ -293,7 +294,7 @@ async def replay(
             result = await _run(session, run, step, interrupted)
             if result is None:
                 break
-            await _kept(session, run, steps, result)
+            await _keep_with_evidence(session, run, steps, result)
         if steps[-1].outcome != "completed" or interrupted():
             assertions = tuple(
                 AssertionResult(check.id, "not_evaluated", stopped_at=steps[-1].seq)
@@ -334,7 +335,7 @@ async def replay(
     )
 
 
-async def _kept(
+async def _keep_with_evidence(
     session: BrowserSession, run: _Replay, steps: list[StepResult], step: StepResult
 ) -> None:
     """Keep `step`, then save its evidence with the page's snapshot as the
@@ -346,8 +347,8 @@ async def _kept(
 
 
 async def _observed(session: BrowserSession, budget: float) -> Redacted | None:
-    """The page's snapshot for evidence, within `budget` seconds and
-    `MARGIN_SECONDS` past them, or None. Its refusal records no policy event
+    """The page's snapshot for evidence, or None: all of its looks within
+    one `budget` of seconds and `MARGIN_SECONDS` past them. Its refusal records no policy event
     (`snapshot(record_refusal=False)`), so evidence leaves the result as it
     was; a page off the allowed origins, one that stopped answering or
     crashed, or one that changed under every look, gets none."""

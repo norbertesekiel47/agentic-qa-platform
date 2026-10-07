@@ -13,8 +13,9 @@ of each step, under `evidence/<seq>/` in the record it is given. Replay
 In a run that binds any test secret, the logs keep no URL, method or
 console text: a page can split a value across them in pieces no scan finds
 (ADR-0026's #47 amendment). Capture serializes no exception or result
-object, and a file its record refuses is left out: evidence never decides
-a run."""
+object. A file its record refuses for what it holds is left out, so no page
+makes evidence decide a run; a write the disk or a link refuses raises, as
+a steps line's does."""
 
 from contextlib import suppress
 
@@ -53,11 +54,13 @@ async def capture_evidence(
         network = await session.network_log(window)
     documents = {
         "console_log.json": {
-            "entries": [_logged(entry, withheld=withheld) for entry in console.kept],
+            "entries": [
+                _console_entry(entry, withheld=withheld) for entry in console.kept
+            ],
             "total": console.total,
         },
         "network_log.json": {
-            "entries": [_requested(entry, withheld=withheld) for entry in network],
+            "entries": [_network_entry(entry, withheld=withheld) for entry in network],
             "total": 0 if window is None else window.requests.total,
         },
     }
@@ -66,13 +69,13 @@ async def capture_evidence(
             record.write(f"{folder}/{name}", document)
 
 
-def _logged(entry: ConsoleEntry, *, withheld: bool) -> dict[str, object]:
+def _console_entry(entry: ConsoleEntry, *, withheld: bool) -> dict[str, object]:
     return (
         {"type": entry.type} if withheld else {"type": entry.type, "text": entry.text}
     )
 
 
-def _requested(entry: NetworkEntry, *, withheld: bool) -> dict[str, object]:
+def _network_entry(entry: NetworkEntry, *, withheld: bool) -> dict[str, object]:
     kept: dict[str, object] = {
         "status": entry.status,
         "timing": {"start": entry.start, "duration_ms": entry.duration_ms},

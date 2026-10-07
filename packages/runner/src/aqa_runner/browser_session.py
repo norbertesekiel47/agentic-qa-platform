@@ -280,7 +280,7 @@ class BrowserSession:
             # Counted from before the page's check, so a navigation during it
             # counts too.
             changes = self._frame_changes
-            await self._require_allowed_page(record=record_refusal)
+            await self._require_allowed_page(record_refusal=record_refusal)
             taken = await self.page.aria_snapshot(mode="ai")
             try:
                 left_out = await self._frames_left_out(taken)
@@ -842,19 +842,23 @@ class BrowserSession:
                 return child
         return None
 
-    async def _require_allowed_page(self, *, record: bool = True) -> None:
-        await self._require_allowed(self.page.main_frame, "document", record=record)
+    async def _require_allowed_page(self, *, record_refusal: bool = True) -> None:
+        await self._require_allowed(
+            self.page.main_frame, "document", record_refusal=record_refusal
+        )
 
     async def _require_allowed(
-        self, frame: Frame, kind: PolicyEventKind, *, record: bool = True
+        self, frame: Frame, kind: PolicyEventKind, *, record_refusal: bool = True
     ) -> None:
-        """Raise a policy event of `kind`, recorded unless `record` is false,
+        """Raise a policy event of `kind`, recorded unless `record_refusal` is false,
         unless `frame` is on one of the run's allowed origins."""
         origin = await frame_origin(frame)
         if origin in self._policy.allowed_origins:
             return
         event = PolicyEvent(kind, frame.url, origin)
-        raise self._refuse(event) if record else PolicyEventError(self._scanned(event))
+        if record_refusal:
+            raise self._refuse(event)
+        raise PolicyEventError(self._scanned(event))
 
     def _refuse(self, event: PolicyEvent) -> PolicyEventError:
         """Record `event`, and the error to raise for it, which holds the
