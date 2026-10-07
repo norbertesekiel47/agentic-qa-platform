@@ -4,7 +4,7 @@ own text, and nothing from a page, a run or the machine."""
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import cast
 
 from aqa_core.coverage_plan import CoveragePlan, PlannedCheck, misfits
@@ -142,11 +142,12 @@ def plan_request(spec: Spec) -> list[BaseMessage]:
 
 @dataclass(frozen=True)
 class Planned:
-    """What one plan call gave: the plan the model wrote, if it parsed; why it
-    can't be used, if it can't (it doesn't fit its spec, or a check's target
-    holds what the check asserts); and the routed call, with a cost record for
-    every response that arrived. No plan means the model refused or its answer
-    didn't parse, and `routed.outcome` says which."""
+    """What the plan call gave, after its one retry if it needed one: the plan
+    the model wrote, if it parsed; why it can't be used, if it can't (it
+    doesn't fit its spec, or a check's target holds what the check asserts);
+    and the routed call, with a cost record for every response that arrived.
+    No plan means the model refused or its answer didn't parse, and
+    `routed.outcome` says which."""
 
     plan: CoveragePlan | None
     misfits: tuple[str, ...]
@@ -159,7 +160,7 @@ _TARGET_RULE = (
 )
 
 
-async def _circular(index: int, check: PlannedCheck) -> str | None:
+async def _why_circular(index: int, check: PlannedCheck) -> str | None:
     """Why `check`'s target holds what the check asserts, if it does: finding
     the element by the text it must verify would turn a wrong text into a
     missing element, drift instead of a failure (ADR-0025). A literal is
@@ -191,7 +192,7 @@ async def _circular(index: int, check: PlannedCheck) -> str | None:
     )
 
 
-async def _judge(routed: Routed, spec: Spec) -> Planned:
+async def _planned(routed: Routed, spec: Spec) -> Planned:
     """The plan `routed` gave, with every reason it can't be used: `misfits`,
     then each check whose target holds what it asserts."""
     # The router parses against the schema it was given.
@@ -199,7 +200,7 @@ async def _judge(routed: Routed, spec: Spec) -> Planned:
     if plan is None:
         return Planned(None, (), routed)
     circular = [
-        await _circular(planned.expect_index, check)
+        await _why_circular(planned.expect_index, check)
         for planned in plan.expectations
         for check in planned.checks
     ]
@@ -224,7 +225,7 @@ async def make_plan(router: ModelRouter, spec: Spec) -> Planned:
     as the router does, and a retry's failure raises `ModelCallError` holding
     the first answer's record too."""
     request = plan_request(spec)
-    first = await _judge(
+    first = await _planned(
         await router.call("navigator", "explore", request, schema=CoveragePlan),
         spec,
     )
@@ -247,7 +248,4 @@ async def make_plan(router: ModelRouter, spec: Spec) -> Planned:
     except Exception as error:
         # The first answer was billed: its record must outlive the failure.
         raise ModelCallError(billed) from error
-    return await _judge(
-        Routed(routed.message, routed.parsed, routed.outcome, (*billed, *routed.calls)),
-        spec,
-    )
+    return await _planned(replace(routed, calls=(*billed, *routed.calls)), spec)
