@@ -37,9 +37,11 @@ class Source(NamedTuple):
 
 
 type ReadSource = Callable[[Path, Path], Source]
+# What reading the source, Docker or the evidence directory can raise.
+FAILURES = (OSError, subprocess.SubprocessError)
 
 
-@dataclass
+@dataclass(eq=False)
 class HaltError(Exception):
     halt: Halt
 
@@ -52,7 +54,7 @@ def git_source(root: Path, out: Path) -> Source:
 
     here, there = root.resolve(), out.resolve()
     inside = there.is_relative_to(here)
-    outside = [f":(exclude){there.relative_to(here)}"] if inside else []
+    outside = [f":(exclude,literal){there.relative_to(here)}"] if inside else []
     status = git("status", "--porcelain", "--untracked-files=all", "--", ".", *outside)
     commit, tree = git("rev-parse", "HEAD", "HEAD^{tree}").split()
     return Source(commit, tree, bool(status))
@@ -137,8 +139,7 @@ class Run:
             if build:
                 flags.build(self.root, self.base.app, self.docker)
             flags.switch(self.root, self.base.app, flag_ids, self.docker)
-        except flags.FlagError as error:
-            print(f"error: {error}", file=sys.stderr)
+        except (flags.FlagError, *FAILURES) as error:
             raise HaltError("switch_failed") from error
 
     def _kept(self, pair: Pair) -> bool:
@@ -175,7 +176,7 @@ def _prepare(
     args: argparse.Namespace, docker: flags.Docker, replay: Replay, source: ReadSource
 ) -> Run:
     """Every input admitted before anything changes, or a fixed ValueError."""
-    root, app, out = args.root, args.app, args.out
+    root, app, out, folder = args.root, args.app, args.out, args.patches
     start = source(root, out)
     if start.dirty:
         raise ValueError(f"{root}: uncommitted changes, so no report could cite it")
@@ -186,16 +187,13 @@ def _prepare(
     cases = tuple(c for _, c in loaded if c.app == app and c.split == "dev")
     qa = root / manifest.APPS / app / "qa"
     pilots = load_pilots(qa, args.compiled_dir or qa / ".compiled", args.spec)
-    patches = _patches(args.patches, cases, pilots)
+    patches = _patches(folder, cases, pilots)
     hashes = {"manifest": _sha256(root / manifest.MANIFEST)}
     for pilot in pilots:
         spec = _id(pilot)
         hashes[f"spec:{spec}"] = pilot.spec.spec_hash
         hashes[f"script:{spec}"] = canonical_hash(pilot.script.model_dump(mode="json"))
-    for key in patches:
-        hashes["patch:" + "/".join(key)] = _sha256(
-            args.patches / f"{'.'.join(key)}.json"
-        )
+    hashes |= {f"patch:{c}/{s}": _sha256(folder / f"{c}.{s}.json") for c, s in patches}
     selected = tuple(_id(p) for p in pilots)
     base = Report(app, start.commit, start.tree, args.repeat, selected, (), hashes)
     (out / "attempts").mkdir(parents=True)
@@ -255,19 +253,22 @@ def main(
     args = parser.parse_args(argv)
     try:
         run = _prepare(args, docker or flags.LocalDocker(), replay, source)
-    except (ValueError, OSError, flags.FlagError, manifest.ManifestError) as error:
-        print(f"error: {error}", file=sys.stderr)
+    except (ValueError, flags.FlagError, manifest.ManifestError, *FAILURES) as error:
+        # Ours name a path and a fixed category; the others can quote input.
+        shown = str(error) if isinstance(error, ValueError) else type(error).__name__
+        print(f"error: {shown}", file=sys.stderr)
         return 12 if isinstance(error, UnusableSecretError) else 2
     try:
-        return asyncio.run(run.execute())
-    except OSError:
-        print(f"error: evidence under {run.out} couldn't be written", file=sys.stderr)
+        try:
+            return asyncio.run(run.execute())
+        except KeyboardInterrupt:
+            run.halt = "interrupted"
+        except SystemExit:
+            run.halt = "system_exit"
+        return run.finish()
+    except FAILURES:
+        print(f"error: the run under {run.out} couldn't be completed", file=sys.stderr)
         return 3
-    except KeyboardInterrupt:
-        run.halt = "interrupted"
-    except SystemExit:
-        run.halt = "system_exit"
-    return run.finish()
 
 
 if __name__ == "__main__":

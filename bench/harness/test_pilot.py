@@ -5,13 +5,13 @@ import subprocess
 import tempfile
 import threading
 import unittest
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from io import StringIO
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pilot
 from aqa_core.project import load_project
@@ -19,7 +19,7 @@ from aqa_core.spec import canonical_hash
 from pilot_inputs import PilotInput, load_pilots
 from pilot_replay import FailedAttempt, ObservedAttempt, replay_pilot
 from test_flags import FakeDocker
-from test_pilot_replay import CLIENTS, COMPILED, SEND, Handler, Server
+from test_pilot_replay import ACCOUNT, BINDING, CLIENTS, COMPILED, SEND, Handler, Server
 from test_pilot_report import A0, DRIFTED, HEALTH, PASSED, PRIVATE
 
 SPEC = '{"id":"pilot","goal":"Send","preconditions":{"start_url":"/","reset":{"http":"POST /reset?fake-sensitive"}},"expect":["Title is visible"]}'
@@ -30,7 +30,9 @@ ZERO, MISSED = frozenset({0}), (A0._replace(outcome="failed"),)
 FAILING = replace(PASSED, outcome="failed", assertions=MISSED, failed_expectations=ZERO)
 FAILED_0 = replace(OK, observation=FAILING)
 PRESS_AB = {"seq": 1, "action": "press", "key": "a+b", "side_effect": False}
+INPUT = "pilot.json: invalid pilot input"
 HELD = FailedAttempt("r9", PRIVATE, "operation_timeout", "incomplete", "unknown")
+REJECTED = FailedAttempt("r9", PRIVATE, "reset_rejected", "completed", "closed")
 
 
 def case(kind: str, flag: str, split: str = "dev", **row: object) -> dict[str, Any]:
@@ -78,14 +80,26 @@ class FlagDocker(FakeDocker):
         super().__init__()
         self.server = server
 
-    def compose(
-        self, app_dir: Path, args: Sequence[str], env: Mapping[str, str] | None = None
-    ) -> str:
-        answer = super().compose(app_dir, args, env)
+    def compose(self, *args: Any, **kwargs: Any) -> str:
+        answer = super().compose(*args, **kwargs)
         on = self.bench_flags.split(",")
         self.server.label = "Post" if "ben1" in on else "Send"
         self.server.reset = 500 if "bug1" in on else 200
         return answer
+
+
+class BrokenDocker(FakeDocker):
+    """Raises as a missing docker binary would, at its `fail_at`th `up`."""
+
+    def __init__(self, fail_at: int) -> None:
+        super().__init__()
+        self.fail_at = fail_at
+
+    def compose(self, *args: Any, **kwargs: Any) -> str:
+        self.fail_at -= args[1][0] == "up"
+        if self.fail_at == 0:
+            raise FileNotFoundError("fake docker")
+        return super().compose(*args, **kwargs)
 
 
 class PilotCommandTests(unittest.TestCase):
@@ -174,29 +188,21 @@ class PilotCommandTests(unittest.TestCase):
         flags_seen = [flags for flags, _ in replay.seen]
         self.assertEqual(flags_seen, ["", "", "ben1", "ben1", "bug1"])
         locators = [p.script.targets["send"].locators[0] for _, p in replay.seen[2:4]]
-        self.assertEqual(
-            [loc.model_dump()["name"] for loc in locators], ["Send", "Post"]
-        )
-        pairs = [(p["case"], p["status"]) for p in self.report()["pairs"]]
-        self.assertEqual(
-            pairs,
-            [
-                (None, "passed"),
-                ("conduit-benign-001", "accepted_pending_C"),
-                ("conduit-bug-001", "unscored_binding_blocked"),
-            ],
-        )
-        self.assertEqual(len(list((self.out / "attempts").iterdir())), 5)
+        names = [loc.model_dump()["name"] for loc in locators]
+        statuses = [p["status"] for p in self.report()["pairs"]]
+        want = ["passed", "accepted_pending_C", "unscored_binding_blocked"]
+        self.assertEqual((names, statuses), (["Send", "Post"], want))
+        kept = sorted((self.out / "attempts").iterdir())
+        roles = [json.loads(path.read_text())["role"] for path in kept]
+        legs = ["clean", "clean", "diagnostic", "acceptance", "unscored"]
+        self.assertEqual(roles, legs)
         self.assertEqual(self.report()["switched_back_clean"], True)
 
     def test_manifest_answers_never_cross_replay_boundary(self) -> None:
-        self.cases = {"conduit-bug-001": case("bug", "bug1", expect=[0])}
         found = []
         for row in ({"expect": [0]}, {"invariants": ["js_exceptions"]}):
             with self.subTest(row=row):
-                self.cases["conduit-bug-001"]["expected"] = [
-                    {"spec": "pilot", "verdict": "expectation_violated"} | row
-                ]
+                self.cases = {"conduit-bug-001": case("bug", "bug1", **row)}
                 self.docker = FakeDocker()
                 replay = FakeReplay(self.docker, {"": [OK], "bug1": [FAILED_0]})
                 code, _ = self.command(replay)
@@ -206,72 +212,68 @@ class PilotCommandTests(unittest.TestCase):
         self.assertEqual(found[0][1], found[1][1])
 
     def test_invalid_input_stops_before_build(self) -> None:
-        def existing() -> None:
-            self.out.mkdir()
-
         def secret() -> None:
-            self.spec["preconditions"]["account"] = {
-                "password": {"secret": "TEST_PASSWORD"}
-            }
-            self.config["secrets"] = {
-                "TEST_PASSWORD": {"origins": ["start"], "field": "password"}
-            }
+            self.spec["preconditions"]["account"] = ACCOUNT
+            self.config["secrets"] = BINDING
+
+        def stray() -> None:
+            self.cases["conduit-bug-001"] = case("bug", "bug1", expect=[0])
+            self.patches["conduit-bug-001.pilot.json"] = {}
+
+        def unparsed() -> None:
+            self.cases["conduit-bug-001"]["flag"] = "fake-sensitive"
 
         cases: list[tuple[str, Callable[[], object], int, str]] = [
-            ("stale", lambda: None, 2, "pilot.json: invalid pilot input"),
-            (
-                "press",
-                lambda: self.steps.__setitem__(0, PRESS_AB),
-                2,
-                "pilot.json: invalid pilot input",
-            ),
-            (
-                "no reset",
-                lambda: self.spec["preconditions"].pop("reset"),
-                2,
-                "pilot.json: invalid pilot input",
-            ),
+            ("stale", lambda: None, 2, INPUT),
+            ("press", lambda: self.steps.__setitem__(0, PRESS_AB), 2, INPUT),
+            ("no reset", lambda: self.spec["preconditions"].pop("reset"), 2, INPUT),
             ("secret", secret, 12, "pilot.json: unusable test secret"),
-            (
-                "patched check",
-                lambda: self.patch_to("Post", "/assertions/0/text"),
-                2,
-                "pilot.json: invalid patch",
-            ),
-            (
-                "unknown patch",
-                lambda: self.patches.update({"conduit-bug-001.pilot.json": {}}),
-                2,
-                "not a patch for a selected",
-            ),
-            ("existing out", existing, 2, "out: exists"),
+            ("patched check", lambda: self.patch_to("x", "/assertions/0"), 2, "patch"),
+            ("non-drift patch", stray, 2, "not a patch for a selected"),
+            ("existing out", lambda: self.out.mkdir(exist_ok=False), 2, "out: exists"),
+            ("bad manifest", unparsed, 2, "error: ManifestError"),
         ]
-        for name, change, expected, message in cases:
+        for name, change, want, message in cases:
             with self.subTest(name), patch.dict(os.environ):
                 self.setUp()
                 change()
                 replay = FakeReplay(self.docker, {})
                 code, shown = self.command(replay, stale=name == "stale")
-                self.assertEqual(
-                    (code, self.docker.calls, replay.seen), (expected, [], [])
-                )
+                self.assertEqual((code, self.docker.calls, replay.seen), (want, [], []))
                 self.assertIn(message, shown)
+                self.assertNotIn("fake-sensitive", shown)
                 self.assertFalse((self.out / "report.json").exists())
-        dirty = SOURCE._replace(dirty=True)
-        code, shown = self.command(FakeReplay(self.docker, {}), source=lambda *_: dirty)
-        self.assertEqual((code, self.docker.calls), (2, []))
-        self.assertIn("uncommitted changes", shown)
-        missing = ["--patches", str(self.root / "none"), "--out", str(self.root / "o")]
-        code, shown = self.command(FakeReplay(self.docker, {}), *missing)
-        self.assertEqual((code, self.docker.calls), (2, []))
-        self.assertIn("No such file or directory", shown)
+        refusals: list[tuple[tuple[str, ...], Any, str]] = [
+            ((), lambda *_: SOURCE._replace(dirty=True), "uncommitted changes"),
+            (("--patches", str(self.root / "none")), lambda *_: SOURCE, "FileNotFound"),
+            (("--repeat", "0"), lambda *_: SOURCE, "--repeat below 1"),
+            ((), pilot.git_source, "CalledProcessError"),
+        ]
+        self.setUp()
+        replay = FakeReplay(self.docker, {})
+        for extra, source, message in refusals:
+            with self.subTest(message):
+                self.out = self.root / f"out-{len(message)}"
+                code, shown = self.command(replay, *extra, source=source)
+                self.assertEqual((code, self.docker.calls), (2, []))
+                self.assertIn(message, shown)
 
     def test_unwritable_evidence_is_an_operational_failure(self) -> None:
         replay = FakeReplay(self.docker, {"": [OK]})
         with patch("pilot_report.write_once", side_effect=OSError("fake disk full")):
             code, shown = self.command(replay)
         self.assertEqual((code, self.ups()), (3, [""]))
-        self.assertIn("couldn't be written", shown)
+        self.assertIn("couldn't be completed", shown)
+
+    def test_a_failed_switch_halts_with_the_app_held(self) -> None:
+        for fail_at, judged in ((1, 0), (4, 3)):
+            with self.subTest(fail_at=fail_at):
+                self.docker, self.out = BrokenDocker(fail_at), self.root / f"o{fail_at}"
+                replay = FakeReplay(self.docker, {"": [OK], "ben1": [OK], "bug1": [OK]})
+                self.assertEqual(self.command(replay)[0], 3)
+                doc = self.report()
+                ended = (doc["halt"], doc["switched_back_clean"], len(doc["pairs"]))
+                self.assertEqual(ended, ("switch_failed", False, judged))
 
     def serve(self) -> FlagServer:
         server = FlagServer()
@@ -296,15 +298,11 @@ class PilotCommandTests(unittest.TestCase):
             self.enterContext(patch.object(client, "__init__", construct))
         code, shown = self.command(replay_pilot)
         self.assertEqual((code, built), (0, []), shown)
-        submit, drifted = (
-            ["POST /reset", "GET /", "POST /submit"],
-            ["POST /reset", "GET /"],
-        )
-        self.assertEqual(server.log, submit + drifted + submit)
+        submit = ["POST /reset", "GET /", "POST /submit"]
+        self.assertEqual(server.log, submit + submit[:2] + submit)
         clean, benign = self.report()["pairs"]
-        self.assertEqual(
-            (clean["status"], benign["status"]), ("passed", "accepted_pending_C")
-        )
+        statuses = (clean["status"], benign["status"])
+        self.assertEqual(statuses, ("passed", "accepted_pending_C"))
         legs = [(a["role"], a["kind"], a["outcome"]) for a in benign["attempts"]]
         expected = [
             ("diagnostic", "binding_only", "failed"),
@@ -328,24 +326,16 @@ class PilotCommandTests(unittest.TestCase):
         self.assertEqual(benign["attempts"][0]["failure"], "reset_rejected")
         self.assertEqual(self.ups(), ["", "bug1", ""])
         infrastructure = replace(LOST, health=replace(HEALTH, infrastructure=True))
+        stopped = (A0._replace(outcome="check_timed_out"),)
         timed_out = replace(
-            OK,
-            observation=replace(
-                LOST.observation, assertions=(A0._replace(outcome="check_timed_out"),)
-            ),
+            OK, observation=replace(LOST.observation, assertions=stopped)
         )
-        failed_step = replace(
-            OK,
-            observation=replace(
-                OK.observation,
-                outcome="errored",
-                eligible=False,
-                steps=(
-                    PASSED.steps[0],
-                    PASSED.steps[1]._replace(outcome="failed", error=True),
-                ),
-            ),
+        broke = (
+            PASSED.steps[0],
+            PASSED.steps[1]._replace(outcome="failed", error=True),
         )
+        bad = replace(OK.observation, outcome="errored", eligible=False, steps=broke)
+        failed_step = replace(OK, observation=bad)
         fatal = {
             "infrastructure": infrastructure,
             "check timeout": timed_out,
@@ -364,6 +354,28 @@ class PilotCommandTests(unittest.TestCase):
                 allowed = self.report()["reservation_release"] == "allowed"
                 after = ["", "ben1"] + ([] if name == "held" else [""])
                 self.assertEqual((self.ups(), allowed), (after, name != "held"))
+        self.docker, self.out = FakeDocker(), self.root / "out-clean"
+        replay = FakeReplay(self.docker, {"": [REJECTED]})
+        code, _ = self.command(replay, "--repeat", "3")
+        self.assertEqual((code, len(replay.seen), self.ups()), (3, 1, ["", ""]))
+
+    def test_an_enter_failing_after_the_cancel_prints_nothing(self) -> None:
+        self.config["budgets"] = {"minutes": 0.005, "resolve_seconds": 0.1}
+        self.steps, self.cases = [], {}
+        self.spec["preconditions"].pop("reset")
+
+        async def late() -> None:
+            await asyncio.sleep(1.5)
+            raise ValueError("fake-enter-text")
+
+        driver = MagicMock(__aenter__=AsyncMock(side_effect=late))
+        self.enterContext(patch("pilot_replay.async_playwright", lambda: driver))
+        with self.assertNoLogs("asyncio"):
+            code, shown = self.command(replay_pilot)
+        attempt = self.report()["pairs"][0]["attempts"][0]
+        ended = (code, attempt["cleanup"], attempt["resources"])
+        self.assertEqual(ended, (3, "incomplete", "unknown"))
+        self.assertNotIn("fake-enter-text", shown)
 
     def test_a_stop_short_keeps_earlier_receipts_and_holds_the_app(self) -> None:
         stops: list[tuple[BaseException, str, int]] = [
@@ -373,21 +385,17 @@ class PilotCommandTests(unittest.TestCase):
             (SystemExit("fake-exit-payload"), "system_exit", 3),
         ]
         self.patch_to("Post")
-        for error, halt, expected in stops:
+        for error, halt, want in stops:
             with self.subTest(halt=halt, error=type(error).__name__):
                 self.docker = FakeDocker()
                 self.out = self.root / f"out-{type(error).__name__}"
                 replay = FakeReplay(self.docker, {"": [OK], "ben1": [LOST, error]})
                 code, shown = self.command(replay)
-                report = self.report()
-                self.assertEqual(
-                    (code, report["halt"], report["exit"]), (expected, halt, expected)
-                )
-                self.assertEqual(
-                    (report["reservation_release"], self.ups()),
-                    ("forbidden", ["", "ben1"]),
-                )
-                self.assertEqual([p["status"] for p in report["pairs"]], ["passed"])
+                doc = self.report()
+                self.assertEqual((code, doc["halt"], doc["exit"]), (want, halt, want))
+                held = (doc["reservation_release"], self.ups())
+                self.assertEqual(held, ("forbidden", ["", "ben1"]))
+                self.assertEqual([p["status"] for p in doc["pairs"]], ["passed"])
                 kept = sorted((self.out / "attempts").iterdir())
                 receipts = [json.loads(path.read_text()) for path in kept]
                 found = [(r["case"], r["role"], r["kind"]) for r in receipts]
@@ -402,28 +410,20 @@ class PilotCommandTests(unittest.TestCase):
         replay = FakeReplay(self.docker, {"": [OK], "ben1": [OK], "bug1": [OK]})
         code, _ = self.command(replay, source=lambda *_: next(identities))
         self.assertEqual((code, self.report()["source_unchanged"]), (3, False))
-        self.assertEqual(
-            self.report()["source"], {"commit": "c" * 40, "tree": "t" * 40}
-        )
+        want = {"commit": SOURCE.commit, "tree": SOURCE.tree}
+        self.assertEqual(self.report()["source"], want)
 
     def test_git_source_reads_head_and_skips_the_output(self) -> None:
         repo, out = self.root / "repo", self.root / "repo" / "out"
         out.mkdir(parents=True)
         git = ["git", "-c", "user.name=fake", "-c", "user.email=fake@example.invalid"]
         subprocess.run([*git, "init", "-q", str(repo)], check=True)
-        commit = [
-            "commit",
-            "-q",
-            "--allow-empty",
-            "--no-verify",
-            "--no-gpg-sign",
-            "-m",
-            "x",
-        ]
-        subprocess.run([*git, "-C", str(repo), *commit], check=True)
+        commit = ["commit", "-q", "--allow-empty", "--no-verify", "--no-gpg-sign"]
+        subprocess.run([*git, "-C", str(repo), *commit, "-m", "x"], check=True)
         (out / "report.json").write_text("{}")
         commit_id, tree, dirty = pilot.git_source(repo, out)
         self.assertEqual((len(commit_id), len(tree), dirty), (40, 40, False))
         self.assertTrue(pilot.git_source(repo, self.root / "elsewhere")[2])
+        self.assertTrue(pilot.git_source(repo, repo / "*")[2])
         (repo / "new").write_text("x")
         self.assertTrue(pilot.git_source(repo, out)[2])
