@@ -51,24 +51,29 @@ def serve() -> Iterator[Callable[..., Endpoint]]:
     """`serve(body=b"{}", headers={...})` starts a local server that answers every
     request with that body and those headers, and stops it after the test. A
     tuple of bodies answers the requests in turn, the last one every request
-    after it."""
+    after it; a tuple of headers goes with them, one per body."""
     servers: list[socketserver.ThreadingTCPServer] = []
 
     def start(
         body: bytes | tuple[bytes, ...] = b"{}",
-        headers: Mapping[str, str] | None = None,
+        headers: Mapping[str, str] | tuple[Mapping[str, str], ...] | None = None,
     ) -> Endpoint:
         endpoint = Endpoint(url="")
-        answer = {"content-type": "application/json", **(headers or {})}
-        head = "".join(f"{name}: {value}\r\n" for name, value in answer.items())
-        responses = [
-            (
-                f"HTTP/1.1 200 OK\r\n{head}content-length: {len(each)}\r\n"
-                "connection: close\r\n\r\n"
-            ).encode()
-            + each
-            for each in (body if isinstance(body, tuple) else (body,))
-        ]
+        bodies = body if isinstance(body, tuple) else (body,)
+        heads = (
+            headers if isinstance(headers, tuple) else (headers or {},) * len(bodies)
+        )
+        responses = []
+        for each, extra in zip(bodies, heads, strict=True):
+            answer = {"content-type": "application/json", **extra}
+            head = "".join(f"{name}: {value}\r\n" for name, value in answer.items())
+            responses.append(
+                (
+                    f"HTTP/1.1 200 OK\r\n{head}content-length: {len(each)}\r\n"
+                    "connection: close\r\n\r\n"
+                ).encode()
+                + each
+            )
 
         class Handler(socketserver.StreamRequestHandler):
             """Reads one request, writes it down, and answers it."""

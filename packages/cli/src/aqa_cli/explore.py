@@ -150,8 +150,8 @@ def _judge(
         else:
             why = "the model's plan didn't parse as a coverage plan"
         return "gave_up", why, ()
-    if planned.misfits:
-        return "gave_up", "the model's plan can't be used", planned.misfits
+    if planned.problems:
+        return "gave_up", "the model's plan can't be used", planned.problems
     if lines := uncovered(planned.plan, spec.frontmatter):
         return "spec_error", "an expectation has no establishing check", lines
     return planned.plan

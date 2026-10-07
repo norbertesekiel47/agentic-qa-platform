@@ -312,7 +312,7 @@ def answers_expected(name: str, calls: tuple[CostRecord, ...]) -> int:
 async def ask(name: str, router: ModelRouter, spec: Spec) -> tuple[Routed, bool]:
     if plan_case(name):
         planned = await make_plan(router, spec)
-        if planned.plan is None or planned.misfits:
+        if planned.plan is None or planned.problems:
             return planned.routed, False
         # Every pilot expectation has an M1 check in REVIEW.md.
         return planned.routed, name == "coverage_plan" or not uncovered(

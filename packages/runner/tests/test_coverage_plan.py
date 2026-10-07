@@ -11,6 +11,7 @@ from typing import Any, get_args
 
 import pytest
 from aqa_core.coverage_plan import CheckType, CoveragePlan, M2Check, PlannedCheck
+from aqa_core.model_costs import Usage
 from aqa_core.project import load_project
 from aqa_core.spec import Spec
 from aqa_runner import text_search
@@ -254,7 +255,7 @@ def test_the_plan_is_asked_of_the_navigator_role_in_explore_mode(
 
     assert factory.built == [("anthropic", "claude-sonnet-5-5", None)]
     assert client.calls == [(plan_request(spec), (), CoveragePlan)]
-    assert (planned.plan, planned.misfits) == (PLAN, ())
+    assert (planned.plan, planned.problems) == (PLAN, ())
     [record] = planned.routed.calls
     assert (record.role, record.mode, record.status) == ("navigator", "explore", "ok")
 
@@ -287,8 +288,8 @@ def test_a_plan_that_does_not_fit_its_spec_comes_back_with_its_misfits(
     planned, _ = plan_with(checkout(tmp_path / "qa"), client)
 
     assert planned.plan == short
-    assert len(planned.misfits) == 1
-    assert "2 expectations" in planned.misfits[0]
+    assert len(planned.problems) == 1
+    assert "2 expectations" in planned.problems[0]
 
 
 SHORT = CoveragePlan(expectations=PLAN.expectations[:1], requires=())
@@ -309,7 +310,7 @@ def test_a_plan_that_cannot_be_used_is_asked_for_once_more_with_its_reasons(
 
     planned, _ = plan_with(spec, client)
 
-    assert (planned.plan, planned.misfits) == (PLAN, ())
+    assert (planned.plan, planned.problems) == (PLAN, ())
     [first, second] = client.calls
     assert first == (plan_request(spec), (), CoveragePlan)
     assert second == (
@@ -325,14 +326,76 @@ def test_a_plan_that_cannot_be_used_is_asked_for_once_more_with_its_reasons(
 
 
 def test_the_second_answer_is_final_and_both_are_costed(tmp_path: Path) -> None:
-    # Asked once more, never twice.
-    client = FakeClient(reply(parsed=SHORT), reply(parsed=SHORT), reply(parsed=PLAN))
+    # Asked once more, never twice; the retry resends the first answer, so it
+    # reads more input.
+    first, retried = (
+        Usage(input_tokens=tokens, cached_input_tokens=0, output_tokens=200)
+        for tokens in (1000, 1500)
+    )
+    client = FakeClient(
+        reply(parsed=SHORT, usage=first),
+        reply(parsed=SHORT, usage=retried),
+        reply(parsed=PLAN),
+    )
 
     planned, _ = plan_with(checkout(tmp_path / "qa"), client)
 
     assert planned.plan == SHORT
     assert len(client.calls) == 2
-    assert len(planned.routed.calls) == 2
+    assert [record.input_tokens for record in planned.routed.calls] == [1000, 1500]
+
+
+def test_a_retry_whose_fallback_fails_keeps_every_billed_record(tmp_path: Path) -> None:
+    # The retry is refused, and the role's fallback then fails: the first
+    # answer and the refusal were both billed.
+    root = tmp_path / "qa"
+    checkout(root)
+    with (root / "config.yaml").open("a") as config:
+        config.write("roles: { navigator: { fallback: claude-opus-5-5 } }\n")
+    project = load_project(root)
+    failure = ValueError("no fallback answer")
+    factory = Factory(
+        **{
+            "claude-sonnet-5-5": FakeClient(reply(parsed=SHORT), reply(refused=True)),
+            "claude-opus-5-5": FakeClient(failure),
+        }
+    )
+    router = ModelRouter.from_config(project.config, factory)
+
+    with pytest.raises(ModelCallError) as raised:
+        asyncio.run(make_plan(router, project.specs["checkout"]))
+
+    assert [record.status for record in raised.value.records] == ["ok", "refusal"]
+    assert raised.value.__cause__ is failure
+
+
+def test_a_plan_lists_its_misfits_before_its_circular_targets(tmp_path: Path) -> None:
+    both = CoveragePlan(
+        expectations=with_first_check(
+            {
+                "check": "text_in_target",
+                "target_meaning": "the error message that says the card has expired",
+                "text": "card has expired",
+            }
+        ).expectations[:1],
+        requires=(),
+    )
+    client = FakeClient(reply(parsed=both), reply(parsed=both))
+
+    planned, _ = plan_with(checkout(tmp_path / "qa"), client)
+
+    assert planned.problems == (
+        (
+            "the plan covers expectations [0], but the spec has 2 expectations: it "
+            "covers each once, in order, from 0 to 1"
+        ),
+        (
+            'expect[0]: the target "the error message that says the card has '
+            'expired" holds "card has expired", the text its check asserts: a '
+            "target says what the element is for and where it sits, never what "
+            "it says"
+        ),
+    )
 
 
 def test_a_retry_that_fails_keeps_the_first_answers_cost(tmp_path: Path) -> None:
@@ -372,7 +435,7 @@ def test_a_target_that_holds_its_checks_text_does_not_fit(tmp_path: Path) -> Non
     planned, _ = plan_with(checkout(tmp_path / "qa"), client)
 
     assert planned.plan == circular
-    assert planned.misfits == (
+    assert planned.problems == (
         (
             'expect[0]: the target "the error message that says the card has '
             'expired" holds "Card has expired", the text its check asserts: a '
@@ -394,7 +457,7 @@ def test_a_target_its_checks_pattern_matches_does_not_fit(tmp_path: Path) -> Non
 
     planned, _ = plan_with(checkout(tmp_path / "qa"), client)
 
-    assert planned.misfits == (
+    assert planned.problems == (
         (
             'expect[0]: the target "the message saying the card has expired" '
             'matches "(?i)card has expired|card is no longer valid", the pattern '
@@ -416,7 +479,7 @@ def test_a_target_that_names_no_asserted_text_fits(tmp_path: Path) -> None:
 
     planned, _ = plan_with(checkout(tmp_path / "qa"), FakeClient(reply(parsed=plan)))
 
-    assert (planned.plan, planned.misfits) == (plan, ())
+    assert (planned.plan, planned.problems) == (plan, ())
 
 
 def test_a_pattern_that_cannot_search_its_target_in_time_does_not_fit(
@@ -436,12 +499,40 @@ def test_a_pattern_that_cannot_search_its_target_in_time_does_not_fit(
 
     planned, _ = plan_with(checkout(tmp_path / "qa"), client)
 
-    assert planned.misfits == (
+    assert planned.problems == (
         (
             'expect[0]: the pattern "(a+)+$" could not be searched in its own '
-            "target within 0.5 s"
+            "target: the search didn't finish within 0.5 s"
         ),
     )
+
+
+@pytest.mark.parametrize("answers", [1, 2])
+def test_a_billed_plan_that_cannot_be_judged_keeps_every_cost(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, answers: int
+) -> None:
+    # A pattern search runs in a child process, which can fail outright; the
+    # answers it judges were billed all the same, the first or the retry's.
+    failure = RuntimeError("the search process failed")
+
+    async def broken(_pattern: str, _text: str) -> bool:
+        raise failure
+
+    monkeypatch.setattr("aqa_runner.coverage_plan.pattern_matches", broken)
+    searched = with_first_check(
+        {
+            "check": "text_in_target",
+            "target_meaning": "the payment step's error message",
+            "pattern": "(?i)card has expired",
+        }
+    )
+    client = FakeClient(*[reply(parsed=SHORT)] * (answers - 1), reply(parsed=searched))
+
+    with pytest.raises(ModelCallError) as raised:
+        plan_with(checkout(tmp_path / "qa"), client)
+
+    assert [record.status for record in raised.value.records] == ["ok"] * answers
+    assert raised.value.__cause__ is failure
 
 
 def plan_through_the_adapter(spec: Spec) -> Planned:
@@ -475,7 +566,7 @@ def test_a_plan_through_the_real_adapter_is_parsed_and_costed(
     assert planned.plan == CoveragePlan.model_validate_json(
         answer["content"][0]["text"]
     )
-    assert planned.misfits == ()
+    assert planned.problems == ()
     [record] = planned.routed.calls
     assert (record.role, record.mode, record.status) == ("navigator", "explore", "ok")
     assert (record.input_tokens, record.output_tokens) == (
