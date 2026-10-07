@@ -98,7 +98,7 @@ def test_each_recorded_pilot_establishes_every_expectation(
         planned = asyncio.run(make_plan(router, spec))
 
     assert planned.plan is not None
-    assert planned.misfits == ()
+    assert planned.problems == ()
     assert uncovered(planned.plan, spec.frontmatter) == ()
     assert accepted_rows_problems(pilot, planned.plan) == ()
 

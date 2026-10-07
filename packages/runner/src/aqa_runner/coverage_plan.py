@@ -12,7 +12,6 @@ from aqa_core.spec import UNHASHED_KEYS, Spec
 from aqa_core.text import has_text
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
-from aqa_runner import text_search
 from aqa_runner.model_router import ModelCallError, ModelRouter, Routed
 from aqa_runner.text_search import SearchTimeoutError, pattern_matches
 
@@ -150,7 +149,7 @@ class Planned:
     `routed.outcome` says which."""
 
     plan: CoveragePlan | None
-    misfits: tuple[str, ...]
+    problems: tuple[str, ...]
     routed: Routed
 
 
@@ -176,10 +175,10 @@ async def _why_circular(index: int, check: PlannedCheck) -> str | None:
     elif check.pattern is not None:
         try:
             found = await pattern_matches(check.pattern, meaning)
-        except SearchTimeoutError:
+        except SearchTimeoutError as error:
             return (
                 f'expect[{index}]: the pattern "{check.pattern}" could not be '
-                f"searched in its own target within {text_search.SEARCH_SECONDS} s"
+                f"searched in its own target: {error}"
             )
         what = f'matches "{check.pattern}", the pattern'
     else:
@@ -194,16 +193,22 @@ async def _why_circular(index: int, check: PlannedCheck) -> str | None:
 
 async def _planned(routed: Routed, spec: Spec) -> Planned:
     """The plan `routed` gave, with every reason it can't be used: `misfits`,
-    then each check whose target holds what it asserts."""
+    then each check whose target holds what it asserts. A failure to judge it,
+    such as a search process that couldn't run, raises `ModelCallError`
+    holding `routed`'s records."""
     # The router parses against the schema it was given.
     plan = cast(CoveragePlan | None, routed.parsed)
     if plan is None:
         return Planned(None, (), routed)
-    circular = [
-        await _why_circular(planned.expect_index, check)
-        for planned in plan.expectations
-        for check in planned.checks
-    ]
+    try:
+        circular = [
+            await _why_circular(planned.expect_index, check)
+            for planned in plan.expectations
+            for check in planned.checks
+        ]
+    except Exception as error:
+        # The answers were billed: their records must outlive the failure.
+        raise ModelCallError(routed.calls) from error
     found = (*misfits(plan, spec.frontmatter), *filter(None, circular))
     return Planned(plan, found, routed)
 
@@ -229,14 +234,14 @@ async def make_plan(router: ModelRouter, spec: Spec) -> Planned:
         await router.call("navigator", "explore", request, schema=CoveragePlan),
         spec,
     )
-    if first.plan is None or not first.misfits:
+    if first.plan is None or not first.problems:
         return first
     retry = [
         *request,
         AIMessage(content=first.plan.model_dump_json(exclude_none=True)),
         HumanMessage(
             content=_CORRECTION.format(
-                reasons="\n".join(f"- {reason}" for reason in first.misfits)
+                reasons="\n".join(f"- {reason}" for reason in first.problems)
             )
         ),
     ]

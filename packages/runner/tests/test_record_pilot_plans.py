@@ -6,9 +6,13 @@ from pathlib import Path
 import pytest
 import yaml
 from aqa_core.coverage_plan import PlannedCheck
+from aqa_core.model_costs import Usage, cost_record
+from aqa_core.model_roles import resolve_roles
+from aqa_core.price_map import vendored
+from aqa_core.project import load_project
 
 from packages.runner.tests.conftest import Endpoint
-from packages.runner.tests.record_cassettes import record
+from packages.runner.tests.record_cassettes import answers_expected, record
 from packages.runner.tests.test_cassettes import HELLO, RECORDING_KEY
 from packages.runner.tests.test_pilot_plan_oracles import (
     EXAMPLES,
@@ -27,6 +31,19 @@ EXPECTATIONS = {
 }
 
 
+CIRCULAR_AUTHOR = replace_checks(
+    EXAMPLES["post-comment"],
+    1,
+    [
+        PlannedCheck(
+            check="text_in_target",
+            target_meaning="the author link reading reader on the new comment",
+            text="reader",
+        )
+    ],
+)
+
+
 @pytest.fixture
 def answering(
     monkeypatch: pytest.MonkeyPatch, serve: Callable[..., Endpoint], tmp_path: Path
@@ -36,7 +53,9 @@ def answering(
     empty cassette library. Each later answer reports 6 more input tokens, as
     a retry that resends the first answer reports more."""
 
-    def prepare(*texts: str) -> tuple[Path, Path]:
+    def prepare(
+        *texts: str, request_ids: tuple[str, ...] = ("req_fake_01",)
+    ) -> tuple[Path, Path]:
         answers = tuple(
             json.dumps(
                 HELLO
@@ -47,7 +66,9 @@ def answering(
             ).encode()
             for turn, text in enumerate(texts)
         )
-        endpoint = serve(answers, {"request-id": "req_fake_01"})
+        # The last request ID goes with every answer after it; "" sends none.
+        ids = request_ids + request_ids[-1:] * (len(answers) - len(request_ids))
+        endpoint = serve(answers, tuple({"request-id": i} if i else {} for i in ids))
         monkeypatch.setenv("ANTHROPIC_API_KEY", RECORDING_KEY)
         monkeypatch.setenv("ANTHROPIC_BASE_URL", endpoint.url)
         monkeypatch.delenv("ANTHROPIC_API_URL", raising=False)
@@ -154,19 +175,8 @@ def test_a_pilot_plan_corrected_when_asked_once_more_records_both_answers(
 ) -> None:
     # First the new comment's author found by the name its check asserts, then
     # the plan with the author link named by where it sits.
-    circular = replace_checks(
-        EXAMPLES["post-comment"],
-        1,
-        [
-            PlannedCheck(
-                check="text_in_target",
-                target_meaning="the author link reading reader on the new comment",
-                text="reader",
-            )
-        ],
-    )
     attempt, library = answering(
-        circular.model_dump_json(), EXAMPLES["post-comment"].model_dump_json()
+        CIRCULAR_AUTHOR.model_dump_json(), EXAMPLES["post-comment"].model_dump_json()
     )
 
     costs = record("plan_post-comment", attempt, library=library)
@@ -179,3 +189,43 @@ def test_a_pilot_plan_corrected_when_asked_once_more_records_both_answers(
     retry = json.loads(second["request"]["body"])["messages"]
     assert [message["role"] for message in retry] == ["user", "assistant", "user"]
     assert json.loads(first["request"]["body"])["messages"] == retry[:1]
+
+
+def test_a_retried_pilot_plan_needs_a_request_id_on_both_answers(
+    answering: Callable[..., tuple[Path, Path]],
+) -> None:
+    attempt, library = answering(
+        CIRCULAR_AUTHOR.model_dump_json(),
+        EXAMPLES["post-comment"].model_dump_json(),
+        request_ids=("req_fake_01", ""),
+    )
+
+    with pytest.raises(ValueError, match="rejected"):
+        record("plan_post-comment", attempt, library=library)
+
+    receipt = json.loads((attempt / "receipt.json").read_text())
+    assert (receipt["outcome"], len(receipt["cost_records"])) == ("rejected", 2)
+    assert not (library / "plan_post-comment.yaml").exists()
+
+
+def test_only_a_plan_cases_two_ok_answers_are_its_retry() -> None:
+    # make_plan's retry is the one way a plan case answers twice; a refusal
+    # and its fallback, or two answers to any other case, stay rejected.
+    model = resolve_roles(load_project(QA).config, vendored())["navigator"].model
+    ok, refused = (
+        cost_record(
+            role="navigator",
+            mode="explore",
+            model=model,
+            usage=Usage(input_tokens=9, cached_input_tokens=0, output_tokens=3),
+            latency_ms=1,
+            status=status,
+        )
+        for status in ("ok", "refusal")
+    )
+
+    assert [
+        answers_expected("plan_post-comment", (ok, ok)),
+        answers_expected("plan_post-comment", (refused, ok)),
+        answers_expected("structured_output", (ok, ok)),
+    ] == [2, 1, 1]
