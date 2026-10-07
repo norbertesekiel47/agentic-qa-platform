@@ -265,6 +265,11 @@ class LinearCommandTests(unittest.TestCase):
             ("ABCD\n<<ABCDEFGHIJ\nAB\nrm x\n", "ABCD\nCDEFGHIJ\n\nrm x\n"),
             ("<<ABCDEFGHIJ\nXYZ\nrm x\n", "<<ABCDEFGHIJ\nXYZ\nrm x\n"),
             ("<<ABCDEFGHIJ\nABC\nABCDEFGHIJ\nrm x", "\n\nrm x"),
+            (
+                "<<ABCDEFGHIJ\nABC\n<<ABCDEFGHIJ\nAB\nrm x\n",
+                "DEFGHIJ\n\nCDEFGHIJ\n\nrm x\n",
+            ),
+            ("ABCDEFGHIJ\n<<ABCDEFGHIJ\nAB\nrm x\n", "ABCDEFGHIJ\nCDEFGHIJ\n\nrm x\n"),
         )
         for lengths in (8, 9):
             decoys = "".join("Q" * k + "\n" for k in range(1, lengths + 1))
