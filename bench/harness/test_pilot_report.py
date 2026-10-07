@@ -76,7 +76,7 @@ def seen(
 def report(*pairs: Pair, **changes: Any) -> Report:
     hashes = {"manifest": "sha256:m", "script:pilot": "sha256:s"}
     base = Report(
-        "conduit", "c" * 40, "t" * 40, True, 3, ("pilot",), (), hashes, (), None, True
+        "conduit", "c" * 40, "t" * 40, 3, ("pilot",), (), hashes, switched_back=True
     )
     return replace(base, pairs=pairs, **changes)
 
@@ -335,7 +335,7 @@ class PilotReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "receipt.json"
             pair = judged(RESET_500)
-            write_once(path, receipt(pair, pair.attempts[0], SCRIPT))
+            write_once(path, receipt("c", "pilot", pair.attempts[0], SCRIPT))
             before = path.read_bytes()
             with self.assertRaises(FileExistsError):
                 write_once(path, {"other": True})

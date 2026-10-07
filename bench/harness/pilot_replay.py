@@ -294,7 +294,7 @@ async def _owned[T](
 async def _exit(
     resource: AbstractAsyncContextManager[object], name: _Owned, state: _State
 ) -> None:
-    # Exited as on success: the state records failures; neither reads them.
+    """Exit as on success: the state records failures; neither reads them."""
     try:
         await resource.__aexit__(None, None, None)
     except Exception:

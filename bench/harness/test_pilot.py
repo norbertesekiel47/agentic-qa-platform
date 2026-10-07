@@ -23,7 +23,7 @@ from test_pilot_replay import CLIENTS, COMPILED, SEND, Handler, Server
 from test_pilot_report import A0, DRIFTED, HEALTH, PASSED, PRIVATE
 
 SPEC = '{"id":"pilot","goal":"Send","preconditions":{"start_url":"/","reset":{"http":"POST /reset?fake-sensitive"}},"expect":["Title is visible"]}'
-SOURCE = ("c" * 40, "t" * 40, False)
+SOURCE = pilot.Source("c" * 40, "t" * 40, False)
 OK = ObservedAttempt("r1", PRIVATE, replace(PASSED, assertions=(A0,)), HEALTH)
 LOST = replace(OK, observation=replace(DRIFTED, assertions=DRIFTED.assertions[:1]))
 ZERO, MISSED = frozenset({0}), (A0._replace(outcome="failed"),)
@@ -58,8 +58,7 @@ class FakeReplay:
 
 
 class FlagServer(Server):
-    """B2's disposable page, whose button reads Post under ben1 and whose
-    reset answers 500 under bug1."""
+    """B2's page: the button reads Post under ben1; the reset answers 500 under bug1."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -245,7 +244,7 @@ class PilotCommandTests(unittest.TestCase):
                 2,
                 "not a patch for a selected",
             ),
-            ("existing out", existing, 2, "out: already exists"),
+            ("existing out", existing, 2, "out: exists"),
         ]
         for name, change, expected, message in cases:
             with self.subTest(name), patch.dict(os.environ):
@@ -258,8 +257,8 @@ class PilotCommandTests(unittest.TestCase):
                 )
                 self.assertIn(message, shown)
                 self.assertFalse((self.out / "report.json").exists())
-        replay = FakeReplay(self.docker, {})
-        code, shown = self.command(replay, source=lambda *_: ("c" * 40, "t" * 40, True))
+        dirty = SOURCE._replace(dirty=True)
+        code, shown = self.command(FakeReplay(self.docker, {}), source=lambda *_: dirty)
         self.assertEqual((code, self.docker.calls), (2, []))
         self.assertIn("uncommitted changes", shown)
         missing = ["--patches", str(self.root / "none"), "--out", str(self.root / "o")]
@@ -373,11 +372,12 @@ class PilotCommandTests(unittest.TestCase):
             (RuntimeError("fake-error-text"), "unexpected", 3),
             (SystemExit("fake-exit-payload"), "system_exit", 3),
         ]
+        self.patch_to("Post")
         for error, halt, expected in stops:
             with self.subTest(halt=halt, error=type(error).__name__):
                 self.docker = FakeDocker()
                 self.out = self.root / f"out-{type(error).__name__}"
-                replay = FakeReplay(self.docker, {"": [OK], "ben1": [error]})
+                replay = FakeReplay(self.docker, {"": [OK], "ben1": [LOST, error]})
                 code, shown = self.command(replay)
                 report = self.report()
                 self.assertEqual(
@@ -388,14 +388,17 @@ class PilotCommandTests(unittest.TestCase):
                     ("forbidden", ["", "ben1"]),
                 )
                 self.assertEqual([p["status"] for p in report["pairs"]], ["passed"])
-                receipt = json.loads((self.out / "attempts" / "001.json").read_text())
-                self.assertEqual((receipt["case"], receipt["kind"]), (None, "eligible"))
+                kept = sorted((self.out / "attempts").iterdir())
+                receipts = [json.loads(path.read_text()) for path in kept]
+                found = [(r["case"], r["role"], r["kind"]) for r in receipts]
+                benign = ("conduit-benign-001", "diagnostic", "binding_only")
+                self.assertEqual(found, [(None, "clean", "eligible"), benign])
                 self.assertNotIn(
                     "fake-", shown + (self.out / "report.json").read_text()
                 )
 
     def test_a_source_change_during_the_run_is_not_citable(self) -> None:
-        identities = iter([SOURCE, ("d" * 40, "t" * 40, False)])
+        identities = iter([SOURCE, SOURCE._replace(commit="d" * 40)])
         replay = FakeReplay(self.docker, {"": [OK], "ben1": [OK], "bug1": [OK]})
         code, _ = self.command(replay, source=lambda *_: next(identities))
         self.assertEqual((code, self.report()["source_unchanged"]), (3, False))
