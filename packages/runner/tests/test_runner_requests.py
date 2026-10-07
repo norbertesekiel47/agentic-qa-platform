@@ -6,6 +6,7 @@ macOS locally."""
 
 import asyncio
 import contextlib
+import errno
 import socket
 import ssl
 import subprocess
@@ -22,6 +23,7 @@ from aqa_runner.egress import (
     EgressPolicy,
     EgressRefusedError,
     EgressUpstreamError,
+    InfrastructureEvent,
 )
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.runner_requests import Method, runner_request
@@ -441,6 +443,29 @@ def test_a_runner_request_that_fails_upstream_is_an_infrastructure_error(
     assert egress.infrastructure_events == [failed.event]
     assert (failed.event.host, failed.event.port) == (APP, port)
     assert egress.refusals == []
+
+
+def test_an_upstream_reset_keeps_the_systems_diagnostic() -> None:
+    # The control for a malformed reply, whose cause keeps only h11's error
+    # class: the system's text holds nothing the upstream sent.
+    async def scenario() -> tuple[EgressGate, int]:
+        async with raw_upstream(resets=True) as upstream:
+            start = f"http://127.0.0.1:{upstream.port}"
+            egress = gate(allowed=(start,))
+            with pytest.raises(EgressUpstreamError):
+                await runner_request(egress, "GET", f"{start}/")
+            return egress, upstream.port
+
+    egress, port = asyncio.run(scenario())
+
+    assert egress.infrastructure_events == [
+        InfrastructureEvent(
+            "127.0.0.1",
+            port,
+            f"the exchange broke off: [Errno {errno.ECONNRESET}] "
+            "Connection reset by peer",
+        )
+    ]
 
 
 def test_a_runner_request_closes_its_connection_when_its_caller_times_out() -> None:

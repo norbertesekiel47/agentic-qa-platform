@@ -76,8 +76,14 @@ class Upstream(Peer):
     def _failures(self) -> Iterator[None]:
         try:
             yield
-        # A reset, an unreachable host, a timeout, or a message cut short.
-        except (h11.RemoteProtocolError, OSError) as error:
+        # A message cut short or malformed. h11's message quotes the bytes
+        # the upstream sent, so the cause keeps only its class (ADR-0026).
+        except h11.RemoteProtocolError as error:
+            raise self.gate.record_failure(
+                self.host, self.port, "the exchange broke off: h11.RemoteProtocolError"
+            ) from error
+        # A reset, an unreachable host or a timeout: the system's own text.
+        except OSError as error:
             raise self.gate.record_failure(
                 self.host, self.port, f"the exchange broke off: {error}"
             ) from error

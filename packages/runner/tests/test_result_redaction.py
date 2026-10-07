@@ -81,7 +81,7 @@ def everything(result: RunResult) -> str:
 
 
 @pytest.mark.parametrize("baseline", [False, True])
-def test_a_malformed_status_line_is_redacted_in_the_infrastructure_event(
+def test_a_malformed_status_line_leaves_only_h11s_error_class_in_the_event(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, baseline: bool
 ) -> None:
     monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", MALFORMED)
@@ -102,8 +102,7 @@ def test_a_malformed_status_line_is_redacted_in_the_infrastructure_event(
     (event,) = result.infrastructure_events
     assert event.host == "127.0.0.1"
     assert event.port == int(app.origin.rsplit(":", 1)[1])
-    assert event.cause.startswith("the exchange broke off: ")
-    assert "[SECRET:TEST_PASSWORD]" in event.cause
+    assert event.cause == "the exchange broke off: h11.RemoteProtocolError"
     assert result.outcome == "errored"
     if not baseline:
         assert result.assertions[0].error == (
@@ -114,7 +113,7 @@ def test_a_malformed_status_line_is_redacted_in_the_infrastructure_event(
     assert ("POST", "/write/save") not in app.seen
 
 
-def test_an_unbound_malformed_status_line_keeps_its_diagnostic(
+def test_an_unbound_malformed_status_line_keeps_only_h11s_error_class(
     app: App, tmp_path: Path
 ) -> None:
     spec = a_spec(
@@ -127,27 +126,35 @@ def test_an_unbound_malformed_status_line_keeps_its_diagnostic(
     result = run(app, tmp_path, compiled([], assertions=[PROBE]), spec=spec).result
 
     (event,) = result.infrastructure_events
-    assert MALFORMED in event.cause
-    assert "[SECRET" not in event.cause
+    assert event.cause == "the exchange broke off: h11.RemoteProtocolError"
 
 
-def test_a_non_ascii_utf8_status_line_is_redacted_as_h11_escapes_it(
-    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("encoding", "escaped"), [("utf-8", "\\xc3\\xa4"), ("latin-1", "\\xe4")]
+)
+def test_a_bound_value_in_a_malformed_status_line_leaves_no_trace(
+    app: App,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    encoding: str,
+    escaped: str,
 ) -> None:
+    # h11 quotes the line's bytes with each non-ASCII one escaped, so a value
+    # the upstream sends as Latin-1 is a spelling no scan looks for.
     value = "fäke-sénsitive"
     monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", value)
-    reply = f"HTTP/1.1 {value}\r\n\r\n".encode()
+    reply = f"HTTP/1.1 {value}\r\n\r\n".encode(encoding)
     with raw_http_server(reply) as origin:
         spec = secret_spec(tmp_path, start_url="/")
         result = run(app, tmp_path, compiled([]), spec=spec, origins=(origin,)).result
 
     (event,) = result.infrastructure_events
     assert (event.host, event.port) == ("127.0.0.1", int(origin.rsplit(":", 1)[1]))
-    assert "[SECRET:TEST_PASSWORD]" in event.cause
+    assert event.cause == "the exchange broke off: h11.RemoteProtocolError"
     assert result.outcome == "errored"
     text = everything(result)
     assert value not in text
-    assert "\\xc3\\xa4" not in text
+    assert escaped not in text
 
 
 def test_an_unfilled_bound_value_is_scanned_in_a_step_reason(
