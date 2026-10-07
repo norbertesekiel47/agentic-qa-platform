@@ -268,15 +268,19 @@ async def _owned[T](
     """`resource`, entered, then exited however the body ends; closed only
     once its exit returns. A cancel during the enter waits for it, then
     exits: Playwright's enter starts a driver whose tasks it doesn't own,
-    so cutting it short would leave the driver running."""
+    so cutting it short would leave the driver running. It is waited for
+    with asyncio.wait: a cancelled shield would log a late error's text."""
     state.opened.add(name)
     entering = asyncio.create_task(resource.__aenter__())
     try:
-        value = await asyncio.shield(entering)
+        await asyncio.wait({entering})
     except asyncio.CancelledError:
-        await entering
-        await _exit(resource, name, state)
+        await asyncio.wait({entering})
+        if entering.exception() is None:
+            await _exit(resource, name, state)
         raise
+    try:
+        value = entering.result()
     except Exception as error:
         state.latch(error)
         raise
