@@ -246,13 +246,15 @@ def _check_secrets(pilot: PilotInput, state: _State) -> None:
 
 async def _reset(gate: EgressGate, url: str, seconds: float, state: _State) -> None:
     """POST the spec's reset hook through the attempt's `gate`, so reset and
-    replay share its pins. Anything but a 2xx within `seconds` stops the attempt."""
+    replay share its pins. Anything but a 2xx within `seconds` stops the
+    attempt. A URL no request line carries is unreachable too; its error
+    quotes the URL, so it is dropped."""
     try:
         async with asyncio.timeout(seconds):
             response = await runner_request(gate, "POST", url)
     except TimeoutError:
         raise state.refuse("reset_timeout") from None
-    except (EgressRefusedError, EgressUpstreamError):
+    except (EgressRefusedError, EgressUpstreamError, ValueError):
         raise state.refuse("reset_unreachable") from None
     if not 200 <= response.status < 300:
         raise state.refuse("reset_rejected")
@@ -264,23 +266,36 @@ async def _owned[T](
     resource: AbstractAsyncContextManager[T], name: _Owned, state: _State
 ) -> AsyncIterator[T]:
     """`resource`, entered, then exited however the body ends; closed only
-    once its exit returns."""
+    once its exit returns. A cancel during the enter waits for it, then
+    exits: Playwright's enter starts a driver whose tasks it doesn't own,
+    so cutting it short would leave the driver running."""
     state.opened.add(name)
+    entering = asyncio.create_task(resource.__aenter__())
     try:
-        value = await resource.__aenter__()
+        value = await asyncio.shield(entering)
+    except asyncio.CancelledError:
+        await entering
+        await _exit(resource, name, state)
+        raise
     except Exception as error:
         state.latch(error)
         raise
     try:
         yield value
     finally:
-        # Exited as on success: the state records failures; neither reads them.
-        try:
-            await resource.__aexit__(None, None, None)
-        except Exception:
-            state.exit_failed()
-            raise
-        state.closed.add(name)
+        await _exit(resource, name, state)
+
+
+async def _exit(
+    resource: AbstractAsyncContextManager[object], name: _Owned, state: _State
+) -> None:
+    # Exited as on success: the state records failures; neither reads them.
+    try:
+        await resource.__aexit__(None, None, None)
+    except Exception:
+        state.exit_failed()
+        raise
+    state.closed.add(name)
 
 
 def _conclude(
