@@ -16,7 +16,12 @@ from urllib.parse import quote, quote_plus
 
 import pytest
 from aqa_core.config import ProjectConfig
-from aqa_runner.document_origins import PolicyEvent, PolicyEventError
+from aqa_runner.browser_session import BrowserSession
+from aqa_runner.document_origins import (
+    DocumentChangedError,
+    PolicyEvent,
+    PolicyEventError,
+)
 from aqa_runner.evidence import capture_evidence
 from aqa_runner.redaction import Redacted, Redactor
 from aqa_runner.run_record import RunRecord
@@ -93,8 +98,11 @@ def holding(files: dict[str, bytes], texts: list[str]) -> list[str]:
     return [text for text in texts for data in files.values() if text.encode() in data]
 
 
-def test_console_entries_and_the_network_log_show_the_marker(app: App) -> None:
+def test_console_entries_and_the_network_log_show_the_marker(
+    app: App, tmp_path: Path
+) -> None:
     redactor = Redactor([fake_secret("FAKE_TOKEN", REFLECTED, app.origin)])
+    record = RunRecord.create(tmp_path).redacting(redactor)
 
     async def scenario() -> tuple[list[str], list[str], int, list[str]]:
         async with browsing(app, redactor) as session:
@@ -110,21 +118,24 @@ def test_console_entries_and_the_network_log_show_the_marker(app: App) -> None:
                     console.log('x'.repeat(1990) + value);
                     for (let index = 0; index < 101; index++) console.log('more');
                     fetch('/did/' + encodeURIComponent(value));
+                    for (let index = 0; index < 101; index++) fetch('/did/more');
                 }""",
                 REFLECTED,
             )
             await until(
                 lambda: (
                     session.console_log(window).total == 105
-                    and bool(window.responses.kept)
+                    and window.requests.total == 102
+                    and not window.open
                 )
             )
+            await capture_evidence(record, session, 1, window, None)
             logged = session.console_log(window)
             return (
                 [entry.text for entry in session.console_log(loaded).kept],
                 [entry.text for entry in logged.kept],
                 logged.total,
-                [entry.url for entry in await session.network_log(window)],
+                [entry.url for entry in (await session.network_log(window)).kept],
             )
 
     before, texts, total, urls = asyncio.run(scenario())
@@ -132,7 +143,13 @@ def test_console_entries_and_the_network_log_show_the_marker(app: App) -> None:
     assert before == ["before"]
     assert texts[:4] == [MARKER, MARKER, MARKER, ("x" * 1990 + MARKER)[:2000]]
     assert (len(texts), total) == (100, 105)
-    assert urls == [f"{app.origin}/did/{MARKER}"]
+    assert (urls[0], len(urls)) == (f"{app.origin}/did/{MARKER}", 100)
+    # Saved, withheld: counts survive the cut to the first hundred.
+    totals = [
+        (len(json.loads(data)["entries"]), json.loads(data)["total"])
+        for data in saved(record.path).values()
+    ]
+    assert totals == [(100, 105), (100, 102)]
     assert [
         copy for copy in copies(REFLECTED) for text in texts + urls if copy in text
     ] == []
@@ -231,7 +248,7 @@ def test_an_evidence_read_refuses_like_any_other_but_records_nothing(
                 pruned = await session.snapshot(record_refusal=False)
                 # The page's own navigation, which no session check stops.
                 with suppress(Error):
-                    await session.page.goto(f"{sites.cdn}/canary")
+                    await session.page.goto(f"{sites.cdn}/canary?{quote(REFLECTED)}")
                 with pytest.raises(PolicyEventError) as quiet:
                     await session.snapshot(record_refusal=False)
                 unrecorded = session.policy_events.total
@@ -254,7 +271,7 @@ def test_an_evidence_read_refuses_like_any_other_but_records_nothing(
     assert (
         quiet.event
         == loud.event
-        == PolicyEvent("document", f"{sites.cdn}/canary", sites.cdn)
+        == PolicyEvent("document", f"{sites.cdn}/canary?{MARKER}", sites.cdn)
     )
     assert sites.cdn in str(quiet)
     files = saved(record.path)
@@ -432,3 +449,66 @@ def test_a_replay_that_binds_but_never_fills_a_secret_withholds_its_logs(
     refused = json.loads(egress)["refused"]
     assert {"host": "[SECRET:TEST_PASSWORD].fragment.test", "port": 4100} in refused
     assert value not in egress
+
+
+@pytest.mark.parametrize(
+    ("value", "saved_as"),
+    [
+        # Its own marker spells it: the hosts can't be saved, the counts can.
+        (
+            "fake",
+            {
+                "error_code": "egress_blocked",
+                "refused_count": 1,
+                "overflowed": False,
+                "hosts_and_ports_withheld": True,
+            },
+        ),
+        # Both forms' own JSON spells it, and its marker breaks them: nothing.
+        ("false", None),
+    ],
+)
+def test_an_egress_record_its_scan_cant_clear_leaves_the_result_whole(
+    app: App,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+    saved_as: dict[str, object] | None,
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_FAKE", value)
+    blocked = "<script>fetch('http://fake.fragment.test/').catch(() => null)</script>"
+    monkeypatch.setitem(PAGES, "evidence-blocked", blocked)
+    spec = secret_spec(
+        tmp_path,
+        "FAKE: { origins: [start], field: password }",
+        account="{ email: reader@example.test, password: { secret: FAKE } }",
+        start_url="/page/evidence-blocked",
+    )
+
+    done = run(app, tmp_path, compiled([]), spec=spec)
+
+    assert (done.result.outcome, done.result.error_code) == (
+        "errored",
+        "egress_blocked",
+    )
+    egress = done.record.path / "egress.json"
+    assert (json.loads(egress.read_text()) if egress.exists() else None) == saved_as
+
+
+def test_a_page_that_changes_under_every_look_leaves_its_snapshot_out(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def changing(*_: object, **__: object) -> Redacted:
+        raise DocumentChangedError
+
+    monkeypatch.setattr(BrowserSession, "snapshot", changing)
+    config = ProjectConfig.model_validate({"budgets": {"resolve_seconds": 1}})
+    spec = a_spec(tmp_path, config, start_url="/page/start")
+
+    done = run(app, tmp_path, compiled([]), config=config, spec=spec)
+
+    assert (done.result.outcome, [step.outcome for step in done.result.steps]) == (
+        "passed",
+        ["completed"],
+    )
+    assert sorted(saved(done.record.path / "evidence" / "0")) == list(FILES[1:])

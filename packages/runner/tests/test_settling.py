@@ -770,7 +770,7 @@ async def answered(session: BrowserSession, window: Window) -> list[settling.Exc
     that has a response."""
     return [
         settling.Exchange(entry.method, entry.url, entry.status)
-        for entry in await session.network_log(window)
+        for entry in (await session.network_log(window)).kept
         if entry.status is not None
     ]
 
@@ -939,7 +939,7 @@ def test_a_network_log_waits_on_no_open_request(site: Site) -> None:
             started = time.monotonic()
             log = await session.network_log(window)
             took = time.monotonic() - started
-            return {urlsplit(e.url).path: (e.status, e.size) for e in log}, took
+            return {urlsplit(e.url).path: (e.status, e.size) for e in log.kept}, took
 
     log, took = asyncio.run(scenario())
 
@@ -974,7 +974,7 @@ def test_a_network_log_keeps_each_kept_request_in_start_order_with_its_own_statu
             assert await session.settle(window) == "idle"
             second = await session.network_log(window)
             return tuple(
-                [(urlsplit(e.url).path, e.status) for e in log]
+                [(urlsplit(e.url).path, e.status) for e in log.kept]
                 for log in (first, second)
             )
 

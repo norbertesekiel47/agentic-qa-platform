@@ -48,10 +48,12 @@ async def capture_evidence(
         with suppress(RefusedWriteError):
             record.write_text(f"{folder}/a11y_snapshot.yaml", snapshot)
     console: Records[ConsoleEntry] = Records()
-    network: tuple[NetworkEntry, ...] = ()
+    network: Records[NetworkEntry] = Records()
     if window is not None:
-        console = session.console_log(window)
-        network = await session.network_log(window)
+        console, network = (
+            session.console_log(window),
+            await session.network_log(window),
+        )
     documents = {
         "console_log.json": {
             "entries": [
@@ -60,8 +62,10 @@ async def capture_evidence(
             "total": console.total,
         },
         "network_log.json": {
-            "entries": [_network_entry(entry, withheld=withheld) for entry in network],
-            "total": 0 if window is None else window.requests.total,
+            "entries": [
+                _network_entry(entry, withheld=withheld) for entry in network.kept
+            ],
+            "total": network.total,
         },
     }
     for name, document in documents.items():

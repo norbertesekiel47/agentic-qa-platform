@@ -439,3 +439,14 @@ def test_a_check_on_the_line_finds_a_spelling_its_strings_hide(tmp_path: Path) -
     ] == []
     assert redactor.finds(journal_line({"action": action}))
     assert not (record.path / "steps.jsonl").exists()
+
+
+def test_text_with_no_utf_8_form_is_refused_and_leaves_no_file(tmp_path: Path) -> None:
+    # A lone surrogate: Chromium sends U+FFFD in its place (measured), but a
+    # record mustn't leave an empty file behind or raise anything but a refusal.
+    record = RunRecord.create(tmp_path)
+
+    with pytest.raises(RefusedWriteError, match=r"console\.json"):
+        record.write("console.json", {"text": "\ud800"})
+
+    assert list(record.path.iterdir()) == []
