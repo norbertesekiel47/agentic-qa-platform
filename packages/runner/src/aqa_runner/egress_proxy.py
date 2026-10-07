@@ -35,6 +35,7 @@ from aqa_runner.egress import (
     EgressUpstreamError,
 )
 from aqa_runner.egress_peers import Peer, Upstream
+from aqa_runner.loopback_server import LoopbackServer
 
 # Headers that describe one hop and are never forwarded, with any header the
 # Connection header names (RFC 9110 §7.6.1). `Upgrade` stays behind too:
@@ -157,14 +158,14 @@ class EgressProxy:
         # which are what the proxy itself refused, these are the run's egress
         # blocks.
         self.blocked_attempts = BlockedAttempts()
-        self._server: asyncio.Server | None = None
-        # Each browser connection's handler, so closing the proxy ends them
-        # all: none may forward a request after the proxy has closed.
-        self._handlers: set[asyncio.Task[None]] = set()
+        # Owns every browser connection, so closing the proxy ends them all:
+        # none may forward a request after the proxy has closed.
+        self._listener: LoopbackServer | None = None
 
     async def __aenter__(self) -> Self:
-        # https://docs.python.org/3.14/library/asyncio-stream.html#asyncio.start_server
-        self._server = await asyncio.start_server(self._accept, "127.0.0.1", 0)
+        listener = LoopbackServer(self._serve)
+        await listener.__aenter__()
+        self._listener = listener
         return self
 
     async def __aexit__(
@@ -173,15 +174,9 @@ class EgressProxy:
         error: BaseException | None,
         trace: TracebackType | None,
     ) -> None:
-        server = self._serving()
-        self._server = None
-        server.close()
-        for handler in self._handlers:
-            handler.cancel()
-        # Each handler closes its connections as it ends, so wait_closed,
-        # which waits for every accepted connection, returns.
-        await asyncio.gather(*self._handlers, return_exceptions=True)
-        await server.wait_closed()
+        listener = self._serving()
+        self._listener = None
+        await listener.__aexit__(kind, error, trace)
 
     @property
     def policy(self) -> EgressPolicy:
@@ -218,27 +213,12 @@ class EgressProxy:
     @property
     def url(self) -> str:
         """Where the browser sends its traffic: the address it listens on."""
-        host, port = self._serving().sockets[0].getsockname()[:2]
-        return f"http://{host}:{port}"
+        return f"http://127.0.0.1:{self._serving().port}"
 
-    def _serving(self) -> asyncio.Server:
-        if self._server is None:
+    def _serving(self) -> LoopbackServer:
+        if self._listener is None:
             raise RuntimeError("the egress proxy serves only inside `async with`")
-        return self._server
-
-    def _accept(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
-        """Serve a new browser connection in a task the proxy can end, unless
-        the proxy is already closing."""
-        if self._server is None:
-            writer.close()
-            return
-        handler = asyncio.create_task(self._serve(reader, writer))
-        self._handlers.add(handler)
-        handler.add_done_callback(self._handlers.discard)
-        # Closed even if the handler is cancelled before it starts.
-        handler.add_done_callback(lambda _: writer.close())
+        return self._listener
 
     async def _serve(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -246,23 +226,18 @@ class EgressProxy:
         """One browser connection: one plain request, or one tunnel. A request
         the proxy can't read, a refusal or an upstream failure (both recorded
         by the gate), or a browser that went away ends it, with nothing more
-        sent."""
+        sent. The listener closes the connection."""
         browser = Peer(h11.Connection(h11.SERVER), reader, writer)
-        try:
-            with contextlib.suppress(
-                h11.RemoteProtocolError,
-                EgressRefusedError,
-                EgressUpstreamError,
-                OSError,
-            ):
-                request = await browser.next()
-                if isinstance(request, h11.Request):
-                    serve = (
-                        self._tunnel if request.method == b"CONNECT" else self._forward
-                    )
-                    await serve(request, browser)
-        finally:
-            writer.close()
+        with contextlib.suppress(
+            h11.RemoteProtocolError,
+            EgressRefusedError,
+            EgressUpstreamError,
+            OSError,
+        ):
+            request = await browser.next()
+            if isinstance(request, h11.Request):
+                serve = self._tunnel if request.method == b"CONNECT" else self._forward
+                await serve(request, browser)
 
     async def _forward(self, request: h11.Request, browser: Peer) -> None:
         """Send one plain request upstream, and its response back."""
