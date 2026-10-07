@@ -258,6 +258,31 @@ class LinearCommandTests(unittest.TestCase):
                 self.assertEqual(masked, expected)
                 self.assertLess(seconds, 0.5)
 
+    def test_message_back_off_holds_with_eight_or_nine_closing_lengths(self) -> None:
+        cases = (
+            ("<<ABCDEFGHIJ\nABC\nrm x\n", "DEFGHIJ\n\nrm x\n"),
+            ("<<ABCDEFGHIJ\nAB\nABCD\nrm x\n", "EFGHIJ\n\nrm x\n"),
+            ("ABCD\n<<ABCDEFGHIJ\nAB\nrm x\n", "ABCD\nCDEFGHIJ\n\nrm x\n"),
+            ("<<ABCDEFGHIJ\nXYZ\nrm x\n", "<<ABCDEFGHIJ\nXYZ\nrm x\n"),
+            ("<<ABCDEFGHIJ\nABC\nABCDEFGHIJ\nrm x", "\n\nrm x"),
+        )
+        for lengths in (8, 9):
+            decoys = "".join("Q" * k + "\n" for k in range(1, lengths + 1))
+            masked = self.masked([decoys + command for command, _ in cases])
+            for (command, expected), actual in zip(cases, masked, strict=True):
+                with self.subTest(lengths=lengths, command=command):
+                    self.assertEqual(actual, decoys + expected)
+
+    def test_long_delimiter_backs_off_quickly_with_nine_closing_lengths(self) -> None:
+        n = 100_000
+        decoys = "".join("Q" * k + "\n" for k in range(1, 10))
+        command = decoys + "<<" + "A" * n + "\nA"
+        result = self.child(["-c", _MEASURE], json.dumps(["mask_messages", command]))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        masked, seconds = json.loads(result.stdout)
+        self.assertEqual(masked, decoys + "A" * (n - 1) + "\n")
+        self.assertLess(seconds, 0.5)
+
     def test_long_messages_keep_their_decisions(self) -> None:
         n = 100_000
         rm = "rm tests/test_a.py"
