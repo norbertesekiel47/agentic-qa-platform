@@ -64,7 +64,7 @@ from aqa_runner.evidence import capture_evidence
 from aqa_runner.invariants import InvariantResult, invariant_results
 from aqa_runner.locators import Absent, Miss, Resolved, Unresolved, Use
 from aqa_runner.redaction import Redacted, Redactor, error_text
-from aqa_runner.run_record import RunRecord
+from aqa_runner.run_record import RefusedWriteError, RunRecord
 from aqa_runner.secret_fields import SecretNotFilledError, SecretRefusedError
 from aqa_runner.settling import Settled, Window
 from aqa_runner.text_search import SearchTimeoutError, text_matches, url_matches
@@ -77,9 +77,6 @@ LOOK_SECONDS = 0.1
 # bounded by the run's `resolve_seconds` instead (ADR-0024's #46 amendment).
 NAVIGATION_SECONDS = 30
 
-# How many times evidence looks at a page that changed under its look: one
-# changing under three looks in a row changes faster than a look can follow.
-EVIDENCE_LOOKS = 3
 
 # How long past those bounds the executor waits for an action before it stops
 # waiting: Playwright's own error, which says what it waited for, comes
@@ -321,7 +318,7 @@ async def replay(
         and all(invariant.outcome != "violated" for invariant in invariants)
     )
     if blocks.blocked:
-        record.write("egress.json", _egress_record(blocks, withheld=run.withheld))
+        _write_egress_record(record, blocks, withheld=run.withheld)
     return RunResult(
         record.run_id,
         "errored" if errored else "passed" if passed else "failed",
@@ -347,23 +344,16 @@ async def _keep_with_evidence(
 
 
 async def _observed(session: BrowserSession, budget: float) -> Redacted | None:
-    """The page's snapshot for evidence, or None: all of its looks within
-    one `budget` of seconds and `MARGIN_SECONDS` past them. Its refusal records no policy event
-    (`snapshot(record_refusal=False)`), so evidence leaves the result as it
-    was; a page off the allowed origins, one that stopped answering or
-    crashed, or one that changed under every look, gets none."""
+    """The page's snapshot for evidence, looked at as `_looked` looks, or
+    None for a page off the allowed origins, stopped, crashed or changing
+    throughout. Its refusal records no policy event, so evidence leaves
+    the result as it was."""
     try:
-        return await _bounded(_unrecorded_snapshot(session), budget)
+        return await _bounded(
+            _looked(lambda: session.snapshot(record_refusal=False), budget), budget
+        )
     except Error, PolicyEventError, DocumentChangedError, _UnansweredError:
-        # The page couldn't be looked at: its evidence goes without a snapshot.
         return None
-
-
-async def _unrecorded_snapshot(session: BrowserSession) -> Redacted:
-    for _ in range(EVIDENCE_LOOKS - 1):
-        with suppress(DocumentChangedError):  # the page changed: look again
-            return await session.snapshot(record_refusal=False)
-    return await session.snapshot(record_refusal=False)
 
 
 def _accepted(
@@ -437,7 +427,7 @@ async def _evaluate_each(
     assertion's look it was."""
     budget = run.setup.config.budgets.resolve_seconds
     try:
-        await _bounded(_read(session, budget), budget)
+        await _bounded(_looked(session.visible_text, budget), budget)
     except (Error, PolicyEventError, DocumentChangedError, _UnansweredError) as error:
         # As below: the page couldn't be looked at, so nothing on it can be
         # evaluated.
@@ -539,7 +529,7 @@ async def _text_held(
     seen = await _bounded(
         _target_text(session, targets[check.target], budget)
         if isinstance(check, TextInTarget)
-        else _read(session, budget),
+        else _looked(session.visible_text, budget),
         budget,
     )
     return seen if isinstance(seen, Unresolved) else await text_matches(check, seen)
@@ -590,14 +580,14 @@ async def _bounded[T](look: Awaitable[T], budget: float) -> T:
         raise _UnansweredError(seconds) from None
 
 
-async def _read(session: BrowserSession, budget: float) -> str:
-    """The page's visible text, read again while the page changes under the
-    read, up to `budget` seconds; then the last change raises."""
+async def _looked[T](look: Callable[[], Awaitable[T]], budget: float) -> T:
+    """`look`'s result, looked again while the page changes under the look,
+    up to `budget` seconds; then the last change raises."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + budget
     while True:
         try:
-            return await session.visible_text()
+            return await look()
         except DocumentChangedError:
             if loop.time() >= deadline:
                 raise
@@ -880,6 +870,19 @@ def _scanned(event: InfrastructureEvent, redactor: Redactor) -> InfrastructureEv
     return replace(
         event, host=redactor.redact(event.host), cause=redactor.redact(event.cause)
     )
+
+
+def _write_egress_record(
+    record: RunRecord, blocks: EgressBlocks, *, withheld: bool
+) -> None:
+    """Write `egress.json`. When the record refuses it (a bound value its
+    scan can't remove), the counts-only form, which holds a subset of it;
+    when that is refused too, nothing: the result still names the block."""
+    try:
+        record.write("egress.json", _egress_record(blocks, withheld=withheld))
+    except RefusedWriteError:
+        with suppress(RefusedWriteError):
+            record.write("egress.json", _egress_record(blocks, withheld=True))
 
 
 def _egress_record(blocks: EgressBlocks, *, withheld: bool) -> dict[str, object]:

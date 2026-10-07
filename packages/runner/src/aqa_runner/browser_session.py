@@ -516,7 +516,7 @@ class BrowserSession:
         session recorded, not the page, so the page isn't checked."""
         return self._traffic.console_log(window)
 
-    async def network_log(self, window: Window) -> tuple[NetworkEntry, ...]:
+    async def network_log(self, window: Window) -> Records[NetworkEntry]:
         """`window`'s network log as it stands now
         (`aqa_runner.settling.Traffic.network_log`). It reads what the
         session recorded, not the page, so the page isn't checked."""
@@ -850,20 +850,17 @@ class BrowserSession:
     async def _require_allowed(
         self, frame: Frame, kind: PolicyEventKind, *, record_refusal: bool = True
     ) -> None:
-        """Raise a policy event of `kind`, recorded unless `record_refusal` is false,
-        unless `frame` is on one of the run's allowed origins."""
+        """Raise a `PolicyEventError` of `kind` unless `frame` is on one of
+        the run's allowed origins; its event is recorded with `record_refusal`."""
         origin = await frame_origin(frame)
         if origin in self._policy.allowed_origins:
             return
-        event = PolicyEvent(kind, frame.url, origin)
-        if record_refusal:
-            raise self._refuse(event)
-        raise PolicyEventError(self._scanned(event))
+        raise self._refuse(PolicyEvent(kind, frame.url, origin), record=record_refusal)
 
-    def _refuse(self, event: PolicyEvent) -> PolicyEventError:
-        """Record `event`, and the error to raise for it, which holds the
-        recorded event."""
-        return PolicyEventError(self._record(event))
+    def _refuse(self, event: PolicyEvent, *, record: bool = True) -> PolicyEventError:
+        """The error to raise for `event`, which holds it scanned, and records
+        it first unless `record` is false."""
+        return PolicyEventError(self._record(event) if record else self._scanned(event))
 
     def _record(self, event: PolicyEvent) -> PolicyEvent:
         """Record `event`, scanned, and return what was recorded."""

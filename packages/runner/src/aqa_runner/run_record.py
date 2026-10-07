@@ -35,8 +35,8 @@ type LineCheck = Callable[[str], object]
 
 class RefusedWriteError(ValueError):
     """What a record won't write: text in which a supported spelling of a
-    bound value is left after its scan, or a document whose scan broke its
-    JSON. The message names the file, never the value, and no file is
+    bound value is left after its scan, a document whose scan broke its
+    JSON, or text with no UTF-8 form. The message names the file, never the value, and no file is
     made."""
 
 
@@ -159,15 +159,20 @@ class RunRecord:
         )
 
     def _create(self, name: str, text: str) -> Path:
-        """Write `text`, checked, to the new file `name`."""
+        """Write `text`, checked and encoded before the file opens, to the new
+        file `name`."""
         if self.redactor.finds(text):
             raise RefusedWriteError(
                 f"{name}: a bound value's spelling is left after its scan, so it "
                 "isn't written"
             )
+        try:
+            data = text.encode()
+        except UnicodeEncodeError:
+            raise RefusedWriteError(f"{name}: text with no UTF-8 form") from None
         written = self._place(name)
-        with written.open("x", encoding="utf-8") as file:
-            file.write(text)
+        with written.open("xb") as file:
+            file.write(data)
         return written
 
     def _place(self, name: str) -> Path:

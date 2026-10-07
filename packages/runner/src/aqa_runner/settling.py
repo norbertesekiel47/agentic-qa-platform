@@ -172,7 +172,7 @@ class Traffic:
         # https://playwright.dev/python/docs/api/class-page#page-event-request
         page.on("request", self._started)
         page.on("response", self._responded)
-        page.on("requestfinished", self._finished_request)
+        page.on("requestfinished", self._on_finished)
         page.on("requestfailed", self._ended)
         # https://playwright.dev/python/docs/api/class-page#page-event-console
         page.on("console", self._logged)
@@ -199,19 +199,20 @@ class Traffic:
         logged = self._console[window]
         return Records(list(logged.kept), logged.total)
 
-    async def network_log(self, window: Window) -> tuple[NetworkEntry, ...]:
+    async def network_log(self, window: Window) -> Records[NetworkEntry]:
         """`window`'s network log as it stands now: each request it keeps,
-        in the order they started. A status is the one the request's
+        in the order they started, and how many it had. A status is the one the request's
         `response` event gave. A size is read only for a request that
-        finished, all of them within `SIZE_SECONDS`, and is None when it
-        isn't read by then. Nothing here waits for a request: Playwright's
+        finished, all of them together within `SIZE_SECONDS`, and is None when
+        it isn't read by then. Nothing here waits for a request: Playwright's
         `Request.response()` waits for the response or a failure, and
         `sizes()` waits for it too (1.63)."""
         requests = self._kept_requests[window]
         sizes = await _sizes(
             [request for request in requests if request in self._finished]
         )
-        return tuple(self._entry(request, sizes.get(request)) for request in requests)
+        entries = [self._entry(request, sizes.get(request)) for request in requests]
+        return Records(entries, window.requests.total)
 
     def _entry(self, request: Request, size: int | None) -> NetworkEntry:
         _, sent = self._sent[request]
@@ -270,7 +271,7 @@ class Traffic:
         text = self._redactor.redact(message.text, limit=CONSOLE_CHARS)
         logged.add(ConsoleEntry(message.type, str(text)))
 
-    def _finished_request(self, request: Request) -> None:
+    def _on_finished(self, request: Request) -> None:
         self._finished.add(request)
         self._ended(request)
 
@@ -283,15 +284,19 @@ class Traffic:
 
 async def _sizes(requests: list[Request]) -> dict[Request, int]:
     """The response body size of each of `requests` that Playwright gives
-    within `SIZE_SECONDS`, for all of them together."""
+    within `SIZE_SECONDS`, all read at once, so one slow read costs no other."""
     sizes: dict[Request, int] = {}
+
+    async def read(request: Request) -> None:
+        size = await _size(request)
+        if size is not None:
+            sizes[request] = size
+
     limit = asyncio.timeout(SIZE_SECONDS)
     try:
-        async with limit:
+        async with limit, asyncio.TaskGroup() as reads:
             for request in requests:
-                size = await _size(request)
-                if size is not None:
-                    sizes[request] = size
+                reads.create_task(read(request))
     except TimeoutError:
         if not limit.expired():
             raise  # not this read's own limit
