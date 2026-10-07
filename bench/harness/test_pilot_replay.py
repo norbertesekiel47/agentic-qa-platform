@@ -29,7 +29,7 @@ from aqa_runner.locator_generation import Seen, generate_for_action
 from aqa_runner.model_router import ModelRouter
 from aqa_runner.run_record import RunRecord
 from langchain_anthropic import ChatAnthropic
-from pilot_inputs import PilotInput, load_pilots
+from pilot_inputs import PilotInput, ResetRequest, load_pilots
 from pilot_replay import (
     AttemptHealth,
     FailedAttempt,
@@ -60,6 +60,7 @@ OUTCOME = json.loads(
     '{"outcome":"failed","failure":null,"interrupted":false,"reset_completed":false,"cleanup":"completed","resources":"unknown"}'
 )
 HOLD_RECEIPTS = ("cleanup-incomplete.json", "attempt.json")
+INTERRUPTED = {"outcome": "interrupted", "interrupted": True}
 CLIENTS: list[type] = [
     ModelRouter,
     AnthropicClient,
@@ -603,3 +604,62 @@ class PilotReplayTests(unittest.TestCase):
         self.enterContext(patch("pilot_replay.async_playwright", stalling))
         attempt = self.replay(self.pilot())
         self.assertEqual(self.failed(attempt), ("cleanup_failed", "failed", "unknown"))
+
+    def test_an_unsendable_reset_is_unreachable_without_its_text(self) -> None:
+        reset = ResetRequest(f"{self.origin}/re set?fake-sensitive")
+        attempt = self.replay(replace(self.pilot(), reset=reset))
+        unreachable = ("reset_unreachable", "completed", "closed")
+        self.assertEqual(self.failed(attempt), unreachable)
+        receipts = "".join(path.read_text() for path in attempt.record.glob("*"))
+        self.assertNotIn("fake-sensitive", repr(attempt) + receipts)
+
+    def test_a_cancel_while_the_driver_starts_still_stops_it(self) -> None:
+        del self.spec["preconditions"]["reset"]
+        self.entered = asyncio.Event()
+
+        @asynccontextmanager
+        async def starting() -> AsyncIterator[Any]:
+            self.entered.set()
+            async with async_playwright() as driver:
+                yield driver
+
+        self.enterContext(patch("pilot_replay.async_playwright", starting))
+
+        async def cancelled() -> set[asyncio.Task[Any]]:
+            async with asyncio.timeout(60):
+                with self.assertRaises(asyncio.CancelledError):
+                    await (await self.interrupt(self.pilot()))
+                return asyncio.all_tasks() - {asyncio.current_task()}
+
+        self.assertEqual(asyncio.run(cancelled()), set())
+        closed = OUTCOME | INTERRUPTED | {"resources": "closed"}
+        self.assertEqual(self.receipt("attempt.json"), closed)
+
+    def test_an_enter_that_never_returns_holds_through_a_second_cancel(self) -> None:
+        del self.spec["preconditions"]["reset"]
+        self.config["budgets"] = {"resolve_seconds": 0.1}
+        self.entered, release = asyncio.Event(), asyncio.Event()
+
+        @asynccontextmanager
+        async def stuck() -> AsyncIterator[MagicMock]:
+            self.entered.set()
+            await release.wait()
+            yield MagicMock()
+
+        self.enterContext(patch("pilot_replay.async_playwright", stuck))
+
+        async def held() -> bool:
+            async with asyncio.timeout(20):
+                attempt = await self.interrupt(self.pilot())
+                await asyncio.sleep(0.3)  # past the 0.1 s cleanup window
+                attempt.cancel()
+                await asyncio.sleep(0.1)
+                done = attempt.done()
+                release.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await attempt
+                return done
+
+        self.assertFalse(asyncio.run(held()))
+        incomplete = OUTCOME | INTERRUPTED | {"cleanup": "incomplete"}
+        self.assertEqual(self.receipt("attempt.json"), incomplete)
