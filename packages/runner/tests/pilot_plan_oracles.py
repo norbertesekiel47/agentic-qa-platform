@@ -254,6 +254,9 @@ SPEC_FINGERPRINTS = {
 # image link holds no text, and the article's author meta lies outside every
 # card), named by when it was posted and what it is for. The frontend puts a
 # posted comment first, but the phrase relies on posting time, not position.
+# The tag-list phrase "the list of tags of the article on the article page"
+# was accepted 2026-10-07 after an independent review (#161): an article page
+# renders one tag list, the article's own, and the phrase carries no tag text.
 ALIASES = {
     "the article title heading at the top of the article page": "article banner title heading",
     "the author name on the most recently posted comment under the article": "new comment card author link",
@@ -263,6 +266,7 @@ ALIASES = {
     "the article body content area on the article page": "article body",
     "the list of tags for the article": "article tag list",
     "the list of tags on the article page": "article tag list",
+    "the list of tags of the article on the article page": "article tag list",
     "the prompt in the comments area where the comment form would be": PROMPT,
     "the favorite button for the article": "article banner favorite button",
     "the favorites count on the article's favorite button": "article banner favorites count",

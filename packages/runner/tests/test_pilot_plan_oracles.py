@@ -846,6 +846,13 @@ def test_the_third_prompt_pattern_is_scoped_to_the_prompt() -> None:
             "new comment card author link",
             "reader",
         ),
+        (
+            "read-article",
+            4,
+            "the list of tags of the article on the article page",
+            "article tag list",
+            "testing",
+        ),
     ],
 )
 def test_a_reviewed_recorded_phrase_means_its_oracle_role(
