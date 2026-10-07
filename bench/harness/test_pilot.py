@@ -89,17 +89,17 @@ class FlagDocker(FakeDocker):
 
 
 class BrokenDocker(FakeDocker):
-    """Raises as a missing docker binary would, at its `fail_at`th `up`."""
+    """At its `fail_at`th switch, the app serves a page that won't decode."""
 
     def __init__(self, fail_at: int) -> None:
         super().__init__()
         self.fail_at = fail_at
 
-    def compose(self, *args: Any, **kwargs: Any) -> str:
-        self.fail_at -= args[1][0] == "up"
+    def fetch(self, url: str) -> str:
+        self.fail_at -= 1
         if self.fail_at == 0:
-            raise FileNotFoundError("fake docker")
-        return super().compose(*args, **kwargs)
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "fake page")
+        return super().fetch(url)
 
 
 class PilotCommandTests(unittest.TestCase):
