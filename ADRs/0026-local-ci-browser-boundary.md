@@ -598,7 +598,7 @@ A failed step's reason carried Playwright's first line, which a page can write, 
 - `redaction.error_text(error, redactor, *, ours, withheld)` is the one presenter; the executor calls it for every reason, and #53 will for its own. `ours` is the caller's own complete message for an error it owns, even empty; None marks Playwright's, which the page may have chosen. The constants `REASON_CHARS` and `PLAYWRIGHT_CALL` move into the redaction module with it.
 - Exactly three scans, never a loop: the complete selected message, before a line, a call, an escape or a cut is taken from it; the complete assembly, class and message or call and fixed wording, so a join is covered; the escaped first line, with the cut to `REASON_CHARS` applied by `Redactor.redact` after its scan. When `withheld`, the call is recognised on the scanned message, never on the raw one.
 - Every reason is therefore one printable line of at most 200 characters, an owned message too. The direct strings the executor builds (an assertion left unevaluated, an action that timed out) are scanned whole.
-- `RunResult.infrastructure_events` holds copies with host and cause scanned; port, order and count are unchanged, and `egress_peers.py` and the gate's own events are untouched.
+- `RunResult.infrastructure_events` holds copies with host and cause scanned; port, order and count are unchanged, and `egress_peers.py` and the gate's own events are untouched (#160's amendment, below, later changed the cause `egress_peers.py` writes).
 
 ### Consequences and limits
 
