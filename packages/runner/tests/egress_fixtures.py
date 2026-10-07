@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from aqa_runner.egress import EgressGate, EgressPolicy, IPAddress
 from aqa_runner.egress_proxy import EgressProxy
+from aqa_runner.loopback_server import LoopbackServer
 
 # Every name a test uses resolves to loopback, so each origin the tests reach
 # is declared private, as a project declares its local servers.
@@ -284,14 +285,9 @@ async def raw_upstream(
         upstream.closed.set()
         writer.close()
 
-    server = await asyncio.start_server(handle, "127.0.0.1", 0)
-    upstream.port = server.sockets[0].getsockname()[1]
-    try:
+    async with LoopbackServer(handle) as server:
+        upstream.port = server.port
         yield upstream
-    finally:
-        server.close()
-        server.close_clients()
-        await server.wait_closed()
 
 
 async def proxy_client(
