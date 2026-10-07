@@ -1,6 +1,6 @@
 ---
 id: publish-article
-goal: A signed-in author publishes a new article with tags and lands on its page.
+goal: A signed-in author publishes a new article with tags and lands on its page, whose path starts with /article/benchmarks-we-trust- in any letter case and ends in a generated suffix.
 preconditions:
   start_url: /login
   account: { email: jake@conduit.test, password: { secret: TEST_PASSWORD } }
