@@ -875,9 +875,9 @@ def _owned(error: _Raised) -> str | None:
 
 
 def _scanned(event: InfrastructureEvent, redactor: Redactor) -> InfrastructureEvent:
-    """A copy of the gate's event with its host and cause scanned: h11's
-    text for a malformed reply holds the upstream's status line. The gate's
-    own list keeps the raw event."""
+    """A copy of the gate's event with its host and cause scanned: a cause
+    can name the host, which can be a bound value. The gate's own list keeps
+    the raw event."""
     return replace(
         event, host=redactor.redact(event.host), cause=redactor.redact(event.cause)
     )
