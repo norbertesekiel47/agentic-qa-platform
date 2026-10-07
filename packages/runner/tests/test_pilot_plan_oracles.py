@@ -832,6 +832,13 @@ def test_the_third_prompt_pattern_is_scoped_to_the_prompt() -> None:
             "article comment list",
             "Thanks for the warm welcome!",
         ),
+        (
+            "read-article",
+            0,
+            "the article title heading at the top of the article page",
+            "article banner title heading",
+            "Testing without flakes",
+        ),
     ],
 )
 def test_a_reviewed_recorded_phrase_means_its_oracle_role(

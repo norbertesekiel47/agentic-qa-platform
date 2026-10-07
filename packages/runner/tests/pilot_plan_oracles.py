@@ -246,7 +246,11 @@ SPEC_FINGERPRINTS = {
 # duplicated-element rows (the author meta, the favorite button and its count,
 # the byline) take a page-level meaning (REVIEW.md:62): which of the two
 # rendered copies it resolves to is #53's binding, to the banner copy.
+# The title phrase was accepted 2026-10-07 after an independent review (#161):
+# an article page renders one heading, the banner h1 (the editor's title is an
+# input on another page), so it names that h1 and carries no title or label.
 ALIASES = {
+    "the article title heading at the top of the article page": "article banner title heading",
     "the author name in the article header's byline": "article banner author link",
     "the publication date in the article header's byline": "article banner publication date",
     "the article body content": "article body",
