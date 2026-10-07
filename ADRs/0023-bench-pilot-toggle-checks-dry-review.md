@@ -118,3 +118,20 @@ The acceptance command replays each admitted pilot several times and under every
 
 - **A cancel during an enter.** Playwright's `async_playwright().__aenter__` starts its driver with a task nothing owns. Cancelled part-way, it left that task and a live driver, and the event loop's shutdown then waited for them indefinitely (measured at `29a95fe`; LAB_NOTES, 2026-10-07). So each resource's enter now runs as its own task behind `asyncio.shield`. The attempt's one cancellation lets the enter finish, then exits what it opened and re-raises. An enter that never returns is held like a cleanup that never returns: `cleanup-incomplete.json`, then a wait. A second interrupt is recorded and not passed on, as before. This applies the approved rule that the cancellation already sent unwinds the driver; the receipts and their fields are unchanged.
 - **An unsendable reset.** `runner_request` refuses a URL no request line carries with a `ValueError` that quotes the URL and its query. B1's admission makes it unreachable from a spec, but an attempt now maps it to `reset_unreachable` and drops it, so no caller can print it.
+
+## Amendment (2026-10-07): the pilot report and its pair policy (#51)
+
+The acceptance command scores each attempt only after it has ended, through `bench/harness/pilot_report.py`. That module never calls replay, never reads a raw `RunResult` and never holds a `PilotInput`.
+
+- **What an attempt admits.** `classify` sorts each attempt into one of four kinds. `eligible` means A2's eligibility. `fatal` covers any `FailedAttempt`, infrastructure, an egress block, an errored run, a completed step that didn't settle idle, a check timeout, or an invariant outcome that disagrees with its count and the spec's settings. `binding_only` is one of two drift shapes. In the first, every step ran and each check passed or found no binding, at least one of them. In the second, the run stopped at a drifted step, which dispatched nothing because its intent follows resolution, before any check was evaluated. Both shapes need every earlier step completed and no invariant violated. Anything else is `ineligible`, as when a real failure sits beside the drift. Binding-only is a harness diagnostic, not an A2 eligibility rule.
+- **Pairs.** A pair is one spec on the clean app or under one case's flag, and the row's verdict decides how it is judged.
+  - **Clean app.** The repeats pass only when every attempt is an eligible pass and all of them are equal. A repeat other than 3 is marked `diagnostic`.
+  - **`expectation_violated` row.** The pair is compared as it is (`matched` or `mismatch`).
+  - **`drift_consistent` row.** The original stays as the diagnostic attempt. A patched attempt runs only when the original passed as the row says or is binding-only. The pair is `accepted_pending_C` only when the patched attempt matches. Without a patch file it is `patch_missing`, a nonzero result rather than a preflight refusal, because the original is how a person learns which bindings broke.
+  - **No row.** The pair is `unscored`, or `unscored_binding_blocked` for a binding-only attempt.
+  - **Any pair.** A fatal attempt makes the pair `fatal`.
+- **The report.** It holds the source commit and tree and whether they were unchanged at the end, the repeat count, the selection, hashes, every attempt and each scored pair's missing and unexpected expectation indexes and invariants. Each attempt carries its kind and the A2 observation's fields, with each step's and check's target ID from the compiled script. It holds no URL, error text, record path or input. C, the assertions' locator provenance, is reported `pending`.
+- **Exit and release.**
+  - **Exit.** 130 when interrupted, otherwise 12 for an attempt whose test secret couldn't be used. Then 3 for a fatal pair, a stop short of the end or a changed source, then 1 for `mismatch` or `patch_missing`, else 0.
+  - **Release.** The app may be switched back and released only when the run didn't stop short and every attempt's resources are known closed.
+  - **Writes.** Receipts and the report are written once (`open("x")`), and the JSON is made before the file is opened.
