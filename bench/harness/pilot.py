@@ -37,7 +37,7 @@ class Source(NamedTuple):
 
 
 type ReadSource = Callable[[Path, Path], Source]
-# What reading the source, Docker or the evidence directory can raise.
+# What reading the source or the evidence directory can raise.
 FAILURES = (OSError, subprocess.SubprocessError)
 
 
@@ -139,7 +139,7 @@ class Run:
             if build:
                 flags.build(self.root, self.base.app, self.docker)
             flags.switch(self.root, self.base.app, flag_ids, self.docker)
-        except (flags.FlagError, *FAILURES) as error:
+        except Exception as error:  # a switch failing part-way leaves the app unknown
             raise HaltError("switch_failed") from error
 
     def _kept(self, pair: Pair) -> bool:

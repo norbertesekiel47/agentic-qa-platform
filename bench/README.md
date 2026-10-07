@@ -43,7 +43,7 @@ The flag commands need the app's images built (`docker compose build` in `apps/<
 |---|---|
 | 0 | Every pair passed, matched, was accepted pending C, or is unscored |
 | 1 | A scored pair disagrees with the manifest (`mismatch`), or a benign pair has no patch (`patch_missing`) |
-| 2 | Invalid input, found before any Docker call. stderr shows our own message, or only the type of a manifest, Docker, git or file error, since its text can quote input; run `manifest.py` or `flags.py show` for details |
+| 2 | Invalid input, found before any Docker call. stderr shows our own message, or only the type of a manifest, Docker, git or file error, since its text can quote input (git may print its own message, naming paths, first); run `manifest.py` or `flags.py show` for details |
 | 3 | A fatal attempt, one the replay couldn't complete (a reset, timeout or cleanup failure) or one that ran with infrastructure events, an egress block, an errored run, an unsettled step or a check timeout. Also a stop short of the end (an unexpected error, a process exit, a failed switch), a source change during the run, or evidence that couldn't be written |
 | 12 | A test secret the spec references can't be used, before the run or at an attempt |
 | 130 | Interrupted |
