@@ -139,3 +139,14 @@ The acceptance command scores each attempt only after it has ended, through `ben
   - **Exit.** 130 when interrupted, otherwise 12 for an attempt whose test secret couldn't be used. Then 3 for a fatal pair, a stop short of the end or a changed source, then 1 for `mismatch` or `patch_missing`, else 0.
   - **Release.** The app may be switched back and released only when the run didn't stop short and every attempt's resources are known closed.
   - **Writes.** Receipts and the report are written once (`open("x")`), and the JSON is made before the file is opened.
+
+## Amendment (2026-10-07): the pilot acceptance command (#51)
+
+`bench/harness/pilot.py` runs the pairs in order and writes the report; bench/README.md has its usage and exit codes.
+
+- **Before Docker.** These are refused with exit 2 before the first Docker call: a source tree that differs from HEAD outside `--out` (untracked files included), an existing `--out`, an unknown app, an invalid manifest, any selected input B1 refuses, and any patch file not named for a selected spec's `drift_consistent` row under a dev case, or that rebinding or admission refuses.
+- **Secrets.** B1 now refuses a test secret the environment can't supply as `UnusableSecretError` (`<source>: unusable test secret`), after every spec problem, and the command exits 12 for it, as API.md §7 does. A binding the run doesn't allow stays `invalid pilot input`. This replaces B1's single category for secrets.
+- **Order and stops.** The run builds, replays the clean app's repeats, then replays each dev case in ID order. Test-split cases are never switched. The first fatal pair stops the run; a mismatch doesn't. A `drift_consistent` row's patched attempt runs only when its original admits it.
+- **One event loop.** The whole run is one `asyncio.run`, and the report is written inside it. A shutdown that hangs, as one did when a driver's start was cut short, can't lose it. An interrupt or a process exit that escapes the loop is recorded, and the report is written after it.
+- **Errors.** An error replay couldn't classify stops the run as `unexpected` with exit 3, printing none of its text. Plan v2 had it propagate, but an uncaught error exits 1, the mismatch code. A `SystemExit` is recorded as `system_exit` without its payload. Evidence that can't be written is exit 3.
+- **Output.** `--out`, which replaces plan v2's `--report`, is a new directory that holds `report.json`, the receipts in `attempts/` and the run records, so the private records sit beside what is cited. The source is read again at the end, and a change makes the report uncitable (exit 3).

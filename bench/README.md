@@ -23,6 +23,29 @@ uv run python bench/harness/flags.py show <app>        # which case is on; fails
 uv run python bench/harness/flags.py selftest <app>    # alternate the reserved flag 0000 and clean, 10 cycles
 
 uv run python bench/harness/toggle.py <app> --cycles 5 # every check on the clean app and under each case's flag
+
+uv run python bench/harness/pilot.py <app> --out .scratch/<new dir> [--spec <id> ...] [--repeat 3] [--compiled-dir DIR] [--patches DIR]
 ```
 
 The flag commands need the app's images built (`docker compose build` in `apps/<app>/`). The self-test proves flag delivery to both tiers. `toggle.py` proves each case's planted change, and that the case's flag switches nothing else (ADR-0023). It builds the app's images from the working tree and the checks image, then runs every case's check (`toggle_checks.py`, as a non-root user with Chromium's sandbox on) on the clean app and under each case's flag. It fails when a case has no check, or when a check sees anything other than its exact expected state: planted under its own flag, clean otherwise. A pull request that adds or changes cases includes its output.
+
+## Pilot acceptance
+
+`pilot.py` replays compiled pilot scripts through the strict executor, with no model client, and scores them against the manifest (ADR-0023). It admits every input before its first Docker call: a clean source tree, a new `--out` directory, the manifest, each selected spec's script (`<compiled-dir>/<id>.json`, by default the app's `qa/.compiled/`) and each patch.
+
+- **Patches.** `--patches DIR` holds `<case-id>.<spec-id>.json` files, one for each `drift_consistent` row of a selected spec under a dev case. Each one replaces target locators only (ADR-0023's rebinding format). Any other file refuses the run.
+- **Order.** It builds the images, switches to the clean app and replays each spec `--repeat` times. Then, in case-ID order, it switches to each dev case's flag and replays each spec once. A `drift_consistent` row with a patch also gets a fresh, patched attempt, but only when its original passed or failed only to find a binding. Test-split cases are never switched. The run stops at the first fatal pair.
+- **Ending.** It switches back to the clean app only when nothing stopped short and every attempt's resources are known closed. Otherwise the report says `reservation_release: forbidden`, and whoever holds the stack's reservation reconciles it before releasing it.
+- **Outputs.** All under `--out`: `report.json`, one receipt per attempt in `attempts/`, and the private run records in `.aqa/runs/`. The report and each receipt are written once. They hold outcomes, counts, IDs and hashes, never a URL or error text. The run records are the executor's own, may hold page text, and stay private (#50).
+- **Limits.** A benign pair accepts at most `accepted_pending_C`, because the assertions' locator provenance is still to come. A repeat other than 3 is marked `diagnostic`. Exit 0 here is not the M1 exit on its own. A report is citable only from a clean commit with `source_unchanged` true.
+
+| Exit | Meaning |
+|---|---|
+| 0 | Every pair passed, matched, was accepted pending C, or is unscored |
+| 1 | A scored pair disagrees with the manifest (`mismatch`), or a benign pair has no patch (`patch_missing`) |
+| 2 | Invalid input, found before any Docker call |
+| 3 | A fatal attempt, one the replay couldn't complete (a reset, timeout or cleanup failure) or one that ran with infrastructure events, an egress block, an errored run, an unsettled step or a check timeout. Also a stop short of the end (an unexpected error, a process exit, a failed switch), a source change during the run, or evidence that couldn't be written |
+| 12 | A test secret the spec references can't be used, before the run or at an attempt |
+| 130 | Interrupted |
+
+When several apply, the highest-ranked wins: 130, then 12, then 3, then 1.
