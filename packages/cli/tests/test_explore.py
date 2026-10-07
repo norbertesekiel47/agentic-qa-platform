@@ -531,13 +531,91 @@ def test_a_plan_that_does_not_fit_its_spec_exits_3(tmp_path: Path, run: Run) -> 
     spec = project(tmp_path / "qa")
     short = plan_with([PLAN.expectations[0].model_dump(exclude_none=True)])
 
+    # The model writes the same plan when asked once more.
     result, _ = run(
-        [str(spec), "--plan-only"], **{SONNET: FakeClient(reply(parsed=short))}
+        [str(spec), "--plan-only"],
+        **{SONNET: FakeClient(reply(parsed=short), reply(parsed=short))},
     )
 
     assert result.exit_code == 3, result.output
     assert "2 expectations" in result.stderr
     assert record_of(tmp_path / "qa")["plan"] is not None
+
+
+# PLAN, with the error message found by the text its check asserts.
+CIRCULAR = plan_with(
+    [
+        {
+            "expect_index": 0,
+            "subject": "the payment error message",
+            "claim": "says the card has expired",
+            "checks": [
+                {
+                    "check": "text_in_target",
+                    "target_meaning": "the message that says the card has expired",
+                    "text": "card has expired",
+                }
+            ],
+        },
+        PLAN.expectations[1].model_dump(exclude_none=True),
+    ]
+)
+
+
+def test_a_target_that_holds_its_checks_text_exits_3_and_is_named(
+    tmp_path: Path, run: Run
+) -> None:
+    spec = project(tmp_path / "qa")
+
+    result, _ = run(
+        [str(spec), "--plan-only"],
+        **{SONNET: FakeClient(reply(parsed=CIRCULAR), reply(parsed=CIRCULAR))},
+    )
+
+    assert result.exit_code == 3, result.output
+    assert "the model's plan can't be used" in result.stderr
+    assert (
+        'expect[0]: the target "the message that says the card has expired" '
+        'holds "card has expired"'
+    ) in result.stderr
+    record = record_of(tmp_path / "qa")
+    assert (record["outcome"], len(record["calls"])) == ("gave_up", 2)
+
+
+def test_a_plan_corrected_when_asked_once_more_is_written_with_both_costs(
+    tmp_path: Path, run: Run
+) -> None:
+    spec = project(tmp_path / "qa")
+
+    result, _ = run(
+        [str(spec), "--plan-only"],
+        **{SONNET: FakeClient(reply(parsed=CIRCULAR), reply(parsed=PLAN))},
+    )
+
+    assert result.exit_code == 0, result.output
+    record = record_of(tmp_path / "qa")
+    assert (record["outcome"], record["plan_hash"]) == ("planned", plan_hash(PLAN))
+    assert [call["status"] for call in record["calls"]] == ["ok", "ok"]
+
+
+def test_a_retry_that_gives_no_response_exits_11_and_keeps_the_first_answer(
+    tmp_path: Path, run: Run
+) -> None:
+    spec = project(tmp_path / "qa")
+    timeout = anthropic.APITimeoutError(
+        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    )
+
+    result, _ = run(
+        [str(spec), "--plan-only"],
+        **{SONNET: FakeClient(reply(parsed=CIRCULAR), timeout)},
+    )
+
+    assert result.exit_code == 11, result.output
+    assert "no response after a billed answer" in result.stderr
+    record = record_of(tmp_path / "qa")
+    assert record["outcome"] == "no_response"
+    assert [call["status"] for call in record["calls"]] == ["ok"]
 
 
 def test_a_provider_that_gives_no_response_exits_11(tmp_path: Path, run: Run) -> None:

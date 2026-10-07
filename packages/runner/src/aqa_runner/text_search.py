@@ -98,6 +98,13 @@ async def text_matches(check: TextVisible | TextInTarget, rendered: str) -> bool
     return await _search("pattern", cast(str, check.pattern), rendered)
 
 
+async def pattern_matches(pattern: str, text: str) -> bool:
+    """Whether the Python regex `pattern` is found in `text`, normalized as an
+    element's rendered text is (DATA_MODEL §7). Raises `SearchTimeoutError`
+    when the search runs out of time."""
+    return await _search("pattern", pattern, text)
+
+
 async def url_matches(pattern: str, url: str) -> bool:
     """Whether the Python regex `pattern` is found in `url`, the URL as it is
     (DATA_MODEL §7). Raises `SearchTimeoutError` when the search runs out of

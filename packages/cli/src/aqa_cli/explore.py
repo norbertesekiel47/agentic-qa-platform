@@ -151,7 +151,7 @@ def _judge(
             why = "the model's plan didn't parse as a coverage plan"
         return "gave_up", why, ()
     if planned.misfits:
-        return "gave_up", "the model's plan doesn't fit the spec", planned.misfits
+        return "gave_up", "the model's plan can't be used", planned.misfits
     if lines := uncovered(planned.plan, spec.frontmatter):
         return "spec_error", "an expectation has no establishing check", lines
     return planned.plan
@@ -203,7 +203,8 @@ def explore(
     try:
         planned = asyncio.run(make_plan(router, spec))
     except ModelCallError as error:
-        # The refusal before the failed fallback was billed: keep its record.
+        # An answer before the failed call was billed (a refusal before its
+        # fallback, or a plan before its one retry): keep its record.
         if not isinstance(error.__cause__, ProviderError):
             _write_record(
                 record,
@@ -214,7 +215,7 @@ def explore(
                 reasons=(str(error),),
             )
             raise  # not the provider's failure, so not "no response"
-        why = f"the fallback model gave no response: {error.__cause__}"
+        why = f"the model gave no response after a billed answer: {error.__cause__}"
         path = _write_record(
             record,
             spec,

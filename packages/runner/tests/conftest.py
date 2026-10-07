@@ -49,19 +49,26 @@ class Endpoint:
 @pytest.fixture
 def serve() -> Iterator[Callable[..., Endpoint]]:
     """`serve(body=b"{}", headers={...})` starts a local server that answers every
-    request with that body and those headers, and stops it after the test."""
+    request with that body and those headers, and stops it after the test. A
+    tuple of bodies answers the requests in turn, the last one every request
+    after it."""
     servers: list[socketserver.ThreadingTCPServer] = []
 
     def start(
-        body: bytes = b"{}", headers: Mapping[str, str] | None = None
+        body: bytes | tuple[bytes, ...] = b"{}",
+        headers: Mapping[str, str] | None = None,
     ) -> Endpoint:
         endpoint = Endpoint(url="")
         answer = {"content-type": "application/json", **(headers or {})}
         head = "".join(f"{name}: {value}\r\n" for name, value in answer.items())
-        response = (
-            f"HTTP/1.1 200 OK\r\n{head}content-length: {len(body)}\r\n"
-            "connection: close\r\n\r\n"
-        ).encode() + body
+        responses = [
+            (
+                f"HTTP/1.1 200 OK\r\n{head}content-length: {len(each)}\r\n"
+                "connection: close\r\n\r\n"
+            ).encode()
+            + each
+            for each in (body if isinstance(body, tuple) else (body,))
+        ]
 
         class Handler(socketserver.StreamRequestHandler):
             """Reads one request, writes it down, and answers it."""
@@ -75,7 +82,8 @@ def serve() -> Iterator[Callable[..., Endpoint]]:
                         length = int(value)
                 self.rfile.read(length)
                 endpoint.requests.append((method, path))
-                self.wfile.write(response)
+                turn = min(len(endpoint.requests), len(responses)) - 1
+                self.wfile.write(responses[turn])
 
         server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
         server.daemon_threads = True

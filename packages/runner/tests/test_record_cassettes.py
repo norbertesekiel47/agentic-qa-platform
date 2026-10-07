@@ -38,7 +38,9 @@ def test_recording_keeps_costs_before_a_plan_is_rejected(
     short = PLAN.model_dump(mode="json")
     short["expectations"] = short["expectations"][:1]
     answer = HELLO | {"content": [{"type": "text", "text": json.dumps(short)}]}
-    endpoint = serve(json.dumps(answer).encode(), {"request-id": "req_fake_01"})
+    asked_again = answer | {"usage": {"input_tokens": 15, "output_tokens": 3}}
+    bodies = (json.dumps(answer).encode(), json.dumps(asked_again).encode())
+    endpoint = serve(bodies, {"request-id": "req_fake_01"})
     monkeypatch.setenv("ANTHROPIC_API_KEY", RECORDING_KEY)
     monkeypatch.setenv("ANTHROPIC_BASE_URL", endpoint.url)
     monkeypatch.delenv("ANTHROPIC_API_URL", raising=False)
@@ -52,9 +54,9 @@ def test_recording_keeps_costs_before_a_plan_is_rejected(
         record("coverage_plan", attempt, library=library)
 
     receipt = json.loads((attempt / "receipt.json").read_text())
-    [cost] = receipt["cost_records"]
+    cost, retried = receipt["cost_records"]
     assert (cost["input_tokens"], cost["output_tokens"], cost["status"]) == (9, 3, "ok")
-    assert cost["cost_usd"] == "0.000048"
+    assert (cost["cost_usd"], retried["cost_usd"]) == ("0.000048", "0.00006")
     assert receipt["outcome"] == "rejected"
     assert previous.read_text() == "previous cassette\n"
     assert (attempt / "coverage_plan.yaml").is_file()

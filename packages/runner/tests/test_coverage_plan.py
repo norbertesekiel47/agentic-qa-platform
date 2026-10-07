@@ -10,13 +10,14 @@ from pathlib import Path
 from typing import Any, get_args
 
 import pytest
-from aqa_core.coverage_plan import CheckType, CoveragePlan, M2Check
+from aqa_core.coverage_plan import CheckType, CoveragePlan, M2Check, PlannedCheck
 from aqa_core.project import load_project
 from aqa_core.spec import Spec
+from aqa_runner import text_search
 from aqa_runner.anthropic_client import AnthropicClient
 from aqa_runner.coverage_plan import INSTRUCTIONS, Planned, make_plan, plan_request
-from aqa_runner.model_router import ModelRouter
-from langchain_core.messages import HumanMessage, SystemMessage
+from aqa_runner.model_router import ModelCallError, ModelRouter
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from packages.runner.tests.test_model_router import Factory, FakeClient, reply
 
@@ -279,14 +280,168 @@ def test_a_plan_that_does_not_parse_comes_back_invalid_with_its_cost(
 def test_a_plan_that_does_not_fit_its_spec_comes_back_with_its_misfits(
     tmp_path: Path,
 ) -> None:
-    # One entry for a spec of two expectations.
+    # One entry for a spec of two expectations, written again when asked.
     short = CoveragePlan(expectations=PLAN.expectations[:1], requires=())
+    client = FakeClient(reply(parsed=short), reply(parsed=short))
 
-    planned, _ = plan_with(checkout(tmp_path / "qa"), FakeClient(reply(parsed=short)))
+    planned, _ = plan_with(checkout(tmp_path / "qa"), client)
 
     assert planned.plan == short
     assert len(planned.misfits) == 1
     assert "2 expectations" in planned.misfits[0]
+
+
+SHORT = CoveragePlan(expectations=PLAN.expectations[:1], requires=())
+# What the one retry says after the first answer, for SHORT.
+SHORT_CORRECTION = (
+    "That plan can't be used:\n"
+    "- the plan covers expectations [0], but the spec has 2 expectations: it "
+    "covers each once, in order, from 0 to 1\n"
+    "Write the whole plan again: fix each of these, and keep the rest as it is."
+)
+
+
+def test_a_plan_that_cannot_be_used_is_asked_for_once_more_with_its_reasons(
+    tmp_path: Path,
+) -> None:
+    spec = checkout(tmp_path / "qa")
+    client = FakeClient(reply(parsed=SHORT), reply(parsed=PLAN))
+
+    planned, _ = plan_with(spec, client)
+
+    assert (planned.plan, planned.misfits) == (PLAN, ())
+    [first, second] = client.calls
+    assert first == (plan_request(spec), (), CoveragePlan)
+    assert second == (
+        [
+            *plan_request(spec),
+            AIMessage(content=SHORT.model_dump_json(exclude_none=True)),
+            HumanMessage(content=SHORT_CORRECTION),
+        ],
+        (),
+        CoveragePlan,
+    )
+    assert [record.status for record in planned.routed.calls] == ["ok", "ok"]
+
+
+def test_the_second_answer_is_final_and_both_are_costed(tmp_path: Path) -> None:
+    # Asked once more, never twice.
+    client = FakeClient(reply(parsed=SHORT), reply(parsed=SHORT), reply(parsed=PLAN))
+
+    planned, _ = plan_with(checkout(tmp_path / "qa"), client)
+
+    assert planned.plan == SHORT
+    assert len(client.calls) == 2
+    assert len(planned.routed.calls) == 2
+
+
+def test_a_retry_that_fails_keeps_the_first_answers_cost(tmp_path: Path) -> None:
+    # The first answer was billed, so its record survives the retry's failure,
+    # as a refusal's survives a failed fallback.
+    failure = ValueError("no second answer")
+    client = FakeClient(reply(parsed=SHORT), failure)
+
+    with pytest.raises(ModelCallError) as raised:
+        plan_with(checkout(tmp_path / "qa"), client)
+
+    assert [record.status for record in raised.value.records] == ["ok"]
+    assert raised.value.__cause__ is failure
+
+
+def with_first_check(check: dict[str, str]) -> CoveragePlan:
+    """PLAN, with expectation 0 established by `check` alone."""
+    first = PLAN.expectations[0].model_copy(
+        update={"checks": (PlannedCheck.model_validate(check),)}
+    )
+    return PLAN.model_copy(update={"expectations": (first, *PLAN.expectations[1:])})
+
+
+def test_a_target_that_holds_its_checks_text_does_not_fit(tmp_path: Path) -> None:
+    # Finding the element by the text the check must verify is circular: a
+    # wrong text would find no element, drift instead of a failure (ADR-0025).
+    circular = with_first_check(
+        {
+            "check": "text_in_target",
+            "target_meaning": "the error message that says the card has expired",
+            "text": "Card has expired",
+        }
+    )
+    # The model writes the same target when asked again.
+    client = FakeClient(reply(parsed=circular), reply(parsed=circular))
+
+    planned, _ = plan_with(checkout(tmp_path / "qa"), client)
+
+    assert planned.plan == circular
+    assert planned.misfits == (
+        (
+            'expect[0]: the target "the error message that says the card has '
+            'expired" holds "Card has expired", the text its check asserts: a '
+            "target says what the element is for and where it sits, never what "
+            "it says"
+        ),
+    )
+
+
+def test_a_target_its_checks_pattern_matches_does_not_fit(tmp_path: Path) -> None:
+    circular = with_first_check(
+        {
+            "check": "text_in_target",
+            "target_meaning": "the message saying the card has expired",
+            "pattern": r"(?i)card has expired|card is no longer valid",
+        }
+    )
+    client = FakeClient(reply(parsed=circular), reply(parsed=circular))
+
+    planned, _ = plan_with(checkout(tmp_path / "qa"), client)
+
+    assert planned.misfits == (
+        (
+            'expect[0]: the target "the message saying the card has expired" '
+            'matches "(?i)card has expired|card is no longer valid", the pattern '
+            "its check asserts: a target says what the element is for and where "
+            "it sits, never what it says"
+        ),
+    )
+
+
+def test_a_target_that_names_no_asserted_text_fits(tmp_path: Path) -> None:
+    # Whole words, as the check itself reads text: "Pay" is not in "payment".
+    plan = with_first_check(
+        {
+            "check": "text_in_target",
+            "target_meaning": "the payment step's error message under the card form",
+            "text": "Pay",
+        }
+    )
+
+    planned, _ = plan_with(checkout(tmp_path / "qa"), FakeClient(reply(parsed=plan)))
+
+    assert (planned.plan, planned.misfits) == (plan, ())
+
+
+def test_a_pattern_that_cannot_search_its_target_in_time_does_not_fit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The pattern is the model's, so it is searched in a child bounded in time,
+    # as every pattern is (ADR-0024's bounded text searches).
+    monkeypatch.setattr(text_search, "SEARCH_SECONDS", 0.5)
+    slow = with_first_check(
+        {
+            "check": "text_in_target",
+            "target_meaning": "a" * 32 + "b",
+            "pattern": "(a+)+$",
+        }
+    )
+    client = FakeClient(reply(parsed=slow), reply(parsed=slow))
+
+    planned, _ = plan_with(checkout(tmp_path / "qa"), client)
+
+    assert planned.misfits == (
+        (
+            'expect[0]: the pattern "(a+)+$" could not be searched in its own '
+            "target within 0.5 s"
+        ),
+    )
 
 
 def plan_through_the_adapter(spec: Spec) -> Planned:
