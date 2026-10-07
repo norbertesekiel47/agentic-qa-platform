@@ -52,7 +52,7 @@ OPEN_ROWS: dict[tuple[str, int], tuple[PlannedCheck, ...]] = {
         PlannedCheck(check="text_in_target", target_meaning=COMMENTS, text="reader"),
     ),
     ("publish-article", 0): (
-        ANY_ARTICLE,
+        PlannedCheck(check="url_matches", pattern="(?i)/article/benchmarks-we-trust-"),
         PlannedCheck(
             check="text_in_target", target_meaning=TITLE, text="Benchmarks we trust"
         ),
