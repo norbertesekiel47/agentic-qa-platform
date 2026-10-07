@@ -279,7 +279,9 @@ def test_probe_request_errors_never_copy_app_text(
     assert ("POST", "/write/save") not in app.seen
     assert "fake-sensitive" not in repr(result)
     assert all(
-        "fake-sensitive" not in p.read_text() for p in done.record.path.iterdir()
+        "fake-sensitive" not in p.read_text()
+        for p in done.record.path.rglob("*")
+        if p.is_file()
     )
 
 

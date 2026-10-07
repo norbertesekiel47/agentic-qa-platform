@@ -9,6 +9,7 @@ import base64
 import contextlib
 import hashlib
 import threading
+import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import FrozenInstanceError, dataclass, field, fields, is_dataclass
@@ -19,16 +20,15 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from aqa_core.compiled import ByCss, ByRole, Target
 from aqa_core.schema import AriaRole
-from aqa_runner import browser_session, settling
+from aqa_runner import settling
 from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.document_origins import PolicyEvent, PolicyEventError
 from aqa_runner.locators import Resolved
-from aqa_runner.redaction import Redactor
 from aqa_runner.settling import Settled, Window
 from playwright.async_api import ElementHandle, Error, Page, async_playwright
 
 from packages.runner.tests import document_fixtures
-from packages.runner.tests.document_fixtures import Sites, serving_sites, to
+from packages.runner.tests.document_fixtures import Sites, serving_sites, to, until
 from packages.runner.tests.egress_fixtures import egress_proxy
 
 # The fixture site's pages, by name: each says what the test makes it do.
@@ -765,34 +765,17 @@ def response_paths(window: Window) -> list[tuple[str, str, int]]:
     ]
 
 
-class RetainedTraffic(settling.Traffic):
-    async def responses(self, window: Window) -> list[settling.Exchange]:
-        exchanges = []
-        for request in self._response_requests[window]:
-            response = await request.response()
-            assert response is not None
-            exchanges.append(
-                settling.Exchange(request.method, request.url, response.status)
-            )
-        return exchanges
+async def answered(session: BrowserSession, window: Window) -> list[settling.Exchange]:
+    """The method, URL and status of each request in `window`'s network log
+    that has a response."""
+    return [
+        settling.Exchange(entry.method, entry.url, entry.status)
+        for entry in await session.network_log(window)
+        if entry.status is not None
+    ]
 
 
-@pytest.fixture
-def retained_traffic(monkeypatch: pytest.MonkeyPatch) -> list[RetainedTraffic]:
-    traffic: list[RetainedTraffic] = []
-
-    def observed(page: Page, redactor: Redactor) -> RetainedTraffic:
-        seen = RetainedTraffic(page, redactor)
-        traffic.append(seen)
-        return seen
-
-    monkeypatch.setattr(browser_session, "Traffic", observed)
-    return traffic
-
-
-def test_a_response_joins_the_window_of_its_request(
-    site: Site, retained_traffic: list[RetainedTraffic]
-) -> None:
+def test_a_response_joins_the_window_of_its_request(site: Site) -> None:
     async def scenario() -> tuple[Window, Window]:
         async with browsing(site) as session:
             await session.navigate(f"{site.origin}/page/load")
@@ -803,8 +786,8 @@ def test_a_response_joins_the_window_of_its_request(
             following = await session.press("a")
             site.release("data")
             assert await session.settle(first) == "idle"
-            assert await retained_traffic[0].responses(first) == first.responses.kept
-            assert await retained_traffic[0].responses(following) == []
+            assert await answered(session, first) == first.responses.kept
+            assert await answered(session, following) == []
             return first, following
 
     first, following = asyncio.run(scenario())
@@ -859,9 +842,7 @@ def test_traffic_keeps_every_window_it_opened(site: Site) -> None:
     assert plain_data(windows)
 
 
-def test_response_records_keep_the_first_hundred_and_count_all(
-    site: Site, retained_traffic: list[RetainedTraffic]
-) -> None:
+def test_response_records_keep_the_first_hundred_and_count_all(site: Site) -> None:
     async def scenario() -> Window:
         async with browsing(site) as session:
             await session.navigate(f"{site.origin}/page/actions")
@@ -869,7 +850,7 @@ def test_response_records_keep_the_first_hundred_and_count_all(
             await session.page.evaluate("""async () => {
                 for (let index = 0; index < 101; index++) await fetch('/did/' + index);
             }""")
-            retained = await retained_traffic[0].responses(window)
+            retained = await answered(session, window)
             assert len(retained) == 100
             assert retained == window.responses.kept
             return window
@@ -934,3 +915,70 @@ def test_a_recorded_exchange_is_immutable(
     assert window.responses.kept == [
         settling.Exchange("GET", "https://app.example.test/orders", 200)
     ]
+
+
+def test_a_network_log_waits_on_no_open_request(site: Site) -> None:
+    # A request held before its headers, a fetch whose headers came and whose
+    # body is held, an event stream, a refused request and a finished one. (A
+    # fetch answered 204 doesn't finish: Playwright reports it failed,
+    # net::ERR_ABORTED, after its response; measured on 1.63.)
+    async def scenario() -> tuple[dict[str, tuple[int | None, int | None]], float]:
+        async with browsing(site) as session:
+            await session.navigate(f"{site.origin}/page/actions")
+            window = await session.press("a")
+            await session.page.evaluate("""() => {
+                fetch('/held/never');
+                fetch('/events/body');
+                window.events = new EventSource('/events/stream');
+                fetch('http://refused.test/x').catch(() => null);
+                fetch('/page/actions');
+            }""")
+            await arrives(window, 5)
+            # Only the held request and the held body are still open.
+            await until(lambda: len(window.open) <= 2)
+            started = time.monotonic()
+            log = await session.network_log(window)
+            took = time.monotonic() - started
+            return {urlsplit(e.url).path: (e.status, e.size) for e in log}, took
+
+    log, took = asyncio.run(scenario())
+
+    assert log == {
+        "/held/never": (None, None),
+        "/events/body": (200, None),
+        "/events/stream": (200, None),
+        "/x": (None, None),
+        "/page/actions": (
+            200,
+            len(f"<!doctype html><title>page</title>{PAGES['actions']}"),
+        ),
+    }
+    assert took < settling.SIZE_SECONDS
+
+
+def test_a_network_log_keeps_each_kept_request_in_start_order_with_its_own_status(
+    site: Site,
+) -> None:
+    # The first request answers after the second; a third comes after the
+    # first log was read, which holds what the window held then.
+    async def scenario() -> tuple[list[tuple[str, int | None]], ...]:
+        async with browsing(site) as session:
+            await session.navigate(f"{site.origin}/page/actions")
+            window = await session.press("a")
+            await session.page.evaluate("fetch('/held/slow'); fetch('/missing')")
+            await arrives(window, 2)
+            await until(lambda: len(window.responses.kept) == 1)
+            first = await session.network_log(window)
+            site.release("slow")
+            await session.page.evaluate("fetch('/did/later')")
+            assert await session.settle(window) == "idle"
+            second = await session.network_log(window)
+            return tuple(
+                [(urlsplit(e.url).path, e.status) for e in log]
+                for log in (first, second)
+            )
+
+    first, second = asyncio.run(scenario())
+
+    assert first == [("/held/slow", None), ("/missing", 404)]
+    assert second == [("/held/slow", 204), ("/missing", 404), ("/did/later", 204)]

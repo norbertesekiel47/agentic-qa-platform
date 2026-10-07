@@ -55,6 +55,11 @@ class Redactor:
             token.groups for _, paths in self._paths for path in paths for token in path
         )
 
+    @property
+    def empty(self) -> bool:
+        """Whether this scan holds no secret: the run binds none."""
+        return not self._secrets
+
     def covers(self, secret: BoundSecret) -> bool:
         """Whether both this secret's name and its value belong to this scan."""
         return any(
@@ -62,13 +67,15 @@ class Redactor:
             for held in self._secrets
         )
 
+    def finds(self, text: str) -> bool:
+        """Whether `text` holds any spelling a scan replaces, changing
+        nothing: the check for text already scanned, in which a marker can
+        still spell a value (its secret's name, say)."""
+        return bool(self._matches(text))
+
     def redact(self, text: str, *, limit: int | None = None) -> Redacted:
         """Replace matches in any case, then apply the optional character limit."""
-        transitions = {groups: _transitions(groups, text) for groups in self._groups}
-        matches: dict[int, tuple[int, str]] = {}
-        for marker, paths in self._paths:
-            for start, end in _endpoints(paths, transitions, len(text)).items():
-                matches.setdefault(start, (end, marker))
+        matches = self._matches(text)
         pieces: list[str] = []
         cursor = 0
         for start in sorted(matches):
@@ -78,6 +85,15 @@ class Redactor:
                 cursor = end
         pieces.append(text[cursor:])
         return Redacted("".join(pieces)[:limit], _key=_SCANNED)
+
+    def _matches(self, text: str) -> dict[int, tuple[int, str]]:
+        """Each match's start, with its end and its marker."""
+        transitions = {groups: _transitions(groups, text) for groups in self._groups}
+        matches: dict[int, tuple[int, str]] = {}
+        for marker, paths in self._paths:
+            for start, end in _endpoints(paths, transitions, len(text)).items():
+                matches.setdefault(start, (end, marker))
+        return matches
 
 
 def _transitions(groups: _Groups, text: str) -> dict[int, list[int]]:

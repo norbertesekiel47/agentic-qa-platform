@@ -9,7 +9,7 @@ import html
 import json
 import re
 import threading
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from http import HTTPStatus
@@ -347,6 +347,16 @@ async def browsing(
         ) as session,
     ):
         yield session
+
+
+async def until(condition: Callable[[], bool]) -> None:
+    """Wait up to 5 s until `condition` holds, as the browser reports what
+    a test is waiting for."""
+    for _ in range(250):
+        if condition():
+            return
+        await asyncio.sleep(0.02)
+    pytest.fail("what the test waited for never happened")
 
 
 def to(url: str) -> str:
