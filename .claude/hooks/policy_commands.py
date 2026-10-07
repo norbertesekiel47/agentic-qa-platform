@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from typing import Any
 
 from policy_rules import DIRECT_INSTALLER, DIRECT_MUTATOR, DIRECT_WRITE
@@ -100,6 +101,8 @@ _TOKEN = re.compile(
     r"""\\.|\$'(?:\\.|[^'\\])*'|'[^']*'|"(?:\\.|[^"\\])*"|<<-?[ \t]*(['"]?)(\w+)"""
 )
 _CLOSING_LINE = re.compile(r"^[ \t]*(\w+)[ \t]*$", re.MULTILINE)
+# Slicing a delimiter at this many indexed lengths costs about one trie walk.
+_MOST_PROBES = 8
 
 
 class _Closings:
@@ -110,21 +113,39 @@ class _Closings:
         self.ends: dict[str, list[int]] = {}
         for line in _CLOSING_LINE.finditer(command):
             self.ends.setdefault(line[1], []).append(line.end())
+        self.lengths = sorted({len(word) for word in self.ends})
         self.seen: dict[str, int] = {}
         self.prefixes: dict[str, Any] | None = None
 
     def after(self, word: str, newline: int) -> int | None:
         """The end of the first line after `newline` that holds just `word`."""
-        ends = self.ends.get(word, [])
-        index = self.seen.get(word, 0)
+        ends = self.ends.get(word)
+        if ends is None:
+            return None
+        index = start = self.seen.get(word, 0)
         while index < len(ends) and ends[index] <= newline:
             index += 1
-        self.seen[word] = index
+        if index != start:
+            self.seen[word] = index
         return ends[index] if index < len(ends) else None
 
     def longest(self, word: str, newline: int) -> tuple[int, int] | None:
         """The longest prefix of `word` that closes after `newline`, as its length
-        and closing line's end: an unquoted `<<ABC` closes on a later `AB` line."""
+        and closing line's end: an unquoted `<<ABC` closes on a later `AB` line.
+        Only an indexed word can close, so `word` is cut at each indexed length up
+        to its own, longest first; past _MOST_PROBES of them, a trie finds the
+        indexed words that start it."""
+        count = bisect_right(self.lengths, len(word))
+        if count > _MOST_PROBES:
+            return self._walk(word, newline)
+        for length in reversed(self.lengths[:count]):
+            end = self.after(word[:length], newline)
+            if end is not None:
+                return length, end
+        return None
+
+    def _walk(self, word: str, newline: int) -> tuple[int, int] | None:
+        """`longest` through a trie of the indexed words, built on first need."""
         if self.prefixes is None:
             self.prefixes = {}
             for candidate in self.ends:
