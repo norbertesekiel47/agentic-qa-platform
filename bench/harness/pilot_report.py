@@ -47,21 +47,21 @@ class Pair:
 
 @dataclass(frozen=True)
 class Report:
-    """A command's run: its source, inputs, pairs and how it ended."""
+    """A command's run: its source and inputs, then its pairs and ending."""
 
     app: str
     commit: str
     tree: str
-    unchanged: bool
     repeat: int
     selected: tuple[str, ...]
     # Every other spec the QA project holds, by ID; no default, so a caller
     # can't leave it out.
     omitted: tuple[str, ...]
     hashes: Mapping[str, str]
-    pairs: tuple[Pair, ...]
-    halt: Halt | None
-    switched_back: bool
+    pairs: tuple[Pair, ...] = ()
+    halt: Halt | None = None
+    unchanged: bool = True
+    switched_back: bool = False
 
 
 def classify(attempt: Attempt, settings: Invariants) -> Kind:
@@ -218,9 +218,9 @@ def document(report: Report, scripts: Mapping[str, CompiledScript]) -> Json:
     }
 
 
-def receipt(pair: Pair, entry: Entry, script: CompiledScript) -> Json:
+def receipt(case: str | None, spec: str, entry: Entry, script: CompiledScript) -> Json:
     """One attempt with its case and spec, as the command saves it at once."""
-    return {"case": pair.case, "spec": pair.spec} | _entry(entry, script)
+    return {"case": case, "spec": spec} | _entry(entry, script)
 
 
 def write_once(path: Path, document: Mapping[str, object]) -> None:
