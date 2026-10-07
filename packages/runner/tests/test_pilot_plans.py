@@ -12,7 +12,7 @@ import pytest
 import typer.testing
 import yaml
 from aqa_cli.main import app
-from aqa_core.coverage_plan import CoveragePlan, plan_hash, uncovered
+from aqa_core.coverage_plan import CoveragePlan, PlannedCheck, plan_hash, uncovered
 from aqa_core.project import load_project
 from aqa_runner.anthropic_client import AnthropicClient
 from aqa_runner.coverage_plan import make_plan, plan_request
@@ -28,22 +28,69 @@ pytestmark = pytest.mark.usefixtures("reset_tracing")
 
 Cassette = Callable[..., AbstractContextManager[Recording]]
 
-# The expectations whose recorded checks the reviewed oracle accepts. The other
-# four of the 23 are open (criterion 4 of #41; ADR-0024's B2b amendment) and
-# are not tested here: read-article 0 and 5, publish-article 0, post-comment 1.
-OPEN_ROWS = {
-    "read-article": {0, 5},
-    "publish-article": {0},
-    "post-comment": {1},
+# The expectations whose recorded checks the reviewed oracle refuses (#41's
+# criterion 4; ADR-0024's B2b amendment), each with exactly the checks its
+# recording holds, so a re-record or an oracle change that touches one fails
+# (#161). Every other expectation's recorded checks are tested against the
+# oracle.
+TITLE = "the article title heading at the top of the article page"
+ANY_ARTICLE = PlannedCheck(check="url_matches", pattern="(?i)/article/")
+COMMENTS = "the list of comments under the article"
+OPEN_ROWS: dict[tuple[str, int], tuple[PlannedCheck, ...]] = {
+    ("read-article", 0): (
+        ANY_ARTICLE,
+        PlannedCheck(
+            check="text_in_target", target_meaning=TITLE, text="Testing without flakes"
+        ),
+    ),
+    ("read-article", 5): (
+        PlannedCheck(
+            check="text_in_target",
+            target_meaning=COMMENTS,
+            text="Deterministic data helped us most.",
+        ),
+        PlannedCheck(check="text_in_target", target_meaning=COMMENTS, text="reader"),
+    ),
+    ("publish-article", 0): (
+        ANY_ARTICLE,
+        PlannedCheck(
+            check="text_in_target", target_meaning=TITLE, text="Benchmarks we trust"
+        ),
+    ),
+    ("post-comment", 1): (
+        PlannedCheck(
+            check="text_in_target",
+            target_meaning="the author name on the newly added comment, "
+            "the one just posted by the signed-in reader",
+            text="reader",
+        ),
+    ),
 }
 
 
 def accepted_rows_problems(pilot: str, plan: CoveragePlan) -> tuple[str, ...]:
-    open_rows = tuple(f"{pilot}/{index}:" for index in OPEN_ROWS.get(pilot, ()))
+    open_rows = tuple(f"{row}/{index}:" for row, index in OPEN_ROWS if row == pilot)
     return tuple(
         problem
         for problem in plan_problems(pilot, plan)
         if not problem.startswith(open_rows)
+    )
+
+
+@pytest.mark.parametrize(("pilot", "index"), OPEN_ROWS)
+def test_each_open_row_replays_exactly_its_recorded_checks(
+    cassette: Cassette, pilot: str, index: int
+) -> None:
+    project = load_project(QA)
+    router = ModelRouter.from_config(project.config, AnthropicClient)
+
+    with cassette(f"plan_{pilot}", replay_only=True):
+        planned = asyncio.run(make_plan(router, project.specs[pilot]))
+
+    assert planned.plan is not None
+    assert planned.plan.expectations[index].checks == OPEN_ROWS[pilot, index]
+    assert f"{pilot}/{index}: establishing checks differ" in plan_problems(
+        pilot, planned.plan
     )
 
 
