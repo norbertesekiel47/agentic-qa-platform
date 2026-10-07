@@ -70,7 +70,7 @@ Last updated: 2026-10-07 (each step's evidence in the local run record, #50 B; s
 ```
 
 **Explore (ADR-0024).** An explore run works in four phases:
-1. **Coverage plan.** Before the browser opens, one structured call turns the spec into a coverage plan (DATA_MODEL §7). The plan stays frozen for the whole run, and an expectation it can't cover ends the run as a spec error.
+1. **Coverage plan.** Before the browser opens, one structured call turns the spec into a coverage plan (DATA_MODEL §7); a plan that can't be used is asked for once more, with its reasons (ADR-0024's #161 amendment). The plan stays frozen for the whole run, and an expectation it can't cover ends the run as a spec error.
 2. **Navigation.** The navigator makes stateless steps. Each step is a fresh request built from graph state: the plan, a compact action log, the model's notes from its last step and the current accessibility snapshot. The conversation never grows and is never edited.
 3. **Path selection.** When the planned checks pass, the agent names the steps that form the path. The path must keep any condition the plan requires, such as a reload.
 4. **Confirmation replay.** The compiled path runs once as a strict replay after the reset hook. The file is written only if every assertion and every invariant the spec keeps enabled passes. A path with side-effect steps whose spec has no reset hook is written unconfirmed instead, unless the person running explore passes `--confirm-repeat` to allow one confirmation that repeats them.

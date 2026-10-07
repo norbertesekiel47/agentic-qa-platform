@@ -171,7 +171,7 @@ Exit codes:
 | `0` | All passed. For `explore`: compiled, including an unconfirmed script, which prints a warning |
 | `1` | Expectation violated (bug). Never returned by `explore` |
 | `2` | Heal proposals pending |
-| `3` | Inconclusive. For `explore`: gave up (attempts or budget exhausted, a model refusal with no fallback, a coverage plan that didn't parse, was cut off at the output bound or doesn't fit its spec, or a flaky confirmation) |
+| `3` | Inconclusive. For `explore`: gave up (attempts or budget exhausted, a model refusal with no fallback, a coverage plan that didn't parse or was cut off at the output bound, a plan that still can't be used when asked for once more (it doesn't fit its spec, or a check's target holds what the check asserts), or a flaky confirmation) |
 | `4` | Non-resumable run |
 | `5` | Spec error: the spec, its compiled script or the project config is invalid, a required setting is missing (a start origin, the provider's key), an expectation has no establishing check, or the compiled script has a step or check M1 can't run (a `press` of more than one key after modifiers or `visible_unoccluded` with `in_viewport: false`), a probe assertion or baseline names a probe the spec doesn't declare or a `fill_secret` step names a secret the spec doesn't reference (ADR-0024 and its #46 amendment; DATA_MODEL §7, "Checked by the loader") |
 | `6` | Policy: egress blocked. The page requested a host that is neither an allowed origin, a subresource host nor expected-blocked. No finding; the run record names the refused host (ADR-0026) |

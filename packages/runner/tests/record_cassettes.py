@@ -297,8 +297,20 @@ class DeferredPersister:
             FilesystemPersister.save_cassette(*self.pending)
 
 
+def plan_case(name: str) -> bool:
+    return name == "coverage_plan" or name.startswith("plan_")
+
+
+def answers_expected(name: str, calls: tuple[CostRecord, ...]) -> int:
+    """One answer per case. A plan case holds two when its plan couldn't be
+    used and make_plan asked once more: two answers, both `ok` (ADR-0024's
+    #161 amendment). A refusal and its fallback stay rejected."""
+    retried = plan_case(name) and [call.status for call in calls] == ["ok", "ok"]
+    return 2 if retried else 1
+
+
 async def ask(name: str, router: ModelRouter, spec: Spec) -> tuple[Routed, bool]:
-    if name == "coverage_plan" or name.startswith("plan_"):
+    if plan_case(name):
         planned = await make_plan(router, spec)
         if planned.plan is None or planned.misfits:
             return planned.routed, False
@@ -350,7 +362,8 @@ def finish(
         state.finalization_failures.append("accounting_error")
         state.outcome = "accounting_error"
     if state.outcome == "accepted" and (
-        len(capture.responses) != 1 or not capture.responses[0]["request_id"]
+        len(capture.responses) != answers_expected(name, state.calls)
+        or not all(response["request_id"] for response in capture.responses)
     ):
         state.outcome = "rejected"
     if capture.withheld:
@@ -423,7 +436,7 @@ def capture_attempt(
         key,
         vcr.before_record_response,
         attempt,
-        name in {"coverage_plan", "structured_output"} or name.startswith("plan_"),
+        plan_case(name) or name == "structured_output",
     )
     vcr.before_record_response = capture.response
     persister = DeferredPersister()

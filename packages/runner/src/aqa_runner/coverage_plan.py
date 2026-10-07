@@ -7,11 +7,14 @@ import re
 from dataclasses import dataclass
 from typing import cast
 
-from aqa_core.coverage_plan import CoveragePlan, misfits
+from aqa_core.coverage_plan import CoveragePlan, PlannedCheck, misfits
 from aqa_core.spec import UNHASHED_KEYS, Spec
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from aqa_core.text import has_text
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
-from aqa_runner.model_router import ModelRouter, Routed
+from aqa_runner import text_search
+from aqa_runner.model_router import ModelCallError, ModelRouter, Routed
+from aqa_runner.text_search import SearchTimeoutError, pattern_matches
 
 # The plan's system prompt. Static: a change to it changes every plan request,
 # so the plan's cassettes are re-recorded or edited with it (TESTING §4).
@@ -140,24 +143,111 @@ def plan_request(spec: Spec) -> list[BaseMessage]:
 @dataclass(frozen=True)
 class Planned:
     """What one plan call gave: the plan the model wrote, if it parsed; why it
-    doesn't fit its spec, if it doesn't; and the routed call, with a cost
-    record for every response that arrived. No plan means the model refused
-    or its answer didn't parse, and `routed.outcome` says which."""
+    can't be used, if it can't (it doesn't fit its spec, or a check's target
+    holds what the check asserts); and the routed call, with a cost record for
+    every response that arrived. No plan means the model refused or its answer
+    didn't parse, and `routed.outcome` says which."""
 
     plan: CoveragePlan | None
     misfits: tuple[str, ...]
     routed: Routed
 
 
-async def make_plan(router: ModelRouter, spec: Spec) -> Planned:
-    """Ask the navigator role's model for `spec`'s coverage plan: one call in
-    explore mode, with the plan as its response format and no tools, so no
-    tool choice at all (ADR-0007 amendment). A refusal falls back as the
-    router does; a call that gets no response raises as the router does."""
-    routed = await router.call(
-        "navigator", "explore", plan_request(spec), schema=CoveragePlan
+# Why a target may not hold what its check asserts, as each such line ends.
+_TARGET_RULE = (
+    "a target says what the element is for and where it sits, never what it says"
+)
+
+
+async def _circular(index: int, check: PlannedCheck) -> str | None:
+    """Why `check`'s target holds what the check asserts, if it does: finding
+    the element by the text it must verify would turn a wrong text into a
+    missing element, drift instead of a failure (ADR-0025). A literal is
+    found as the check finds it, whole words ignoring case; a pattern is the
+    model's regex, so it is searched in a child bounded in time, as every
+    pattern is (ADR-0024's bounded text searches)."""
+    meaning = check.target_meaning
+    if meaning is None:
+        return None
+    if check.text is not None:
+        found = has_text(meaning, check.text)
+        what = f'holds "{check.text}", the text'
+    elif check.pattern is not None:
+        try:
+            found = await pattern_matches(check.pattern, meaning)
+        except SearchTimeoutError:
+            return (
+                f'expect[{index}]: the pattern "{check.pattern}" could not be '
+                f"searched in its own target within {text_search.SEARCH_SECONDS} s"
+            )
+        what = f'matches "{check.pattern}", the pattern'
+    else:
+        return None
+    if not found:
+        return None
+    return (
+        f'expect[{index}]: the target "{meaning}" {what} its check asserts: '
+        f"{_TARGET_RULE}"
     )
+
+
+async def _judge(routed: Routed, spec: Spec) -> Planned:
+    """The plan `routed` gave, with every reason it can't be used: `misfits`,
+    then each check whose target holds what it asserts."""
     # The router parses against the schema it was given.
     plan = cast(CoveragePlan | None, routed.parsed)
-    found = () if plan is None else misfits(plan, spec.frontmatter)
+    if plan is None:
+        return Planned(None, (), routed)
+    circular = [
+        await _circular(planned.expect_index, check)
+        for planned in plan.expectations
+        for check in planned.checks
+    ]
+    found = (*misfits(plan, spec.frontmatter), *filter(None, circular))
     return Planned(plan, found, routed)
+
+
+# What the one retry says after the plan that can't be used.
+_CORRECTION = (
+    "That plan can't be used:\n{reasons}\n"
+    "Write the whole plan again: fix each of these, and keep the rest as it is."
+)
+
+
+async def make_plan(router: ModelRouter, spec: Spec) -> Planned:
+    """Ask the navigator role's model for `spec`'s coverage plan: a call in
+    explore mode, with the plan as its response format and no tools, so no
+    tool choice at all (ADR-0007 amendment). A plan that can't be used is
+    asked for once more, with the plan as the model's answer and every reason
+    after it, and the second answer is final (ADR-0024's #161 amendment). A
+    refusal falls back as the router does; a call that gets no response raises
+    as the router does, and a retry's failure raises `ModelCallError` holding
+    the first answer's record too."""
+    request = plan_request(spec)
+    first = await _judge(
+        await router.call("navigator", "explore", request, schema=CoveragePlan),
+        spec,
+    )
+    if first.plan is None or not first.misfits:
+        return first
+    retry = [
+        *request,
+        AIMessage(content=first.plan.model_dump_json(exclude_none=True)),
+        HumanMessage(
+            content=_CORRECTION.format(
+                reasons="\n".join(f"- {reason}" for reason in first.misfits)
+            )
+        ),
+    ]
+    billed = first.routed.calls
+    try:
+        routed = await router.call("navigator", "explore", retry, schema=CoveragePlan)
+    except ModelCallError as error:
+        raise ModelCallError((*billed, *error.records)) from error.__cause__
+    except Exception as error:
+        # The first answer was billed: its record must outlive the failure.
+        raise ModelCallError(billed) from error
+    return await _judge(
+        Routed(routed.message, routed.parsed, routed.outcome, (*billed, *routed.calls)),
+        spec,
+    )
