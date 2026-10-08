@@ -467,13 +467,15 @@ def ask(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-navigator-tests")
     request = [SystemMessage(INSTRUCTIONS), HumanMessage("<log>\n</log>")]
     try:
-        return asyncio.run(
+        reply = asyncio.run(
             AnthropicClient(model, None).call(request, navigator_tools(), None)
         )
     finally:
         server.shutdown()
         server.server_close()
         serving.join()
+    assert len(sent) == 1, "the request went to the loopback stand-in"
+    return reply
 
 
 def keywords(schema: dict[str, Any]) -> Iterator[str]:
