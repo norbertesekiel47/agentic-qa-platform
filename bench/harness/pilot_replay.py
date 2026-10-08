@@ -23,6 +23,7 @@ from aqa_runner.egress import (
 )
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.executor import RunResult, RunSetup, replay
+from aqa_runner.locator_generation import register_identity_engine
 from aqa_runner.run_record import RunRecord
 from aqa_runner.runner_requests import runner_request
 from pilot_inputs import PilotInput
@@ -207,8 +208,9 @@ async def _attempt(pilot: PilotInput, record: RunRecord, state: _State) -> RunRe
         _owned(async_playwright(), "driver", state) as playwright,
         _owned(EgressProxy(gate), "proxy", state) as proxy,
     ):
-        state.browser = "unknown"
         try:
+            await register_identity_engine(playwright)
+            state.browser = "unknown"
             result = await replay(
                 pilot.script,
                 setup,

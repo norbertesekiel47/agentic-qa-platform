@@ -18,13 +18,14 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anthropic
-from aqa_core.compiled import Press
+from aqa_core.compiled import ByRole, Locator, Press
 from aqa_core.project import contracts_fingerprint, load_project
 from aqa_runner import browser_session
 from aqa_runner.anthropic_client import AnthropicClient
-from aqa_runner.egress import EgressGate
+from aqa_runner.egress import EgressGate, EgressPolicy
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.invariants import Observers
+from aqa_runner.locator_generation import Seen, generate_for_action
 from aqa_runner.model_router import ModelRouter
 from aqa_runner.run_record import RunRecord
 from langchain_anthropic import ChatAnthropic
@@ -35,7 +36,7 @@ from pilot_replay import (
     ObservedAttempt,
     replay_pilot,
 )
-from playwright.async_api import async_playwright
+from playwright.async_api import Page, async_playwright
 
 PAGE = "<!doctype html><h1>Title</h1><form method=post action=/submit><button>Send</button></form>"
 COMPILED = """{
@@ -202,7 +203,7 @@ class PilotReplayTests(unittest.TestCase):
 
         @asynccontextmanager
         async def driver() -> AsyncIterator[MagicMock]:
-            yield MagicMock()
+            yield MagicMock(selectors=MagicMock(register=AsyncMock()))
 
         page = MagicMock(goto=goto)
         context = MagicMock(add_init_script=AsyncMock(), new_page=AsyncMock())
@@ -232,6 +233,78 @@ class PilotReplayTests(unittest.TestCase):
         await self.entered.wait()
         attempt.cancel()
         return attempt
+
+    def engine_probe(self) -> list[Locator]:
+        original = Observers.watch
+        generated: list[Locator] = []
+
+        async def watch(page: Page, policy: EgressPolicy) -> Observers:
+            await page.set_content(PAGE)
+            button = await page.get_by_role("button", name="Send").element_handle()
+            if button is None:
+                self.fail("the disposable Send button is missing")
+            try:
+                locators = await generate_for_action(
+                    page, Seen(button, role="button", name="Send")
+                )
+                generated.append(locators[0])
+            finally:
+                await button.dispose()
+            return await original(page, policy)
+
+        self.enterContext(patch.object(Observers, "watch", watch))
+        return generated
+
+    def test_pilot_adapter_registers_engines_before_its_first_context(self) -> None:
+        generated = self.engine_probe()
+        pilot = self.pilot()
+        first, second = (self.observed(self.replay(pilot)) for _ in range(2))
+        self.assertEqual(generated, [ByRole(role="button", name="Send")] * 2)
+        self.assertNotEqual(first.run_id, second.run_id)
+        self.assertEqual(
+            (first.observation.outcome, second.observation.outcome),
+            ("passed", "passed"),
+        )
+        self.assertEqual(self.server.log, ["POST /reset", "GET /"] * 2)
+
+    def test_pilot_engine_probe_refuses_missing_registration(self) -> None:
+        self.engine_probe()
+        with (
+            patch("pilot_replay.register_identity_engine", AsyncMock()),
+            self.assertRaisesRegex(RuntimeError, "register_identity_engine"),
+        ):
+            self.replay(self.pilot())
+        self.assertEqual(self.server.log, ["POST /reset"])
+
+    def test_registration_failure_preserves_its_cause_and_closes_owned_resources(
+        self,
+    ) -> None:
+        fault = RuntimeError("fake registration failure")
+        launch = AsyncMock(side_effect=AssertionError("a browser was launched"))
+        pilot = self.pilot()
+        self.enterContext(patch.object(browser_session, "launch", launch))
+        self.enterContext(
+            patch("pilot_replay.register_identity_engine", AsyncMock(side_effect=fault))
+        )
+        for failed, cleanup, resources in (
+            (False, "completed", "closed"),
+            (True, "failed", "unknown"),
+        ):
+            with self.subTest(cleanup=cleanup):
+                if failed:
+                    self.fail_proxy_exits()
+                with self.assertRaises(RuntimeError) as raised:
+                    self.replay(pilot)
+                self.assertIs(raised.exception, fault)
+                expected = {
+                    "outcome": "unexpected",
+                    "reset_completed": True,
+                    "cleanup": cleanup,
+                    "resources": resources,
+                }
+                self.assertEqual(self.receipt("attempt.json"), OUTCOME | expected)
+        self.assertEqual(launch.call_count, 0)
+        self.assertEqual(self.server.log, ["POST /reset"] * 2)
 
     def test_reset_runs_on_the_attempt_gate_before_the_first_navigation(self) -> None:
         self.config["base_url"] = f"http://pilot.test:{self.server.server_address[1]}"
