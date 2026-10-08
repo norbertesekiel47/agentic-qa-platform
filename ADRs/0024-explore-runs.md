@@ -554,7 +554,9 @@ Explore writes two phases into one run record, decides exit 4 and non-resumabili
   - *Options:* (1) `disable_parallel_tool_use` in the adapter; (2) run the first call and report the rest.
   - *Chosen: 2.* (1) changes every tool request the adapter sends, and every cassette with it.
   - A call to a tool the navigator lacks, or arguments that don't fit, is `Unrunnable` with our own text. Pydantic's message is never used, since it quotes the arguments the model wrote.
+  - A reply whose routed outcome isn't `ok`, or that holds a tool call LangChain couldn't parse (`invalid_tool_calls`), runs nothing: it is `Unrunnable` too, so a refused reply's call never runs.
 
 ### Consequences
 - The instructions and the tools' descriptions are part of every navigator request: a change to either changes the cassettes the fixture explore records.
 - The tools' results reach `<results>` as the attempt's tools write them, through `redaction.error_text` (#50's ruling for every navigator tool error), and are scanned again here.
+- Only `<` is escaped, so a page that writes `&lt;` reads the same as one that writes `<`. The model can't tell them apart; nothing can close a block either way, and escaping `&` too would add another spelling to scan around.
