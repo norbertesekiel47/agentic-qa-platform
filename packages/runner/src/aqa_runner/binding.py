@@ -146,20 +146,40 @@ async def held_region(
         return
     [element] = regions
     token = secrets.token_hex(16)
-    holding = False
     try:
         await _query(element, f"hold:{token}")
-        holding = True
         yield HeldRegion(element, root, contract, token)
-    finally:
+    except Exception as error:
+        await _release(element, token, error)
+        raise
+    except BaseException as error:
+        # A cancellation stays the raised exception, so asyncio still sees one.
         try:
-            if holding:
-                await _query(element, f"drop:{token}")
-        except Error:
-            # A removed document destroys its utility world and the held map.
-            if page.is_closed():
-                raise
+            await _release(element, token, None)
+        except BaseException as failure:
+            raise error from failure
+        raise
+    await _release(element, token, None)
+
+
+async def _release(element: ElementHandle, token: str, cause: Exception | None) -> None:
+    try:
+        await _query(element, f"drop:{token}")
+    except BaseException as error:
+        error.__cause__ = cause
+        await _dispose(element, error)
+        raise
+    await _dispose(element, cause)
+
+
+async def _dispose(element: ElementHandle, earlier: BaseException | None) -> None:
+    try:
         await element.dispose()
+    except BaseException as error:
+        if isinstance(earlier, Exception | None):
+            raise error from earlier
+        # A cancelled drop stays raised with its own cause; this failure is its context.
+        raise earlier from earlier.__cause__
 
 
 @dataclass(frozen=True)
