@@ -12,6 +12,7 @@ from aqa_core.coverage_plan import (
     PlannedExpectation,
     misfits,
     plan_hash,
+    planned_checks,
     uncovered,
 )
 from aqa_core.spec import SpecContext, SpecFrontmatter
@@ -465,3 +466,46 @@ def test_a_url_pattern_must_compile_as_a_python_regex(check: str, pattern: str) 
     fields = {**OF_EACH_TYPE[check], "url_pattern": pattern}
     with pytest.raises(ValidationError, match="is not a Python regex"):
         planned(check, **fields)
+
+
+def test_planned_checks_number_every_check_in_plan_order_from_a1() -> None:
+    url = {"check": "url_matches", "pattern": "/article/"}
+    title = {
+        "check": "text_in_target",
+        "target_meaning": "the article's title",
+        "text": "Hello",
+    }
+    count = {"check": "probe_equals", "probe": "favorites", "value": 1}
+    numbered = planned_checks(
+        CoveragePlan.model_validate(
+            {
+                "expectations": [
+                    {
+                        "expect_index": 0,
+                        "subject": "the article page",
+                        "claim": "is shown with its title",
+                        "checks": [url, title],
+                    },
+                    {
+                        "expect_index": 1,
+                        "subject": "the banner",
+                        "claim": "is brand blue",
+                        "unsupported": {"reason": "a colour", "needs": "pixel_diff"},
+                    },
+                    {
+                        "expect_index": 2,
+                        "subject": "the favorites",
+                        "claim": "count 1",
+                        "checks": [count],
+                    },
+                ],
+                "requires": [],
+            }
+        )
+    )
+
+    assert numbered == {
+        "a1": (0, PlannedCheck.model_validate(url)),
+        "a2": (0, PlannedCheck.model_validate(title)),
+        "a3": (2, PlannedCheck.model_validate(count)),
+    }
