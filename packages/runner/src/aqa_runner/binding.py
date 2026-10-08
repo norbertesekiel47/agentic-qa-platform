@@ -33,7 +33,7 @@ SCRIPT = """(() => {
     const children = native("Element", "children");
     const classList = native("Element", "classList");
     const childElementCount = native("Element", "childElementCount");
-    const within = native("Element", "querySelectorAll");
+    const inElement = native("Element", "querySelectorAll");
     const checkVisibility = native("Element", "checkVisibility");
     const getBoundingClientRect = native("Element", "getBoundingClientRect");
     const inDocument = native("Document", "querySelectorAll");
@@ -42,11 +42,13 @@ SCRIPT = """(() => {
     const count = (scope, css) => {
         const query = scope === document ? inDocument : inShadow;
         let n = query(scope, css).length;
-        for (const e of query(scope, "*")) if (shadowRoot(e)) n += count(shadowRoot(e), css);
+        for (const e of query(scope, "*")) {
+            const tree = shadowRoot(e); if (tree) n += count(tree, css);
+        }
         return n;
     };
     const valid = (r, region, root) => r && isConnected(r) && ownerDocument(r) === document &&
-        ownerDocument(root) === document && ![r, ...within(r, "*")].some(shadowRoot) &&
+        ownerDocument(root) === document && ![r, ...inElement(r, "*")].some(shadowRoot) &&
         count(document, region) === 1 && inDocument(document, region)[0] === r;
     const visible = (e) => {
         const style = getComputedStyle(e);
@@ -98,7 +100,7 @@ SCRIPT = """(() => {
         const r = held.get(token);
         if (!valid(r, region, root)) return [];
         if (verb === "in") return contains(r, root) ? [root] : [];
-        const parts = [...within(r, part)];
+        const parts = [...inElement(r, part)];
         if (verb === "parts") return parts;
         if (verb === "absent") return parts.some(visible) ? [] : [r];
         return verb === "bound" && parts.length === 1 && parts[0] === root &&

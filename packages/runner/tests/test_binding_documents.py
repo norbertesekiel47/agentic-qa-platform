@@ -68,7 +68,12 @@ def test_an_open_shadow_root_gained_inside_the_region_is_never_absent() -> None:
         (BANNER, "div.banner", '<span class="counter">2</span><slot></slot>'),
         ("<x-host></x-host>", "x-host", BANNER),
     ],
-    ids=["beside a shadow part", "beside an empty host", "as the host", "in a shadow"],
+    ids=[
+        "beside a shadow part",
+        "beside an empty host",
+        "as the host",
+        "inside a shadow tree",
+    ],
 )
 def test_a_region_with_an_open_shadow_host_never_binds_its_part(
     body: str, host: str, shadow: str
@@ -218,6 +223,7 @@ CONTENTS = (
     '<form class="counter" style="display:contents">'
     '<select name="childNodes" hidden></select>'
 )
+CHILD_NODES = "document.querySelector('.counter').childNodes"
 NAMED_TYPE = (
     '<span class="counter" style="display:contents">'
     '<form><input name="nodeType" type="hidden">shown</form></span>'
@@ -225,19 +231,25 @@ NAMED_TYPE = (
 
 
 @pytest.mark.parametrize(
-    ("part", "contract"),
+    ("part", "contract", "clobbered", "control"),
     [
-        (f"{CONTENTS}shown</form>", SHOWN),
-        (f"{CONTENTS}<b>shown</b></form>", SHOWN),
-        (NAMED_TYPE, COUNT),
+        (f"{CONTENTS}shown</form>", SHOWN, CHILD_NODES, "SELECT"),
+        (f"{CONTENTS}<b>shown</b></form>", SHOWN, CHILD_NODES, "SELECT"),
+        (
+            NAMED_TYPE,
+            COUNT,
+            "document.querySelector('.counter form').nodeType",
+            "INPUT",
+        ),
     ],
     ids=["childNodes over text", "childNodes over an element", "nodeType of a child"],
 )
 def test_named_controls_cannot_hide_a_visible_contents_part(
-    part: str, contract: Contract
+    part: str, contract: Contract, clobbered: str, control: str
 ) -> None:
     async def scenario(session: BrowserSession) -> None:
         await put(session, f'<div class="banner">{part}</div>')
+        assert await session.page.evaluate(f"{clobbered}.nodeName") == control
         async with held_region(session.page, contract) as held:
             assert held is not None
             assert await held.absent() is False
