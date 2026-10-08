@@ -7,6 +7,7 @@ any of them is a spec error (exit 5). Then one call on the navigator role
 writes the plan into the run record, with every response's cost record."""
 
 import asyncio
+import contextlib
 import os
 import re
 from collections.abc import Mapping, Sequence
@@ -38,9 +39,17 @@ EXIT_CODES: Final[Mapping[Failure, int]] = {
     "no_response": 11,
     "record_error": 15,
 }
-# What the run record says: "planned", a failure, or "error", a fault of
-# ours, which is raised as it is.
-Outcome = Literal["planned", "error"] | Failure
+# What the run record says: "planned", a failure, "error", a fault of ours,
+# or "interrupted", Ctrl-C or a cancellation while planning. The last two are
+# raised as they came.
+Outcome = Literal["planned", "error", "interrupted"] | Failure
+
+# Said when an interrupted run's record can't be written: the interruption
+# goes on regardless, and the error's own text stays out, as for exit 15.
+_UNWRITTEN: Final = (
+    "interrupted: the run record could not be written, so what the plan call "
+    "was billed is not kept"
+)
 
 # Characters that would move the cursor, recolour the terminal or reorder text
 # when printed: C0 and C1 controls, line and paragraph separators, and every
@@ -131,6 +140,30 @@ def _write_record(
     return record.path
 
 
+def _write_interrupted(
+    record: RunRecord, spec: Spec, router: ModelRouter, interruption: BaseException
+) -> None:
+    """Write an interrupted run's plan.json: no plan, and the cost record of
+    every response the router received before Ctrl-C or the cancellation.
+    The caller raises the interruption afterwards, so a record that can't be
+    written gets a note and a warning, never an error of its own."""
+    try:
+        _write_record(
+            record,
+            spec,
+            outcome="interrupted",
+            calls=router.completed_calls,
+            plan=None,
+            reasons=("planning interrupted",),
+        )
+    except OSError, ValueError:
+        # What `RunRecord.write` raises: a filesystem failure, or a write the
+        # record refuses. Neither may replace the interruption.
+        interruption.add_note(_UNWRITTEN)
+        with contextlib.suppress(OSError):  # stderr itself may be gone
+            typer.echo(_UNWRITTEN, err=True)
+
+
 def _cut_off(planned: Planned) -> bool:
     """Whether the answer stopped at the output bound (the adapter leaves
     such an answer unparsed, and the router records it `invalid`)."""
@@ -202,6 +235,11 @@ def explore(
         _stop("spec_error", str(spec_path), "nothing was planned", (str(error),))
     try:
         planned = asyncio.run(make_plan(router, spec))
+    except (asyncio.CancelledError, KeyboardInterrupt) as interruption:
+        # Keep what was billed, then let the interruption go on as it came:
+        # Ctrl-C still exits 130, and a cancellation still propagates.
+        _write_interrupted(record, spec, router, interruption)
+        raise
     except ModelCallError as error:
         # An answer before the failed call was billed (a refusal before its
         # fallback, or a plan before its one retry): keep its record.
