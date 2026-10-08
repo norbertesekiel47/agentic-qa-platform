@@ -139,15 +139,16 @@ class _Replay:
 
     @property
     def withheld(self) -> bool:
-        return bool(self.secrets)
+        """Whether the result keeps no page text a scan can't clear: the run
+        binds a test secret, filled or not (ADR-0026's #50 D amendment)."""
+        return not self.redactor.empty
 
     def reason(self, error: _Raised) -> str:
         """`error` as a failed step's or an unevaluated assertion's reason
         (`_owned`, then `error_text`: scanned for every bound value, the
-        ones the script never fills too). When the script fills a test
-        secret, Playwright's message is withheld for the whole run, the steps before the first
-        fill included: a page handed a value can throw it back in any later
-        error, and the run never needs to know which steps came after it."""
+        ones the script never fills too). When the run binds a test secret,
+        Playwright's message is withheld for the whole run: a page can throw
+        a value back split into pieces no scan finds."""
         return error_text(
             error, self.redactor, ours=_owned(error), withheld=self.withheld
         )
@@ -203,8 +204,9 @@ class RunResult:
     """A replay: every step that ran and every assertion, each with its
     outcome, and the run's; the egress gate's infrastructure events and the
     session's policy events (the first 100). Invariants are judged for every
-    run, errored ones included. Egress blocks keep hosts in memory until
-    #50 redacts what #53 prints or saves."""
+    run, errored ones included; in a run that binds a test secret they keep
+    no text. Egress blocks keep hosts and ports in memory: what #53 prints
+    or saves of them is its preflight's."""
 
     run_id: str
     outcome: RunOutcome
@@ -239,9 +241,10 @@ async def replay(
     Before the browser starts, it binds the test secrets the spec references
     (`aqa_runner.bound_secrets.bound_secrets`): a missing value raises
     `MissingSecretError`, Playwright's protocol logging `SecretLoggedError`,
-    and a binding the run doesn't allow `SpecError`. When the script fills a
-    test secret, every reason keeps nothing of Playwright's messages, for the
-    whole run (`_Replay.reason`).
+    and a binding the run doesn't allow `SpecError`. When the run binds a
+    test secret, filled or not, every reason keeps nothing of Playwright's
+    messages (`_Replay.reason`), the invariants keep no text, and
+    `egress.json` names no host or port (ADR-0026's #50 D amendment).
 
     After every step it keeps, it saves the step's evidence in the record,
     which scans what it writes with the session's redactor
@@ -334,8 +337,11 @@ async def replay(
         and all(assertion.outcome == "pass" for assertion in assertions)
         and all(invariant.outcome != "violated" for invariant in invariants)
     )
+    # A saved file, so its own predicate: whatever a caller may one day let
+    # the returned result keep, a bound run's record names no host or port.
+    secret_bound = not redactor.empty
     if blocks.blocked:
-        _write_egress_record(record, blocks, withheld=run.withheld)
+        _write_egress_record(record, blocks, withheld=secret_bound)
     return RunResult(
         record.run_id,
         "errored" if errored else "passed" if passed else "failed",
@@ -848,10 +854,10 @@ def _owned(error: _Raised) -> str | None:
     policy event's names only an origin, a fill_secret refusal only the
     secret, origins and field), or its fixed diagnostic for a probe's; None
     for Playwright's, which the page may have chosen. `error_text` presents
-    either, and withholds the rest of Playwright's message in a run whose
-    script fills a test secret: a page handed a value can throw it back from
-    any later call, encoded as it likes (ADR-0026's fill_secret
-    amendment)."""
+    either, and withholds the rest of Playwright's message in a run that
+    binds a test secret: a page can throw a value back from any call,
+    encoded or split as it likes (ADR-0026's fill_secret and #50 D
+    amendments)."""
     for kind, reason in (
         (probes.ProbeError, "the probe could not be read"),
         (
@@ -892,14 +898,10 @@ def _scanned(event: InfrastructureEvent, redactor: Redactor) -> InfrastructureEv
 def _write_egress_record(
     record: RunRecord, blocks: EgressBlocks, *, withheld: bool
 ) -> None:
-    """Write `egress.json`. When the record refuses it (a bound value its
-    scan can't remove), the counts-only form, which holds a subset of it;
-    when that is refused too, nothing: the result still names the block."""
-    try:
+    """Write `egress.json`, or nothing when the record refuses it (a bound
+    value its scan can't remove): the result still names the block."""
+    with suppress(RefusedWriteError):
         record.write("egress.json", _egress_record(blocks, withheld=withheld))
-    except RefusedWriteError:
-        with suppress(RefusedWriteError):
-            record.write("egress.json", _egress_record(blocks, withheld=True))
 
 
 def _egress_record(blocks: EgressBlocks, *, withheld: bool) -> dict[str, object]:

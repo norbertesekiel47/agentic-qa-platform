@@ -463,11 +463,11 @@ def test_each_fill_secret_step_fills_the_secret_it_names(
 
 
 @pytest.mark.usefixtures("with_the_value")
-def test_a_run_that_fills_no_secret_keeps_playwrights_reasons(
+def test_a_run_that_binds_but_fills_no_secret_withholds_playwrights_reasons(
     app: App, tmp_path: Path
 ) -> None:
-    # The spec references a secret, but the script fills none: the page is
-    # never handed a value, so a failed step's reason is as any run's.
+    # The spec references a secret and the script fills none: the reason
+    # still keeps only Playwright's class and call (ADR-0026's #50 D amendment).
     script = compiled(
         [
             {
@@ -485,7 +485,10 @@ def test_a_run_that_fills_no_secret_keeps_playwrights_reasons(
     step = run(app, tmp_path, script, spec=spec).result.steps[1]
 
     assert step.outcome == "failed"
-    assert (step.error or "").startswith("Error: ElementHandle.evaluate: Error: ")
+    assert step.error == (
+        "Error: ElementHandle.evaluate: the rest is withheld, since the page was "
+        "handed a test secret"
+    )
 
 
 @pytest.mark.parametrize(
