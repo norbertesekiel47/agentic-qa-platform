@@ -10,7 +10,7 @@ import json
 import socket
 import subprocess
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
@@ -24,15 +24,17 @@ from aqa_core.project import SpecError, contracts_fingerprint, parse_compiled
 from aqa_runner import settling
 from aqa_runner.anthropic_client import AnthropicClient
 from aqa_runner.egress import EgressGate, InfrastructureEvent
-from aqa_runner.egress_proxy import EgressBlocks, EgressProxy
+from aqa_runner.egress_proxy import EgressBlocks, EgressProxy, PhaseTraffic, RefusedHost
 from aqa_runner.executor import RunResult, RunSetup, replay
 from aqa_runner.invariants import InvariantResult
 from aqa_runner.model_router import ModelRouter
 from aqa_runner.run_record import RunRecord
+from aqa_runner.sandbox import Chromium, launch
 from langchain_anthropic import ChatAnthropic
-from playwright.async_api import BrowserType, async_playwright
+from playwright.async_api import Browser, BrowserType, async_playwright
 
-from packages.runner.tests.egress_fixtures import gate
+from packages.runner.tests.document_fixtures import until
+from packages.runner.tests.egress_fixtures import gate, get, unused_port
 from packages.runner.tests.executor_fixtures import (
     FORM_STEPS,
     FORM_TARGETS,
@@ -554,12 +556,14 @@ def replay_with(
     tmp_path: Path,
     script: CompiledScript,
     prepare: Callable[[EgressProxy, EgressGate], None],
+    *,
+    also: tuple[str, ...] = (),
 ) -> tuple[RunResult, RunRecord, int]:
     """Replay `script` from the app's start page as `run` does, once
-    `prepare` has had the run's proxy and gate; with the proxy's first
-    port."""
+    `prepare` has had the run's proxy and gate, with the origins in `also`
+    allowed too; with the proxy's first port."""
     config = ProjectConfig()
-    run_gate = gate(allowed=(app.origin,))
+    run_gate = gate(allowed=(app.origin, *also), private=also)
     record = RunRecord.create(tmp_path)
     app.record = record.path
     setup = RunSetup(
@@ -611,4 +615,145 @@ def test_emfile_on_accept_after_the_first_navigation_makes_the_replay_an_infrast
     )
     assert (result.steps[0].seq, result.steps[0].outcome) == (0, "completed")
     assert [assertion.outcome for assertion in result.assertions] == ["not_evaluated"]
+    assert result.error_code is None
+
+
+def while_closing(
+    monkeypatch: pytest.MonkeyPatch, act: Callable[[], Awaitable[None]]
+) -> None:
+    """Have each browser the session launches run `act` as its close
+    begins, before the browser goes."""
+
+    async def launching(chromium: Chromium) -> Browser:
+        browser = await launch(chromium)
+        close = browser.close
+
+        async def closing(reason: str | None = None) -> None:
+            await act()
+            await close(reason=reason)
+
+        monkeypatch.setattr(browser, "close", closing)
+        return browser
+
+    monkeypatch.setattr("aqa_runner.browser_session.launch", launching)
+
+
+def through(proxy: EgressProxy, request: bytes) -> None:
+    """Send `request` to the proxy's open phase on a connection of its own
+    that this leaves open, as a browser's late request would."""
+    browser = socket.create_connection(("127.0.0.1", port_of(proxy)))
+    browser.sendall(request)
+    LATE.append(browser)
+
+
+LATE: list[socket.socket] = []
+
+
+@pytest.fixture(autouse=True)
+def late_connections_closed() -> Iterator[None]:
+    yield
+    while LATE:
+        LATE.pop().close()
+
+
+def test_a_listener_retired_while_the_browser_closes_leaves_the_replay_errored(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    accept = socket.socket.accept
+    runs: list[tuple[EgressProxy, EgressGate]] = []
+    closing: list[bool] = []
+
+    def prepare(proxy: EgressProxy, run_gate: EgressGate) -> None:
+        runs.append((proxy, run_gate))
+
+    async def retire() -> None:
+        proxy, run_gate = runs[0]
+        port = port_of(proxy)
+
+        def accepting(listener: socket.socket) -> tuple[socket.socket, object]:
+            if closing and listener.getsockname()[1] == port:
+                raise OSError(errno.EMFILE, "Too many open files")
+            return accept(listener)
+
+        closing.append(True)
+        monkeypatch.setattr(socket.socket, "accept", accepting)
+        through(proxy, b"")
+        await until(lambda: bool(run_gate.infrastructure_events))
+
+    while_closing(monkeypatch, retire)
+    script = compiled([{"seq": 1, "action": "reload", "side_effect": False}])
+
+    result, _, port = replay_with(app, tmp_path, script, prepare)
+
+    assert [(step.seq, step.outcome) for step in result.steps] == [
+        (0, "completed"),
+        (1, "completed"),
+    ]
+    assert [assertion.outcome for assertion in result.assertions] == ["pass"]
+    assert all(invariant.outcome == "held" for invariant in result.invariants)
+    assert result.outcome == "errored"
+    assert result.infrastructure_events == (
+        InfrastructureEvent("127.0.0.1", port, RETIRED),
+    )
+
+
+def test_an_egress_block_recorded_while_the_browser_closes_errs_the_replay_and_is_saved(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs: list[tuple[EgressProxy, EgressGate]] = []
+
+    def prepare(proxy: EgressProxy, run_gate: EgressGate) -> None:
+        runs.append((proxy, run_gate))
+
+    async def refused() -> None:
+        proxy, run_gate = runs[0]
+        through(proxy, get("http://evil.example.test/", close=True))
+        await until(lambda: bool(run_gate.refusals))
+
+    while_closing(monkeypatch, refused)
+    script = compiled([{"seq": 1, "action": "reload", "side_effect": False}])
+
+    result, record, _ = replay_with(app, tmp_path, script, prepare)
+
+    assert [assertion.outcome for assertion in result.assertions] == ["pass"]
+    assert result.outcome == "errored"
+    assert result.error_code == "egress_blocked"
+    assert result.egress_blocks == EgressBlocks(
+        (RefusedHost("evil.example.test", 80),), False
+    )
+    assert json.loads((record.path / "egress.json").read_text()) == {
+        "error_code": "egress_blocked",
+        "refused": [{"host": "evil.example.test", "port": 80}],
+        "overflowed": False,
+        "hosts_and_ports_withheld": False,
+    }
+
+
+def test_an_infrastructure_event_recorded_while_the_replays_phase_ends_errs_the_replay(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dead = unused_port()
+
+    def prepare(proxy: EgressProxy, run_gate: EgressGate) -> None:
+        end_phase = proxy.end_phase
+
+        async def ending() -> PhaseTraffic:
+            # One of the phase's own connections fails upstream as it ends.
+            through(proxy, get(f"http://127.0.0.1:{dead}/", close=True))
+            await until(lambda: bool(run_gate.infrastructure_events))
+            return await end_phase()
+
+        monkeypatch.setattr(proxy, "end_phase", ending)
+
+    script = compiled([{"seq": 1, "action": "reload", "side_effect": False}])
+
+    result, _, _ = replay_with(
+        app, tmp_path, script, prepare, also=(f"http://127.0.0.1:{dead}",)
+    )
+
+    assert [assertion.outcome for assertion in result.assertions] == ["pass"]
+    assert result.outcome == "errored"
+    assert [(event.host, event.port) for event in result.infrastructure_events] == [
+        ("127.0.0.1", dead)
+    ]
     assert result.error_code is None
