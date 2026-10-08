@@ -2,3 +2,12 @@
 base_url: "http://127.0.0.1:4100"   # the local stack (compose.yaml); `aqa explore --url` overrides it
 secrets:
   TEST_PASSWORD: { origins: [ start ], field: password }   # the seeded accounts' shared password (README.md)
+# Where these expectations' subjects bind (DATA_MODEL §9, ADR-0025): the article page
+# renders the author meta and the favorite button twice (REVIEW.md:62), so each part
+# names the one element inside the banner that may bind.
+subjects:
+  - { spec: read-article, expect: 1, region: div.banner, part: a.author, leaf: true }        # REVIEW.md:29
+  - { spec: read-article, expect: 2, region: div.banner, part: span.date, leaf: true }       # REVIEW.md:30
+  - { spec: publish-article, expect: 3, region: div.banner, part: a.author, leaf: true }     # REVIEW.md:56
+  - { spec: favorite-article, expect: 0, region: div.banner, part: "app-favorite-button > button" }  # REVIEW.md:47
+  - { spec: favorite-article, expect: 1, region: div.banner, part: span.counter, leaf: true }  # REVIEW.md:48

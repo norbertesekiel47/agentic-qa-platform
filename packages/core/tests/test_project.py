@@ -31,6 +31,7 @@ from aqa_core.project import (
     start_url,
     subject_contracts,
 )
+from aqa_core.schema import Contract
 from aqa_core.spec import Account, Spec
 
 PILOT = Path(__file__).resolve().parents[3] / "bench" / "apps" / "conduit" / "qa"
@@ -755,4 +756,27 @@ def test_the_contracts_fingerprint_changes_with_a_rows_index_region_part_or_leaf
     )
     assert contracts_fingerprint(ordered, "login") == contracts_fingerprint(
         reversed_rows, "login"
+    )
+
+
+def test_the_conduit_projects_subject_contracts_are_its_five_reviewed_rows() -> None:
+    config = load_project(PILOT).config
+    banner, button = "div.banner", "app-favorite-button > button"
+
+    assert [(row.spec, row.expect, row.contract) for row in config.subjects] == [
+        ("read-article", 1, Contract(region=banner, part="a.author", leaf=True)),
+        ("read-article", 2, Contract(region=banner, part="span.date", leaf=True)),
+        ("publish-article", 3, Contract(region=banner, part="a.author", leaf=True)),
+        ("favorite-article", 0, Contract(region=banner, part=button)),
+        (
+            "favorite-article",
+            1,
+            Contract(region=banner, part="span.counter", leaf=True),
+        ),
+    ]
+    assert {
+        spec: contracts_fingerprint(config, spec) for spec in ("login", "post-comment")
+    } == dict.fromkeys(
+        ("login", "post-comment"),
+        "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
     )
