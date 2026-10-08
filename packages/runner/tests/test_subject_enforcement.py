@@ -19,6 +19,7 @@ from aqa_core.project import (
     subject_contracts,
 )
 from aqa_core.schema import Contract
+from aqa_runner import locator_generation
 from aqa_runner.anthropic_client import AnthropicClient
 from aqa_runner.binding import Refused, binding_verdict
 from aqa_runner.browser_session import BrowserSession, open_browser_session
@@ -36,7 +37,7 @@ from aqa_runner.locators import Absent, Resolved, Unresolved, rendered_text, res
 from aqa_runner.model_router import ModelRouter
 from aqa_runner.run_record import RunRecord
 from langchain_anthropic import ChatAnthropic
-from playwright.async_api import ElementHandle, Page, async_playwright
+from playwright.async_api import ElementHandle, Error, JSHandle, Page, async_playwright
 from playwright.async_api import Locator as PlaywrightLocator
 
 from packages.runner.tests.egress_fixtures import egress_proxy, gate
@@ -72,6 +73,10 @@ MOVED = (
     'document.querySelector("div.container").classList.add("banner")'
 )
 SECOND = 'document.querySelector("div.container").classList.add("banner")'
+ADOPTED = (
+    'document.implementation.createHTMLDocument("").body'
+    '.appendChild(document.querySelector("div.banner"))'
+)
 
 
 def contracted(*locators: dict[str, Any], contract: Contract = COUNT) -> Target:
@@ -135,7 +140,9 @@ def test_an_escaping_scope_is_outside_the_region_and_a_missing_one_is_no_scope()
     )
 
 
-@pytest.mark.parametrize("change", [MOVED, SECOND], ids=["moved", "second"])
+@pytest.mark.parametrize(
+    "change", [MOVED, SECOND, ADOPTED], ids=["moved", "second", "adopted"]
+)
 def test_a_region_changed_between_counting_and_retrieving_is_drift(
     monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
@@ -227,6 +234,9 @@ def test_a_contracted_negative_check_is_absent_only_inside_its_present_region() 
         {"testid": "count", "scope": {"css": "div.article-meta"}},
     )
     escaping = contracted({"css": ":scope + div.container.page span.missing"})
+    escaping_scope = contracted(
+        {"css": "span.missing", "scope": {"css": ":scope + div.container.page"}}
+    )
     gone = HIDDEN.replace('class="banner"', 'class="hero"')
 
     async def scenario(page: Page) -> Resolved | Absent | Unresolved:
@@ -235,10 +245,15 @@ def test_a_contracted_negative_check_is_absent_only_inside_its_present_region() 
     async def shown(page: Page) -> Resolved | Absent | Unresolved:
         return await resolve(page, escaping, "negative_check")
 
+    async def outside(page: Page) -> Resolved | Absent | Unresolved:
+        return await resolve(page, escaping_scope, "negative_check")
+
     assert in_regions(scenario, HIDDEN) == Absent(0)
     assert in_regions(scenario, gone) == Unresolved(("no region", "no region"))
     # The escaping locator finds nothing, but the banner's count shows.
     assert in_regions(shown) == Unresolved(("not the part",))
+    # An empty scope outside the region proves nothing, though no part shows.
+    assert in_regions(outside, HIDDEN) == Unresolved(("outside region",))
 
 
 @pytest.mark.parametrize(
@@ -800,3 +815,78 @@ def test_a_count_whose_attributes_moved_to_the_lower_copy_never_resolves_to_it(
         return await session.resolve(target, "assertion")
 
     assert in_app(scenario) == Unresolved(("no match", "no match", "no match"))
+
+
+def test_a_contracted_look_releases_its_region_handle_on_every_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The look keeps a main-world handle on the held region as evidence:
+    # released after a binding, an absence, a raise and a drift, while the
+    # element a binding returns stays the caller's.
+    taken: list[JSHandle] = []
+    released: list[int] = []
+    adopt: list[bool] = []
+    evaluate_handle, dispose = ElementHandle.evaluate_handle, JSHandle.dispose
+    count = PlaywrightLocator.count
+
+    async def taking(self: ElementHandle, expression: str, arg: Any = None) -> JSHandle:
+        handle = await evaluate_handle(self, expression, arg)
+        taken.append(handle)
+        return handle
+
+    async def releasing(self: JSHandle) -> None:
+        released.append(id(self))
+        await dispose(self)
+
+    async def adopting(self: PlaywrightLocator) -> int:
+        found = await count(self)
+        if found == 0 and adopt:
+            adopt.clear()
+            await self.page.evaluate(f"() => {{ {ADOPTED} }}")
+        return found
+
+    monkeypatch.setattr(ElementHandle, "evaluate_handle", taking)
+    monkeypatch.setattr(JSHandle, "dispose", releasing)
+    monkeypatch.setattr(PlaywrightLocator, "count", adopting)
+    count_target = contracted({"css": "span.counter"})
+
+    async def scenario(page: Page) -> tuple[Any, ...]:
+        found = await resolve(page, count_target, "assertion")
+        assert isinstance(found, Resolved), found
+        kept = id(found.element) not in released
+        await page.evaluate(
+            "() => { document.querySelector('span.counter').hidden = true }"
+        )
+        absent = await resolve(page, count_target, "negative_check")
+        with pytest.raises(Error, match="while parsing css selector"):
+            await resolve(page, contracted({"css": "//input"}), "assertion")
+        adopt.append(True)
+        return kept, absent, await resolve(page, count_target, "negative_check")
+
+    kept, absent, adopted = in_regions(scenario)
+
+    assert (kept, absent, adopted) == (True, Absent(0), Unresolved(("no region",)))
+    assert len(taken) == 4
+    assert all(id(handle) in released for handle in taken)
+
+
+def test_a_page_that_breaks_the_subject_check_binds_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def broken(*_: object) -> None:
+        raise Error("fake page break")
+
+    monkeypatch.setattr(locator_generation, "binding_verdict", broken)
+
+    async def scenario(session: BrowserSession) -> tuple[Any, ...]:
+        uses = TargetUses(MEANING, checks_text=True, contract=COUNT)
+        await put(session, REGIONS)
+        count = await offered(session, "div.banner span.counter")
+        with pytest.raises(LocatorError) as refused:
+            await uses.add(session.page, count, "assertion")
+        monkeypatch.setattr(session.page, "is_closed", lambda: True)
+        with pytest.raises(Error, match="fake page break"):
+            await uses.add(session.page, count, "assertion")
+        return str(refused.value), uses.targets
+
+    assert in_session(scenario) == (f"{MEANING}: the page broke the subject check", ())
