@@ -127,7 +127,7 @@ async def _scoped(
     held: HeldRegion | None,
     *,
     hidden: bool = False,
-) -> PlaywrightLocator | Miss:
+) -> PlaywrightLocator | Literal["no scope", "outside region"]:
     """`locator`'s query inside its scope under `root`, or `"no scope"` when
     the scope doesn't resolve to exactly one element there. A scope is judged
     as an assertion's target is, so it never sees hidden elements by role.
@@ -298,35 +298,41 @@ async def resolve(
     return await _resolve_held(page, target, use, target.contract)
 
 
-# Whether a held region's node left the page's document. A region that
-# another document adopted makes Playwright refuse every utility-world query
-# on it with its own error, so this main-world read is the evidence that
-# makes that drift. A page that lies here only chooses between drift and the
-# error, never a binding or an absence.
-_LEFT = "(region) => !region.isConnected || region.ownerDocument !== document"
-
-
 async def _resolve_held(
     page: Page, target: Target, use: Use, contract: Contract
 ) -> Resolved | Absent | Unresolved:
     drift = Unresolved(tuple("no region" for _ in target.locators))
     found: Resolved | Absent | Unresolved = drift
+    kept: Resolved | Absent | Unresolved = drift
     region: JSHandle | None = None
     try:
         async with held_region(page, contract) as held:
             if held is not None:
                 region = await held.element.evaluate_handle("(element) => element")
                 found = await _resolve(page, target, use, held)
+        kept = found
     except Error:
-        if isinstance(found, Resolved):
-            await found.element.dispose()
-        if region is None or not await region.evaluate(_LEFT):
+        if region is None or not await _left(region):
             raise
-        return drift
     finally:
+        if isinstance(found, Resolved) and found is not kept:
+            await found.element.dispose()
         if region is not None:
             await region.dispose()
-    return found
+    return kept
+
+
+async def _left(region: JSHandle) -> bool:
+    """Whether a held region's node left the page's document. Playwright
+    refuses every utility-world query on a region another document adopted,
+    with its own error, so this main-world read is the evidence that makes
+    that drift. A page that lies here only chooses between drift and the
+    error, never a binding or an absence."""
+    return bool(
+        await region.evaluate(
+            "(region) => !region.isConnected || region.ownerDocument !== document"
+        )
+    )
 
 
 async def _resolve(
@@ -353,6 +359,7 @@ async def _absence(held: HeldRegion | None, misses: list[Miss]) -> Absent | Unre
     every-locator negatives reuse it)."""
     if held is None or await held.absent():
         return Absent(misses.index("no match"))
+    # The held region contains itself only while it is still the region.
     shown: Miss = "not the part" if await held.contains(held.element) else "no region"
     return Unresolved(tuple(shown if miss == "no match" else miss for miss in misses))
 

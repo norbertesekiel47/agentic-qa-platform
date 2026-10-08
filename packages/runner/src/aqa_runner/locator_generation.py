@@ -327,6 +327,12 @@ async def _unless_the_page_breaks[T](page: Page, check: Awaitable[T], broken: T)
         return broken
 
 
+def _alone(locator: Locator, contract: Contract | None) -> Target:
+    """`locator` as a candidate's one-locator target, inside `contract`'s
+    region when there is one."""
+    return Target(semantic=_CANDIDATE_MEANING, locators=(locator,), contract=contract)
+
+
 class _OutOfTriesError(Exception):
     """The trial spent its tries."""
 
@@ -361,10 +367,7 @@ class _Trial:
         self.tries -= 1
 
     async def _found(self, locator: Locator) -> bool:
-        target = Target(
-            semantic=_CANDIDATE_MEANING, locators=(locator,), contract=self.contract
-        )
-        found = await resolve(self.page, target, self.use)
+        found = await resolve(self.page, _alone(locator, self.contract), self.use)
         if not isinstance(found, Resolved):
             return False
         try:
@@ -730,14 +733,11 @@ class TargetUses:
     async def _admit(self, page: Page, used: Seen) -> None:
         """The subject's verdict on the element offered (`binding_verdict`).
         A page that breaks it binds nothing."""
-        try:
-            verdict = await binding_verdict(page, used.element, self.contract)
-        except Error:
-            if page.is_closed():
-                raise
-            raise LocatorError(
-                f"{self.meaning}: the page broke the subject check"
-            ) from None
+        verdict = await _unless_the_page_breaks(
+            page, binding_verdict(page, used.element, self.contract), None
+        )
+        if verdict is None:
+            raise LocatorError(f"{self.meaning}: the page broke the subject check")
         if isinstance(verdict, Refused):
             raise BindingRefusedError(self.meaning, verdict)
 
@@ -787,10 +787,7 @@ async def _look(page: Page, locator: Locator, contract: Contract | None) -> _Loo
     region selector's one match: that proves nothing absent."""
 
     async def look() -> _Look:
-        target = Target(
-            semantic=_CANDIDATE_MEANING, locators=(locator,), contract=contract
-        )
-        found = await resolve(page, target, "negative_check")
+        found = await resolve(page, _alone(locator, contract), "negative_check")
         if isinstance(found, Absent):
             return "absent"
         if isinstance(found, Resolved):
