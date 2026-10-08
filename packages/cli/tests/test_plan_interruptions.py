@@ -5,6 +5,7 @@ and the interruption goes on as it came: Ctrl-C exits 130 and a
 cancellation propagates."""
 
 import asyncio
+import io
 import os
 import selectors
 import signal
@@ -259,6 +260,29 @@ def test_persistence_failure_does_not_replace_interruption(
     assert UNWRITTEN in said
     [written] = (tmp_path / "qa" / ".aqa" / "runs").glob("*/plan.json")
     assert written.read_text() == "written first\n"
+
+
+def test_a_closed_stderr_does_not_replace_the_interruption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = project(tmp_path / "qa")
+
+    async def taken() -> Reply:
+        [run] = (tmp_path / "qa" / ".aqa" / "runs").iterdir()
+        (run / "plan.json").write_text("written first\n")
+        raise asyncio.CancelledError
+
+    sonnet = Scripted(answer(CIRCULAR), taken)
+    monkeypatch.setattr(explore_module, "AnthropicClient", lambda *_: sonnet)
+    closed = io.StringIO()
+    closed.close()
+    monkeypatch.setattr(sys, "stderr", closed)
+
+    # Called as the command's function: CliRunner itself fails on a closed stderr.
+    with pytest.raises(asyncio.CancelledError) as raised:
+        explore_module.explore(spec, plan_only=True)
+
+    assert raised.value.__notes__ == [UNWRITTEN]
 
 
 # The real command in a child process, its model scripted: the first answer
