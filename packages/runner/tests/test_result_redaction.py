@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 from aqa_core.config import ProjectConfig
+from aqa_core.spec import Spec
 from aqa_runner.executor import RunResult
 from aqa_runner.redaction import REASON_CHARS
 
@@ -185,9 +186,114 @@ def test_an_unfilled_bound_value_is_scanned_in_a_step_reason(
 
     step = result.steps[1]
     assert step.outcome == "failed"
-    # No fill_secret step, so Playwright's own reason shows: scanned.
-    assert step.error == "Error: ElementHandle.evaluate: Error: [SECRET:TEST_NAME]"
+    # A secret is bound, so Playwright's own message is withheld, filled or not.
+    assert step.error == (
+        "Error: ElementHandle.evaluate: the rest is withheld, since the page was "
+        "handed a test secret"
+    )
     assert OTHER_FAKE_VALUE not in everything(result)
+
+
+# A bound value, and the page's message holding it split by punctuation,
+# which no scan for its spellings finds.
+SPLIT_VALUE = "fakespl1tva1ue"
+SPLIT_MESSAGE = "fake.spl1t.va1ue"
+WITHHELD = "the rest is withheld, since the page was handed a test secret"
+
+
+def split_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, page: str, *, binds: bool
+) -> Spec:
+    """A spec starting at `page`, binding `SPLIT_VALUE`, never filled, or
+    binding nothing."""
+    if not binds:
+        return a_spec(tmp_path, ProjectConfig(), start_url=f"/page/{page}")
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", SPLIT_VALUE)
+    return secret_spec(tmp_path, start_url=f"/page/{page}")
+
+
+@pytest.mark.parametrize(
+    ("binds", "reason"),
+    [
+        (True, f"Error: ElementHandle.evaluate: {WITHHELD}"),
+        (False, f"Error: ElementHandle.evaluate: Error: {SPLIT_MESSAGE}"),
+    ],
+    ids=["binds", "binds-none"],
+)
+def test_a_bound_runs_step_reason_keeps_no_page_message(
+    app: App,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    binds: bool,
+    reason: str,
+) -> None:
+    monkeypatch.setitem(
+        PAGES,
+        "throws-split",
+        "<label>Name <input></label><script>document.execCommand = () => "
+        f'{{ throw new Error("{SPLIT_MESSAGE}"); }};</script>',
+    )
+    spec = split_spec(tmp_path, monkeypatch, "throws-split", binds=binds)
+    fill = {
+        "seq": 1,
+        "action": "fill",
+        "target": "name",
+        "value": "Ada",
+        "side_effect": False,
+    }
+
+    result = run(
+        app, tmp_path, compiled([fill], targets=FORM_TARGETS), spec=spec
+    ).result
+
+    assert [(step.outcome, step.error) for step in result.steps] == [
+        ("completed", None),
+        ("failed", reason),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("binds", "reason"),
+    [
+        (True, f"Error: ElementHandle.evaluate: {WITHHELD}"),
+        (False, f"Error: ElementHandle.evaluate: Error: {SPLIT_MESSAGE}"),
+    ],
+    ids=["binds", "binds-none"],
+)
+def test_a_bound_runs_assertion_reason_keeps_no_page_message(
+    app: App,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    binds: bool,
+    reason: str,
+) -> None:
+    monkeypatch.setitem(
+        PAGES,
+        "hides-split",
+        '<p id="said">said</p><script>document.getElementById("said")'
+        f'.getBoundingClientRect = () => {{ throw new Error("{SPLIT_MESSAGE}"); }};'
+        "</script>",
+    )
+    spec = split_spec(tmp_path, monkeypatch, "hides-split", binds=binds)
+    script = compiled(
+        [],
+        targets={"said": {"semantic": "what was said", "locators": [{"css": "#said"}]}},
+        assertions=[
+            {
+                "id": "a1",
+                "expect_index": 0,
+                "check": "text_in_target",
+                "target": "said",
+                "text": "said",
+            }
+        ],
+    )
+
+    result = run(app, tmp_path, script, spec=spec).result
+
+    assert [(a.outcome, a.error) for a in result.assertions] == [
+        ("not_evaluated", reason)
+    ]
 
 
 def test_an_assertion_reason_holding_a_bound_value_is_scanned(
@@ -300,9 +406,12 @@ def test_a_join_spanning_bound_value_is_scanned_in_a_run_with_no_fill(
         app, tmp_path, compiled([fill], targets=FORM_TARGETS), spec=spec
     ).result
 
-    # Playwright's message shows in a run that fills no secret: its class
-    # and call are the bound value, scanned across their join.
-    assert result.steps[1].error == "[SECRET:TEST_NAME]: Error: fake page text"
+    # A secret is bound, so Playwright's message is withheld; its class and
+    # call are the bound value, scanned across their join.
+    assert result.steps[1].error == (
+        "[SECRET:TEST_NAME]: the rest is withheld, since the page was handed a "
+        "test secret"
+    )
 
 
 def test_an_owned_message_is_one_line_of_at_most_the_reason_bound(
