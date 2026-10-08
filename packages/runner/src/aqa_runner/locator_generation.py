@@ -35,6 +35,7 @@ from aqa_core.text import normalize
 from playwright.async_api import ElementHandle, Error, Page, Playwright
 from pydantic import Field, StringConstraints, TypeAdapter, ValidationError
 
+from aqa_runner.binding import register_binding_engine
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.locators import Absent, Resolved, Use, resolve
 from aqa_runner.snapshot_refs import ELEMENT_REF, LINE
@@ -422,6 +423,7 @@ async def register_identity_engine(playwright: Playwright) -> None:
     await playwright.selectors.register(
         _IDENTITY, script=_IDENTITY_ENGINE, content_script=True
     )
+    await register_binding_engine(playwright)
 
 
 async def _held(page: Page, element: ElementHandle) -> str:
