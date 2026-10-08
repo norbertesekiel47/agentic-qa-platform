@@ -203,7 +203,6 @@ class Project:
 def _subject_problems(
     config: ProjectConfig, specs: Mapping[str, Spec], path: Path
 ) -> list[str]:
-    """Rows whose spec or expectation is absent from this project."""
     problems: list[str] = []
     for index, row in enumerate(config.subjects):
         prefix = f"{path}: subjects[{index}]"
