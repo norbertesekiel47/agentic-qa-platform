@@ -494,6 +494,19 @@ def test_a_subject_contract_row_takes_a_spec_an_expectation_a_region_a_part_and_
     }
 
 
+def test_a_region_of_exactly_200_characters_is_accepted(tmp_path: Path) -> None:
+    region = "div." + "a" * 196
+    data = {
+        "subjects": [
+            {"spec": "login", "expect": 0, "region": region, "part": "a.author"}
+        ]
+    }
+
+    config = load_config(write(tmp_path, json.dumps(data)))
+
+    assert config.subjects[0].region == region
+
+
 @pytest.mark.parametrize(
     "region",
     [
