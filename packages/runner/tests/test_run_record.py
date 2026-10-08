@@ -787,8 +787,17 @@ def test_each_cost_line_is_on_disk_when_cost_returns(
     assert first[0][1].count("\n") == 1
 
 
+def fail_the_check(_: str) -> None:
+    raise RuntimeError("a check that broke")
+
+
+@pytest.mark.parametrize(
+    ("check", "cause"),
+    [(refuse, RefusedWriteError), (fail_the_check, RuntimeError)],
+    ids=["refused", "broken-check"],
+)
 def test_a_cost_line_refused_by_its_check_raises_with_the_call_and_leaves_the_file(
-    tmp_path: Path,
+    tmp_path: Path, check: Callable[[str], None], cause: type[Exception]
 ) -> None:
     record = RunRecord.create(tmp_path)
     costs = record.path / "costs.jsonl"
@@ -797,14 +806,14 @@ def test_a_cost_line_refused_by_its_check_raises_with_the_call_and_leaves_the_fi
     call = priced(200)
 
     with pytest.raises(UnrecordedCostError) as raised:
-        record.cost(call, check=refuse)
+        record.cost(call, check=check)
 
     # The call is kept for the caller, never put in what the error says.
     assert raised.value.record is call
     assert raised.value.args == (
         "costs.jsonl: a priced call's cost line isn't on disk",
     )
-    assert isinstance(raised.value.__cause__, RefusedWriteError)
+    assert isinstance(raised.value.__cause__, cause)
     assert costs.read_bytes() == before
     # A refusal leaves the journal open.
     record.cost(priced(300))
