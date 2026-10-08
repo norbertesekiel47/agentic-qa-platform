@@ -365,7 +365,7 @@ class PilotReplayTests(unittest.TestCase):
     def test_the_operation_limit_cancels_once_and_keeps_its_cause(self) -> None:
         del self.spec["preconditions"]["reset"]
         self.config["budgets"] = {"minutes": 0.005}
-        calls, launch = self.fake_browser()
+        calls, _ = self.fake_browser()
         attempt = self.replay(self.pilot())
         self.assertEqual(
             self.failed(attempt), ("operation_timeout", "completed", "unknown")
@@ -378,7 +378,11 @@ class PilotReplayTests(unittest.TestCase):
         self.assertEqual(
             self.failed(attempt), ("operation_timeout", "failed", "unknown")
         )
-        launch.side_effect = OSError("fake evidence failure")
+        self.close_error = None
+        fault = OSError("fake evidence failure")
+        self.enterContext(
+            patch.object(Observers, "watch", AsyncMock(side_effect=fault))
+        )
         original = EgressProxy.__aexit__
 
         async def stalled(proxy: EgressProxy, *args: Any) -> None:
@@ -389,9 +393,11 @@ class PilotReplayTests(unittest.TestCase):
 
         with (
             patch.object(EgressProxy, "__aexit__", stalled),
-            self.assertRaisesRegex(OSError, "fake evidence failure"),
+            self.assertRaisesRegex(OSError, "fake evidence failure") as raised,
         ):
             self.replay(self.pilot())
+        self.assertIs(raised.exception, fault)
+        self.assertEqual(calls, {"close": 3, "close_cancelled": 0})
         unexpected = {"outcome": "unexpected"}
         self.assertEqual(self.receipt("attempt.json"), OUTCOME | unexpected | FAILED)
 
