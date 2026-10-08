@@ -6,6 +6,7 @@ listens on loopback."""
 
 import asyncio
 import contextlib
+import errno
 import socket
 import ssl
 import threading
@@ -17,6 +18,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import pytest
+from aqa_runner.egress import InfrastructureEvent
 from aqa_runner.egress_proxy import EgressProxy, PhaseTraffic
 
 from packages.runner.tests.document_fixtures import until
@@ -50,9 +52,13 @@ def post(url: str) -> bytes:
 class Watch:
     """The connections the proxy's listeners accepted, seen from the loop:
     their sockets and tasks, and the barriers a test can hold them at,
-    in stream conversion (`convert`) or in closing (`close`)."""
+    in stream conversion (`convert`) or in closing (`close`). While `fail`
+    is set, an accept on a watched listener raises it; `accepts` counts
+    every accept a watched listener tried."""
 
     ports: set[int] = field(default_factory=set)
+    fail: BaseException | None = None
+    accepts: int = 0
     peers: set[Any] = field(default_factory=set)
     sockets: list[socket.socket] = field(default_factory=list)
     tasks: list[asyncio.Task[Any]] = field(default_factory=list)
@@ -83,8 +89,12 @@ def watch(monkeypatch: pytest.MonkeyPatch) -> Watch:
     wait_closed = asyncio.StreamWriter.wait_closed
 
     def accepted(listener: socket.socket) -> tuple[socket.socket, Any]:
+        watched = listener.getsockname()[1] in seen.ports
+        seen.accepts += watched
+        if watched and seen.fail is not None:
+            raise seen.fail
         connection, address = accept(listener)
-        if listener.getsockname()[1] in seen.ports:
+        if watched:
             seen.sockets.append(connection)
             seen.peers.add(connection.getpeername())
         return connection, address
@@ -626,3 +636,111 @@ def test_a_keyboard_interrupt_in_the_proxys_body_joins_the_phase_before_it_propa
         socket.create_connection(("127.0.0.1", ports[0]), timeout=1)
     with pytest.raises(RuntimeError, match="async with"):
         _ = proxies[0].url
+
+
+# A retired listener (#162): the run's gate records it, whatever the phase.
+
+
+def retired(port: int, name: str) -> InfrastructureEvent:
+    return InfrastructureEvent(
+        "127.0.0.1",
+        port,
+        "the egress proxy stopped accepting the browser's connections after an "
+        f"accept error ({name})",
+    )
+
+
+async def retire(proxy: EgressProxy, watch: Watch, failure: BaseException) -> int:
+    """Retire the proxy's open listener with `failure` on its next accept,
+    and give its port."""
+    port = watch.watch(proxy)
+    watch.fail = failure
+    # A plain socket: the listener may close under an asyncio client's setup.
+    with socket.create_connection(("127.0.0.1", port)):
+        await until(lambda: watch.accepts > 0)
+        await turns(2)
+    return port
+
+
+@pytest.mark.parametrize(
+    ("failure", "name"),
+    [
+        (OSError(errno.EMFILE, "Too many open files"), "EMFILE"),
+        (OSError(errno.ENOBUFS, "No buffer space available"), "ENOBUFS"),
+        (ValueError("accept failed"), "ValueError"),
+        # An errno no name is known for, or none: the class names it.
+        (OSError(99999, "Unknown error"), "OSError"),
+        (OSError("accept failed"), "OSError"),
+    ],
+)
+def test_a_retired_listener_is_an_infrastructure_event_with_a_fixed_cause(
+    watch: Watch, failure: BaseException, name: str
+) -> None:
+    egress = gate(allowed=("http://127.0.0.1:9",))
+
+    async def scenario() -> int:
+        async with EgressProxy(egress) as proxy:
+            return await retire(proxy, watch, failure)
+
+    port = asyncio.run(scenario())
+
+    assert egress.infrastructure_events == [retired(port, name)]
+
+
+def test_a_retirement_is_kept_when_the_phase_had_no_uncertain_exchange(
+    watch: Watch,
+) -> None:
+    egress = gate(allowed=("http://127.0.0.1:9",))
+
+    async def scenario() -> tuple[int, PhaseTraffic]:
+        async with EgressProxy(egress) as proxy:
+            port = await retire(proxy, watch, OSError(errno.EMFILE, "EMFILE"))
+            return port, await proxy.end_phase()
+
+    port, traffic = asyncio.run(scenario())
+
+    assert traffic == PhaseTraffic(0, 0)
+    assert egress.infrastructure_events == [retired(port, "EMFILE")]
+
+
+def test_a_retirement_in_one_phase_is_still_recorded_after_the_next_phase_begins(
+    watch: Watch,
+) -> None:
+    async def scenario() -> tuple[int, int, bytes, list[InfrastructureEvent]]:
+        async with raw_upstream(ANSWER) as upstream:
+            start = f"http://127.0.0.1:{upstream.port}"
+            egress = gate(allowed=(start,))
+            async with EgressProxy(egress) as proxy:
+                first = await retire(proxy, watch, OSError(errno.EMFILE, "EMFILE"))
+                await proxy.end_phase()
+                watch.fail = None
+                await proxy.begin_phase()
+                answer = await exchange(proxy, get(f"{start}/"))
+                return first, port_of(proxy), answer, egress.infrastructure_events
+
+    first, second, answer, events = asyncio.run(scenario())
+
+    assert second != first
+    assert answer.endswith(b"\r\n\r\nok")
+    assert events == [retired(first, "EMFILE")]
+
+
+def test_a_retired_listener_is_never_retried(watch: Watch) -> None:
+    egress = gate(allowed=("http://127.0.0.1:9",))
+
+    async def scenario() -> int:
+        async with EgressProxy(egress) as proxy:
+            port = await retire(proxy, watch, OSError(errno.EMFILE, "EMFILE"))
+            watch.fail = None
+            # Its socket is closed: nothing listens there any more.
+            with pytest.raises(ConnectionRefusedError):
+                await asyncio.open_connection("127.0.0.1", port)
+            await asyncio.sleep(1.2)
+            with pytest.raises(ConnectionRefusedError):
+                await asyncio.open_connection("127.0.0.1", port)
+            return port
+
+    port = asyncio.run(scenario())
+
+    assert watch.accepts == 1
+    assert egress.infrastructure_events == [retired(port, "EMFILE")]
