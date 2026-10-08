@@ -366,10 +366,21 @@ def _parsed(name: str, arguments: dict[str, Any]) -> Call | Unrunnable:
 
 
 def decision(routed: Routed) -> Decision:
-    """The decision `routed`'s reply made. Nothing the model wrote in a call's
-    name or arguments is echoed."""
-    calls = routed.message.tool_calls
-    notes = routed.message.text
+    """The decision `routed`'s reply made. A reply that isn't `ok`, or that
+    holds a tool call LangChain couldn't parse, runs nothing. Nothing the
+    model wrote in a call's name or arguments is echoed; its text goes on as
+    the notes, which the next request scans and escapes."""
+    message = routed.message
+    calls = message.tool_calls
+    made = len(calls) + len(message.invalid_tool_calls)
+    unrun = max(made - 1, 0)
+    if routed.outcome != "ok":
+        problem = f"the reply's outcome was {routed.outcome}, so nothing ran"
+        return Decision(Unrunnable(problem), unrun, message.text)
+    if message.invalid_tool_calls:
+        problem = "a tool call in the reply was malformed, so nothing ran"
+        return Decision(Unrunnable(problem), unrun, message.text)
     if not calls:
-        return Decision(None, 0, notes)
-    return Decision(_parsed(calls[0]["name"], calls[0]["args"]), len(calls) - 1, notes)
+        return Decision(None, 0, message.text)
+    first = _parsed(calls[0]["name"], calls[0]["args"])
+    return Decision(first, unrun, message.text)

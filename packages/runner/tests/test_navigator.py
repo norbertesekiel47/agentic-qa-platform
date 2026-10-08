@@ -12,6 +12,7 @@ from typing import Any, cast
 
 import pytest
 from aqa_core.coverage_plan import CoveragePlan
+from aqa_core.model_costs import Status
 from aqa_core.model_roles import RoutedModel
 from aqa_core.project import (
     SecretDestination,
@@ -27,6 +28,7 @@ from aqa_runner.chat_client import Reply
 from aqa_runner.model_router import Routed
 from aqa_runner.navigator import (
     INSTRUCTIONS,
+    AssertCheck,
     Click,
     Decision,
     Navigate,
@@ -54,21 +56,23 @@ def secret(value: str, name: str = "FAKE") -> BoundSecret:
     )
 
 
-def spec_at(tmp_path: Path, account: str, *, subjects: str = "") -> Spec:
+def spec_at(tmp_path: Path, account: str | None, *, subjects: str = "") -> Spec:
     """A favorite-article spec with tags, a reset hook, a probe and a start
-    path carrying fake tokens in their queries, and a TEST_PASSWORD binding."""
+    path carrying fake tokens after a fragment or query, and a TEST_PASSWORD
+    binding."""
     (tmp_path / "config.yaml").write_text(
         "base_url: http://app.fake.test:4100\n"
         "secrets: { TEST_PASSWORD: { origins: [start], field: password } }\n" + subjects
     )
     path = tmp_path / "favorite-article.spec.md"
+    signs_in = "" if account is None else f"  account: {account}\n"
     path.write_text(
         "---\n"
         "id: favorite-article\n"
-        "goal: A signed-in reader favorites an article.\n"
+        "goal: A signed-in reader favorites an article in the café.\n"
         "preconditions:\n"
-        "  start_url: /article/fake-slug?token=fake-start-token\n"
-        f"  account: {account}\n"
+        "  start_url: /article/fake-slug#token=fake-start-token\n"
+        f"{signs_in}"
         "  reset: { http: 'POST /test-api/reset?token=fake-reset-token' }\n"
         "  probes: { favorites: 'GET /test-api/favorites?key=fake-probe-key' }\n"
         "steps:\n  - Open the article and favorite it\n"
@@ -143,7 +147,7 @@ def test_the_prefix_leaves_out_tags_the_reset_hook_and_the_start_origin(
 
     assert json.loads(prefix.spec) == {
         "id": "favorite-article",
-        "goal": "A signed-in reader favorites an article.",
+        "goal": "A signed-in reader favorites an article in the café.",
         "preconditions": {
             "start_url": "/article/fake-slug",
             "account": {"email": FAKE_EMAIL, "password": {"secret": "TEST_PASSWORD"}},
@@ -156,10 +160,9 @@ def test_the_prefix_leaves_out_tags_the_reset_hook_and_the_start_origin(
             {"text": "The article page is shown"},
         ],
     }
-    left_out = ("fake-tag-smoke", "reset", "token", "key=", "app.fake.test", "4100")
-    for text in left_out:
-        assert text not in prefix.spec
-        assert text not in prefix.plan
+    # Sorted keys and text as written keep the prefix the same bytes every run.
+    assert list(json.loads(prefix.spec)) == sorted(json.loads(prefix.spec))
+    assert "café" in prefix.spec
 
 
 def test_a_literal_password_is_a_spec_error_that_never_echoes_it(
@@ -192,6 +195,10 @@ def test_the_account_email_matching_a_bound_value_is_a_spec_error(
         "test secret, which never reaches the model: write { secret: NAME }"
     )
     assert FAKE_EMAIL not in str(raised.value)
+    unsigned = navigator_prefix(
+        spec_at(tmp_path, None), PLAN, {}, redactor=Redactor([secret(FAKE_EMAIL)])
+    )
+    assert "account" not in json.loads(unsigned.spec)["preconditions"]
 
 
 def test_the_prefix_states_each_listed_checks_contract_and_nothing_for_unlisted_ones(
@@ -204,6 +211,10 @@ def test_the_prefix_states_each_listed_checks_contract_and_nothing_for_unlisted_
         spec, PLAN, subject_contracts(config, "favorite-article"), redactor=NO_SECRETS
     )
 
+    expectations = json.loads(prefix.plan)["expectations"]
+    assert [sorted(shown) for shown in expectations] == [
+        ["checks", "claim", "expect_index", "subject"]
+    ] * 3
     assert plan_checks(prefix.plan) == {
         "a1": {
             "id": "a1",
@@ -245,9 +256,9 @@ PAGE = '- link "Sign in" [ref=e3]\n- heading "Fake article" [level=1] [ref=e4]'
 def turn(
     redactor: Redactor = NO_SECRETS,
     *,
-    log: tuple[str, ...] = ("1. click e3 as the header's sign-in link",),
+    log: tuple[str, ...] = ("1. click e3 as the sign-in link", "2. fill e7"),
     notes: str = "Signed in; next I favorite the article.",
-    results: tuple[str, ...] = ("clicked; the page is now /login",),
+    results: tuple[str, ...] = ("filled", "the page is now /login"),
     page: str = PAGE,
 ) -> Turn:
     return Turn(log=log, notes=notes, results=results, snapshot=redactor.redact(page))
@@ -305,9 +316,9 @@ def test_the_snapshot_reaches_the_model_inside_its_delimited_block(
     sent = navigator_request(prefix, turn(), redactor=NO_SECRETS)
 
     assert sent[2].content == (
-        "<log>\n1. click e3 as the header's sign-in link\n</log>\n\n"
+        "<log>\n1. click e3 as the sign-in link\n2. fill e7\n</log>\n\n"
         "<notes>\nSigned in; next I favorite the article.\n</notes>\n\n"
-        "<results>\nclicked; the page is now /login\n</results>\n\n"
+        "<results>\nfilled\nthe page is now /login\n</results>\n\n"
         "<snapshot>\n"
         '- link "Sign in" [ref=e3]\n- heading "Fake article" [level=1] [ref=e4]\n'
         "</snapshot>"
@@ -524,8 +535,8 @@ def test_only_the_first_tool_call_of_a_reply_runs(
     )
 
 
-def calling(name: str, **args: object) -> Routed:
-    call = {"name": name, "args": args, "id": "toolu_fake"}
+def calling(tool: str, /, **args: object) -> Routed:
+    call = {"name": tool, "args": args, "id": "toolu_fake"}
     return routed(AIMessage(content="", tool_calls=[call]))
 
 
@@ -543,12 +554,69 @@ def test_navigate_takes_only_a_path_on_the_start_origin(path: str) -> None:
     assert taken.call == Navigate(path="/login?next=/")
 
 
-def test_an_action_with_an_empty_meaning_is_not_run() -> None:
-    refused = "the call to click was not run: its arguments don't fit the tool"
+@pytest.mark.parametrize(
+    ("name", "args"),
+    [
+        *((action, {"ref": "e3", "meaning": " "}) for action in ("click", "fill")),
+        ("select", {"ref": "e3", "meaning": "", "option": "Blue"}),
+        ("fill_secret", {"ref": "e3", "meaning": " ", "name": "TEST_PASSWORD"}),
+        ("fill_secret", {"ref": "e3", "meaning": "the password field", "name": "pw"}),
+        ("finish", {"steps": ["1"]}),
+        ("assert_check", {"check_id": "a1"}),
+    ],
+)
+def test_arguments_that_do_not_fit_their_tool_run_nothing(
+    name: str, args: dict[str, object]
+) -> None:
+    if name == "fill":
+        args = {**args, "text": "fake text"}
+    refused = f"the call to {name} was not run: its arguments don't fit the tool"
 
-    assert decision(calling("click", ref="e3", meaning=" ")) == Decision(
-        call=Unrunnable(refused), unrun=0, notes=""
-    )
+    assert decision(calling(name, **args)).call == Unrunnable(refused)
+
+
+def test_assert_check_takes_a_null_ref_for_a_check_that_reads_no_element() -> None:
+    taken = decision(calling("assert_check", check_id="a2", ref=None))
+
+    assert taken.call == AssertCheck(check_id="a2", ref=None)
+
+
+@pytest.mark.parametrize(
+    ("message", "outcome", "expected"),
+    [
+        (AIMessage(content="Looking."), "ok", Decision(None, 0, "Looking.")),
+        (
+            calling("click", ref="e3", meaning="the sign-in link").message,
+            "refusal",
+            Decision(
+                Unrunnable("the reply's outcome was refusal, so nothing ran"), 0, ""
+            ),
+        ),
+        (
+            AIMessage(
+                content="",
+                invalid_tool_calls=[
+                    {
+                        "name": "click",
+                        "args": '{"ref":',
+                        "id": "toolu_fake",
+                        "error": None,
+                    }
+                ],
+            ),
+            "ok",
+            Decision(
+                Unrunnable("a tool call in the reply was malformed, so nothing ran"),
+                0,
+                "",
+            ),
+        ),
+    ],
+)
+def test_a_reply_without_a_complete_call_runs_nothing(
+    message: AIMessage, outcome: Status, expected: Decision
+) -> None:
+    assert decision(Routed(message, None, outcome, ())) == expected
 
 
 def test_a_call_to_a_tool_the_navigator_lacks_runs_nothing_and_is_not_echoed() -> None:
