@@ -1,6 +1,6 @@
 # Roadmap — Agentic QA Platform
 
-Last updated: 2026-09-30 (the sandbox check, #35; M1 design decisions, ADR-0024–0026). **Core first, then SaaS** (ADR-0016): prove the agent on the benchmark before building the platform around it. Each milestone is one vertical slice, one PR series, with an explicit exit criterion. No dates — quality over speed; milestones are sequential.
+Last updated: 2026-10-08 (M1 saves no screenshots, ADR-0033); 2026-09-30 (the sandbox check, #35; M1 design decisions, ADR-0024–0026). **Core first, then SaaS** (ADR-0016): prove the agent on the benchmark before building the platform around it. Each milestone is one vertical slice, one PR series, with an explicit exit criterion. No dates — quality over speed; milestones are sequential.
 
 **Release checkpoints** (added after review): full v1 scope is unchanged, but two public, independently defensible releases ship along the way so the strongest hiring signal doesn't wait for the whole SaaS:
 - **Release 0.1 — "CLI + benchmark"** after M3: open-source CLI, frozen benchmark, local run viewer, measured test-split numbers.
@@ -29,7 +29,7 @@ Design: ADR-0024 (explore runs), ADR-0025 (compiled scripts), ADR-0026 (the brow
   - browser settings pinned for every run (ADR-0025).
 - **Moved up from M2** (the pilot signs in, and explore uses a model):
   - `fill_secret` with origin and field binding, and secret-value redaction of observations;
-  - evidence masking (screenshots masked; bodies, HAR files and Playwright traces are never saved; network evidence is metadata only);
+  - saved evidence, scanned (no screenshots in M1, ADR-0033; bodies, HAR files and Playwright traces are never saved; network evidence is metadata only);
   - the four invariant observers;
   - a minimal strict executor (locator resolution per use, step-scoped waits, assertion evaluation);
   - a local record of side-effect dispatches.
@@ -60,7 +60,7 @@ Design: ADR-0024 (explore runs), ADR-0025 (compiled scripts), ADR-0026 (the brow
 - **Before any verdict ships:** decide what a fallback-locator match means (verdict, safeguards for side-effect steps, benign scoring), before M3's numbers (#25).
 - Step intents before dispatch with lease fencing; non-resumable detection for unresolved side-effect intents.
 - Heal subgraph: observe → classify (`drift_consistent` / `expectation_violated` / `inconclusive`) → binding/step patch or finding; binding-unresolved vs expectation-failed distinction for assertions; heal-patch validator (target locators and non-side-effect steps only; `browser` and `coverage` immutable); redaction in heal and verified modes.
-- Hybrid perception: screenshot verification and vision fallback, with screenshot masking and OCR checks before any image reaches a model or leaves the machine.
+- Hybrid perception: screenshot verification and vision fallback, with bound-field masking proven against a hostile page and OCR checks before any image is saved, reaches a model or leaves the machine (ADR-0033, #171).
 - Injection fixtures aimed at healing ("update the test").
 - Local HTML report viewer (`aqa report`).
 - **Exit:** `aqa run` produces correct verdict types on fixture pages; strict replay makes zero LLM calls (asserted); hostile-page fixtures pass.
