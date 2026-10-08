@@ -1,13 +1,15 @@
 import json
 import tempfile
 import unittest
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any
 
 from aqa_core.compiled import CompiledScript
 from aqa_core.spec import Invariants
-from aqa_runner.invariants import INVARIANTS
+from aqa_runner.egress_proxy import EgressBlocks
+from aqa_runner.executor import AssertionResult, RunResult, StepResult
+from aqa_runner.invariants import INVARIANTS, InvariantResult
 from manifest import DRIFT, VIOLATED, Expected
 from pilot_replay import AttemptHealth, FailedAttempt, ObservedAttempt
 from pilot_report import (
@@ -26,6 +28,7 @@ from pilot_results import (
     InvariantObservation,
     Observation,
     StepObservation,
+    observe,
 )
 from test_pilot_replay import COMPILED, SEND
 
@@ -73,7 +76,7 @@ def seen(
 def report(*pairs: Pair, **changes: Any) -> Report:
     hashes = {"manifest": "sha256:m", "script:pilot": "sha256:s"}
     base = Report(
-        "conduit", "c" * 40, "t" * 40, True, 3, ("pilot",), hashes, (), None, True
+        "conduit", "c" * 40, "t" * 40, True, 3, ("pilot",), (), hashes, (), None, True
     )
     return replace(base, pairs=pairs, **changes)
 
@@ -117,6 +120,23 @@ class PilotReportTests(unittest.TestCase):
         disabled = Invariants(disable=("console_errors",))
         both = [classify(off, disabled), classify(off, SETTINGS)]
         self.assertEqual(both, ["binding_only", "fatal"])
+
+    def test_a_step_or_check_error_is_fatal_in_any_shape(self) -> None:
+        errors = [
+            seen(UNBOUND, steps=(NAV, CLICK._replace(error=True))),
+            seen(DRIFTED, steps=(NAV, LOST._replace(error=True))),
+            seen(UNBOUND, assertions=(A0._replace(error=True), UNRESOLVED)),
+            seen(UNBOUND, assertions=(A0, UNRESOLVED._replace(error=True))),
+            seen(DRIFTED, assertions=(NOT_RUN[0]._replace(error=True), NOT_RUN[1])),
+            seen(steps=(NAV._replace(error=True), CLICK)),
+            seen(assertions=(A0, A1._replace(error=True))),
+        ]
+        attempts = (*errors, seen(UNBOUND), seen(DRIFTED), seen())
+        kinds = [classify(a, SETTINGS) for a in attempts]
+        admitted = [admits_patch(a, BENIGN, SETTINGS) for a in attempts]
+        controls = ["binding_only", "binding_only", "eligible"]
+        self.assertEqual(kinds, ["fatal"] * 7 + controls)
+        self.assertEqual(admitted, [False] * 7 + [True] * 3)
 
     def test_pair_policy_follows_the_acceptance_table(self) -> None:
         drifted, fatal = seen(DRIFTED), seen(DRIFTED, AttemptHealth(True, True, False))
@@ -193,6 +213,7 @@ class PilotReportTests(unittest.TestCase):
                 "repeat": 3,
                 "diagnostic": False,
                 "selected": ["pilot"],
+                "omitted": [],
                 "hashes": {"manifest": "sha256:m", "script:pilot": "sha256:s"},
                 "assertion_provenance": "pending",
                 "halt": None,
@@ -221,6 +242,57 @@ class PilotReportTests(unittest.TestCase):
         self.assertEqual((attempt["kind"], attempt["run_id"]), ("binding_only", "r1"))
         self.assertNotIn("/private", json.dumps(attempt))
         self.assertTrue(encoded(report(repeat=1))["diagnostic"])
+
+    def test_report_lists_every_unselected_spec_as_omitted(self) -> None:
+        full = encoded(report(selected=("pilot", "excluded")))
+        partial = encoded(report(judged(seen(FAILING)), omitted=("zeta", "excluded")))
+        sets = [(doc["selected"], doc["omitted"]) for doc in (full, partial)]
+        self.assertEqual(
+            sets, [(["pilot", "excluded"], []), (["pilot"], ["excluded", "zeta"])]
+        )
+        pairs = [(p["spec"], p["expected"], p["status"]) for p in partial["pairs"]]
+        self.assertEqual(pairs, [("pilot", None, "unscored")])
+        kept = ("source", "hashes", "assertion_provenance", "exit")
+        self.assertEqual([partial[k] for k in kept], [full[k] for k in kept])
+        values = {f.name: getattr(report(), f.name) for f in fields(Report)}
+        del values["omitted"]
+        with self.assertRaisesRegex(TypeError, "omitted"):
+            Report(**values)
+
+    def test_an_observed_error_makes_a_pair_without_a_row_fatal(self) -> None:
+        nav = StepResult(0, "completed", settled="idle")
+        steps = (nav, replace(nav, seq=1, locator_index=0))
+        checks = (AssertionResult("a0", "pass"), AssertionResult("a1", "failed"))
+        held = tuple(InvariantResult(name, "held", (), 0) for name in INVARIANTS)
+        egress = EgressBlocks((), False)
+        failed = RunResult("r1", "failed", steps, checks, (), (), held, egress, None)
+        raised = AssertionResult("a1", "not_evaluated", error="fake page error")
+        found = []
+        for result in (failed, replace(failed, assertions=(checks[0], raised))):
+            observed = observe(SCRIPT, result, invariants=SETTINGS)
+            doc = encoded(report(judged(seen(observed))))
+            found.append((observed.eligible, doc["pairs"][0]["status"], doc["exit"]))
+        self.assertEqual(found, [(True, "unscored", 0), (False, "fatal", 3)])
+        self.assertNotIn("fake page error", json.dumps(doc))
+
+    def test_an_error_in_any_leg_makes_its_pair_fatal(self) -> None:
+        broken = (NAV, CLICK._replace(error=True))
+        original = seen(DRIFTED, steps=(NAV, LOST._replace(error=True)))
+        patched = seen(steps=broken)
+        pairs = (
+            judge_clean("pilot", [patched] * 3, SETTINGS),
+            judged(seen(FAILING, steps=broken, **JS_VIOLATED), BUG),
+            judge_case("c", "pilot", BENIGN, original, settings=SETTINGS),
+            judge_case("c", "pilot", BENIGN, seen(DRIFTED), patched, settings=SETTINGS),
+        )
+        self.assertEqual([p.status for p in pairs], ["fatal"] * 4)
+        self.assertFalse(admits_patch(original, BENIGN, SETTINGS))
+        doc = encoded(report(*pairs))
+        scored = doc["pairs"][1]
+        none: dict[str, list[object]] = {"expect": [], "invariants": []}
+        self.assertEqual((scored["missing"], scored["unexpected"]), (none, none))
+        steps = [(s["seq"], s["error"]) for s in scored["attempts"][0]["steps"]]
+        self.assertEqual((steps, doc["exit"]), ([(0, False), (1, True)], 3))
 
     def test_exit_codes_and_release_follow_the_table(self) -> None:
         secret = replace(RESET_500, failure="secret_unusable")

@@ -55,6 +55,9 @@ class Report:
     unchanged: bool
     repeat: int
     selected: tuple[str, ...]
+    # Every other spec the QA project holds, by ID; no default, so a caller
+    # can't leave it out.
+    omitted: tuple[str, ...]
     hashes: Mapping[str, str]
     pairs: tuple[Pair, ...]
     halt: Halt | None
@@ -66,6 +69,9 @@ def classify(attempt: Attempt, settings: Invariants) -> Kind:
     if isinstance(attempt, FailedAttempt):
         return "fatal"
     seen, health = attempt.observation, attempt.health
+    # Checked before eligibility, so the verdict never rests on A2's flag.
+    if any(s.error for s in seen.steps) or any(a.error for a in seen.assertions):
+        return "fatal"
     if seen.eligible:
         return "eligible"
     if (
@@ -137,7 +143,7 @@ def judge_case(
     *,
     settings: Invariants,
 ) -> Pair:
-    """`spec` under `case`'s flag. An omitted pair is unscored; a
+    """`spec` under `case`'s flag. A pair with no row is unscored; a
     `drift_consistent` row accepts only a patched attempt that matches."""
     kind = classify(original, settings)
     if expected is None:
@@ -199,6 +205,7 @@ def document(report: Report, scripts: Mapping[str, CompiledScript]) -> Json:
         "repeat": report.repeat,
         "diagnostic": report.repeat != 3,
         "selected": list(report.selected),
+        "omitted": sorted(report.omitted),
         "hashes": dict(report.hashes),
         "assertion_provenance": "pending",
         "pairs": [_pair(p, scripts[p.spec]) for p in report.pairs],
