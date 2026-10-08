@@ -478,10 +478,9 @@ def test_replay_refuses_a_listed_expectations_target_without_its_contract_before
     assert problems == ("targets.shown: lacks subject contract for replay expect 0",)
 
 
-def test_replay_refuses_a_script_compiled_under_other_subject_contracts(
+def test_replay_refuses_other_subject_contracts_before_unsupported_steps(
     tmp_path: Path,
 ) -> None:
-    # Unsupported press would make _accepted refuse first if admission moved below it.
     script = compiled(
         [{"seq": 1, "action": "press", "key": "a+b", "side_effect": False}]
     )
