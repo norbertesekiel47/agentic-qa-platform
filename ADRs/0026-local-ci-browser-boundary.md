@@ -1,6 +1,6 @@
 # ADR-0026: The browser boundary for local and CI runs: sandbox, egress and test secrets
 
-- Status: Accepted
+- Status: Accepted. The Evidence decision's masked screenshots are superseded for M1 by [ADR-0033](0033-m1-saves-no-screenshots.md).
 - Date: 2026-09-29
 
 ## Context
@@ -79,7 +79,7 @@ The start origin comes only from the invocation (`aqa explore --url`) or the pro
 
 ### Evidence (option 1)
 - Text observations are redacted before any model sees them (SECURITY §5).
-- Every secret-bearing field is masked in every screenshot.
+- Every secret-bearing field is masked in every screenshot. *Superseded by ADR-0033:* M1 takes no screenshots, and bound-field masking moves to M2.
 - **Never saved, in any milestone:** request or response bodies, HAR files and Playwright traces. Request bodies are where secrets travel (a sign-in POST carries the password), and reliably scrubbing a trace's page snapshots and bodies isn't worth a debugging convenience.
 - Network evidence is metadata only: method, redacted URL, status, timing and size (`network_log`, DATA_MODEL §2).
 - Text redaction runs over everything that is saved.
@@ -89,7 +89,7 @@ The start origin comes only from the invocation (`aqa explore --url`) or the pro
 - **Explore runs behind the proxy from its first commit.** The egress, origin-check and injection tests block merges from M1 on (TESTING §1).
 - **The CI workflow gains a sysctl step.** Like any gate change, it needs the maintainer's approval under the guard.
 - **An undeclared third-party host stops a confirmation replay**, with a message that names the host to declare. Conduit makes no third-party requests.
-- **Local screenshots can still show a secret that a page reflects** until M2's OCR checks. That stays within SECURITY §5's best-effort class, and M1 uploads nothing.
+- **Local screenshots can still show a secret that a page reflects** until M2's OCR checks. That stays within SECURITY §5's best-effort class, and M1 uploads nothing. *Superseded by ADR-0033:* M1 saves no screenshots.
 - **Later milestones decide:**
   - the Action's sandbox (#26);
   - the CI run's trusted config revision (#27);
@@ -566,7 +566,7 @@ Let `N` be input length, `P` the total token positions, `U` the distinct spellin
 
 Every needle matches in any case, base64 in page text included: browser hosts are lowercased and CSS can transform reflected text. This accepts harmless over-redaction. The rough four-character case-insensitive core collision estimate is about one per two million positions (38⁻⁴), an approximation, not a measured benchmark. Short values are refused instead of accepting still smaller cores.
 
-This remains SECURITY §5's best-effort reflection defense. Double percent encoding, base64 of percent encoding, other page-chosen encodings, Unicode normalization, locale-specific case mappings, truncated/fragmented values and pixels remain outside this scan. A2 owns result/error and recorded-URL redaction; later slices own saved evidence and screenshot masking. #49's error withholding remains in force. There is no new dependency, paid resource or model call.
+This remains SECURITY §5's best-effort reflection defense. Double percent encoding, base64 of percent encoding, other page-chosen encodings, Unicode normalization, locale-specific case mappings, truncated/fragmented values and pixels remain outside this scan. A2 owns result/error and recorded-URL redaction; later slices own saved evidence; screenshot masking is M2's (ADR-0033). #49's error withholding remains in force. There is no new dependency, paid resource or model call.
 
 ## Amendment (2026-10-05): recorded traffic and policy metadata (#50 A2)
 
@@ -644,7 +644,7 @@ An owned message that ran past one line or 200 characters is now cut like Playwr
 
 ### Context and options
 
-The Decision's Evidence (option 1) saves each step's screenshot, accessibility snapshot, console log and metadata-only network log, text-scanned. Replay and #53's explore both save it. Three ways a saved file could still hold a value: the scan of a string misses what JSON escaping then writes (a line feed written as `\n` spells a value holding a backslash and an n); a marker can spell a value (one equal to its own name); and a page can split a value across console messages, request methods and refused hosts with ports, in pieces no scan finds. Saving must also change nothing a run reports or a model sees.
+The Decision's Evidence (option 1) saves each step's screenshot, accessibility snapshot, console log and metadata-only network log, text-scanned. ADR-0033 takes the screenshot out of M1. Replay and #53's explore both save it. Three ways a saved file could still hold a value: the scan of a string misses what JSON escaping then writes (a line feed written as `\n` spells a value holding a backslash and an n); a marker can spell a value (one equal to its own name); and a page can split a value across console messages, request methods and refused hosts with ports, in pieces no scan finds. Saving must also change nothing a run reports or a model sees.
 
 Rejected: scanning each string before serializing, which misses what escaping writes; rescanning until nothing changes, which never ends for a value inside its own marker; saving scanned logs in a run that binds a secret, which reopens the channels the #47 amendment withholds; evidence taking a snapshot of its own, which retires and renumbers the refs a model was shown; recording evidence's refusals as policy events, which makes the result depend on evidence.
 
@@ -659,7 +659,7 @@ Rejected: scanning each string before serializing, which misses what escaping wr
 
 ### Consequences and limits
 
-What is guaranteed for saved evidence is that every supported spelling of a bound value is removed, or the file isn't written. Encoded and fragmented reflections in a saved snapshot (other encodings, a value split across elements) remain SECURITY §5's best-effort class, as in what a model sees; screenshots are slice C's. `egress.json` and invariant texts keep the fill-step predicate until #53's preflight; a refused `egress.json` falls back to its counts-only form, and to none when that is refused too, and the result still names the block; a fixed policy reason in withheld runs is #53's too. A secret whose value its marker spells leaves those files out. A page holding a value can still encode it in what withheld logs keep (the order of console types, statuses, sizes, timing), which R1 keeps for debugging. Each kept step costs one snapshot and two small files; a page that stopped answering costs up to `resolve_seconds` and one second more at the end of its run. No dependency, paid resource or model call.
+What is guaranteed for saved evidence is that every supported spelling of a bound value is removed, or the file isn't written. Encoded and fragmented reflections in a saved snapshot (other encodings, a value split across elements) remain SECURITY §5's best-effort class, as in what a model sees; M1 saves no screenshots (ADR-0033). `egress.json` and invariant texts keep the fill-step predicate until #53's preflight; a refused `egress.json` falls back to its counts-only form, and to none when that is refused too, and the result still names the block; a fixed policy reason in withheld runs is #53's too. A secret whose value its marker spells leaves those files out. A page holding a value can still encode it in what withheld logs keep (the order of console types, statuses, sizes, timing), which R1 keeps for debugging. Each kept step costs one snapshot and two small files; a page that stopped answering costs up to `resolve_seconds` and one second more at the end of its run. No dependency, paid resource or model call.
 
 
 ## Amendment (2026-10-07): session boundaries for explore (#53 P1+P6)

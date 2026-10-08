@@ -55,7 +55,7 @@ Each navigator turn is a fresh request built from graph state:
 - the model's short notes from its previous turn, delimited as data;
 - the current accessibility snapshot.
 
-The conversation never grows and is never edited. In M1 the navigator reads the snapshot only. Screenshots are kept as evidence but aren't sent to a model until hybrid perception arrives in M2. Tool choice is never forced (ADR-0007 amendment, 2026-09-29).
+The conversation never grows and is never edited. In M1 the navigator reads the snapshot only. M1 takes no screenshots (ADR-0033); hybrid perception adds them in M2. Tool choice is never forced (ADR-0007 amendment, 2026-09-29).
 
 ### Path selection and attempts
 - **The agent names its path.** When the planned checks pass, the agent's `finish` call names the steps of the current attempt that form the path, dropping detours.
