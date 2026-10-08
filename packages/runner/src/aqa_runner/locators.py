@@ -301,7 +301,8 @@ async def resolve(
 # Whether a held region's node left the page's document. A region that
 # another document adopted makes Playwright refuse every utility-world query
 # on it with its own error, so this main-world read is the evidence that
-# makes that drift. A page that lies here can only make it raise.
+# makes that drift. A page that lies here only chooses between drift and the
+# error, never a binding or an absence.
 _LEFT = "(region) => !region.isConnected || region.ownerDocument !== document"
 
 
@@ -319,14 +320,12 @@ async def _resolve_held(
     except Error:
         if isinstance(found, Resolved):
             await found.element.dispose()
-        left = region is not None and await region.evaluate(_LEFT)
-        if region is not None:
-            await region.dispose()
-        if not left:
+        if region is None or not await region.evaluate(_LEFT):
             raise
         return drift
-    if region is not None:
-        await region.dispose()
+    finally:
+        if region is not None:
+            await region.dispose()
     return found
 
 
