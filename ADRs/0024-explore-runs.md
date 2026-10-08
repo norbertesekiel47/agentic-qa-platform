@@ -483,3 +483,14 @@ Each was recorded with the named recorder (TESTING §4) under a scratch cap that
 
   Each holds REVIEW's establishing check plus an extra or looser URL check. Closing them would take a fourth prompt round, which would resample all five pilots, or an oracle rule the maintainer declined.
 - **Consequences:** a plan that can't be used costs at most one more plan call, and explore names why it can't be used. The pilot cassettes for post-comment and publish-article pair with the source SHAs above. post-comment's holds two interactions. Before planning a fix for a refused row, repair its named defect alone in an offline probe (LAB_NOTES, 2026-10-07).
+
+## Amendment (2026-10-08): an interrupted plan call keeps its charges (#161)
+
+The one retry above opened a window. Ctrl-C or a cancellation after a billed answer skipped every handler that writes `plan.json`, since both are `BaseException`s, and the answer's cost record was lost (#161's final verification, 2026-10-07).
+
+- **Outcome `interrupted`.** When `KeyboardInterrupt` or `asyncio.CancelledError` ends the plan call, explore writes `plan.json` once: outcome `interrupted`, reason `planning interrupted`, no plan or `plan_hash`, and the router's `completed_calls` (ADR-0007's #161 amendment), each completed response once and in order. Then it raises the interruption as it came. Ctrl-C exits 130, Typer's code for it, and a cancellation propagates. No exit code is added.
+- **Nothing is printed.** The outcome lines above are for a run that ends on its own; Typer prints nothing on Ctrl-C either. The run record holds the costs.
+- **What is kept.** A billed answer, refusal or fallback stays in the record when the request after it, or the judgement of a corrected plan, is interrupted. A request that never returned a `Reply` adds nothing: no zero-priced attempt and no estimate.
+- **A record that can't be written** (a filesystem failure, or a write the record refuses) never replaces the interruption. The interruption gets a fixed note and stderr one fixed line, and the error's own text appears in neither. It is not exit 15, which is found before planning and spend.
+- **Options:** (1) keep the interruption; (2) turn it into an ordinary outcome such as `error` or `gave_up`, with an exit code. **Chosen: 1.** Option 2 would make Ctrl-C read as a model or record failure, and a caller's cancellation would stop propagating.
+- **Limits.** One write, for the first cooperative interruption, while the filesystem works. SIGKILL, a second Ctrl-C during the write, or a power loss can leave no `plan.json`: there is no journal or fsync. Ctrl-C before the plan call starts bills nothing and writes no `plan.json`.
