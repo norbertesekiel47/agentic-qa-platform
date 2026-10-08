@@ -22,11 +22,10 @@ async def reset(gate: EgressGate, hook: Reset, start: str, *, seconds: float) ->
     a whole 2xx response within `seconds` passes: a redirect isn't followed,
     and the body is read to its end but never kept. Otherwise raises
     `ResetFailedError`."""
-    path = hook.http.partition(" ")[2]
     try:
         async with asyncio.timeout(seconds):
             response = await runner_request(
-                gate, "POST", path_on_origin(start, path), keep_body=False
+                gate, "POST", path_on_origin(start, hook.path), keep_body=False
             )
     except TimeoutError:
         raise ResetFailedError(
