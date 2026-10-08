@@ -280,15 +280,16 @@ def contracts_fingerprint(config: ProjectConfig, spec_id: str) -> str:
 def contract_problems(script: CompiledScript, config: ProjectConfig) -> list[str]:
     """Why replay lacks agreement with reviewed subjects (ADR-0025).
 
-    This format cannot carry a target contract, so every listed spec fails
-    closed. A shared semantic meaning is governed wherever it is targeted.
+    A shared semantic meaning is governed wherever it is targeted. A governed
+    target carries exactly its row's contract; any other target carries none.
     """
     problems: list[str] = []
     if script.compiled_by.subject_contracts != contracts_fingerprint(
         config, script.spec_id
     ):
         problems.append("compiled under other subject contracts: explore it again")
-    for expect in subject_contracts(config, script.spec_id):
+    governed_by_rows: set[str] = set()
+    for expect, contract in subject_contracts(config, script.spec_id).items():
         names = {
             assertion.target
             for assertion in script.assertions
@@ -308,10 +309,17 @@ def contract_problems(script: CompiledScript, config: ProjectConfig) -> list[str
             for name, target in script.targets.items()
             if target.semantic in meanings
         }
+        governed_by_rows |= governed
         problems.extend(
             f"targets.{name}: lacks subject contract for {script.spec_id} expect {expect}"
             for name in sorted(governed)
+            if name not in script.targets or script.targets[name].contract != contract
         )
+    problems.extend(
+        f"targets.{name}: carries a subject contract no row gives it"
+        for name, target in sorted(script.targets.items())
+        if target.contract is not None and name not in governed_by_rows
+    )
     return problems
 
 

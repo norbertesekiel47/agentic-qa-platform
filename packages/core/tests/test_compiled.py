@@ -22,6 +22,7 @@ from aqa_core.compiled import (
     TextVisible,
     VisibleUnoccluded,
 )
+from aqa_core.schema import Contract
 from aqa_core.spec import spec_hash
 from pydantic import ValidationError
 
@@ -910,3 +911,26 @@ def test_compiled_by_records_the_subject_contracts_fingerprint() -> None:
         script["compiled_by"]["subject_contracts"] = value
         [(location, _, _)] = errors(script)
         assert location == ("compiled_by", "subject_contracts")
+
+
+def test_a_targets_contract_reads_back() -> None:
+    script = example()
+    script["targets"]["pay_button"]["contract"] = {
+        "region": "div.banner",
+        "part": "app-favorite-button > button",
+        "leaf": True,
+    }
+    parsed = CompiledScript.model_validate_json(json.dumps(script))
+    assert parsed.targets["pay_button"].contract == Contract(
+        region="div.banner", part="app-favorite-button > button", leaf=True
+    )
+    assert parsed.targets["cart_items"].contract is None
+    for contract, field in (
+        ({"region": "div.banner", "part": "span.counter", "scope": "x"}, "scope"),
+        ({"region": "div.banner", "part": "span.counter", "leaf": "true"}, "leaf"),
+        ({"region": "div .banner", "part": "span.counter"}, "region"),
+        ({"region": "div.banner"}, "part"),
+    ):
+        script["targets"]["pay_button"]["contract"] = contract
+        [(location, _, _)] = errors(script)
+        assert location == ("targets", "pay_button", "contract", field)
