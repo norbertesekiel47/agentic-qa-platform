@@ -178,7 +178,9 @@ class _Exchange:
 @dataclass(eq=False)
 class _Phase:
     """One phase's listener, its port, and its uncertain exchanges so far.
-    It stays the proxy's until its listener has joined every connection."""
+    It stays the proxy's until its listener has joined every connection.
+    The port is kept here because the listener's own raises once it has
+    stopped, and a retirement names it after the stop."""
 
     listener: LoopbackServer = field(init=False)
     port: int = 0
