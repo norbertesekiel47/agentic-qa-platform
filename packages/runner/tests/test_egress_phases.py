@@ -830,3 +830,34 @@ def test_leaving_the_proxy_while_its_phase_is_ending_waits_for_the_join(
             return traffic, held
 
     assert asyncio.run(scenario()) == (PhaseTraffic(1, 0), True)
+
+
+def test_a_phase_opened_while_the_proxy_exits_outlives_that_exit(watch: Watch) -> None:
+    # A misuse, entering while another task exits, must still leave no
+    # listener the proxy has forgotten.
+    async def scenario() -> tuple[int, int]:
+        async with raw_upstream() as silent:
+            start = f"http://127.0.0.1:{silent.port}"
+            proxy = EgressProxy(gate(allowed=(start,)))
+            await proxy.__aenter__()
+            first = watch.watch(proxy)
+            _, writer = await proxy_client(proxy)
+            writer.write(get(f"{start}/"))
+            await until(lambda: b"\r\n\r\n" in silent.received)
+
+            async def end_then_enter() -> None:
+                await proxy.end_phase()
+                await proxy.__aenter__()
+
+            entering = asyncio.create_task(end_then_enter())
+            await asyncio.sleep(0)
+            leaving = asyncio.create_task(proxy.__aexit__(None, None, None))
+            await asyncio.gather(entering, leaving)
+            second = port_of(proxy)
+            await proxy.__aexit__(None, None, None)
+            writer.close()
+            return first, second
+
+    first, second = asyncio.run(scenario())
+
+    assert second != first

@@ -271,7 +271,9 @@ class EgressProxy:
             # Returns or raises only once every connection is joined.
             await phase.listener.__aexit__(kind, error, trace)
         finally:
-            self._phase = None
+            # Another task's end may already have let a new phase open.
+            if self._phase is phase:
+                self._phase = None
 
     @property
     def policy(self) -> EgressPolicy:
@@ -328,7 +330,8 @@ class EgressProxy:
         if self._phase is None or self._phase.ending:
             raise RuntimeError("the egress proxy is between phases")
         # The live listener's port raises once an accept error has retired
-        # it, so no browser is sent to a port another process could take.
+        # it, so no browser is launched toward a port another process could
+        # take.
         return f"http://127.0.0.1:{self._phase.listener.port}"
 
     async def _serve(
