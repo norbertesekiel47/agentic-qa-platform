@@ -39,17 +39,17 @@ SCRIPT = """(() => {
     const inDocument = native("Document", "querySelectorAll");
     const inShadow = native("DocumentFragment", "querySelectorAll");
     const createRange = native("Document", "createRange");
-    const count = (scope, css) => {
+    const matches = (scope, css) => {
         const query = scope === document ? inDocument : inShadow;
-        let n = query(scope, css).length;
+        const found = [...query(scope, css)];
         for (const e of query(scope, "*")) {
-            const tree = shadowRoot(e); if (tree) n += count(tree, css);
+            const tree = shadowRoot(e); if (tree) found.push(...matches(tree, css));
         }
-        return n;
+        return found;
     };
     const valid = (r, region, root) => r && isConnected(r) && ownerDocument(r) === document &&
         ownerDocument(root) === document && ![r, ...inElement(r, "*")].some(shadowRoot) &&
-        count(document, region) === 1 && inDocument(document, region)[0] === r;
+        matches(document, region).length === 1 && inDocument(document, region)[0] === r;
     const visible = (e) => {
         const style = getComputedStyle(e);
         if (style.display === "contents") return [...childNodes(e)].some((c) => {
@@ -96,7 +96,7 @@ SCRIPT = """(() => {
         const [token, region, part, leaf] = body.slice(colon + 1).split("|");
         if (verb === "hold") { held.set(token, root); return []; }
         if (verb === "drop") { held.delete(token); return []; }
-        if (verb === "regions") return [...inDocument(document, token)];
+        if (verb === "regions") return matches(document, token);
         const r = held.get(token);
         if (!valid(r, region, root)) return [];
         if (verb === "in") return contains(r, root) ? [root] : [];
