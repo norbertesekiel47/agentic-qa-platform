@@ -3,14 +3,28 @@
 replay, on fixture pages and the pilot's captures in real Chromium."""
 
 import asyncio
+import json
+import shutil
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any, Literal
 
+import anthropic
 import pytest
 from aqa_core.compiled import ByCss, Target
+from aqa_core.project import (
+    contracts_fingerprint,
+    load_project,
+    parse_compiled,
+    subject_contracts,
+)
 from aqa_core.schema import Contract
+from aqa_runner.anthropic_client import AnthropicClient
+from aqa_runner.binding import Refused, binding_verdict
 from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.document_origins import DocumentChangedError
+from aqa_runner.egress_proxy import EgressProxy
+from aqa_runner.executor import AssertionResult, RunResult, RunSetup, replay
 from aqa_runner.locator_generation import (
     BindingRefusedError,
     LocatorError,
@@ -18,12 +32,19 @@ from aqa_runner.locator_generation import (
     TargetUses,
     register_identity_engine,
 )
-from aqa_runner.locators import Absent, Resolved, Unresolved, resolve
+from aqa_runner.locators import Absent, Resolved, Unresolved, rendered_text, resolve
+from aqa_runner.model_router import ModelRouter
+from aqa_runner.run_record import RunRecord
+from langchain_anthropic import ChatAnthropic
 from playwright.async_api import ElementHandle, Page, async_playwright
 from playwright.async_api import Locator as PlaywrightLocator
 
-from packages.runner.tests.egress_fixtures import egress_proxy
+from packages.runner.tests.egress_fixtures import egress_proxy, gate
+from packages.runner.tests.executor_fixtures import compiled
+from packages.runner.tests.explore_fixtures import MODES, App, in_app
 from packages.runner.tests.pilot_pages import ORIGIN, in_session, put, show
+
+PILOT = Path(__file__).resolve().parents[3] / "bench" / "apps" / "conduit" / "qa"
 
 
 async def marker(resolution: Resolved | Absent | Unresolved) -> str | None:
@@ -561,3 +582,221 @@ def test_a_contracted_negative_check_whose_region_is_gone_names_it() -> None:
         return str(gone.value), uses.targets
 
     assert in_session(scenario) == (REGION_GONE, ())
+
+
+@pytest.mark.parametrize(
+    ("spec", "expect", "page"),
+    [
+        ("read-article", 1, "article-signed-out"),
+        ("read-article", 2, "article-signed-out"),
+        ("publish-article", 3, "article"),
+        ("favorite-article", 0, "article-favorited"),
+        ("favorite-article", 1, "article-favorited"),
+    ],
+)
+def test_each_reviewed_conduit_row_binds_only_its_banner_part(
+    spec: str, expect: int, page: str
+) -> None:
+    contract = subject_contracts(load_project(PILOT).config, spec)[expect]
+    part = Target(
+        semantic=spec, locators=(ByCss(css=contract.part),), contract=contract
+    )
+
+    async def scenario(session: BrowserSession) -> tuple[Any, ...]:
+        await show(session, page)
+        found = await resolve(session.page, part, "assertion")
+        assert isinstance(found, Resolved), found
+        banner = await offered(session, f"div.banner {contract.part}")
+        lower = await offered(session, f"div.article-actions {contract.part}")
+        same = await found.element.evaluate("(e, b) => e === b", banner.element)
+        return same, await binding_verdict(session.page, lower.element, contract)
+
+    assert in_session(scenario) == (True, Refused("outside_region"))
+
+
+def test_the_published_article_row_binds_its_template_inferred_banner_author() -> None:
+    contract = subject_contracts(load_project(PILOT).config, "publish-article")[3]
+    author = Target(
+        semantic="author", locators=(ByCss(css="a.author"),), contract=contract
+    )
+
+    async def scenario(session: BrowserSession) -> str:
+        await put(session, MODES["published-template-inferred"])
+        found = await resolve(session.page, author, "assertion")
+        assert isinstance(found, Resolved), found
+        return await rendered_text(found.element)
+
+    assert in_session(scenario) == "jake"
+
+
+def favorite_project(tmp_path: Path) -> tuple[Any, ...]:
+    """The pilot's spec root, its favorite-article spec starting on the
+    fixture app instead, so the replay needs no account."""
+    root = shutil.copytree(PILOT, tmp_path / "qa")
+    (root / "favorite-article.spec.md").write_text(
+        "---\nid: favorite-article\ngoal: A reader sees the article favorited.\n"
+        "preconditions:\n  start_url: /\nexpect:\n"
+        '  - The favorite button reads "Unfavorite Article"\n'
+        "  - The article's favorites count shows 1\n---\n"
+    )
+    project = load_project(root)
+    config = project.config
+    rows = subject_contracts(config, "favorite-article")
+    data = compiled(
+        [],
+        targets={
+            "button": {
+                "semantic": "the banner's favorite button",
+                "locators": [{"css": "app-favorite-button > button"}],
+                "contract": rows[0].model_dump(),
+            },
+            "count": {
+                "semantic": "the banner's favorites count",
+                "locators": [{"css": "span.counter"}],
+                "contract": rows[1].model_dump(),
+            },
+        },
+        assertions=[
+            {
+                "id": "a0",
+                "expect_index": 0,
+                "check": "text_in_target",
+                "target": "button",
+                "text": "Unfavorite Article",
+            },
+            {
+                "id": "a1",
+                "expect_index": 1,
+                "check": "text_in_target",
+                "target": "count",
+                "text": "(1)",
+            },
+        ],
+    ).model_dump(mode="json")
+    data["spec_id"] = "favorite-article"
+    data["compiled_by"]["subject_contracts"] = contracts_fingerprint(
+        config, "favorite-article"
+    )
+    data["coverage"]["expectations"] = [
+        {
+            "expect_index": index,
+            "subject": "the banner",
+            "claim": claim,
+            "assertions": [f"a{index}"],
+        }
+        for index, claim in enumerate(("reads Unfavorite Article", "shows 1"))
+    ]
+    script = parse_compiled(
+        json.dumps(data), config, source=root / "favorite-article.json"
+    )
+    return project.specs["favorite-article"], config, script
+
+
+def replayed(tmp_path: Path, mode: str, monkeypatch: pytest.MonkeyPatch) -> RunResult:
+    """A strict public replay of the favorite-article script on the fixture
+    app in `mode`, with every model client's constructor a trap."""
+    built: list[str] = []
+
+    def trap(name: str) -> Callable[..., None]:
+        def constructor(*_: object, **__: object) -> None:
+            built.append(name)
+            raise AssertionError(f"{name} built during a strict replay")
+
+        return constructor
+
+    clients: list[type] = [
+        ModelRouter,
+        AnthropicClient,
+        ChatAnthropic,
+        anthropic.Anthropic,
+        anthropic.AsyncAnthropic,
+    ]
+    for client in clients:
+        monkeypatch.setattr(client, "__init__", trap(client.__name__))
+    for client in clients:
+        with pytest.raises(AssertionError):
+            client()
+    assert len(built) == len(clients)
+    built.clear()
+    spec, config, script = favorite_project(tmp_path)
+
+    async def run() -> RunResult:
+        async with App(mode=mode).serving() as app, async_playwright() as playwright:
+            await register_identity_engine(playwright)
+            run_gate = gate(allowed=(app.origin,))
+            setup = RunSetup(spec, config, app.origin, RunRecord.create(tmp_path))
+            async with EgressProxy(run_gate) as proxy, asyncio.timeout(60):
+                return await replay(
+                    script,
+                    setup,
+                    chromium=playwright.chromium,
+                    proxy=proxy,
+                    gate=run_gate,
+                )
+
+    result = asyncio.run(run())
+    assert built == []
+    return result
+
+
+def test_a_bug_planted_only_in_the_banner_copy_fails_the_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = replayed(tmp_path, "banner-bug", monkeypatch)
+
+    assert result.assertions == (
+        AssertionResult("a0", "pass"),
+        AssertionResult("a1", "failed"),
+    )
+    assert result.outcome == "failed"
+
+
+def test_a_bug_planted_only_in_the_article_actions_copy_passes_the_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = replayed(tmp_path, "lower-bug", monkeypatch)
+
+    assert result.assertions == (
+        AssertionResult("a0", "pass"),
+        AssertionResult("a1", "pass"),
+    )
+    assert result.outcome == "passed"
+
+
+def test_a_count_whose_value_violates_the_check_still_resolves_to_the_banner_copy() -> (
+    None
+):
+    count = contracted({"css": "span.counter"})
+
+    async def scenario(app: App, session: BrowserSession) -> str:
+        await session.page.goto(f"{app.origin}/page/banner-bug")
+        found = await session.resolve(count, "assertion")
+        assert isinstance(found, Resolved), found
+        return await rendered_text(found.element)
+
+    assert in_app(scenario) == "(3)"
+
+
+def test_a_count_whose_attributes_moved_to_the_lower_copy_never_resolves_to_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The lower copy shows the expected (1) and carries the banner count's
+    # class, id and test ID; the banner shows (3) with none of them.
+    moved = (
+        MODES["banner-bug"]
+        .replace('<span class="counter">(3)</span>', "<span>(3)</span>")
+        .replace(
+            '<span class="counter">(1)</span>',
+            '<span class="counter" id="count" data-testid="count">(1)</span>',
+        )
+    )
+    monkeypatch.setitem(MODES, "moved", moved)
+    target = contracted({"testid": "count"}, {"css": "#count"}, {"css": "span.counter"})
+
+    async def scenario(
+        app: App, session: BrowserSession
+    ) -> Resolved | Absent | Unresolved:
+        await session.page.goto(f"{app.origin}/page/moved")
+        return await session.resolve(target, "assertion")
+
+    assert in_app(scenario) == Unresolved(("no match", "no match", "no match"))
