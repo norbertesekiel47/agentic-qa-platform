@@ -224,6 +224,10 @@ CONTENTS = (
     '<select name="childNodes" hidden></select>'
 )
 CHILD_NODES = "document.querySelector('.counter').childNodes"
+BOXED = (
+    '<form class="counter"><input name="checkVisibility" type="hidden">'
+    '<input name="getBoundingClientRect" type="hidden">shown</form>'
+)
 NAMED_TYPE = (
     '<span class="counter" style="display:contents">'
     '<form><input name="nodeType" type="hidden">shown</form></span>'
@@ -241,10 +245,16 @@ NAMED_TYPE = (
             "document.querySelector('.counter form').nodeType",
             "INPUT",
         ),
+        (BOXED, SHOWN, "document.querySelector('.counter').checkVisibility", "INPUT"),
     ],
-    ids=["childNodes over text", "childNodes over an element", "nodeType of a child"],
+    ids=[
+        "childNodes over text",
+        "childNodes over an element",
+        "nodeType of a child",
+        "the part's own box",
+    ],
 )
-def test_named_controls_cannot_hide_a_visible_contents_part(
+def test_named_controls_cannot_hide_a_visible_part(
     part: str, contract: Contract, clobbered: str, control: str
 ) -> None:
     async def scenario(session: BrowserSession) -> None:
@@ -335,7 +345,8 @@ def test_a_hold_ends_with_its_document_and_a_fresh_hold_binds() -> None:
 def test_an_iframe_engine_judges_a_hold_in_its_own_document() -> None:
     async def scenario(session: BrowserSession) -> None:
         await put(session, f"{BANNER}<iframe srcdoc='{BANNER}'></iframe>")
-        frame = session.page.frames[1]
+        frame = await (await element(session, "iframe")).content_frame()
+        assert frame is not None
         region = await frame.query_selector("div.banner")
         inner = await frame.query_selector("span.counter")
         assert region is not None
@@ -362,6 +373,69 @@ def test_a_named_form_control_cannot_hide_unlisted_copies(name: str) -> None:
         offered = await element(session, "x-card.first span.counter")
         assert await binding_verdict(session.page, offered, None) == Refused(
             "unlisted_copies"
+        )
+
+    in_session(scenario)
+
+
+def test_named_controls_on_a_form_region_change_no_verdict() -> None:
+    async def scenario(session: BrowserSession) -> None:
+        await put(
+            session,
+            '<form class="banner"><span class="counter" style="display:contents">1'
+            '</span><input name="querySelectorAll" type="hidden"><input name="contains"'
+            ' type="hidden"><input name="shadowRoot" type="hidden"></form>',
+        )
+        assert await session.page.evaluate(
+            "() => { const r = document.querySelector('form');"
+            " return [r.querySelectorAll, r.contains, r.shadowRoot]"
+            ".map((c) => c.nodeName); }"
+        ) == ["INPUT", "INPUT", "INPUT"]
+        offered = await element(session, "span.counter")
+        region = Contract(region="form.banner", part="span.counter", leaf=True)
+        assert await binding_verdict(session.page, offered, region) == Bind()
+        missing = Contract(region="div.missing", part="span.counter")
+        assert await binding_verdict(session.page, offered, missing) == Refused(
+            "region_absent"
+        )
+        async with held_region(session.page, region) as held:
+            assert held is not None
+            assert await held.contains(offered) is True
+            assert await held.absent() is False
+            await offered.evaluate("(e) => { e.style.display = 'none'; }")
+            assert await held.absent() is True
+
+    in_session(scenario)
+
+
+@pytest.mark.parametrize(
+    "name", ["plain", "parentElement", "localName", "classList", "children"]
+)
+def test_named_controls_cannot_hide_copies_two_levels_up(name: str) -> None:
+    async def scenario(session: BrowserSession) -> None:
+        control = f'<select name="{name}" hidden></select>'
+        await put(
+            session,
+            f'<div><form class="first"><x-card><span class="counter" id="first">1</span>'
+            f'</x-card>{control}</form><form class="second"><x-card>'
+            f'<span class="counter">2</span></x-card>{control}</form></div>',
+        )
+        offered = await element(session, "#first")
+        assert await binding_verdict(session.page, offered, None) == Refused(
+            "unlisted_copies"
+        )
+
+    in_session(scenario)
+
+
+def test_regions_only_in_shadow_trees_are_ambiguous_not_absent() -> None:
+    async def scenario(session: BrowserSession) -> None:
+        await put(session, f"{LIGHT}<x-host></x-host><y-host></y-host>")
+        await attach(session, "x-host", '<div class="banner"></div>')
+        await attach(session, "y-host", '<div class="banner"></div>')
+        offered = await element(session, "#light")
+        assert await binding_verdict(session.page, offered, COUNT) == Refused(
+            "region_ambiguous"
         )
 
     in_session(scenario)
