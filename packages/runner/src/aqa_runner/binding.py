@@ -1,5 +1,3 @@
-"""Trusted held-region predicates for reviewed subjects (ADR-0025)."""
-
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
