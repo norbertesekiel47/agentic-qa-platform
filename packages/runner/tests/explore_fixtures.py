@@ -79,6 +79,8 @@ class App:
                 return "400 Bad Request", "unknown fixture mode"
             self.mode, self.writes = mode, 0
             self.messages.clear()
+            self.slow_started.clear()
+            self.release_slow.clear()
             return "204 No Content", ""
         if method == "POST" and target.path in ("/write", "/slow-write"):
             if target.path == "/slow-write":
