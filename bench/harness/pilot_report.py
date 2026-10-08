@@ -124,13 +124,13 @@ def admits_patch(original: Attempt, row: Expected, settings: Invariants) -> bool
 
 
 def judge_clean(spec: str, attempts: Sequence[Attempt], settings: Invariants) -> Pair:
-    """The clean app's repeats of `spec`: passed when every attempt is an
-    eligible pass and all of them are equal."""
+    """The clean app's repeats of `spec`: passed when there is one at least,
+    each is an eligible pass and all of them are equal."""
     entries = tuple(Entry("clean", a, classify(a, settings)) for a in attempts)
     seen = [a.observation for a in attempts if isinstance(a, ObservedAttempt)]
     passed = all(o.eligible and o.outcome == "passed" and o == seen[0] for o in seen)
     fatal = any(e.kind == "fatal" for e in entries)
-    status: Status = "fatal" if fatal else "passed" if passed else "mismatch"
+    status: Status = "fatal" if fatal else "passed" if passed and seen else "mismatch"
     return Pair(None, spec, None, entries, status)
 
 
@@ -143,8 +143,10 @@ def judge_case(
     *,
     settings: Invariants,
 ) -> Pair:
-    """`spec` under `case`'s flag. A pair with no row is unscored; a
-    `drift_consistent` row accepts only a patched attempt that matches."""
+    """`spec` under `case`'s flag. A pair with no row is unscored. Only a
+    `drift_consistent` row takes a patched attempt, accepted if it matches."""
+    if patched is not None and (expected is None or expected.verdict != DRIFT):
+        raise ValueError("only a drift_consistent row takes a patched attempt")
     kind = classify(original, settings)
     if expected is None:
         blocked = kind == "binding_only"

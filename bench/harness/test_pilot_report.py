@@ -97,6 +97,7 @@ class PilotReportTests(unittest.TestCase):
         miscounted = (HELD[0]._replace(total=2), *HELD[1:])
         beside = (A0._replace(outcome="failed"), UNRESOLVED)
         early = tuple(a._replace(stopped_at=0) for a in DRIFTED.assertions)
+        drifted_twice = (NAV._replace(outcome="drifted"), LOST)
         cases: list[tuple[Attempt, str]] = [
             (seen(), "eligible"),
             (seen(UNBOUND), "binding_only"),
@@ -111,6 +112,10 @@ class PilotReportTests(unittest.TestCase):
             (seen(DRIFTED, **JS_VIOLATED), "ineligible"),
             (seen(UNBOUND, assertions=beside), "ineligible"),
             (seen(DRIFTED, assertions=early), "ineligible"),
+            (seen(DRIFTED, outcome="errored"), "fatal"),
+            (seen(DRIFTED, steps=drifted_twice), "ineligible"),
+            (seen(DRIFTED, assertions=(NOT_RUN[0], early[1])), "ineligible"),
+            (seen(UNBOUND, assertions=CHECKS), "ineligible"),
         ]
         kinds = [classify(attempt, SETTINGS) for attempt, _ in cases]
         self.assertEqual(kinds, [kind for _, kind in cases])
@@ -166,6 +171,12 @@ class PilotReportTests(unittest.TestCase):
         pair = judge_case("c", "pilot", BENIGN, drifted, seen(), settings=SETTINGS)
         self.assertEqual([e.role for e in pair.attempts], ["diagnostic", "acceptance"])
 
+    def test_only_a_drift_consistent_row_takes_a_patched_attempt(self) -> None:
+        held = replace(RESET_500, failure="operation_timeout", resources="unknown")
+        for row in (None, BUG):
+            with self.assertRaisesRegex(ValueError, "drift_consistent"):
+                judge_case("c", "pilot", row, seen(), held, settings=SETTINGS)
+
     def test_three_clean_attempts_must_pass_and_match(self) -> None:
         fallback = seen(steps=(NAV, CLICK._replace(locator_index=1)))
         runs: list[tuple[list[Attempt], str]] = [
@@ -173,6 +184,7 @@ class PilotReportTests(unittest.TestCase):
             ([seen(), fallback, seen()], "mismatch"),
             ([seen(), seen(FAILING), seen()], "mismatch"),
             ([seen(), RESET_500], "fatal"),
+            ([], "mismatch"),
         ]
         statuses = [judge_clean("pilot", a, SETTINGS).status for a, _ in runs]
         self.assertEqual(statuses, [status for _, status in runs])
@@ -198,6 +210,12 @@ class PilotReportTests(unittest.TestCase):
                 ("mismatch", none, {"expect": [], "invariants": ["http_5xx"]}),
             ],
         )
+        drift = judge_case(
+            "c", "pilot", BENIGN, seen(DRIFTED), seen(FAILING), settings=SETTINGS
+        )
+        pair = encoded(report(drift))["pairs"][0]
+        found_sets = (pair["missing"], pair["unexpected"])
+        self.assertEqual(found_sets, (none, {"expect": [1], "invariants": []}))
 
     def test_report_pins_source_and_marks_omitted_pairs_unscored(self) -> None:
         omitted = replace(judged(seen(DRIFTED)), case="conduit-bug-003")
@@ -307,6 +325,7 @@ class PilotReportTests(unittest.TestCase):
             (report(judged(seen()), unchanged=False), 3, "allowed"),
             (report(halt="unexpected", switched_back=False), 3, "forbidden"),
             (report(judged(seen(), BUG), halt="interrupted"), 130, "forbidden"),
+            (report(judged(secret), halt="interrupted"), 130, "forbidden"),
         ]
         docs = [encoded(value) for value, *_ in cases]
         found = [(doc["exit"], doc["reservation_release"]) for doc in docs]
