@@ -113,17 +113,19 @@ A checkpoint preserves graph state, not the browser. Resuming therefore requires
 
 | Tool | Purpose |
 |---|---|
-| `navigate(url)`, `reload()` | Only absolute http(s) URLs on the run's allowed origins, refused before anything is requested; the page each lands on, after redirects, is checked (ADR-0026) |
-| `click(ref)`, `fill(ref, text)`, `select(ref, option)`, `press(key)` | Act on accessibility-tree element refs |
-| `fill_secret(ref, name)` | Inject a named secret at the browser layer, only into a field and origin the secret is bound to (project config, DATA_MODEL §9); a refusal comes back to the agent as a tool error that names the secret, never its value (`BrowserSession.fill_secret`, ADR-0026) |
+| `navigate(path)`, `reload()` | `navigate` takes a path on the run's start origin, such as `/login`, never a URL with an origin, so no port reaches a prompt; other allowed origins are reached by clicks. The page each lands on, after redirects, is checked (ADR-0026) |
+| `click(ref, meaning)`, `fill(ref, meaning, text)`, `select(ref, meaning, option)`, `press(key)` | Act on accessibility-tree element refs. An action on an element names its meaning: what the element is for and where it sits, never its label (ADR-0025) |
+| `fill_secret(ref, meaning, name)` | Inject a named secret at the browser layer, only into a field and origin the secret is bound to (project config, DATA_MODEL §9); a refusal comes back to the agent as a tool error that names the secret, never its value (`BrowserSession.fill_secret`, ADR-0026) |
 | `screenshot(region?)` | Visual observation for verification (hybrid perception, M2; M1's navigator reads the accessibility tree only) |
 | `vision_click(x, y)` | Vision fallback, only when the tree lacks a usable ref (M2) |
-| `assert_*` | Bind a coverage-plan check to an element ref and evaluate it; compiles directly into the script |
+| `assert_check(check_id, ref)`, `note_for_absence(check_id, ref)` | Explore: bind a coverage-plan check, named by its ID (`a1`, `a2`, ... in plan order), to the element ref it reads, or to none for a check that reads no element, and evaluate it; a `not_visible` check first notes its element while it shows. Compiles directly into the script |
 | `restart()` | Explore: start a new attempt, allowed only under the reset rule in §3.3 (ADR-0024) |
-| `finish(…)` | Explore: name the steps that form the path. Heal: a structured verdict (Pydantic-validated) with evidence refs |
+| `finish(steps)` | Explore: name the log's step numbers that form the path. Heal: a structured verdict (Pydantic-validated) with evidence refs |
+
+A navigator turn runs one tool call: the first call of a reply runs, and any others are reported unrun. Every tool's schema is strict, and no request forces a tool choice (ADR-0024's #53 amendment).
 
 Page content is **untrusted data**:
-- Observations enter the model context inside delimited blocks, after secret-value redaction.
+- Observations enter the model context inside delimited blocks, after secret-value redaction. Each block is scanned again as the request is built and holds no `<`, so no text can close it (ADR-0024's #53 amendment).
 - Before every observation and action, the browser session checks that the top-level page and the target's frame are on allowed origins. An action also refuses an element that contains another origin's frame, `press` checks the frame that has the focus, and frames from other origins are left out of snapshots (ADR-0026). The executor (#46) and the navigator's tools (#53) act and observe only through the session.
 - Browser-wide egress is enforced independently of the agent's tools (see [SECURITY §4, §7](SECURITY.md#4-prompt-injection)).
 
