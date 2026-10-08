@@ -1,5 +1,3 @@
-"""Direct trusted engine tests; public contract integration belongs to P7b-II."""
-
 import asyncio
 
 import pytest
@@ -517,7 +515,7 @@ def test_fixture_reset_slow_write_websocket_and_cleanup_are_real() -> None:
         "wrapped-lower",
         "flattened",
         "decoy",
-        "published",
+        "published-template-inferred",
         "lower-bug",
         "article-favorited",
     ],
@@ -526,7 +524,7 @@ def test_app_fixture_modes_and_capture_are_explicit(name: str) -> None:
 
     async def scenario(app: App, session: BrowserSession) -> None:
         await session.page.goto(app.origin + "/page/" + name)
-        if name == "published":
+        if name == "published-template-inferred":
             assert (
                 await verdict(
                     session,

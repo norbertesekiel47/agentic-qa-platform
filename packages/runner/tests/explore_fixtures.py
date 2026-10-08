@@ -1,5 +1,3 @@
-"""Disposable explore app; published-author markup is shared-template inference."""
-
 import asyncio
 import base64
 import hashlib
@@ -27,14 +25,12 @@ MODES = {
         '<div class="banner">', '<div class="banner"><span class="decoy">1</span>'
     ),
     "wrapped-lower": f'<div class="banner">{PARTS}</div><div class="article-actions"><section>{PARTS}</section></div>',
-    "published": '<div class="banner"><app-article-meta><div class="info"><a class="author">jake</a><span class="date">October 1, 2026</span></div></app-article-meta></div>',
+    "published-template-inferred": '<div class="banner"><app-article-meta><div class="info"><a class="author">jake</a><span class="date">October 1, 2026</span></div></app-article-meta></div>',
 }
 
 
 @dataclass
 class App:
-    """Loopback-only pages, reset, held writes and a real WebSocket write seam."""
-
     origin: str = ""
     mode: str = "clean"
     writes: int = 0
