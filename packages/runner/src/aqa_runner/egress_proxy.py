@@ -13,6 +13,10 @@ gate's policy makes every allowlist decision.
   never terminates TLS; a tunnel's bytes pass through unread.
 - A failure on the upstream side is an infrastructure event, recorded with the
   gate; one on the browser's side, such as a closed tab, isn't.
+- Each phase of a run (an attempt, a confirmation) has its own listener on a
+  new port. Ending it drops what is still queued, cancels and joins every
+  connection it accepted, and counts the exchanges whose effect upstream is
+  unknown, so the reset hook runs only after the phase's traffic is certain.
 
 h11 frames HTTP/1.1 on both sides: https://h11.readthedocs.io/en/v0.16.0/api.html
 """
@@ -21,6 +25,7 @@ import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from dataclasses import dataclass, field
+from functools import partial
 from types import TracebackType
 from typing import Self
 from urllib.parse import urlsplit
@@ -146,10 +151,53 @@ class EgressBlocks:
         return bool(self.refused) or self.overflowed
 
 
+@dataclass(frozen=True)
+class PhaseTraffic:
+    """What a phase's browser connections left uncertain when it ended: plain
+    requests that sent upstream without their response reaching the browser
+    whole, and tunnels that carried any byte upstream, whose requests the
+    proxy can't see answered. Either may have changed the app after the
+    browser closed."""
+
+    plain_uncertain: int
+    tunnel_uncertain: int
+
+
+@dataclass
+class _Exchange:
+    """One browser connection's exchange: a tunnel or a plain request,
+    whether any byte went upstream (noted before it went, so a partial send
+    counts), and whether a plain response reached the browser whole."""
+
+    tunnel: bool = False
+    sent: bool = False
+    answered: bool = False
+
+
+@dataclass(eq=False)
+class _Phase:
+    """One phase's listener, its port, and its uncertain exchanges so far.
+    It stays the proxy's until its listener has joined every connection."""
+
+    listener: LoopbackServer = field(init=False)
+    port: int = 0
+    plain_uncertain: int = 0
+    tunnel_uncertain: int = 0
+    ending: bool = False
+
+    def classify(self, exchange: _Exchange) -> None:
+        if exchange.sent and exchange.tunnel:
+            self.tunnel_uncertain += 1
+        elif exchange.sent and not exchange.answered:
+            self.plain_uncertain += 1
+
+
 class EgressProxy:
     """The run's egress proxy, serving on 127.0.0.1 while it is open (`async
     with`). One serves a whole run, every browser session in it, through the
-    run's `EgressGate`, so the gate's pins and records cover them all."""
+    run's `EgressGate`, so the gate's pins and records cover them all. It
+    opens with its first phase; `end_phase` and `begin_phase` give each
+    later phase a listener of its own."""
 
     def __init__(self, gate: EgressGate) -> None:
         self._gate = gate
@@ -158,14 +206,18 @@ class EgressProxy:
         # which are what the proxy itself refused, these are the run's egress
         # blocks.
         self.blocked_attempts = BlockedAttempts()
-        # Owns every browser connection, so closing the proxy ends them all:
-        # none may forward a request after the proxy has closed.
-        self._listener: LoopbackServer | None = None
+        self._entered = False
+        # Its listener owns every browser connection, so ending the phase or
+        # closing the proxy ends them all: none may forward a request after.
+        self._phase: _Phase | None = None
 
     async def __aenter__(self) -> Self:
-        listener = LoopbackServer(self._serve)
-        await listener.__aenter__()
-        self._listener = listener
+        self._entered = True
+        try:
+            await self.begin_phase()
+        except BaseException:
+            self._entered = False
+            raise
         return self
 
     async def __aexit__(
@@ -174,9 +226,46 @@ class EgressProxy:
         error: BaseException | None,
         trace: TracebackType | None,
     ) -> None:
-        listener = self._serving()
-        self._listener = None
-        await listener.__aexit__(kind, error, trace)
+        self._entered = False
+        if self._phase is not None and not self._phase.ending:
+            await self._end(self._phase, kind, error, trace)
+
+    async def begin_phase(self) -> None:
+        """Open a phase: a new listener, on a new port."""
+        if not self._entered:
+            raise RuntimeError("the egress proxy serves only inside `async with`")
+        if self._phase is not None:
+            raise RuntimeError("the egress proxy has a phase open or ending")
+        phase = _Phase()
+        listener = LoopbackServer(partial(self._serve, phase))
+        await listener.__aenter__()
+        phase.listener, phase.port = listener, listener.port
+        self._phase = phase
+
+    async def end_phase(self) -> PhaseTraffic:
+        """End the open phase: its listener stops, so a connection still
+        queued is never accepted, and every connection it accepted is
+        cancelled and joined before this returns, a caller's cancellation
+        included. Its traffic is what those connections left uncertain."""
+        phase = self._phase
+        if phase is None or phase.ending:
+            raise RuntimeError("the egress proxy has no open phase to end")
+        await self._end(phase, None, None, None)
+        return PhaseTraffic(phase.plain_uncertain, phase.tunnel_uncertain)
+
+    async def _end(
+        self,
+        phase: _Phase,
+        kind: type[BaseException] | None,
+        error: BaseException | None,
+        trace: TracebackType | None,
+    ) -> None:
+        phase.ending = True
+        try:
+            # Returns or raises only once every connection is joined.
+            await phase.listener.__aexit__(kind, error, trace)
+        finally:
+            self._phase = None
 
     @property
     def policy(self) -> EgressPolicy:
@@ -212,41 +301,57 @@ class EgressProxy:
 
     @property
     def url(self) -> str:
-        """Where the browser sends its traffic: the address it listens on."""
-        return f"http://127.0.0.1:{self._serving().port}"
-
-    def _serving(self) -> LoopbackServer:
-        if self._listener is None:
+        """Where the browser sends its traffic: the open phase's address."""
+        if not self._entered:
             raise RuntimeError("the egress proxy serves only inside `async with`")
-        return self._listener
+        if self._phase is None or self._phase.ending:
+            raise RuntimeError("the egress proxy is between phases")
+        return f"http://127.0.0.1:{self._phase.port}"
 
     async def _serve(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        self,
+        phase: _Phase,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
     ) -> None:
         """One browser connection: one plain request, or one tunnel. A request
         the proxy can't read, a refusal or an upstream failure (both recorded
         by the gate), or a browser that went away ends it, with nothing more
-        sent. The listener closes the connection."""
+        sent. The listener closes the connection. However it ends, its
+        exchange counts in the phase whose listener accepted it."""
         browser = Peer(h11.Connection(h11.SERVER), reader, writer)
-        with contextlib.suppress(
-            h11.RemoteProtocolError,
-            EgressRefusedError,
-            EgressUpstreamError,
-            OSError,
-        ):
-            request = await browser.next()
-            if isinstance(request, h11.Request):
-                serve = self._tunnel if request.method == b"CONNECT" else self._forward
-                await serve(request, browser)
+        exchange = _Exchange()
+        try:
+            with contextlib.suppress(
+                h11.RemoteProtocolError,
+                EgressRefusedError,
+                EgressUpstreamError,
+                OSError,
+            ):
+                request = await browser.next()
+                if isinstance(request, h11.Request):
+                    exchange.tunnel = request.method == b"CONNECT"
+                    serve = self._tunnel if exchange.tunnel else self._forward
+                    await serve(request, browser, exchange)
+        finally:
+            phase.classify(exchange)
 
-    async def _forward(self, request: h11.Request, browser: Peer) -> None:
+    async def _forward(
+        self, request: h11.Request, browser: Peer, exchange: _Exchange
+    ) -> None:
         """Send one plain request upstream, and its response back."""
         host, port, path = _plain_target(request.target)
         reader, writer = await self._gate.connect(host, port, "request")
         upstream = Upstream(
             h11.Connection(h11.CLIENT), reader, writer, self._gate, host, port
         )
+
+        async def answer() -> None:
+            await _relay(upstream, browser)
+            exchange.answered = True
+
         try:
+            exchange.sent = True
             await upstream.send(
                 h11.Request(
                     method=request.method,
@@ -261,11 +366,13 @@ class EgressProxy:
                 )
             )
             await _relay(browser, upstream)  # the body
-            await _unless_browser_leaves(_relay(upstream, browser), browser)
+            await _unless_browser_leaves(answer(), browser)
         finally:
             writer.close()
 
-    async def _tunnel(self, request: h11.Request, browser: Peer) -> None:
+    async def _tunnel(
+        self, request: h11.Request, browser: Peer, exchange: _Exchange
+    ) -> None:
         """Open a tunnel and pass its bytes both ways until either side ends."""
         host, port = _host_and_port(request.target.decode("ascii"), default_port=None)
         await browser.next()  # CONNECT's EndOfMessage
@@ -280,6 +387,12 @@ class EgressProxy:
         upstream = Upstream(
             h11.Connection(h11.CLIENT), reader, writer, self._gate, host, port
         )
+
+        async def send_upstream(data: bytes) -> None:
+            if data:
+                exchange.sent = True
+            await upstream.write(data)
+
         try:
             await browser.send(
                 h11.Response(
@@ -287,9 +400,9 @@ class EgressProxy:
                 )
             )
             early, _ = browser.http.trailing_data
-            await upstream.write(early)
+            await send_upstream(early)
             await _first_to_end(
-                _carry(browser.read, upstream.write),
+                _carry(browser.read, send_upstream),
                 _carry(upstream.read, browser.write),
             )
         finally:
