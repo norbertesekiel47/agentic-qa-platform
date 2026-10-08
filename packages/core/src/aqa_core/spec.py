@@ -103,6 +103,11 @@ class Reset(StrictModel):
 
     http: ResetEndpoint
 
+    @property
+    def path(self) -> str:
+        """The hook's path and query, as the runner sends them."""
+        return self.http.partition(" ")[2]
+
 
 class Preconditions(StrictModel):
     """Where a run starts and the state it starts from."""

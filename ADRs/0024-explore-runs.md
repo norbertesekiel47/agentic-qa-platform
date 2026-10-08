@@ -497,7 +497,7 @@ The one retry above opened a window. Ctrl-C or a cancellation after a billed ans
 
 ## Amendment (2026-10-08): the reset hook's request (#53 P8)
 
-- **Form.** A spec's reset hook is `POST`, one space and a path held to `start_url`'s rules, ASCII and with no fragment, checked when the spec loads (DATA_MODEL §6).
+- **Form.** A spec's reset hook is `POST`, one space and a path held to `start_url`'s rules, ASCII and with no fragment, checked when the spec loads (DATA_MODEL §6). Its error names the rule and never repeats the hook: a spec may write a token in the hook's URL, as the plan request's section above notes, and a spec error is printed.
 - **The request.** `aqa_runner.reset.reset(gate, hook, start, seconds=...)` posts it to the run's start origin as a runner-side request, through the run's egress gate. Only a whole 2xx response within `budgets.resolve_seconds` passes. A redirect isn't followed and fails, and an informational reply waits for the final one. The body is read to its end but never kept (`runner_request(..., keep_body=False)`), so a long body holds no memory and an endless one fails at the bound. A failure raises `ResetFailedError`, whose fixed text names no origin, host, port or path; explore exits 14 for it (API.md §7).
 - **When.** This refines Settling's "Before a reset, the previous browser is stopped and its outstanding requests settle": explore resets only after the phase's proxy listener has ended and joined every connection, with nothing uncertain (ADR-0026's #53 P8 amendment).
 - **Fencing.** A completed request proves only that the app answered. An app that commits work after answering must make its reset hook wait for that work or cancel it; the runner can't check this (DATA_MODEL §6).

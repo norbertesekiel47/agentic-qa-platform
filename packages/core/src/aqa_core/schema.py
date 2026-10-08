@@ -252,13 +252,17 @@ def _probe_endpoint(text: str) -> str:
 
 
 def _reset_endpoint(text: str) -> str:
-    return _endpoint(
-        text,
-        "POST",
-        "a reset hook",
-        "POST and a path, such as POST /test-api/reset, since the runner posts "
-        "it, and only to the start origin",
-    )
+    try:
+        return _endpoint(text, "POST", "a reset hook", "POST and a path")
+    except ValueError:
+        # A hook may carry a token in its query (ADR-0024), and a spec error is
+        # printed, so it names the rule, never the hook.
+        raise ValueError(
+            "the reset hook is not POST and a path on the start origin: write "
+            "POST, one space and a path such as /test-api/reset?fixture=seed, in "
+            "ASCII, with no empty, . or .. segment and no fragment (DATA_MODEL "
+            "§6). The hook isn't repeated here: it may hold a token"
+        ) from None
 
 
 # A spec's probe: GET and a path on the start origin, held to start_url's
