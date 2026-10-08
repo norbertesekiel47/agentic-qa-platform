@@ -555,6 +555,7 @@ Explore writes two phases into one run record, decides exit 4 and non-resumabili
   - *Chosen: 2.* (1) changes every tool request the adapter sends, and every cassette with it.
   - A call to a tool the navigator lacks, or arguments that don't fit, is `Unrunnable` with our own text. Pydantic's message is never used, since it quotes the arguments the model wrote.
   - A reply whose routed outcome isn't `ok`, or that holds a tool call LangChain couldn't parse (`invalid_tool_calls`), runs nothing: it is `Unrunnable` too, so a refused reply's call never runs.
+  - A tool reply cut off before it ended (`stop_reason` `max_tokens`, say) is not yet recorded `invalid`, so its call still runs if its arguments validate. ADR-0007's rule that a cut-off answer comes back unparsed and is recorded `invalid` covers schema answers only today. A #53 follow-up PR, landed before the attempt's action tools, extends it to tool replies in the adapter and the router, and this outcome check then refuses them with no change here (maintainer, 2026-10-08).
 
 ### Consequences
 - The instructions and the tools' descriptions are part of every navigator request: a change to either changes the cassettes the fixture explore records.
