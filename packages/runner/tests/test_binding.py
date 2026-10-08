@@ -674,3 +674,41 @@ def test_sixteen_ancestors_without_copies_still_bind_as_offered() -> None:
         assert await verdict(session, "span", None) == Bind()
 
     in_session(scenario)
+
+
+def test_reset_rearms_a_completed_slow_write_cycle() -> None:
+    async def scenario(app: App, session: BrowserSession) -> None:
+        await session.page.goto(app.origin)
+        request = "async () => (await fetch('/slow-write', {method:'POST'})).status"
+        first = asyncio.create_task(session.page.evaluate(request))
+        try:
+            await asyncio.wait_for(app.slow_started.wait(), 5)
+            assert app.writes == 0
+            assert not first.done()
+        finally:
+            app.release_slow.set()
+            assert await first == 204
+        assert app.writes == 1
+        assert (
+            await session.page.evaluate(
+                "async () => (await fetch('/reset', {method:'POST'})).status"
+            )
+            == 204
+        )
+        assert app.writes == 0
+        assert app.messages == []
+        assert not app.slow_started.is_set()
+        assert not app.release_slow.is_set()
+        second = asyncio.create_task(session.page.evaluate(request))
+        try:
+            await asyncio.wait_for(app.slow_started.wait(), 5)
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(asyncio.shield(second), 0.2)
+            assert app.writes == 0
+            assert not second.done()
+        finally:
+            app.release_slow.set()
+            assert await second == 204
+        assert app.writes == 1
+
+    in_app(scenario)
