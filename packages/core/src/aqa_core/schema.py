@@ -7,7 +7,7 @@ import re
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StrictStr
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StrictBool, StrictStr
 
 
 class StrictModel(BaseModel):
@@ -41,6 +41,40 @@ AtLeastOne = AfterValidator(_at_least_one)
 
 NonEmpty = Annotated[StrictStr, Field(min_length=1)]
 PositiveNumber = Annotated[float, Field(gt=0, allow_inf_nan=False)]
+_COMPOUND = r"[a-z][a-z0-9-]*(?:[.#][A-Za-z][A-Za-z0-9_-]*){0,8}"
+_REGION = re.compile(_COMPOUND)
+_PART = re.compile(rf"{_COMPOUND}(?:(?: | > ){_COMPOUND}){{0,3}}")
+
+
+def _region(text: str) -> str:
+    if len(text) > 200 or not _REGION.fullmatch(text):
+        raise ValueError(
+            f"'{text}' is not a region: write one element's CSS, a tag with "
+            "optional .class or #id parts, such as div.banner"
+        )
+    return text
+
+
+def _part_selector(text: str) -> str:
+    if len(text) > 200 or not _PART.fullmatch(text):
+        raise ValueError(
+            f"'{text}' is not a part selector: write tags with optional .class or "
+            '#id parts, joined by spaces or " > ", such as span.counter'
+        )
+    return text
+
+
+Region = Annotated[StrictStr, AfterValidator(_region)]
+PartSelector = Annotated[StrictStr, AfterValidator(_part_selector)]
+
+
+class Contract(StrictModel):
+    """The reviewed region and its required subject part (ADR-0025)."""
+
+    region: Region
+    part: PartSelector
+    leaf: StrictBool = False
+
 
 DEFAULT_PORTS = {"http": 80, "https": 443}
 # Characters no origin or host contains as written. WHATWG URL parsing reads

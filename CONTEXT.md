@@ -11,7 +11,7 @@ A Markdown file in the customer's repo that states one user goal in structured p
 _Avoid_: test case, scenario
 
 **Project config**:
-The committed file of project-wide settings next to a project's specs: model roles, browser settings, egress hosts and test-secret bindings. The directory that holds it is the project's **spec root**, under which every spec ID is unique.
+The committed file of project-wide settings next to a project's specs: model roles, browser settings, egress hosts, test-secret bindings and reviewed subject contracts. The directory that holds it is the project's **spec root**, under which every spec ID is unique.
 
 **Expectation**:
 One observable claim in a spec's `expect` list about what must be true once the goal is done. Only a human edit to the spec can change an expectation.
@@ -19,6 +19,18 @@ _Avoid_: expect item, clause
 
 **Subject**:
 What an expectation is about, such as "jake's comment" or "the Pay button". It becomes a target's meaning when the spec is explored, and replays don't re-check it.
+
+**Subject contract**:
+A reviewed project-config row keyed by spec ID and expectation index, naming where the subject may bind through a region and a required part selector, with an optional childless-element requirement. The row applies independently of whether copies are detected. DATA_MODEL §7 and §9 own its format and replay admission rules.
+
+**Region**:
+The one element named by a subject contract's restricted CSS compound. It determines where that subject's required part belongs.
+
+**Part selector**:
+A restricted relative CSS selector naming the subject within its contract's region, without choosing by the subject's current value.
+
+**Copy**:
+Another rendering of one component's element in a different location, such as an article's author shown in both its banner and its actions area. Copies differ from repeated list items. Detection can require a subject contract; a reviewed contract applies even when detection misses a copy.
 
 **Claim**:
 Everything an expectation says about its subject: its text, state, position, destination or count. The expectation's assertions must establish all of it.

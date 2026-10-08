@@ -201,7 +201,7 @@ Free-form notes for humans. The agent never reads the body; anything that affect
   "spec_id": "checkout-expired-card",
   "spec_hash": "sha256:bcb054dbf5a73870f5ddfb8fd99045b028ce9bec953a4f60de8cdd7c964f4db6",
   "compiled_at": "2026-10-12T14:03:22Z",
-  "compiled_by": { "mode": "explore", "models": { "navigator": "claude-sonnet-5-5" }, "price_map": "<upstream commit>" },
+  "compiled_by": { "mode": "explore", "models": { "navigator": "claude-sonnet-5-5" }, "price_map": "<upstream commit>", "subject_contracts": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945" },
   "confirmed": true,
   "browser": { "timezone": "UTC", "locale": "en-US", "viewport": [1440, 900], "device_scale_factor": 1, "color_scheme": "light" },
   "coverage": {
@@ -362,12 +362,14 @@ A compiled script is read as strictly as a spec (§6): an unknown field is an er
   | `visible_unoccluded` | `target`, `min_size_px` (width and height, each 1 or more), `in_viewport` |
 
   A `text` is written normalized, as a `name` is. A `pattern` or `url_pattern` must compile as a Python regex, in a compiled assertion or a planned check. A `json_path`, here and in `probe_baselines`, is `$`, then a step for each level: `.name` for an object's key (ASCII letters, digits, `_` or `-`) or `[index]` for an array's item (an integer from 0, no leading zero, at most nine digits), as in `$.count` or `$.orders[0].total`. Nothing else, so no path reads two ways.
-- **Also enforced:** `coverage.expectations` and `assertions` are not empty, and neither is an expectation's `assertions`. An expectation's `assertions` and a step's `satisfies` name each ID once. `compiled_by.mode` is `explore`, and `compiled_by.models` is keyed by model role (navigator, verifier, healer, vision_fallback).
+- **Also enforced:** `coverage.expectations` and `assertions` are not empty, and neither is an expectation's `assertions`. An expectation's `assertions` and a step's `satisfies` name each ID once. `compiled_by.mode` is `explore`, and `compiled_by.models` is keyed by model role (navigator, verifier, healer, vision_fallback). `compiled_by.subject_contracts` is required and is a `sha256:` fingerprint of the config rows for this script's spec (§9). A script with no rows still carries the canonical hash of `[]`, as the example does.
 - **Checked by the loader, not the format** (`aqa_core.project.load_compiled`, #46). The file reader delegates to `parse_compiled(text, config, source=path)`, which applies the same strict JSON and cross-field checks without file I/O. In-memory benchmark rebindings use this parser too (#51). Every problem is reported at once, each naming the file and the key, as a spec error (exit 5, API.md §7). Reading the file is as for a spec (§6): a directory, or text that isn't UTF-8, is a spec error, and any other read error, a missing file included, propagates for the caller to handle.
   - that the JSON repeats no key, wherever it is: a reader keeps a key's last value, so a repeat could hide a lowered `side_effect`. Objects and arrays nest at most 256 deep;
   - that every name a part of the script uses exists, and is unique where it is defined: targets, assertion IDs, the expectations `expect_index` names, conditions, probes and step numbers (`capture_before_seq` names a step's `seq`);
   - that each secret a `fill_secret` step names is declared in the project config (§9);
   - that every locator of a `not_visible` check's target has a `scope`. Unscoped, the target is absent from any page without a match, such as a wrong page or an app's 404, so the check would pass whatever the page (#52). A scope every page has, such as `html` or `body`, protects nothing either, so the generator picks one particular to the page; the loader can't tell the two apart.
+
+**Subject-contract agreement before replay (ADR-0025's #53 P7a amendment).** `aqa_core.project.contract_problems(script, config)` compares the recorded fingerprint with `contracts_fingerprint(config, script.spec_id)`. Replay raises a spec error before accepting steps, binding secrets, opening the browser or writing an intent when they differ: "compiled under other subject contracts: explore it again". It also refuses a listed expectation whose governing target lacks its subject contract, and every target sharing that target's semantic meaning without the same contract. A listed expectation checked without a target is refused too. The current strict target format has no `contract` field, so every script of a listed spec fails closed. P7b adds the field together with its region/part enforcement; config rows cannot authorize an unscoped replay in the meantime. A correctly fingerprinted script of an unlisted spec remains admissible.
 
 ### Replay outcomes
 - **Binding unresolved:** no locator gives the match its use needs (see *Resolution per use*) within the wait budget → drift → heal path.
@@ -385,7 +387,7 @@ A compiled script is read as strictly as a spec (§6): an unknown field is an er
 
 ### What a heal patch may change (validator-enforced)
 - **Allowed:** `/targets/<id>/locators` (re-binding what an element *is* to how to find it), and actions/values of steps whose `side_effect` is `false` (including inserting or removing replay-safe steps, e.g., dismissing a new modal).
-- **Forbidden:** anything under `/assertions`; any target's `semantic`; any `side_effect` step other than via its target's locators; adding or removing `side_effect` steps; changing any step's `side_effect` flag; `spec_hash`; `/browser`; `/coverage`; invariants; probes; and any patch that leaves a required condition without a satisfying step (a heal may move a `satisfies` mark only onto a step that still meets the condition).
+- **Forbidden:** anything under `/assertions`; any target's `semantic`; any `side_effect` step other than via its target's locators; adding or removing `side_effect` steps; changing any step's `side_effect` flag; `spec_hash`; `/compiled_by` provenance, including `subject_contracts`; `/browser`; `/coverage`; invariants; probes; and any patch that leaves a required condition without a satisfying step (a heal may move a `satisfies` mark only onto a step that still meets the condition).
 - A heal is valid only if, after the patch, **every assertion evaluates** (none unresolved) **and passes**, and every invariant holds.
 
 ## 8. Benchmark manifest
@@ -456,6 +458,19 @@ budgets:                      # per explore run (ADR-0024)
   minutes: 15
   resolve_seconds: 10
 ```
+
+**Subject contracts (ADR-0025's #53 P7a amendment).** Optional `subjects` is a list of reviewed rows. Each row has `spec`, `expect`, `region`, required `part`, and optional `leaf` defaulting to `false`. `spec` is a non-empty spec ID; `expect` is a strict nonnegative integer indexing that spec's expectations from zero; `leaf` is a strict boolean. No `(spec, expect)` pair may occur twice, even with different contract fields. For example:
+
+```yaml
+subjects:
+  - { spec: checkout-expired-card, expect: 0, region: app-payment-step, part: button#pay }
+```
+
+- A `region` is one CSS compound: a lowercase tag starting with a letter, followed by lowercase letters, digits or hyphens, then at most eight `.class` or `#id` parts. Each suffix is `[A-Za-z][A-Za-z0-9_-]*`. It has at most 200 characters and no whitespace, combinator, attribute, pseudo-class, quote, comma, pipe or `>>`.
+- A `part` is one to four compounds of the same grammar, joined only by a descendant space or ` > `, at most 200 characters. It cannot use `:scope`, a sibling combinator or any other selector syntax. It names the subject within its region without choosing by the subject's value. `leaf` additionally requires a childless element when the contract is enforced.
+- `load_config` validates row shapes, grammars and duplicate subject keys. `load_project` additionally checks that each spec exists and each expectation index is in range, reporting spec errors before any call. `subject_contracts(config, spec_id)` returns that spec's contracts keyed by expectation index.
+- `contracts_fingerprint(config, spec_id)` hashes the canonical JSON (§7) of `[{expect, region, part, leaf}]` sorted by expectation index, with defaults included. Other specs' rows and row order do not affect it. No rows means `sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945`, the hash of `[]`.
+- Current replay refuses every script of a listed spec because targets cannot yet carry a contract (§7). P7b supplies target contracts, enforcement and the reviewed Conduit rows together. No Conduit row is added by P7a.
 
 **Browser time zone (ADR-0025's 2026-10-02 amendment).** `browser.timezone`, in the project config, in a spec and in a compiled script's `browser`, is a name in the `tzdata` package's list, written as the IANA database spells it: case counts, so `utc` is an error. Backward-compatible aliases such as `Asia/Calcutta` and `US/Pacific` are accepted, because Chromium accepts them, and are passed on as written. The list is the pinned package's (TECH_STACK §1), never the host's: `localtime` and any zone only the host lists are errors, and the answer is the same on every machine (`aqa_core.browser.time_zones`).
 

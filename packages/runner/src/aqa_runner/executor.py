@@ -36,7 +36,13 @@ from aqa_core.compiled import (
     VisibleUnoccluded,
 )
 from aqa_core.config import ProjectConfig
-from aqa_core.project import SpecError, path_on_origin, probe_url, start_url
+from aqa_core.project import (
+    SpecError,
+    contract_problems,
+    path_on_origin,
+    probe_url,
+    start_url,
+)
 from aqa_core.spec import Spec, secret_references
 from playwright.async_api import BrowserType, ElementHandle, Error
 
@@ -224,6 +230,9 @@ async def replay(
     The session uses `script.browser`, never the project's or the spec's
     settings (ADR-0025).
 
+    Before accepting steps or binding secrets, the script must agree with the
+    project's subject contracts. A mismatch raises `SpecError`.
+
     Before the browser starts, it binds the test secrets the spec references
     (`aqa_runner.bound_secrets.bound_secrets`): a missing value raises
     `MissingSecretError`, Playwright's protocol logging `SecretLoggedError`,
@@ -236,6 +245,8 @@ async def replay(
     (`aqa_runner.evidence`)."""
     # The script's own problems first, so a spec error wins over a missing
     # value (exit 5 before 12).
+    if problems := contract_problems(script, setup.config):
+        raise SpecError(problems)
     runnable, checks = _accepted(script, setup.spec)
     bound = bound_secrets(setup.spec, setup.start)
     redactor = Redactor(bound.values())

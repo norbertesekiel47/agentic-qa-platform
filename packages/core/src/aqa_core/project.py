@@ -27,11 +27,12 @@ from aqa_core.compiled import (
 from aqa_core.config import ProjectConfig, SecretField
 from aqa_core.model_roles import RoleError, resolve_roles
 from aqa_core.price_map import vendored
-from aqa_core.schema import parse_origin
+from aqa_core.schema import Contract, parse_origin
 from aqa_core.spec import (
     Spec,
     SpecContext,
     SpecFrontmatter,
+    canonical_hash,
     secret_references,
     spec_hash,
 )
@@ -199,6 +200,24 @@ class Project:
     specs: Mapping[str, Spec]
 
 
+def _subject_problems(
+    config: ProjectConfig, specs: Mapping[str, Spec], path: Path
+) -> list[str]:
+    """Rows whose spec or expectation is absent from this project."""
+    problems: list[str] = []
+    for index, row in enumerate(config.subjects):
+        prefix = f"{path}: subjects[{index}]"
+        if row.spec not in specs:
+            problems.append(f"{prefix}: no spec named {row.spec}")
+        elif row.expect >= len(specs[row.spec].frontmatter.expect):
+            count = len(specs[row.spec].frontmatter.expect)
+            problems.append(
+                f"{prefix}: {row.spec} has {count} expectations, "
+                f"so it has no expect {row.expect}"
+            )
+    return problems
+
+
 def load_project(spec_root: Path) -> Project:
     """The project whose config is `spec_root/config.yaml`, with every
     `*.spec.md` below it, in subdirectories too. Spec ids are unique in a
@@ -237,9 +256,64 @@ def load_project(spec_root: Path) -> Project:
             specs[frontmatter.id] = _spec_with_bindings(
                 path, frontmatter, hashed, config
             )
+    if config is not None:
+        problems.extend(_subject_problems(config, specs, config_path))
     if config is None or problems:
         raise SpecError(problems)
     return Project(spec_root, config, specs)
+
+
+def subject_contracts(config: ProjectConfig, spec_id: str) -> Mapping[int, Contract]:
+    """The reviewed subjects of exactly one spec, by expectation index."""
+    return {row.expect: row.contract for row in config.subjects if row.spec == spec_id}
+
+
+def contracts_fingerprint(config: ProjectConfig, spec_id: str) -> str:
+    """The canonical hash of this spec's sorted, normalized rows (ADR-0025)."""
+    return canonical_hash(
+        [
+            {"expect": expect, **contract.model_dump()}
+            for expect, contract in sorted(subject_contracts(config, spec_id).items())
+        ]
+    )
+
+
+def contract_problems(script: CompiledScript, config: ProjectConfig) -> list[str]:
+    """Why replay lacks agreement with reviewed subjects (ADR-0025).
+
+    This format cannot carry a target contract, so every listed spec fails
+    closed. A shared semantic meaning is governed wherever it is targeted.
+    """
+    problems: list[str] = []
+    if script.compiled_by.subject_contracts != contracts_fingerprint(
+        config, script.spec_id
+    ):
+        problems.append("compiled under other subject contracts: explore it again")
+    for expect in subject_contracts(config, script.spec_id):
+        names = {
+            assertion.target
+            for assertion in script.assertions
+            if assertion.expect_index == expect
+            and isinstance(assertion, TextInTarget | NotVisible | VisibleUnoccluded)
+        }
+        if not names:
+            problems.append(
+                f"subjects {script.spec_id} expect {expect}: no target carries its subject contract"
+            )
+            continue
+        meanings = {
+            script.targets[name].semantic for name in names if name in script.targets
+        }
+        governed = names | {
+            name
+            for name, target in script.targets.items()
+            if target.semantic in meanings
+        }
+        problems.extend(
+            f"targets.{name}: lacks subject contract for {script.spec_id} expect {expect}"
+            for name in sorted(governed)
+        )
+    return problems
 
 
 class _JsonObject(dict[str, object]):

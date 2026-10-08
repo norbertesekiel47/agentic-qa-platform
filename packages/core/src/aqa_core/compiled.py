@@ -615,6 +615,7 @@ class CompiledBy(StrictModel):
     mode: Literal["explore"]
     models: dict[ModelRoleName, NonEmpty]
     price_map: NonEmpty
+    subject_contracts: _Sha256
 
 
 def _version_1(version: int) -> int:

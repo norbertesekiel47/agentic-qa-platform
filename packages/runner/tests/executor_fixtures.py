@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from aqa_core.compiled import CompiledScript
 from aqa_core.config import ProjectConfig
-from aqa_core.project import load_spec
+from aqa_core.project import contracts_fingerprint, load_spec
 from aqa_core.spec import Spec
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.executor import RunResult, RunSetup, replay
@@ -539,6 +539,9 @@ def compiled(
                     "mode": "explore",
                     "models": {"navigator": "a-model"},
                     "price_map": "a-commit",
+                    "subject_contracts": contracts_fingerprint(
+                        ProjectConfig(), "replay"
+                    ),
                 },
                 "confirmed": True,
                 "browser": browser or PINNED,
