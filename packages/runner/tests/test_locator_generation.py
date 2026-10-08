@@ -21,6 +21,7 @@ from aqa_core.compiled import (
     Target,
     TextInTarget,
 )
+from aqa_core.schema import Contract
 from aqa_core.text import normalize
 from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.locator_generation import (
@@ -1030,7 +1031,9 @@ async def resolves_alone_to(
     element `used`."""
     found = []
     for locator in target.locators:
-        alone = Target(semantic=target.semantic, locators=(locator,))
+        alone = Target(
+            semantic=target.semantic, locators=(locator,), contract=target.contract
+        )
         resolved = await resolve(page, alone, use)
         found.append(
             isinstance(resolved, Resolved)
@@ -1041,6 +1044,8 @@ async def resolves_alone_to(
 
 FAVORITE_BUTTON = "the favorite button in the article banner"
 BANNER = ByCss(css="div.banner")
+BUTTON_CONTRACT = Contract(region=BANNER.css, part="app-favorite-button > button")
+COUNT_CONTRACT = Contract(region=BANNER.css, part="span.counter", leaf=True)
 FAVORITING: list[tuple[str, str, Literal["action", "assertion"]]] = [
     ("article", "Favorite Article (0)", "action"),
     ("article-favorited", "Unfavorite Article (1)", "assertion"),
@@ -1056,7 +1061,7 @@ def test_the_favorite_toggle_is_split_between_its_click_and_its_check() -> None:
     async def scenario(
         session: BrowserSession,
     ) -> tuple[tuple[Target, ...], list[tuple[int, list[bool]]]]:
-        uses = TargetUses(FAVORITE_BUTTON, checks_text=True)
+        uses = TargetUses(FAVORITE_BUTTON, checks_text=True, contract=BUTTON_CONTRACT)
         got = []
         for page, name, use in FAVORITING:
             await show(session, page)
@@ -1072,18 +1077,26 @@ def test_the_favorite_toggle_is_split_between_its_click_and_its_check() -> None:
 
     targets, got = in_session(scenario)
 
-    structure = ByCss(css="app-favorite-button button.btn", scope=BANNER)
+    structure = ByCss(css="button.btn", scope=ByCss(css="app-favorite-button"))
     assert targets == (
         Target(
             semantic=FAVORITE_BUTTON,
             locators=(
-                ByRole(role="button", name="Favorite Article (0)", scope=BANNER),
+                ByRole(role="button", name="Favorite Article (0)"),
                 structure,
             ),
+            contract=BUTTON_CONTRACT,
         ),
-        Target(semantic=FAVORITE_BUTTON, locators=(structure,)),
+        Target(
+            semantic=FAVORITE_BUTTON,
+            locators=(
+                ByRole(role="button", scope=ByCss(css="app-favorite-button")),
+                structure,
+            ),
+            contract=BUTTON_CONTRACT,
+        ),
     )
-    assert got == [(0, [True, True]), (1, [True])]
+    assert got == [(0, [True, True]), (1, [True, True])]
 
 
 def test_a_target_whose_locators_hold_at_every_use_stays_one() -> None:
@@ -1095,7 +1108,7 @@ def test_a_target_whose_locators_hold_at_every_use_stays_one() -> None:
     async def scenario(
         session: BrowserSession,
     ) -> tuple[tuple[Target, ...], list[tuple[int, list[bool]]]]:
-        uses = TargetUses(meaning, checks_text=True)
+        uses = TargetUses(meaning, checks_text=True, contract=COUNT_CONTRACT)
         got = []
         for page, name, _ in FAVORITING:
             await show(session, page)
@@ -1116,7 +1129,11 @@ def test_a_target_whose_locators_hold_at_every_use_stays_one() -> None:
     targets, got = in_session(scenario)
 
     assert targets == (
-        Target(semantic=meaning, locators=(ByCss(css="span.counter", scope=BANNER),)),
+        Target(
+            semantic=meaning,
+            locators=(ByCss(css="span.counter"),),
+            contract=COUNT_CONTRACT,
+        ),
     )
     assert got == [(0, [True]), (0, [True])]
 
