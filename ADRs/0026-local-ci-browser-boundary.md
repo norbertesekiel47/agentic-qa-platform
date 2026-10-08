@@ -733,13 +733,13 @@ Option 3 (the maintainer, 2026-10-08); slice D is closed. When a run's redactor 
 
 - *Two predicates, equal today.* `_Replay.withheld` decides what the returned result keeps (reasons and `seen`); a local `secret_bound` decides `egress.json`. A caller that one day may keep the returned texts for its own presentation (#53) can relax only the first: a saved file never names a host or port in a run that binds a secret.
 - *No counts-only retry.* Only a run that binds nothing writes the named form, and an empty scan refuses nothing, so a refused `egress.json` is left out.
-- *Not changed here.* A policy event's own message, which names its origin, is still kept as ours (`_owned`); a fixed reason for it is #53's.
+- *Not changed here.* A policy event's or a `fill_secret` refusal's own message, which names an origin, is still kept as ours (`_owned`); a fixed reason for it is #53's. The withheld wording still says "since the page was handed a test secret", also in a run that never fills one; rewording it (`redaction._WITHHELD`) is a follow-up.
 
 ### Consequences and limits
 
 What is guaranteed, whenever a secret is bound: `egress.json` names no host or port, invariants keep no text, and failure reasons keep no Playwright message. Every other channel keeps what it kept, and what #53 prints or saves of it is #53's protected output:
 
 - saved: the accessibility snapshot, scanned (fragmented reflections best-effort), and the logs' metadata (console types and their order, request statuses, timing, sizes and totals);
-- returned in `RunResult`: `steps[*].window` requests and responses (scanned methods and URLs, statuses), `policy_events` (scanned URLs and origins), `infrastructure_events` (scanned host and cause, the port as it was) and `egress_blocks` (hosts and ports, raw).
+- returned in `RunResult`: a reason the executor owns, such as a policy event's, which names an origin (scanned); `steps[*].window` requests and responses (scanned methods and URLs, statuses), `policy_events` (scanned URLs and origins), `infrastructure_events` (scanned host and cause, the port as it was) and `egress_blocks` (hosts and ports, raw).
 
 A page holding a value can still encode it in what is kept, such as `refused_count`, totals and outcomes. Tests: `test_evidence.py`'s `test_a_run_that_binds_a_secret_keeps_no_refused_host_or_invariant_text` (a record part included) and `test_a_run_that_binds_a_secret_keeps_no_text_of_any_invariant`, `test_result_redaction.py`'s `test_a_bound_runs_step_reason_keeps_no_page_message` and `test_a_bound_runs_assertion_reason_keeps_no_page_message`, each beside a control that binds nothing. No dependency, paid resource or model call.
