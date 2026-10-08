@@ -40,8 +40,8 @@ EXIT_CODES: Final[Mapping[Failure, int]] = {
     "record_error": 15,
 }
 # What the run record says: "planned", a failure, "error", a fault of ours,
-# or "interrupted", Ctrl-C or a cancellation while planning. The last two are
-# raised as they came.
+# or "interrupted", Ctrl-C or a cancellation while planning. "error" and
+# "interrupted" are raised as they came.
 Outcome = Literal["planned", "error", "interrupted"] | Failure
 
 # Said when an interrupted run's record can't be written: the interruption
@@ -160,7 +160,8 @@ def _write_interrupted(
         # What `RunRecord.write` raises: a filesystem failure, or a write the
         # record refuses. Neither may replace the interruption.
         interruption.add_note(_UNWRITTEN)
-        with contextlib.suppress(OSError):  # stderr itself may be gone
+        # A broken stderr raises OSError; a closed one, ValueError.
+        with contextlib.suppress(OSError, ValueError):
             typer.echo(_UNWRITTEN, err=True)
 
 
