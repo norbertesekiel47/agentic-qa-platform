@@ -531,6 +531,20 @@ def test_unresolved_lists_pending_intents_with_their_side_effect(
     assert record.unresolved() == ()
 
 
+def test_a_record_at_another_path_keeps_intents_of_its_own(tmp_path: Path) -> None:
+    # Copied with `dataclasses.replace` into another directory, as #50 B's
+    # tests make a part by hand: other files, so other intents.
+    record = RunRecord.create(tmp_path)
+    record.step_intent(1, click(1), side_effect=True, target_used="t1")
+    elsewhere = replace(record, path=record.path / "attempt-1")
+
+    elsewhere.step_intent(1, click(1), side_effect=False, target_used="t1")
+    elsewhere.step_completed(1, locator_used=0, settled="idle")
+
+    assert record.unresolved() == (PendingIntent(seq=1, side_effect=True),)
+    assert elsewhere.unresolved() == ()
+
+
 def test_a_rescanned_record_keeps_its_pending_intents(tmp_path: Path) -> None:
     # Replay scans the record it is given with its own redactor
     # (`executor.replay`), and explore then asks the part it gave.
@@ -587,22 +601,15 @@ def refuse(_: str) -> None:
     raise RefusedWriteError("refused by the caller")
 
 
-@pytest.mark.parametrize("how", ["fsync", "check"])
 def test_a_failed_intent_write_leaves_nothing_pending_and_raises(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, how: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # A refused one too (`test_the_check_runs_on_the_exact_journal_line_...`).
     record = RunRecord.create(tmp_path)
-    if how == "fsync":
-        fail_fsync(monkeypatch)
+    fail_fsync(monkeypatch)
 
-    with pytest.raises(OSError if how == "fsync" else RefusedWriteError):
-        record.step_intent(
-            1,
-            click(1),
-            side_effect=True,
-            target_used="t1",
-            check=refuse if how == "check" else None,
-        )
+    with pytest.raises(OSError, match="fake fsync failure"):
+        record.step_intent(1, click(1), side_effect=True, target_used="t1")
 
     assert record.unresolved() == ()
 
@@ -632,12 +639,16 @@ def test_each_part_has_its_own_steps_and_forces_every_directory(
     assert confirmation.unresolved() == (PendingIntent(seq=0, side_effect=False),)
 
 
+class _Interrupted(BaseException):
+    """What stops a write without being an OSError, as a signal can."""
+
+
 class _Cut:
     """An open journal whose next write puts half its text on disk, then
-    fails as a full disk does."""
+    fails as a full disk does, or with `error`."""
 
-    def __init__(self, file: Any) -> None:
-        self.file = file
+    def __init__(self, file: Any, error: BaseException) -> None:
+        self.file, self.error = file, error
 
     def __enter__(self) -> Self:
         return self
@@ -648,15 +659,15 @@ class _Cut:
     def write(self, text: str) -> int:
         self.file.write(text[: len(text) // 2])
         self.file.flush()
-        raise OSError(errno.ENOSPC, "fake full disk")
+        raise self.error
 
 
-def cut_the_next_line(monkeypatch: pytest.MonkeyPatch) -> None:
+def cut_the_next_line(monkeypatch: pytest.MonkeyPatch, error: BaseException) -> None:
     opening = Path.open
 
     def cutting(path: Path, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
         file = opening(path, mode, *args, **kwargs)
-        return _Cut(file) if mode == "a" else file
+        return _Cut(file, error) if mode == "a" else file
 
     monkeypatch.setattr(Path, "open", cutting)
 
@@ -666,7 +677,7 @@ def test_a_completion_cut_mid_line_leaves_its_intent_unresolved(
 ) -> None:
     record = RunRecord.create(tmp_path)
     record.step_intent(1, click(1), side_effect=True, target_used="t1")
-    cut_the_next_line(monkeypatch)
+    cut_the_next_line(monkeypatch, OSError(errno.ENOSPC, "fake full disk"))
 
     with pytest.raises(OSError, match="fake full disk"):
         record.step_completed(1, locator_used=0, settled="idle")
@@ -677,13 +688,18 @@ def test_a_completion_cut_mid_line_leaves_its_intent_unresolved(
     assert record.unresolved() == (PendingIntent(seq=1, side_effect=True),)
 
 
+@pytest.mark.parametrize(
+    "error",
+    [OSError(errno.ENOSPC, "fake full disk"), _Interrupted("fake interruption")],
+    ids=["full-disk", "interrupted"],
+)
 def test_a_journal_cut_mid_intent_takes_no_further_line(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: BaseException
 ) -> None:
     record = RunRecord.create(tmp_path)
     steps = record.path / "steps.jsonl"
-    cut_the_next_line(monkeypatch)
-    with pytest.raises(OSError, match="fake full disk"):
+    cut_the_next_line(monkeypatch, error)
+    with pytest.raises(type(error), match="fake"):
         record.step_intent(1, click(1), side_effect=True, target_used="t1")
     monkeypatch.undo()
     cut = steps.read_bytes()
@@ -809,7 +825,7 @@ def test_a_cost_line_refused_by_its_check_raises_with_the_call_and_leaves_the_fi
         record.cost(call, check=check)
 
     # The call is kept for the caller, never put in what the error says.
-    assert raised.value.record is call
+    assert raised.value.call is call
     assert raised.value.args == (
         "costs.jsonl: a priced call's cost line isn't on disk",
     )
@@ -836,7 +852,7 @@ def test_a_cost_line_whose_write_failed_raises_with_the_call_and_is_not_retried(
     with pytest.raises(UnrecordedCostError) as again:
         record.cost(priced(200))
 
-    assert raised.value.record is call
+    assert raised.value.call is call
     assert isinstance(raised.value.__cause__, OSError)
     assert len(calls) == 1
     assert written.count(b"\n") == 1
