@@ -790,18 +790,25 @@ def cause_chain(
 
 
 @pytest.mark.parametrize(
-    ("body", "disposal_fails", "expected"),
+    ("body", "drop_fails", "disposal_fails", "expected"),
     [
-        (None, False, ("drop",)),
-        (None, True, ("disposal", "drop")),
-        (ValueError, False, ("drop", "body")),
-        (ValueError, True, ("disposal", "drop", "body")),
-        (asyncio.CancelledError, False, ("body", "drop")),
-        (asyncio.CancelledError, True, ("body", "disposal", "drop")),
+        (None, True, False, ("drop",)),
+        (None, True, True, ("disposal", "drop")),
+        (ValueError, True, False, ("drop", "body")),
+        (ValueError, True, True, ("disposal", "drop", "body")),
+        (asyncio.CancelledError, True, False, ("body", "drop")),
+        (asyncio.CancelledError, True, True, ("body", "disposal", "drop")),
+        (None, False, True, ("disposal",)),
+        (ValueError, False, True, ("disposal", "body")),
+        (asyncio.CancelledError, False, True, ("body", "disposal")),
     ],
 )
 def test_an_open_document_drop_error_propagates_and_does_not_claim_retirement(
-    body: type[BaseException] | None, *, disposal_fails: bool, expected: tuple[str, ...]
+    body: type[BaseException] | None,
+    *,
+    drop_fails: bool,
+    disposal_fails: bool,
+    expected: tuple[str, ...],
 ) -> None:
     async def scenario(session: BrowserSession) -> None:
         await put(session, '<div class="banner"><span class="counter">1</span></div>')
@@ -818,7 +825,7 @@ def test_an_open_document_drop_error_propagates_and_does_not_claim_retirement(
         held: HeldRegion | None = None
 
         async def fail_drop(element: ElementHandle, text: str) -> list[ElementHandle]:
-            if text.startswith("drop:"):
+            if drop_fails and text.startswith("drop:"):
                 raise failures["drop"]
             return await _query(element, text)
 
@@ -847,7 +854,7 @@ def test_an_open_document_drop_error_propagates_and_does_not_claim_retirement(
             assert held is not None
             assert held.element in disposed
             assert not session.page.is_closed()
-            assert await held.bound(offered)
+            assert await held.bound(offered) is drop_fails
             await _query(offered, f"drop:{held.token}")
             assert not await held.bound(offered)
         finally:
