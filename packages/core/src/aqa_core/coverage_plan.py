@@ -156,6 +156,18 @@ def plan_hash(plan: CoveragePlan) -> str:
     return canonical_hash(plan.model_dump(mode="json", exclude_none=True))
 
 
+def planned_checks(plan: CoveragePlan) -> dict[str, tuple[int, PlannedCheck]]:
+    """Each planned check by its ID, with its expectation's index. The IDs are
+    `a1`, `a2`, ... in plan order: the navigator names a check by the ID of
+    the assertion it compiles to (ADR-0024)."""
+    numbered = (
+        (planned.expect_index, check)
+        for planned in plan.expectations
+        for check in planned.checks
+    )
+    return {f"a{n}": pair for n, pair in enumerate(numbered, start=1)}
+
+
 def misfits(plan: CoveragePlan, frontmatter: SpecFrontmatter) -> tuple[str, ...]:
     """Why `plan` doesn't fit the spec it was written for: it must have one
     entry per expectation, in the spec's order, and read only probes the spec
