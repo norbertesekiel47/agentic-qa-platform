@@ -228,7 +228,9 @@ async def replay(
     """Run `script` once for `setup`, through `proxy`, the run's egress
     proxy, whose gate is `gate`, recording each step in the setup's record.
     The session uses `script.browser`, never the project's or the spec's
-    settings (ADR-0025).
+    settings (ADR-0025). Once its browser has closed, replay ends the
+    proxy's open phase and only then reads the run's egress blocks and
+    infrastructure events, so the proxy is between phases when it returns.
 
     Before accepting steps or binding secrets, the script must agree with the
     project's subject contracts. A mismatch raises `SpecError`.
@@ -315,14 +317,17 @@ async def replay(
         )
         if run.withheld:
             invariants = tuple(replace(result, seen=()) for result in invariants)
-        blocks = proxy.egress_blocks(expected)
-        errored = (
-            blocks.blocked
-            or bool(gate.infrastructure_events)
-            or any(step.outcome == "failed" for step in steps)
-            or any(assertion.error is not None for assertion in assertions)
-        )
         policy_events = tuple(session.policy_events.kept)
+    # Ending the phase joins every connection the browser opened, so no
+    # proxy task can record a block or an event after the verdict.
+    await proxy.end_phase()
+    blocks = proxy.egress_blocks(expected)
+    errored = (
+        blocks.blocked
+        or bool(gate.infrastructure_events)
+        or any(step.outcome == "failed" for step in steps)
+        or any(assertion.error is not None for assertion in assertions)
+    )
     passed = (
         all(step.outcome == "completed" for step in steps)
         and all(assertion.outcome == "pass" for assertion in assertions)
