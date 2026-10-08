@@ -1,5 +1,3 @@
-"""Session infrastructure failures use the sandbox boundary (ADR-0026)."""
-
 import asyncio
 import sys
 from collections.abc import Sequence
@@ -32,8 +30,6 @@ from packages.runner.tests.test_sandbox import (
 
 
 class FaultyChromium:
-    """A launch fault before any browser exists."""
-
     def __init__(self, fault: Exception) -> None:
         self.fault = fault
 
