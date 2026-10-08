@@ -215,12 +215,8 @@ class EgressProxy:
         self._phase: _Phase | None = None
 
     async def __aenter__(self) -> Self:
+        await self._open_phase()
         self._entered = True
-        try:
-            await self.begin_phase()
-        except BaseException:
-            self._entered = False
-            raise
         return self
 
     async def __aexit__(
@@ -230,13 +226,18 @@ class EgressProxy:
         trace: TracebackType | None,
     ) -> None:
         self._entered = False
-        if self._phase is not None and not self._phase.ending:
+        # A phase another task is ending is joined here too: the proxy
+        # closes only once every connection has.
+        if self._phase is not None:
             await self._end(self._phase, kind, error, trace)
 
     async def begin_phase(self) -> None:
         """Open a phase: a new listener, on a new port."""
         if not self._entered:
             raise RuntimeError("the egress proxy serves only inside `async with`")
+        await self._open_phase()
+
+    async def _open_phase(self) -> None:
         if self._phase is not None:
             raise RuntimeError("the egress proxy has a phase open or ending")
         phase = _Phase()
@@ -326,7 +327,9 @@ class EgressProxy:
             raise RuntimeError("the egress proxy serves only inside `async with`")
         if self._phase is None or self._phase.ending:
             raise RuntimeError("the egress proxy is between phases")
-        return f"http://127.0.0.1:{self._phase.port}"
+        # The live listener's port raises once an accept error has retired
+        # it, so no browser is sent to a port another process could take.
+        return f"http://127.0.0.1:{self._phase.listener.port}"
 
     async def _serve(
         self,

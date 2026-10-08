@@ -186,6 +186,46 @@ def test_a_plain_exchange_cancelled_at_the_phases_end_is_uncertain() -> None:
     assert asyncio.run(scenario()) == (PhaseTraffic(1, 0), b"")
 
 
+class CutWriter:
+    """An upstream connection's writer that takes the bytes, then fails as a
+    reset does while they drain: a request cut partway upstream."""
+
+    def __init__(self, writer: asyncio.StreamWriter) -> None:
+        self.writer = writer
+
+    def write(self, data: bytes) -> None:
+        self.writer.write(data)
+
+    async def drain(self) -> None:
+        raise ConnectionResetError(errno.ECONNRESET, "Connection reset by peer")
+
+    def close(self) -> None:
+        self.writer.close()
+
+
+def test_a_plain_exchange_whose_request_fails_partway_upstream_is_uncertain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    open_connection = asyncio.open_connection
+
+    async def scenario() -> tuple[int, PhaseTraffic]:
+        async with raw_upstream() as upstream:
+            start = f"http://127.0.0.1:{upstream.port}"
+
+            async def opening(host: str, port: int, **tls: Any) -> tuple[Any, Any]:
+                reader, writer = await open_connection(host, port, **tls)
+                return reader, CutWriter(writer) if port == upstream.port else writer
+
+            monkeypatch.setattr(asyncio, "open_connection", opening)
+            egress = gate(allowed=(start,))
+            async with EgressProxy(egress) as proxy:
+                await exchange(proxy, get(f"{start}/"))
+                traffic = await proxy.end_phase()
+            return len(egress.infrastructure_events), traffic
+
+    assert asyncio.run(scenario()) == (1, PhaseTraffic(1, 0))
+
+
 @pytest.mark.parametrize("case", ["refused host", "unreachable", "unreadable"])
 def test_a_refused_or_unconnected_request_is_clean(case: str) -> None:
     start = f"http://127.0.0.1:{unused_port()}"
@@ -536,6 +576,10 @@ def test_a_phase_cannot_begin_while_one_is_open_or_ending(watch: Watch) -> None:
                 first = watch.watch(proxy)
                 with pytest.raises(RuntimeError, match="open or ending"):
                     await proxy.begin_phase()
+                # Entering it again leaves the open phase as it was.
+                with pytest.raises(RuntimeError, match="open or ending"):
+                    await proxy.__aenter__()
+                assert port_of(proxy) == first
                 release = watch.close = asyncio.Event()
                 _, writer = await proxy_client(proxy)
                 writer.write(get(f"{start}/"))
@@ -735,6 +779,8 @@ def test_a_retired_listener_is_never_retried(watch: Watch) -> None:
             # Its socket is closed: nothing listens there any more.
             with pytest.raises(ConnectionRefusedError):
                 await asyncio.open_connection("127.0.0.1", port)
+            # asyncio.start_server, the listener's predecessor, retried 1 s
+            # after a persistent accept error.
             await asyncio.sleep(1.2)
             with pytest.raises(ConnectionRefusedError):
                 await asyncio.open_connection("127.0.0.1", port)
@@ -744,3 +790,43 @@ def test_a_retired_listener_is_never_retried(watch: Watch) -> None:
 
     assert watch.accepts == 1
     assert egress.infrastructure_events == [retired(port, "EMFILE")]
+
+
+def test_a_retired_phase_gives_no_url(watch: Watch) -> None:
+    # No browser may be pointed at a port another process could now take.
+    async def scenario() -> PhaseTraffic:
+        async with EgressProxy(gate(allowed=("http://127.0.0.1:9",))) as proxy:
+            await retire(proxy, watch, OSError(errno.EMFILE, "EMFILE"))
+            with pytest.raises(RuntimeError, match="not listening"):
+                _ = proxy.url
+            return await proxy.end_phase()
+
+    assert asyncio.run(scenario()) == PhaseTraffic(0, 0)
+
+
+def test_leaving_the_proxy_while_its_phase_is_ending_waits_for_the_join(
+    watch: Watch,
+) -> None:
+    async def scenario() -> tuple[PhaseTraffic, bool]:
+        async with raw_upstream() as silent:
+            start = f"http://127.0.0.1:{silent.port}"
+            proxy = EgressProxy(gate(allowed=(start,)))
+            await proxy.__aenter__()
+            port = watch.watch(proxy)
+            release = watch.close = asyncio.Event()
+            _, writer = await proxy_client(proxy)
+            writer.write(get(f"{start}/"))
+            await until(lambda: b"\r\n\r\n" in silent.received)
+            ending = asyncio.create_task(proxy.end_phase())
+            await asyncio.wait_for(watch.closing.wait(), 5)
+            leaving = asyncio.create_task(proxy.__aexit__(None, None, None))
+            await turns(3)
+            held = not leaving.done()
+            release.set()
+            await leaving
+            traffic = await ending
+            await watch.released(port)
+            writer.close()
+            return traffic, held
+
+    assert asyncio.run(scenario()) == (PhaseTraffic(1, 0), True)
