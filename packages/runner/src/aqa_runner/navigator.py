@@ -8,7 +8,7 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 
 from aqa_core.coverage_plan import CoveragePlan, planned_checks
 from aqa_core.project import SpecError
@@ -16,7 +16,7 @@ from aqa_core.schema import Contract, ListOf, SecretName, StartPath, StrictModel
 from aqa_core.spec import UNHASHED_KEYS, Spec
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool, StructuredTool
-from pydantic import StrictInt, StrictStr, ValidationError
+from pydantic import AfterValidator, StrictInt, StrictStr, ValidationError
 
 from aqa_runner.model_router import Routed
 from aqa_runner.redaction import Redacted, Redactor
@@ -216,6 +216,16 @@ def navigator_request(
 # it, so a rule on a value is a validator, which adds nothing to the schema.
 
 
+def _said(meaning: str) -> str:
+    if not meaning.strip():
+        raise ValueError("an action names what its element is for and where it sits")
+    return meaning
+
+
+# What an element is for and where it sits, never its label (ADR-0025).
+Meaning = Annotated[StrictStr, AfterValidator(_said)]
+
+
 class Navigate(StrictModel):
     path: StartPath
 
@@ -226,24 +236,24 @@ class Reload(StrictModel):
 
 class Click(StrictModel):
     ref: StrictStr
-    meaning: StrictStr
+    meaning: Meaning
 
 
 class Fill(StrictModel):
     ref: StrictStr
-    meaning: StrictStr
+    meaning: Meaning
     text: StrictStr
 
 
 class FillSecret(StrictModel):
     ref: StrictStr
-    meaning: StrictStr
+    meaning: Meaning
     name: SecretName
 
 
 class Select(StrictModel):
     ref: StrictStr
-    meaning: StrictStr
+    meaning: Meaning
     option: StrictStr
 
 

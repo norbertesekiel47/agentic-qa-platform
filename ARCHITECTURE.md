@@ -113,7 +113,7 @@ A checkpoint preserves graph state, not the browser. Resuming therefore requires
 
 | Tool | Purpose |
 |---|---|
-| `navigate(path)`, `reload()` | `navigate` takes a path on the run's start origin, such as `/login`, never a URL with an origin, so no port reaches a prompt; other allowed origins are reached by clicks. The page each lands on, after redirects, is checked (ADR-0026) |
+| `navigate(path)`, `reload()` | `navigate` takes a path on the run's start origin, such as `/login`, never a URL with an origin, so no port reaches a prompt. The page each lands on, after redirects, is checked (ADR-0026) |
 | `click(ref, meaning)`, `fill(ref, meaning, text)`, `select(ref, meaning, option)`, `press(key)` | Act on accessibility-tree element refs. An action on an element names its meaning: what the element is for and where it sits, never its label (ADR-0025) |
 | `fill_secret(ref, meaning, name)` | Inject a named secret at the browser layer, only into a field and origin the secret is bound to (project config, DATA_MODEL §9); a refusal comes back to the agent as a tool error that names the secret, never its value (`BrowserSession.fill_secret`, ADR-0026) |
 | `screenshot(region?)` | Visual observation for verification (hybrid perception, M2; M1's navigator reads the accessibility tree only) |
