@@ -89,7 +89,7 @@ def test_a_refusal_survives_its_fallback_being_cancelled(tmp_path: Path) -> None
     asked = model_router.call("healer", "heal", [HumanMessage(content="go")])
 
     with pytest.raises(TimeoutError):
-        asyncio.run(asyncio.wait_for(asked, timeout=0.05))
+        asyncio.run(asyncio.wait_for(asked, timeout=1))
 
     assert billed(model_router) == [(SONNET, "refusal", Decimal("0.00027"))]
 

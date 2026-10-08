@@ -269,7 +269,7 @@ def test_a_closed_stderr_does_not_replace_the_interruption(
 
     async def taken() -> Reply:
         [run] = (tmp_path / "qa" / ".aqa" / "runs").iterdir()
-        (run / "plan.json").write_text("written first\n")
+        (run / "plan.json").symlink_to(run)  # a link the record refuses to write
         raise asyncio.CancelledError
 
     sonnet = Scripted(answer(CIRCULAR), taken)
@@ -329,9 +329,9 @@ def test_sigint_during_corrective_request_exits_130_and_keeps_first_cost(
     ) as child:
         try:
             assert child.stdout is not None
-            ready = selectors.DefaultSelector()
-            ready.register(child.stdout, selectors.EVENT_READ)
-            assert ready.select(timeout=60), "the corrective request never started"
+            with selectors.DefaultSelector() as ready:
+                ready.register(child.stdout, selectors.EVENT_READ)
+                assert ready.select(60), "the corrective request never started"
             assert child.stdout.readline() == "SECOND_REQUEST_READY\n"
             os.kill(child.pid, signal.SIGINT)
             _, stderr = child.communicate(timeout=30)
