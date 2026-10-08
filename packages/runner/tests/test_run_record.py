@@ -604,7 +604,7 @@ def refuse(_: str) -> None:
 def test_a_failed_intent_write_leaves_nothing_pending_and_raises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A refused one too (`test_the_check_runs_on_the_exact_journal_line_...`).
+    # A refused one too (`test_the_check_runs_on_the_exact_journal_line_wrapper_fields_included`).
     record = RunRecord.create(tmp_path)
     fail_fsync(monkeypatch)
 
@@ -614,10 +614,17 @@ def test_a_failed_intent_write_leaves_nothing_pending_and_raises(
     assert record.unresolved() == ()
 
 
+@pytest.mark.parametrize(
+    "made",
+    [lambda record: record, lambda record: RunRecord(record.run_id, record.path)],
+    ids=["created", "made-directly"],
+)
 def test_each_part_has_its_own_steps_and_forces_every_directory(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    made: Callable[[RunRecord], RunRecord],
 ) -> None:
-    record = RunRecord.create(tmp_path)
+    record = made(RunRecord.create(tmp_path))
     attempt, confirmation = record.part("attempt-1"), record.part("confirmation")
     synced = forced(monkeypatch, attempt.path / "steps.jsonl")
 

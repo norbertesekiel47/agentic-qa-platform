@@ -85,8 +85,8 @@ class PendingIntent:
 class _Journals:
     """What a run's records hold of their journals in memory, shared by
     every record made from the run's (`redacting`, `part`, any
-    `dataclasses.replace`) and kept by path, so only records that write
-    the same files share an entry: by record directory, each step whose
+    `dataclasses.replace`) and kept by path as spelled, so only records
+    at the same path share an entry: by record directory, each step whose
     intent is on disk with no completion yet, by seq, with its
     `side_effect` flag; and each journal a write to failed."""
 
@@ -122,7 +122,7 @@ class RunRecord:
     of every secret the run binds (`NO_SECRETS` until `redacting`). A
     record made from this one with `dataclasses.replace`, as `redacting`
     and `part` make theirs, keeps the scan and the spec root, and shares
-    the journals' state of the files it writes."""
+    the journals' state of its path."""
 
     run_id: str
     path: Path
@@ -130,10 +130,15 @@ class RunRecord:
     _journals: _Journals = field(
         default_factory=_Journals, kw_only=True, repr=False, compare=False
     )
-    # The spec root (`create`), which existed before the run: a new journal
-    # forces each directory from the record's up to it. None for a record
-    # made directly, a run's, whose spec root is three directories up.
+    # The spec root, which existed before the run: a new journal forces each
+    # directory from the record's up to it. Set once, where the run's record
+    # is made, so every record made from it keeps it.
     _root: Path | None = field(default=None, kw_only=True, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._root is None:
+            # Made directly, not by `create`: a run's, three directories down.
+            object.__setattr__(self, "_root", self.path.parents[2])
 
     @classmethod
     def create(cls, base: Path) -> Self:
@@ -348,14 +353,14 @@ class RunRecord:
                 # https://docs.python.org/3.14/library/os.html#os.fsync
                 os.fsync(file.fileno())
             if new:
-                chain = [self.path, *self.path.parents]
-                root = self._root or self.path.parents[2]
-                for directory in chain[: chain.index(root) + 1]:
+                for directory in (self.path, *self.path.parents):
                     handle = os.open(directory, os.O_RDONLY)
                     try:
                         os.fsync(handle)
                     finally:
                         os.close(handle)
+                    if directory == self._root:
+                        break
         except BaseException:
             # Whatever stopped it once the file was open, an OSError or an
             # interruption, may have cut a line or left its entry unforced.
