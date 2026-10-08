@@ -123,9 +123,6 @@ def watch(monkeypatch: pytest.MonkeyPatch) -> Watch:
     return seen
 
 
-# Classification: what a phase's connection left uncertain when it ended.
-
-
 def test_a_plain_exchange_answered_in_full_is_complete() -> None:
     async def scenario() -> tuple[bytes, PhaseTraffic]:
         async with raw_upstream(ANSWER) as upstream:
@@ -403,9 +400,6 @@ def test_an_idle_tls_connection_after_a_completed_exchange_is_uncertain(
     assert traffic == PhaseTraffic(0, 1)
 
 
-# Ending a phase: nothing queued, paused or accepted outlives it.
-
-
 def test_a_buffered_post_paused_in_conversion_when_the_phase_ends_never_reaches_upstream(
     watch: Watch,
 ) -> None:
@@ -565,9 +559,6 @@ def test_leaving_the_proxy_between_phases_closes_cleanly() -> None:
         _ = proxy.url
 
 
-# Transitions: one phase at a time, each owned until its cleanup is done.
-
-
 def test_a_phase_cannot_begin_while_one_is_open_or_ending(watch: Watch) -> None:
     async def scenario() -> tuple[PhaseTraffic, int, int]:
         async with raw_upstream() as silent:
@@ -680,9 +671,6 @@ def test_a_keyboard_interrupt_in_the_proxys_body_joins_the_phase_before_it_propa
         socket.create_connection(("127.0.0.1", ports[0]), timeout=1)
     with pytest.raises(RuntimeError, match="async with"):
         _ = proxies[0].url
-
-
-# A retired listener (#162): the run's gate records it, whatever the phase.
 
 
 def retired(port: int, name: str) -> InfrastructureEvent:
