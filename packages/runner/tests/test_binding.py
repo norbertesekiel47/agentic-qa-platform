@@ -884,7 +884,10 @@ def test_successful_cleanup_preserves_body_cancellation() -> None:
     in_session(scenario)
 
 
-def test_a_cancelled_drop_still_disposes_and_is_not_retried() -> None:
+@pytest.mark.parametrize("disposal_fails", [False, True])
+def test_a_cancelled_drop_still_disposes_and_is_not_retried(
+    *, disposal_fails: bool
+) -> None:
     async def scenario(session: BrowserSession) -> None:
         await put(session, '<div class="banner"><span class="counter">1</span></div>')
         offered = await session.page.query_selector("span.counter")
@@ -892,6 +895,7 @@ def test_a_cancelled_drop_still_disposes_and_is_not_retried() -> None:
         original_dispose = ElementHandle.dispose
         dropping = asyncio.Event()
         stop = ValueError("fixture stop")
+        fault = Error("fake disposal failure")
         disposed: list[ElementHandle] = []
         held: HeldRegion | None = None
 
@@ -904,6 +908,8 @@ def test_a_cancelled_drop_still_disposes_and_is_not_retried() -> None:
         async def dispose(element: ElementHandle) -> None:
             disposed.append(element)
             await original_dispose(element)
+            if disposal_fails and held is not None and element is held.element:
+                raise fault
 
         async def fail() -> None:
             nonlocal held
@@ -923,6 +929,7 @@ def test_a_cancelled_drop_still_disposes_and_is_not_retried() -> None:
                 with pytest.raises(asyncio.CancelledError) as caught:
                     await task
             assert caught.value.__cause__ is stop
+            assert caught.value.__context__ is (fault if disposal_fails else None)
             assert held is not None
             assert held.element in disposed
             assert await held.bound(offered)
