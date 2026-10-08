@@ -530,4 +530,4 @@ Explore writes two phases into one run record, decides exit 4 and non-resumabili
 - **A new part is durable only with its first journal line.** `part()` forces nothing. A part that never gets a journal line, only documents, is not forced, as no document is.
 - **Directories that are swapped while a record writes are out of scope**, as ADR-0026's #50 B amendment states. The link checks are by path, before each open, so a local writer that swaps a checked directory between the check and the open could redirect a write. Exclusive `mkdir` keeps a part's own directory from being taken over by a racing create, but anchors none of its parents.
 - **One writer per part.** The shared state assumes the sequential use the explore graph makes. Two writers on the same part at once are not supported.
-- Production code grows by about 130 lines in `run_record.py`. There is no new dependency, paid resource or model call.
+- No new dependency, paid resource or model call.

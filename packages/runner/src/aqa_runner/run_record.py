@@ -42,7 +42,8 @@ COSTS = "costs.jsonl"
 PARTS = ("attempt-1", "confirmation")
 
 # What a caller checks a journal line or a document with before it is
-# written: whatever it raises leaves the file as it was.
+# written: whatever it raises leaves the file as it was. What it raises
+# mustn't quote the text, as `require_clean`'s doesn't.
 type LineCheck = Callable[[str], object]
 
 
@@ -62,9 +63,10 @@ class BrokenJournalError(OSError):
 
 class UnrecordedCostError(Exception):
     """A priced call whose cost line isn't on disk: its check refused the
-    line, or writing it failed, perhaps after part of it reached the file.
+    line, or writing it failed, perhaps after part of it reached the file;
+    neither a `ValueError` nor an `OSError`, since it stands for both.
     `record` keeps the call in memory; the message never holds it, since a
-    refused line spelled a bound value."""
+    refused line may spell a bound value."""
 
     def __init__(self, record: CostRecord) -> None:
         super().__init__(f"{COSTS}: a priced call's cost line isn't on disk")
@@ -269,15 +271,14 @@ class RunRecord:
     def cost(self, call: CostRecord, *, check: LineCheck | None = None) -> None:
         """Record a priced model call in `COSTS`: its fields, and no time,
         so its line reads back as the `CostRecord`. On disk when this
-        returns. `check` gets the exact line first, and refuses it by
-        raising `ValueError`, as `require_clean` does. A refused line, or a
+        returns. `check` gets the exact line first. A refused line, or a
         write that failed, raises `UnrecordedCostError` with `call`; the
         line is never tried again."""
         try:
             self._append(COSTS, call.model_dump(mode="json"), check)
-        except (ValueError, OSError) as error:
-            # Refused (by the check, or a link in the way) or not known to be
-            # on disk: either way the billed call has no line to count.
+        except Exception as error:
+            # Whatever stopped it (a check refuses by raising anything), the
+            # billed call has no line to count, and its caller needs the call.
             raise UnrecordedCostError(call) from error
 
     def _create(self, name: str, text: str) -> Path:
