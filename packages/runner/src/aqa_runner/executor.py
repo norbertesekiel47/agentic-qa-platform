@@ -228,9 +228,10 @@ async def replay(
     """Run `script` once for `setup`, through `proxy`, the run's egress
     proxy, whose gate is `gate`, recording each step in the setup's record.
     The session uses `script.browser`, never the project's or the spec's
-    settings (ADR-0025). Once its browser has closed, replay ends the
-    proxy's open phase and only then reads the run's egress blocks and
-    infrastructure events, so the proxy is between phases when it returns.
+    settings (ADR-0025). It needs the proxy's phase open, as the browser's
+    launch does, and ends it once its browser has closed: only then does it
+    read the run's egress blocks and infrastructure events, so the proxy is
+    between phases when it returns.
 
     Before accepting steps or binding secrets, the script must agree with the
     project's subject contracts. A mismatch raises `SpecError`.
