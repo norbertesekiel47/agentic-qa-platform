@@ -13,44 +13,77 @@ type BindingMiss = Literal["no region", "outside region", "not the part", "not a
 ENGINE = "aqa-binding"
 SCRIPT = """(() => {
     const held = new Map();
-    const valid = (r, region, doc) => r && r.isConnected && r.ownerDocument === doc &&
-        doc.querySelectorAll(region).length === 1 && doc.querySelector(region) === r;
+    // A form's named controls override DOM properties on the form itself, in
+    // every world, so page nodes are read only through prototype natives. Each
+    // is looked up on first use, which is in the utility world: the page's main
+    // world evaluates this source too, and its globals are the page's to poison.
+    const native = (type, name) => {
+        let found;
+        return (node, ...args) => {
+            found ??= Object.getOwnPropertyDescriptor(globalThis[type].prototype, name);
+            return found.get ? found.get.call(node) : found.value.apply(node, args);
+        };
+    };
+    const ownerDocument = native("Node", "ownerDocument");
+    const isConnected = native("Node", "isConnected"), contains = native("Node", "contains");
+    const childNodes = native("Node", "childNodes"), nodeType = native("Node", "nodeType");
+    const parentElement = native("Node", "parentElement");
+    const shadowRoot = native("Element", "shadowRoot");
+    const localName = native("Element", "localName");
+    const children = native("Element", "children");
+    const classList = native("Element", "classList");
+    const childElementCount = native("Element", "childElementCount");
+    const within = native("Element", "querySelectorAll");
+    const checkVisibility = native("Element", "checkVisibility");
+    const getBoundingClientRect = native("Element", "getBoundingClientRect");
+    const inDocument = native("Document", "querySelectorAll");
+    const inShadow = native("DocumentFragment", "querySelectorAll");
+    const createRange = native("Document", "createRange");
+    const count = (scope, css) => {
+        const query = scope === document ? inDocument : inShadow;
+        let n = query(scope, css).length;
+        for (const e of query(scope, "*")) if (shadowRoot(e)) n += count(shadowRoot(e), css);
+        return n;
+    };
+    const valid = (r, region, root) => r && isConnected(r) && ownerDocument(r) === document &&
+        ownerDocument(root) === document && ![r, ...within(r, "*")].some(shadowRoot) &&
+        count(document, region) === 1 && inDocument(document, region)[0] === r;
     const visible = (e) => {
-        const style = e.ownerDocument.defaultView.getComputedStyle(e);
-        if (style.display === "contents") return [...e.childNodes].some((c) => {
-            if (c.nodeType === 1) return visible(c);
-            if (c.nodeType !== 3) return false;
-            const range = e.ownerDocument.createRange(); range.selectNode(c);
+        const style = getComputedStyle(e);
+        if (style.display === "contents") return [...childNodes(e)].some((c) => {
+            if (nodeType(c) === 1) return visible(c);
+            if (nodeType(c) !== 3) return false;
+            const range = createRange(document); range.selectNode(c);
             const box = range.getBoundingClientRect(); return box.width > 0 && box.height > 0;
         });
-        if (!e.checkVisibility() || style.visibility !== "visible") return false;
-        const box = e.getBoundingClientRect(); return box.width > 0 && box.height > 0;
+        if (!checkVisibility(e) || style.visibility !== "visible") return false;
+        const box = getBoundingClientRect(e); return box.width > 0 && box.height > 0;
     };
     const stable = (s) => /^[A-Za-z][A-Za-z0-9_-]*$/.test(s) &&
         !/^(css|sc|jsx|emotion|svelte|ng)-/.test(s) &&
         !["active", "checked", "collapsed", "disabled", "expanded", "focus", "hidden",
           "hover", "open", "selected", "show"].includes(s) &&
         !s.split(/[-_]/).some((p) => p.length >= 5 && /[0-9]/.test(p) && /[A-Za-z]/.test(p));
-    const classes = (e) => [...e.classList].filter(stable).sort().join(" ");
+    const classes = (e) => [...classList(e)].filter(stable).sort().join(" ");
     const copies = (e) => {
-        const found = new Set([e]); const path = [e.localName];
+        const found = new Set([e]); const path = [localName(e)];
         let child = e;
-        for (let n = 0, a = e.parentElement; a && a.localName !== "body" &&
-             a.localName !== "html"; n++, child = a, a = a.parentElement) {
+        for (let n = 0, a = parentElement(e); a && localName(a) !== "body" &&
+             localName(a) !== "html"; n++, child = a, a = parentElement(a)) {
             if (n === 16) return [e];
             if (path.some((tag) => tag.includes("-"))) {
-                if (a.children.length > 64) return [e];
-                for (const other of a.children) {
-                    if (other === child || other.localName !== child.localName ||
+                if (children(a).length > 64) return [e];
+                for (const other of children(a)) {
+                    if (other === child || localName(other) !== localName(child) ||
                         classes(other) === classes(child)) continue;
                     let matches = [other];
                     for (const tag of path.slice(1)) matches = matches.flatMap(
-                        (node) => [...node.children].filter((c) => c.localName === tag));
+                        (node) => [...children(node)].filter((c) => localName(c) === tag));
                     for (const match of matches) found.add(match);
                     if (found.size > 8) return [e];
                 }
             }
-            path.unshift(a.localName);
+            path.unshift(localName(a));
         }
         return found.size > 1 ? [...found] : [];
     };
@@ -61,15 +94,15 @@ SCRIPT = """(() => {
         const [token, region, part, leaf] = body.slice(colon + 1).split("|");
         if (verb === "hold") { held.set(token, root); return []; }
         if (verb === "drop") { held.delete(token); return []; }
-        if (verb === "regions") return [...root.ownerDocument.querySelectorAll(token)];
+        if (verb === "regions") return [...inDocument(document, token)];
         const r = held.get(token);
-        if (!valid(r, region, root.ownerDocument)) return [];
-        if (verb === "in") return r.contains(root) ? [root] : [];
-        const parts = [...r.querySelectorAll(part)];
+        if (!valid(r, region, root)) return [];
+        if (verb === "in") return contains(r, root) ? [root] : [];
+        const parts = [...within(r, part)];
         if (verb === "parts") return parts;
         if (verb === "absent") return parts.some(visible) ? [] : [r];
         return verb === "bound" && parts.length === 1 && parts[0] === root &&
-            (leaf !== "leaf" || root.childElementCount === 0) ? [root] : [];
+            (leaf !== "leaf" || childElementCount(root) === 0) ? [root] : [];
     };
     return { query: (root, body) => queryAll(root, body)[0] || null, queryAll };
 })()"""
