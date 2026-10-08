@@ -30,7 +30,9 @@ class RunnerResponse:
     body: bytes
 
 
-async def runner_request(gate: EgressGate, method: Method, url: str) -> RunnerResponse:
+async def runner_request(
+    gate: EgressGate, method: Method, url: str, *, keep_body: bool = True
+) -> RunnerResponse:
     """Send `method` to the absolute http or https `url` through `gate`, and
     read the response. Raises ValueError, before any connection, for a URL
     whose origin isn't one or whose path and query no request line carries;
@@ -41,7 +43,9 @@ async def runner_request(gate: EgressGate, method: Method, url: str) -> RunnerRe
     both.
 
     It has no deadline of its own past the gate's for connecting, its TLS
-    handshake included: a caller bounds it with `asyncio.timeout`."""
+    handshake included: a caller bounds it with `asyncio.timeout`. Without
+    `keep_body`, the response is still read to its end, and its body comes
+    back empty, so a long one holds no memory."""
     parts = urlsplit(url)
     origin = parse_origin(f"{parts.scheme}://{parts.netloc}")
     host, port = authority(origin)
@@ -79,18 +83,19 @@ async def runner_request(gate: EgressGate, method: Method, url: str) -> RunnerRe
     try:
         await upstream.send(request)
         await upstream.send(h11.EndOfMessage())
-        return await _response(upstream)
+        return await _response(upstream, keep_body=keep_body)
     finally:
         writer.close()
 
 
-async def _response(upstream: Upstream) -> RunnerResponse:
-    """The final response, past any 1xx, with its body."""
+async def _response(upstream: Upstream, *, keep_body: bool) -> RunnerResponse:
+    """The final response, past any 1xx, with its body when `keep_body`."""
     head = await upstream.next()
     while not isinstance(head, h11.Response):
         head = await upstream.next()
     body = bytearray()
     # After a response head, h11 gives Data until the EndOfMessage.
     while isinstance(event := await upstream.next(), h11.Data):
-        body += event.data
+        if keep_body:
+            body += event.data
     return RunnerResponse(head.status_code, bytes(body))

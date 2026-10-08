@@ -11,7 +11,10 @@ import socket
 import ssl
 import subprocess
 import threading
+import tracemalloc
 from collections import Counter
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from http import HTTPStatus
 from ipaddress import ip_address
 from pathlib import Path
@@ -26,7 +29,8 @@ from aqa_runner.egress import (
     InfrastructureEvent,
 )
 from aqa_runner.egress_proxy import EgressProxy
-from aqa_runner.runner_requests import Method, runner_request
+from aqa_runner.loopback_server import LoopbackServer
+from aqa_runner.runner_requests import Method, RunnerResponse, runner_request
 from playwright.async_api import async_playwright
 
 from packages.runner.tests.egress_fixtures import (
@@ -480,6 +484,66 @@ def test_a_runner_request_closes_its_connection_when_its_caller_times_out() -> N
             await asyncio.wait_for(silent.closed.wait(), 5)
 
     asyncio.run(scenario())
+
+
+@asynccontextmanager
+async def sending(declared: int, sent: int) -> AsyncIterator[int]:
+    """A loopback origin, by its port, that answers a request with a 200
+    declaring `declared` body bytes, sends `sent` of them and closes."""
+    chunk = bytes(65536)
+
+    async def handle(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        with contextlib.suppress(ConnectionError):
+            await reader.readuntil(b"\r\n\r\n")
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % declared)
+            for _ in range(sent // len(chunk)):
+                writer.write(chunk)
+                await writer.drain()
+
+    async with LoopbackServer(handle) as server:
+        yield server.port
+
+
+def test_a_runner_request_that_keeps_no_body_reads_it_whole_holding_none_of_it() -> (
+    None
+):
+    size = 32 * 2**20
+
+    async def scenario() -> tuple[RunnerResponse, int]:
+        async with sending(size, size) as port:
+            start = f"http://127.0.0.1:{port}"
+            tracemalloc.start()
+            try:
+                response = await runner_request(
+                    gate(allowed=(start,)), "POST", f"{start}/reset", keep_body=False
+                )
+                _, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            return response, peak
+
+    response, peak = asyncio.run(scenario())
+
+    assert response == RunnerResponse(HTTPStatus.OK, b"")
+    # A kept body holds all 32 MiB at once, and its copy as many again.
+    assert peak < 4 * 2**20
+
+
+def test_a_runner_request_that_keeps_no_body_still_refuses_a_cut_body() -> None:
+    async def scenario() -> tuple[EgressGate, EgressUpstreamError]:
+        async with sending(8 * 2**20, 4 * 2**20) as port:
+            start = f"http://127.0.0.1:{port}"
+            egress = gate(allowed=(start,))
+            with pytest.raises(EgressUpstreamError) as failed:
+                await runner_request(egress, "POST", f"{start}/reset", keep_body=False)
+            return egress, failed.value
+
+    egress, failed = asyncio.run(scenario())
+
+    assert egress.infrastructure_events == [failed.event]
+    assert failed.event.cause == "the exchange broke off: h11.RemoteProtocolError"
 
 
 @pytest.mark.parametrize(
