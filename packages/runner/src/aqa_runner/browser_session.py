@@ -182,7 +182,6 @@ NOTHING_FOCUSED = """(element) =>
     element === element.ownerDocument.body ||
     element === element.ownerDocument.documentElement"""
 
-# Existing public names, bound to the unchanged key helpers.
 MODIFIERS = keys.MODIFIERS
 one_key = keys.one_key
 press_keys = keys.press_keys
@@ -748,7 +747,6 @@ class BrowserSession:
     async def _require_secret_binding(
         self, element: ElementHandle, secret: BoundSecret
     ) -> None:
-        """The same fresh binding checks for a precheck and the actual fill."""
         frame = await self._require_actionable(element)
         page = await frame_origin(self.page.main_frame)
         origins = secret.destination.origins

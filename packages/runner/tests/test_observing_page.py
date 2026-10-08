@@ -1,5 +1,3 @@
-"""Locked, origin-checked observations without retiring refs (ADR-0026)."""
-
 import asyncio
 from collections.abc import Iterator
 from typing import Any

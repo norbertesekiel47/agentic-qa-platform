@@ -1,7 +1,3 @@
-"""The single-key press grammar used by the session and executor."""
-
-# The keys `press` may hold down before the key it presses
-# (https://playwright.dev/python/docs/api/class-keyboard#keyboard-press).
 MODIFIERS = frozenset({"Shift", "Control", "Alt", "Meta", "ControlOrMeta"})
 
 
