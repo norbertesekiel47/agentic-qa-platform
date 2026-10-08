@@ -44,7 +44,7 @@ PARTS = ("attempt-1", "confirmation")
 # What a caller checks a journal line or a document with before it is
 # written: whatever it raises leaves the file as it was. What it raises
 # mustn't quote the text, as `require_clean`'s doesn't.
-type LineCheck = Callable[[str], object]
+type LineCheck = Callable[[str], None]
 
 
 class RefusedWriteError(ValueError):
@@ -65,12 +65,12 @@ class UnrecordedCostError(Exception):
     """A priced call whose cost line isn't on disk: its check refused the
     line, or writing it failed, perhaps after part of it reached the file;
     neither a `ValueError` nor an `OSError`, since it stands for both.
-    `record` keeps the call in memory; the message never holds it, since a
-    refused line may spell a bound value."""
+    `call` keeps it in memory; the message never holds it, since a refused
+    line may spell a bound value."""
 
-    def __init__(self, record: CostRecord) -> None:
+    def __init__(self, call: CostRecord) -> None:
         super().__init__(f"{COSTS}: a priced call's cost line isn't on disk")
-        self.record = record
+        self.call = call
 
 
 @dataclass(frozen=True)
@@ -83,13 +83,15 @@ class PendingIntent:
 
 @dataclass
 class _Journals:
-    """What a record holds of its journals in memory, shared by every copy
-    `redacting` makes of it, since they write the same files: each step
-    whose intent is on disk with no completion yet, by seq, with its
-    `side_effect` flag, and each journal a write to failed."""
+    """What a run's records hold of their journals in memory, shared by
+    every record made from the run's (`redacting`, `part`, any
+    `dataclasses.replace`) and kept by path, so only records that write
+    the same files share an entry: by record directory, each step whose
+    intent is on disk with no completion yet, by seq, with its
+    `side_effect` flag; and each journal a write to failed."""
 
-    pending: dict[int, bool] = field(default_factory=dict)
-    broken: set[str] = field(default_factory=set)
+    pending: dict[Path, dict[int, bool]] = field(default_factory=dict)
+    broken: set[Path] = field(default_factory=set)
 
 
 def journal_line(entry: Mapping[str, object]) -> str:
@@ -118,9 +120,9 @@ def require_clean(redactor: Redactor, place: str) -> LineCheck:
 class RunRecord:
     """The directory one run writes what it leaves behind to, and the scan
     of every secret the run binds (`NO_SECRETS` until `redacting`). A
-    record made from this one with `dataclasses.replace`, such as a part
-    in a directory below it, keeps the scan, and a copy of the same record,
-    such as `redacting` makes, shares its journals' state."""
+    record made from this one with `dataclasses.replace`, as `redacting`
+    and `part` make theirs, keeps the scan and the spec root, and shares
+    the journals' state of the files it writes."""
 
     run_id: str
     path: Path
@@ -128,10 +130,10 @@ class RunRecord:
     _journals: _Journals = field(
         default_factory=_Journals, kw_only=True, repr=False, compare=False
     )
-    # How many directories above this record's own a new journal forces:
-    # `runs`, `.aqa` and the spec root, which existed before the run
-    # (`create`), and the run's own for a part.
-    _above: int = field(default=3, kw_only=True, repr=False, compare=False)
+    # The spec root (`create`), which existed before the run: a new journal
+    # forces each directory from the record's up to it. None for a record
+    # made directly, a run's, whose spec root is three directories up.
+    _root: Path | None = field(default=None, kw_only=True, repr=False, compare=False)
 
     @classmethod
     def create(cls, base: Path) -> Self:
@@ -152,7 +154,7 @@ class RunRecord:
         run_id = str(uuid.uuid7())
         path = records / "runs" / run_id
         path.mkdir(parents=True)
-        return cls(run_id, path)
+        return cls(run_id, path, _root=base)
 
     def redacting(self, redactor: Redactor) -> Self:
         """This record, scanning what it writes with `redactor`."""
@@ -166,7 +168,7 @@ class RunRecord:
             raise ValueError(f"{name!r} isn't a part of a run record")
         place = self._place(name)
         place.mkdir()
-        return replace(self, path=place, _journals=_Journals(), _above=self._above + 1)
+        return replace(self, path=place)
 
     def unresolved(self) -> tuple[PendingIntent, ...]:
         """Each step whose intent this record wrote with no completion
@@ -174,7 +176,7 @@ class RunRecord:
         journal: a completion whose write failed leaves its step here."""
         return tuple(
             PendingIntent(seq, side_effect)
-            for seq, side_effect in sorted(self._journals.pending.items())
+            for seq, side_effect in sorted(self._pending().items())
         )
 
     def write(
@@ -228,7 +230,7 @@ class RunRecord:
         unresolved until its completion is on disk. `check` gets the exact
         line first. A step whose intent is still unresolved can't have
         another."""
-        if seq in self._journals.pending:
+        if seq in self._pending():
             raise ValueError(f"step {seq}'s intent is still unresolved")
         self._append(
             STEPS,
@@ -242,7 +244,7 @@ class RunRecord:
             },
             check,
         )
-        self._journals.pending[seq] = side_effect
+        self._pending()[seq] = side_effect
 
     def step_completed(
         self,
@@ -266,7 +268,7 @@ class RunRecord:
             },
             check,
         )
-        self._journals.pending.pop(seq, None)
+        self._pending().pop(seq, None)
 
     def cost(self, call: CostRecord, *, check: LineCheck | None = None) -> None:
         """Record a priced model call in `COSTS`: its fields, and no time,
@@ -280,6 +282,9 @@ class RunRecord:
             # Whatever stopped it (a check refuses by raising anything), the
             # billed call has no line to count, and its caller needs the call.
             raise UnrecordedCostError(call) from error
+
+    def _pending(self) -> dict[int, bool]:
+        return self._journals.pending.setdefault(self.path, {})
 
     def _create(self, name: str, text: str) -> Path:
         """Write `text`, checked and encoded before the file opens, to the new
@@ -327,7 +332,7 @@ class RunRecord:
         `check` refuses, leaves the file as it was and the journal open.
         A write that fails once it began breaks the journal for good
         (`BrokenJournalError`), for every copy of this record."""
-        if name in self._journals.broken:
+        if self.path / name in self._journals.broken:
             raise BrokenJournalError(
                 f"{name}: an earlier write to it failed, so nothing more is appended"
             )
@@ -343,12 +348,16 @@ class RunRecord:
                 # https://docs.python.org/3.14/library/os.html#os.fsync
                 os.fsync(file.fileno())
             if new:
-                for directory in (self.path, *self.path.parents[: self._above]):
+                chain = [self.path, *self.path.parents]
+                root = self._root or self.path.parents[2]
+                for directory in chain[: chain.index(root) + 1]:
                     handle = os.open(directory, os.O_RDONLY)
                     try:
                         os.fsync(handle)
                     finally:
                         os.close(handle)
-        except OSError:
-            self._journals.broken.add(name)
+        except BaseException:
+            # Whatever stopped it once the file was open, an OSError or an
+            # interruption, may have cut a line or left its entry unforced.
+            self._journals.broken.add(journal)
             raise
