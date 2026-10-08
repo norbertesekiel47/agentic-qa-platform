@@ -30,12 +30,13 @@ from aqa_core.compiled import (
     Locator,
     Target,
 )
-from aqa_core.schema import AriaRole
+from aqa_core.schema import AriaRole, Contract
 from aqa_core.text import normalize
 from playwright.async_api import ElementHandle, Error, Page, Playwright
+from playwright.async_api import Locator as PlaywrightLocator
 from pydantic import Field, StringConstraints, TypeAdapter, ValidationError
 
-from aqa_runner.binding import register_binding_engine
+from aqa_runner.binding import Refused, binding_verdict, register_binding_engine
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.locators import Absent, Resolved, Use, resolve
 from aqa_runner.snapshot_refs import ELEMENT_REF, LINE
@@ -201,6 +202,15 @@ class LocatorError(LookupError):
     """No locator of the grammar finds the element, alone, for the use."""
 
 
+class BindingRefusedError(LocatorError):
+    """The element a use offered isn't its subject (ADR-0025's #53 P7b-II
+    amendment): `reason` is the verdict's fixed reason, never page text."""
+
+    def __init__(self, meaning: str, refused: Refused) -> None:
+        super().__init__(f"{meaning}: {refused.reason}")
+        self.reason = refused.reason
+
+
 def _name_as_written(name: str | None) -> str | None:
     """A snapshot name, decoded from JSON, or None for one that holds a lone
     surrogate, which no locator can carry. (Playwright 1.63's snapshot leaves
@@ -334,11 +344,13 @@ async def _is_held(element: ElementHandle, token: str) -> bool:
 @dataclass
 class _Trial:
     """Resolving candidates for one use of the element, which the identity
-    engine holds as `token`, within a budget of tries."""
+    engine holds as `token`, within a budget of tries; with a contract, each
+    candidate resolves inside its region."""
 
     page: Page
     use: Use
     token: str
+    contract: Contract | None
     tries: int = _TRIES
     # Whether each scope finds one element on the page, counted once.
     counted: dict[str, bool] = field(default_factory=dict)
@@ -349,7 +361,9 @@ class _Trial:
         self.tries -= 1
 
     async def _found(self, locator: Locator) -> bool:
-        target = Target(semantic=_CANDIDATE_MEANING, locators=(locator,))
+        target = Target(
+            semantic=_CANDIDATE_MEANING, locators=(locator,), contract=self.contract
+        )
         found = await resolve(self.page, target, self.use)
         if not isinstance(found, Resolved):
             return False
@@ -365,10 +379,14 @@ class _Trial:
         return await _unless_the_page_breaks(self.page, self._found(locator), False)
 
     async def _count_is_one(self, scope: str) -> bool:
-        return await self.page.locator(f"css={scope}").count() == 1
+        root: Page | PlaywrightLocator = self.page
+        if self.contract is not None:
+            root = self.page.locator(f"css={self.contract.region}")
+        return await root.locator(f"css={scope}").count() == 1
 
     async def unique(self, scope: str) -> bool:
-        """Whether `scope` finds one element on the page, counted once."""
+        """Whether `scope` finds one element on the page, or in the region,
+        counted once."""
         if scope not in self.counted:
             self._spend()
             self.counted[scope] = await _unless_the_page_breaks(
@@ -509,6 +527,7 @@ async def _placed(
     used: Seen,
     use: Use,
     kinds_of: Callable[[_Element], _ByKind],
+    contract: Contract | None,
 ) -> _ByKind:
     """For each of the grammar's kinds, in order, its candidates where they
     find the element `used` for `use`: for an action or an assertion, the
@@ -520,7 +539,8 @@ async def _placed(
     place = _every_scoped if use == "negative_check" else _first_of_each_kind
     async with _holding(page, used.element) as token:
         try:
-            await place(_Trial(page, use, token), kinds, _scopes(element), placed)
+            trial = _Trial(page, use, token, contract)
+            await place(trial, kinds, _scopes(element), placed)
         except _OutOfTriesError:
             # Out of tries, the kinds found so far stand; with none, the
             # budget is the reason.
@@ -570,39 +590,43 @@ async def _generate(
     used: Seen,
     use: GeneratedUse,
     kinds_of: Callable[[_Element], _ByKind],
+    contract: Contract | None,
 ) -> tuple[Locator, ...]:
     """The first candidate of each kind that finds the element for `use`,
     in order. Raises `LocatorError` when none does."""
-    return tuple(
-        found[0] for found in await _placed(page, used, use, kinds_of) if found
-    )
+    placed = await _placed(page, used, use, kinds_of, contract)
+    return tuple(found[0] for found in placed if found)
 
 
-async def generate_for_action(page: Page, used: Seen) -> tuple[Locator, ...]:
+async def generate_for_action(
+    page: Page, used: Seen, *, contract: Contract | None = None
+) -> tuple[Locator, ...]:
     """An action target's locators: one of each kind that finds the element
     `used`, in the grammar's order, each resolved alone, as an action, to
-    that element on the page as it is now. Raises `LocatorError` when no
-    locator does."""
+    that element on the page as it is now, inside `contract`'s region when
+    there is one. Raises `LocatorError` when no locator does."""
     return await _generate(
-        page, used, "action", lambda element: _action_kinds(used, element)
+        page, used, "action", lambda element: _action_kinds(used, element), contract
     )
 
 
 async def generate_for_assertion(
-    page: Page, used: Seen, *, checks_text: bool
+    page: Page, used: Seen, *, checks_text: bool, contract: Contract | None = None
 ) -> tuple[Locator, ...]:
     """An assertion target's locators: one of each kind that finds the
     element `used`, in the grammar's order, each resolved alone, as an
     assertion's target, to that element on the page as it is now.
     `checks_text` says whether any use of the target's meaning checks its
     text (`text_in_target`); then it is located by no name. `TargetUses`
-    holds it for the meaning and passes it at every use.
-    Raises `LocatorError` when no locator does."""
+    holds it for the meaning and passes it at every use, with `contract`,
+    inside whose region every locator resolves. Raises `LocatorError` when no
+    locator does."""
     return await _generate(
         page,
         used,
         "assertion",
         lambda element: _assertion_kinds(used, element, checks_text=checks_text),
+        contract,
     )
 
 
@@ -611,11 +635,20 @@ class TargetUses:
     come (ADR-0025, "Targets used more than once"). A later use joins the
     current target only if every one of its locators holds at that use;
     otherwise it starts a new target, generated there. A locator is never
-    dropped to keep a target whole."""
+    dropped to keep a target whole.
 
-    def __init__(self, meaning: str, *, checks_text: bool) -> None:
+    A meaning with a subject contract (ADR-0025's #53 P7b-II amendment)
+    gives it to every target, and every use runs its verdict on the element
+    offered before anything else: `BindingRefusedError` starts no target and
+    keeps no sighting. A meaning with no contract is refused where copies of
+    the element are detected."""
+
+    def __init__(
+        self, meaning: str, *, checks_text: bool, contract: Contract | None = None
+    ) -> None:
         self.meaning = meaning
         self.checks_text = checks_text
+        self.contract = contract
         self._targets: list[Target] = []
         # Where a later negative check's element was seen: for each kind,
         # its candidates under every scope that found it there.
@@ -629,27 +662,32 @@ class TargetUses:
     async def add(self, page: Page, used: Seen, use: GeneratedUse) -> int:
         """The index in `targets` of the target this use of the element
         `used` gets."""
+        await self._admit(page, used)
         with self._named():
             joins = False
             if self._targets:
                 async with _holding(page, used.element) as token:
-                    joins = await self._holds(use, _Trial(page, use, token).finds)
+                    trial = _Trial(page, use, token, self.contract)
+                    joins = await self._holds(use, trial.finds)
             if not joins:
                 if use == "action":
-                    locators = await generate_for_action(page, used)
+                    locators = await generate_for_action(
+                        page, used, contract=self.contract
+                    )
                 else:
                     locators = await generate_for_assertion(
-                        page, used, checks_text=self.checks_text
+                        page, used, checks_text=self.checks_text, contract=self.contract
                     )
-                self._targets.append(Target(semantic=self.meaning, locators=locators))
+                self._start(locators)
         return len(self._targets) - 1
 
     async def see_for_negative_check(self, page: Page, seen: Seen) -> None:
         """Generate, from the element `seen` on the page now, the locators a
         later negative check of the meaning starts its target from: an
         assertion's kinds, each scoped (ADR-0025's 2026-10-02 amendment)."""
+        self._seen = []
+        await self._admit(page, seen)
         with self._named():
-            self._seen = []
             self._seen = await _placed(
                 page,
                 seen,
@@ -657,6 +695,7 @@ class TargetUses:
                 lambda element: _assertion_kinds(
                     seen, element, checks_text=self.checks_text
                 ),
+                self.contract,
             )
 
     async def add_negative_check(self, page: Page) -> int:
@@ -673,15 +712,34 @@ class TargetUses:
         with self._named():
             if not self._seen:
                 raise LocatorError("it wasn't seen before its negative check")
-            kept = await _first_absent(page, self._seen)
+            kept = await _first_absent(page, self._seen, self.contract)
             joins = bool(self._targets) and await self._holds(
-                "negative_check", lambda locator: _absent(page, locator)
+                "negative_check", lambda locator: _absent(page, locator, self.contract)
             )
             if not joins:
                 if not kept:
                     raise LocatorError("no scope it was seen under is on the page")
-                self._targets.append(Target(semantic=self.meaning, locators=kept))
+                self._start(kept)
         return len(self._targets) - 1
+
+    def _start(self, locators: tuple[Locator, ...]) -> None:
+        self._targets.append(
+            Target(semantic=self.meaning, locators=locators, contract=self.contract)
+        )
+
+    async def _admit(self, page: Page, used: Seen) -> None:
+        """The subject's verdict on the element offered (`binding_verdict`).
+        A page that breaks it binds nothing."""
+        try:
+            verdict = await binding_verdict(page, used.element, self.contract)
+        except Error:
+            if page.is_closed():
+                raise
+            raise LocatorError(
+                f"{self.meaning}: the page broke the subject check"
+            ) from None
+        if isinstance(verdict, Refused):
+            raise BindingRefusedError(self.meaning, verdict)
 
     @contextmanager
     def _named(self) -> Iterator[None]:
@@ -723,28 +781,35 @@ class TargetUses:
 type _Look = Literal["absent", "shown", "no scope", "broken"]
 
 
-async def _look(page: Page, locator: Locator) -> _Look:
+async def _look(page: Page, locator: Locator, contract: Contract | None) -> _Look:
     """What `locator`, alone, finds on the page now, as a negative check
-    counts."""
+    counts. Raises `LocatorError` when its contract's region isn't the
+    region selector's one match: that proves nothing absent."""
 
     async def look() -> _Look:
-        target = Target(semantic=_CANDIDATE_MEANING, locators=(locator,))
+        target = Target(
+            semantic=_CANDIDATE_MEANING, locators=(locator,), contract=contract
+        )
         found = await resolve(page, target, "negative_check")
         if isinstance(found, Absent):
             return "absent"
         if isinstance(found, Resolved):
             await found.element.dispose()
             return "shown"
+        if found.misses == ("no region",):
+            raise LocatorError("its region is not on the page exactly once")
         return "no scope" if found.misses == ("no scope",) else "shown"
 
     return await _unless_the_page_breaks(page, look(), "broken")
 
 
-async def _absent(page: Page, locator: Locator) -> bool:
-    return await _look(page, locator) == "absent"
+async def _absent(page: Page, locator: Locator, contract: Contract | None) -> bool:
+    return await _look(page, locator, contract) == "absent"
 
 
-async def _first_absent(page: Page, seen: _ByKind) -> tuple[Locator, ...]:
+async def _first_absent(
+    page: Page, seen: _ByKind, contract: Contract | None
+) -> tuple[Locator, ...]:
     """Of each kind, the first locator seen whose scope is on the page with
     nothing visible in it. Every locator seen is looked at, the broader ones
     too: one that finds something visible in its scope raises `LocatorError`,
@@ -753,7 +818,7 @@ async def _first_absent(page: Page, seen: _ByKind) -> tuple[Locator, ...]:
     for found in seen:
         first: Locator | None = None
         for locator in found:
-            look = await _look(page, locator)
+            look = await _look(page, locator, contract)
             if look == "shown":
                 raise LocatorError(
                     "it is still shown: a locator it was seen by finds "

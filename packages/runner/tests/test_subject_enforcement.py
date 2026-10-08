@@ -7,17 +7,23 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
 import pytest
-from aqa_core.compiled import Target
+from aqa_core.compiled import ByCss, Target
 from aqa_core.schema import Contract
 from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.document_origins import DocumentChangedError
-from aqa_runner.locator_generation import register_identity_engine
+from aqa_runner.locator_generation import (
+    BindingRefusedError,
+    LocatorError,
+    Seen,
+    TargetUses,
+    register_identity_engine,
+)
 from aqa_runner.locators import Absent, Resolved, Unresolved, resolve
 from playwright.async_api import ElementHandle, Page, async_playwright
 from playwright.async_api import Locator as PlaywrightLocator
 
 from packages.runner.tests.egress_fixtures import egress_proxy
-from packages.runner.tests.pilot_pages import ORIGIN, in_session, put
+from packages.runner.tests.pilot_pages import ORIGIN, in_session, put, show
 
 
 async def marker(resolution: Resolved | Absent | Unresolved) -> str | None:
@@ -326,3 +332,232 @@ def test_a_navigation_inside_a_held_region_is_a_document_change(
         return control
 
     assert in_session(scenario) == Absent(0)
+
+
+MEANING = "the favorites count in the banner"
+REGION_GONE = f"{MEANING}: its region is not on the page exactly once"
+
+
+async def offered(session: BrowserSession, css: str) -> Seen:
+    element = await session.page.query_selector(css)
+    assert element is not None, css
+    return Seen(element)
+
+
+def test_target_uses_runs_the_contract_verdict_at_every_later_use() -> None:
+    async def scenario(session: BrowserSession) -> tuple[Any, ...]:
+        uses = TargetUses(MEANING, checks_text=True, contract=COUNT)
+        await show(session, "article")
+        first = await uses.add(
+            session.page, await offered(session, "div.banner span.counter"), "assertion"
+        )
+        before = uses.targets
+        await show(session, "article-favorited")
+        lower = await offered(session, "div.article-actions span.counter")
+        with pytest.raises(BindingRefusedError) as refused:
+            await uses.add(session.page, lower, "assertion")
+        await put(session, REGIONS.replace('class="container page"', 'class="banner"'))
+        banner = await offered(session, "div.banner span.counter")
+        with pytest.raises(BindingRefusedError) as moved:
+            await uses.add(session.page, banner, "assertion")
+        return first, before, uses.targets, refused.value, moved.value
+
+    first, before, after, refused, moved = in_session(scenario)
+
+    assert first == 0
+    assert (
+        before
+        == after
+        == (
+            Target(
+                semantic=MEANING, locators=(ByCss(css="span.counter"),), contract=COUNT
+            ),
+        )
+    )
+    assert (refused.reason, str(refused)) == (
+        "outside_region",
+        f"{MEANING}: outside_region",
+    )
+    assert moved.reason == "region_ambiguous"
+
+
+def test_a_sighting_outside_the_region_keeps_no_sighting() -> None:
+    async def scenario(session: BrowserSession) -> tuple[Any, ...]:
+        uses = TargetUses(MEANING, checks_text=False, contract=COUNT)
+        await put(session, REGIONS)
+        await uses.see_for_negative_check(
+            session.page, await offered(session, "div.banner span.counter")
+        )
+        lower = await offered(session, "div.container span.counter")
+        with pytest.raises(BindingRefusedError) as refused:
+            await uses.see_for_negative_check(session.page, lower)
+        await put(session, HIDDEN)
+        with pytest.raises(LocatorError) as unseen:
+            await uses.add_negative_check(session.page)
+        return refused.value.reason, str(unseen.value), uses.targets
+
+    assert in_session(scenario) == (
+        "outside_region",
+        f"{MEANING}: it wasn't seen before its negative check",
+        (),
+    )
+
+
+def test_unlisted_uses_are_refused_only_where_copies_are_detected() -> None:
+    async def scenario(session: BrowserSession) -> tuple[Any, ...]:
+        author = TargetUses("the article's author", checks_text=True)
+        await show(session, "article")
+        with pytest.raises(BindingRefusedError) as refused:
+            await author.add(
+                session.page, await offered(session, "div.banner a.author"), "assertion"
+            )
+        field = TargetUses("the login form's email field", checks_text=False)
+        await show(session, "login")
+        email = await offered(session, 'input[name="email"]')
+        return (
+            refused.value.reason,
+            author.targets,
+            await field.add(session.page, email, "action"),
+            field.targets[0].contract,
+        )
+
+    assert in_session(scenario) == ("unlisted_copies", (), 0, None)
+
+
+def test_page_world_facts_cannot_drop_the_region_from_a_contracted_targets_locators() -> (
+    None
+):
+    lower = REGIONS.replace(
+        'data-is="lower-count"', 'data-is="lower-count" id="lower" data-testid="lower"'
+    )
+    lie = """() => {
+        const read = Element.prototype.getAttribute;
+        Element.prototype.getAttribute = function (name) {
+            if (read.call(this, "data-is") !== "banner-count") return read.call(this, name);
+            if (name === "id" || name === "data-testid") return "lower";
+            return read.call(this, name);
+        };
+    }"""
+
+    async def scenario(session: BrowserSession) -> tuple[Any, ...]:
+        uses = TargetUses(MEANING, checks_text=True, contract=COUNT)
+        await put(session, lower)
+        await session.page.evaluate(lie)
+        banner = await offered(session, "div.banner span.counter")
+        said = await banner.element.evaluate("(e) => e.getAttribute('data-testid')")
+        await uses.add(session.page, banner, "assertion")
+        return said, uses.targets
+
+    assert in_session(scenario) == (
+        "lower",
+        (
+            Target(
+                semantic=MEANING, locators=(ByCss(css="span.counter"),), contract=COUNT
+            ),
+        ),
+    )
+
+
+def test_a_banner_count_stripped_of_its_class_is_refused_and_a_span_part_still_generates() -> (
+    None
+):
+    # The banner count's class, id and test ID moved to the lower copy: under
+    # the reviewed row the banner has no part, so nothing binds; under a
+    # test-local row whose part is the span, only region-rooted locators stay.
+    moved = REGIONS.replace(
+        'class="counter" data-testid="count" data-is="banner-count"',
+        'data-is="banner-count"',
+    ).replace(
+        'class="counter" data-is="lower-count"',
+        'class="counter" id="count" data-testid="count" data-is="lower-count"',
+    )
+    span = Contract(region="div.banner", part="span")
+
+    async def scenario(session: BrowserSession) -> tuple[Any, ...]:
+        row = TargetUses(MEANING, checks_text=True, contract=COUNT)
+        local = TargetUses(MEANING, checks_text=True, contract=span)
+        await put(session, moved)
+        banner = await offered(session, "div.banner app-favorite-button span")
+        with pytest.raises(BindingRefusedError) as refused:
+            await row.add(session.page, banner, "assertion")
+        await local.add(session.page, banner, "assertion")
+        return refused.value.reason, row.targets, local.targets
+
+    assert in_session(scenario) == (
+        "part_absent",
+        (),
+        (Target(semantic=MEANING, locators=(ByCss(css="span"),), contract=span),),
+    )
+
+
+CHANGES = {
+    "replaced": "r.replaceWith(r.cloneNode(true))",
+    "relabelled": 'r.className = "moved"',
+    "second": "r.after(r.cloneNode(true))",
+    "removed": "r.remove()",
+}
+
+
+@pytest.mark.parametrize("path", ["new", "joining"])
+@pytest.mark.parametrize("change", CHANGES)
+def test_a_region_change_after_a_zero_result_fails_a_contracted_negative_check(
+    monkeypatch: pytest.MonkeyPatch, change: str, path: str
+) -> None:
+    # Armed, the page changes after a zero result: the first one on the new
+    # target's path, the first repeated look (the join's) on the joining path.
+    original = PlaywrightLocator.count
+    armed: list[str] = []
+    looked: list[str] = []
+
+    async def count(self: PlaywrightLocator) -> int:
+        found = await original(self)
+        if found == 0 and armed:
+            repeated = repr(self) in looked
+            looked.append(repr(self))
+            if path == "new" or repeated:
+                await self.page.evaluate(
+                    f'() => {{ const r = document.querySelector("div.banner"); {armed.pop()} }}'
+                )
+        return found
+
+    monkeypatch.setattr(PlaywrightLocator, "count", count)
+
+    async def scenario(session: BrowserSession) -> tuple[Any, ...]:
+        uses = TargetUses(MEANING, checks_text=False, contract=COUNT)
+        await put(session, REGIONS)
+        await uses.see_for_negative_check(
+            session.page, await offered(session, "div.banner span.counter")
+        )
+        await put(session, HIDDEN)
+        indexes = (
+            [await uses.add_negative_check(session.page)] if path == "joining" else []
+        )
+        before = uses.targets
+        await put(session, HIDDEN)
+        armed.append(CHANGES[change])
+        with pytest.raises(LocatorError) as failed:
+            await uses.add_negative_check(session.page)
+        return indexes, before, uses.targets, str(failed.value), armed
+
+    indexes, before, after, message, left = in_session(scenario)
+
+    assert indexes == ([0] if path == "joining" else [])
+    assert after == before
+    assert all(target.contract == COUNT for target in after)
+    assert message == REGION_GONE
+    assert left == []
+
+
+def test_a_contracted_negative_check_whose_region_is_gone_names_it() -> None:
+    async def scenario(session: BrowserSession) -> tuple[Any, ...]:
+        uses = TargetUses(MEANING, checks_text=False, contract=COUNT)
+        await put(session, REGIONS)
+        await uses.see_for_negative_check(
+            session.page, await offered(session, "div.banner span.counter")
+        )
+        await put(session, HIDDEN.replace('class="banner"', 'class="hero"'))
+        with pytest.raises(LocatorError) as gone:
+            await uses.add_negative_check(session.page)
+        return str(gone.value), uses.targets
+
+    assert in_session(scenario) == (REGION_GONE, ())
