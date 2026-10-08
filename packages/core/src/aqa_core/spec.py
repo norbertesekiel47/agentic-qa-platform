@@ -26,6 +26,7 @@ from aqa_core.schema import (
     NonEmpty,
     Origin,
     ProbeEndpoint,
+    ResetEndpoint,
     SecretName,
     StartPath,
     StrictModel,
@@ -100,7 +101,7 @@ class Account(StrictModel):
 class Reset(StrictModel):
     """The reset hook, called before every attempt (ADR-0024)."""
 
-    http: NonEmpty
+    http: ResetEndpoint
 
 
 class Preconditions(StrictModel):

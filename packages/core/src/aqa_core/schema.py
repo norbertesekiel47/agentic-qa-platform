@@ -217,35 +217,58 @@ def _start_path(text: str) -> str:
 StartPath = Annotated[StrictStr, AfterValidator(_start_path)]
 
 
-def _probe_endpoint(text: str) -> str:
-    method, space, path = text.partition(" ")
-    if method != "GET" or not space:
-        raise ValueError(
-            f"'{text}' is not a probe: write GET and a path, such as GET "
-            "/test-api/orders/count, since a probe only reads, and only from the "
-            "start origin (DATA_MODEL §6)"
-        )
+def _endpoint(text: str, method: str, kind: str, form: str) -> str:
+    """`text` when it is `method`, one space and a path held to start_url's
+    rules, ASCII and with no fragment, as the runner sends it; otherwise a
+    ValueError naming it as `kind`, whose usual `form` the first error gives."""
+    written, space, path = text.partition(" ")
+    if written != method or not space:
+        raise ValueError(f"'{text}' is not {kind}: write {form} (DATA_MODEL §6)")
     try:
         _start_path(path)
     except ValueError as error:
-        raise ValueError(f"'{text}' is not a probe: {error}") from None
+        raise ValueError(f"'{text}' is not {kind}: {error}") from None
     if "#" in path:
         raise ValueError(
-            f"'{text}' is not a probe: a request carries no fragment, so write the "
+            f"'{text}' is not {kind}: a request carries no fragment, so write the "
             "path without one"
         )
     if not path.isascii():
         raise ValueError(
-            f"'{text}' is not a probe: the runner sends its path as written, and a "
+            f"'{text}' is not {kind}: the runner sends its path as written, and a "
             "request line is ASCII, so write it percent-encoded"
         )
     return text
+
+
+def _probe_endpoint(text: str) -> str:
+    return _endpoint(
+        text,
+        "GET",
+        "a probe",
+        "GET and a path, such as GET /test-api/orders/count, since a probe only "
+        "reads, and only from the start origin",
+    )
+
+
+def _reset_endpoint(text: str) -> str:
+    return _endpoint(
+        text,
+        "POST",
+        "a reset hook",
+        "POST and a path, such as POST /test-api/reset, since the runner posts "
+        "it, and only to the start origin",
+    )
 
 
 # A spec's probe: GET and a path on the start origin, held to start_url's
 # rules, so a probe never reads another origin, and ASCII, as the runner
 # sends it (DATA_MODEL §6; #48).
 ProbeEndpoint = Annotated[StrictStr, AfterValidator(_probe_endpoint)]
+
+# A spec's reset hook: POST and a path on the start origin under the same
+# rules, so the runner never posts to another origin (DATA_MODEL §6; ADR-0024).
+ResetEndpoint = Annotated[StrictStr, AfterValidator(_reset_endpoint)]
 
 
 # The roles Playwright 1.63's get_by_role accepts, which are WAI-ARIA's, as

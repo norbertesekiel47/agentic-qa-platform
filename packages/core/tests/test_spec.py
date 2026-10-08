@@ -425,6 +425,66 @@ def test_a_probe_problem_reads_in_full(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("hook", "problem"),
+    [
+        # The hook posts, as the runner sends it (ADR-0024).
+        ("GET /test-api/reset", "is not a reset hook: write POST and a path"),
+        ("post /test-api/reset", "is not a reset hook: write POST and a path"),
+        ("POST", "is not a reset hook: write POST and a path"),
+        # Only on the start origin, as start_url is.
+        ("POST https://evil.test/reset", "is not a path"),
+        ("POST //evil.test/reset", "is not a path"),
+        ("POST /a//b", "is not a path"),
+        ("POST  /test-api/reset", "is not a path"),
+        ("POST /café", "write it percent-encoded"),
+        ("POST /test-api/reset#seed", "a request carries no fragment"),
+    ],
+)
+def test_a_reset_hook_is_post_and_a_path(
+    tmp_path: Path, hook: str, problem: str
+) -> None:
+    text = LOGIN.replace(
+        "  start_url: /login\n",
+        f'  start_url: /login\n  reset: {{ http: "{hook}" }}\n',
+    )
+    path = write(tmp_path, text)
+
+    [line] = problems_for(path)
+
+    assert line.startswith(f"{path}: preconditions.reset.http: '{hook}' ")
+    assert problem in line
+
+
+def test_a_reset_hook_problem_reads_in_full(tmp_path: Path) -> None:
+    text = LOGIN.replace(
+        "  start_url: /login\n",
+        '  start_url: /login\n  reset: { http: "GET /test-api/reset" }\n',
+    )
+    path = write(tmp_path, text)
+
+    assert problems_for(path) == (
+        (
+            f"{path}: preconditions.reset.http: 'GET /test-api/reset' is not a reset "
+            "hook: write POST and a path, such as POST /test-api/reset, since the "
+            "runner posts it, and only to the start origin (DATA_MODEL §6)"
+        ),
+    )
+
+
+def test_a_reset_hook_keeps_its_query(tmp_path: Path) -> None:
+    text = LOGIN.replace(
+        "  start_url: /login\n",
+        '  start_url: /login\n  reset: { http: "POST /test-api/reset?fixture=seed" }\n',
+    )
+
+    spec = load_spec(write(tmp_path, text), CONFIG)
+
+    reset = spec.frontmatter.preconditions.reset
+    assert reset is not None
+    assert reset.http == "POST /test-api/reset?fixture=seed"
+
+
 def test_a_probe_keeps_its_query(tmp_path: Path) -> None:
     text = LOGIN.replace(
         "  start_url: /login\n",
