@@ -9,6 +9,8 @@ from types import TracebackType
 from typing import Self
 
 type Handler = Callable[[asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]]
+# Told once, with the error, when an accept error retires the listener.
+type Retired = Callable[[BaseException], None]
 
 
 @dataclass(eq=False)
@@ -61,10 +63,13 @@ class _ClosingStream(asyncio.Protocol):
 
 
 class LoopbackServer:
-    """A plain IPv4 listener whose context joins every accepted connection."""
+    """A plain IPv4 listener whose context joins every accepted connection.
+    An accept error other than a transient one retires the listener for
+    good, never to be retried; `on_retired` hears of it once."""
 
-    def __init__(self, handler: Handler) -> None:
+    def __init__(self, handler: Handler, *, on_retired: Retired | None = None) -> None:
         self._handler = handler
+        self._on_retired = on_retired
         self._socket: socket.socket | None = None
         self._connections: set[_Connection] = set()
 
@@ -137,23 +142,28 @@ class LoopbackServer:
         except OSError as error:
             self._fail(error)
             return
-        except Exception:
+        except Exception as error:
             # An unexpected readiness error retires the listener, then reaches
             # the loop's callback error handler unchanged.
-            self._stop()
+            self._retire(error)
             raise
         try:
             self._submit(raw)
         except (OSError, RuntimeError, ValueError, MemoryError) as error:
             self._fail(error)
-        except Exception:
+        except Exception as error:
             # Likewise for an unexpected setup error; rollback or _stop closes
             # the accepted socket.
-            self._stop()
+            self._retire(error)
             raise
 
-    def _fail(self, error: BaseException) -> None:
+    def _retire(self, error: BaseException) -> None:
         self._stop()
+        if self._on_retired is not None:
+            self._on_retired(error)
+
+    def _fail(self, error: BaseException) -> None:
+        self._retire(error)
         asyncio.get_running_loop().call_exception_handler(
             {"message": "loopback acceptance failed", "exception": error}
         )
