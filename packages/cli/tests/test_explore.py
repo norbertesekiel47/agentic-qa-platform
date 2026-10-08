@@ -23,6 +23,7 @@ from aqa_core.model_costs import Usage
 from aqa_core.project import load_project
 from aqa_runner.chat_client import Reply
 from aqa_runner.model_router import ModelCallError
+from aqa_runner.run_record import RunRecord
 from langchain_core.messages import AIMessage
 from langsmith.utils import tracing_is_enabled
 from playwright._impl._browser_type import BrowserType
@@ -649,3 +650,31 @@ def test_the_console_script_exits_5_on_a_spec_error(aqa: str, tmp_path: Path) ->
 
     assert result.returncode == 5, result.stderr
     assert "colour: unknown key" in result.stderr
+
+
+@pytest.mark.parametrize("failure", ["file", "permission"])
+def test_a_spec_root_that_cannot_hold_a_run_record_exits_15_before_any_model_call(
+    tmp_path: Path, run: Run, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    spec = project(tmp_path / "qa")
+    if failure == "file":
+        (spec.parent / ".aqa").write_text("a file, not a record directory")
+    else:
+
+        def refuse(_base: Path) -> None:
+            raise PermissionError("raw OS advice must not reach the terminal")
+
+        monkeypatch.setattr(RunRecord, "create", refuse)
+    client = FakeClient(reply(parsed=PLAN))
+
+    result, factory = run([str(spec), "--plan-only"], **{SONNET: client})
+
+    assert result.exit_code == 15, result.output
+    assert result.stderr == (
+        f"record_error {spec}: the run record could not be created; nothing was planned\n"
+    )
+    assert factory.built == []
+    assert client.calls == []
+    assert list(spec.parent.rglob("plan.json")) == []
+    assert "Traceback" not in result.output
+    assert "raw OS advice" not in result.output

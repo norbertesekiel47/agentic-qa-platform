@@ -4,6 +4,7 @@ refusal `BrowserSession.fill_secret` raises when it isn't, or when the page
 or the field's frame isn't where the binding allows."""
 
 import re
+from typing import Literal
 
 from aqa_core.config import SecretField
 from aqa_core.text import normalize
@@ -28,6 +29,16 @@ class SecretRefusedError(Exception):
     allow it: not a policy event, since the page is on an allowed origin, but
     the wrong page or field for this secret. Nothing was filled, and the
     message names the secret, never its value."""
+
+    def __init__(
+        self,
+        secret: str,
+        check: Literal["destination", "document_origin", "frame_origin", "field"],
+        message: str,
+    ) -> None:
+        self.secret = secret
+        self.check = check
+        super().__init__(message)
 
 
 class SecretNotFilledError(Error):

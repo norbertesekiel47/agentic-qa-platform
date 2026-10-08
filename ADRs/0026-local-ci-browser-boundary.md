@@ -650,3 +650,47 @@ Rejected: scanning each string before serializing, which misses what escaping wr
 ### Consequences and limits
 
 What is guaranteed for saved evidence is that every supported spelling of a bound value is removed, or the file isn't written. Encoded and fragmented reflections in a saved snapshot (other encodings, a value split across elements) remain SECURITY §5's best-effort class, as in what a model sees; screenshots are slice C's. `egress.json` and invariant texts keep the fill-step predicate until #53's preflight; a refused `egress.json` falls back to its counts-only form, and to none when that is refused too, and the result still names the block; a fixed policy reason in withheld runs is #53's too. A secret whose value its marker spells leaves those files out. A page holding a value can still encode it in what withheld logs keep (the order of console types, statuses, sizes, timing), which R1 keeps for debugging. Each kept step costs one snapshot and two small files; a page that stopped answering costs up to `resolve_seconds` and one second more at the end of its run. No dependency, paid resource or model call.
+
+
+## Amendment (2026-10-07): session boundaries for explore (#53 P1+P6)
+
+### Context and decision
+
+Explore needs a checked observation while deriving locators and a secret binding
+check before writing an action intent. The browser session owns these checks so
+its callers share the same origin rules and serialization as replay.
+
+- `open_browser_session` maps Playwright `Error`, `KeyError`, `ValueError` and
+  `OSError` from its launch and sandbox check to `SandboxUnavailableError`
+  (code 10). The diagnostic names the exception type and the existing host fix,
+  never the exception's text. An existing sandbox refusal keeps its diagnostic
+  and observations. Context setup, routing, the caller's body and cleanup keep
+  their own errors. The sandbox launch still closes a browser when its check
+  fails.
+- `BrowserSession.observing_page()` yields the page under the session lock,
+  checks the allowed origin before and after a successful observation, and
+  discards it with `DocumentChangedError` if any frame navigated or detached,
+  including during the initial check. A caller's exception or cancellation
+  propagates and releases the lock. It does not retire snapshot refs.
+- `page` stays public for tests. Production observations outside the session
+  use `observing_page`; actions continue through the checked session methods.
+- `secret_refusal(element, secret)` checks the redactor and the same destination,
+  document origin, frame ancestry and field binding as `fill_secret`, under the
+  lock, without filling or starting a traffic window. It returns `None` on
+  success and raises the existing refusal otherwise. `SecretRefusedError`
+  carries the secret's name and the literal check (`destination`,
+  `document_origin`, `frame_origin` or `field`), with its message unchanged.
+  A Playwright check error keeps only our existing value-free diagnostic.
+- A passed precheck grants no later permission: `fill_secret` repeats the shared
+  binding checks immediately before its fill under its own locked turn.
+
+### Consequences and verification
+
+Tests use disposable loopback sites and fake values. They exercise launch and
+check faults, browser closure, narrow error mapping, observation origin and
+frame changes, serialization and cancellation, unchanged refusal messages,
+value-free page errors, no-fill prechecks and changed bindings before filling.
+The key grammar helpers move unchanged to `aqa_runner.keys`; their existing
+imports remain valid. No dependency, tenant surface, paid resource or model
+call is added. This establishes the runner boundary; the later CLI explore
+slices still own end-to-end infrastructure-code printing.

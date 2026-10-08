@@ -645,3 +645,23 @@ def test_changing_the_config_after_loading_does_not_change_the_specs_destination
             origins=("http://127.0.0.1:4100",), field="password"
         )
     }
+
+
+@pytest.mark.parametrize(
+    ("key", "shown"),
+    [
+        ("extra\nkey", "'extra\\nkey'"),
+        ("extra\x1bkey", "'extra\\x1bkey'"),
+        ("extra\u202ekey", "'extra\\u202ekey'"),
+    ],
+)
+def test_a_key_that_is_not_printable_is_shown_with_repr(
+    tmp_path: Path, key: str, shown: str
+) -> None:
+    root = write_project(tmp_path / "qa", json.dumps({key: True}))
+    config = root / "config.yaml"
+
+    with pytest.raises(SpecError) as raised:
+        load_config(config)
+
+    assert raised.value.problems == (f"{config}: {shown}: unknown key",)
