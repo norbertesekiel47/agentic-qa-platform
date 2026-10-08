@@ -1,11 +1,21 @@
 import asyncio
+from unittest.mock import patch
 
 import pytest
 from aqa_core.schema import Contract
-from aqa_runner.binding import Bind, HeldRegion, Refused, binding_verdict, held_region
+from aqa_runner import binding
+from aqa_runner.binding import (
+    Bind,
+    HeldRegion,
+    Refused,
+    _passes,
+    _query,
+    binding_verdict,
+    held_region,
+)
 from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.locator_generation import _stable
-from playwright.async_api import ElementHandle, async_playwright
+from playwright.async_api import ElementHandle, Error, async_playwright
 
 from packages.runner.tests.egress_fixtures import egress_proxy
 from packages.runner.tests.explore_fixtures import App, in_app
@@ -712,3 +722,213 @@ def test_reset_rearms_a_completed_slow_write_cycle() -> None:
         assert app.writes == 1
 
     in_app(scenario)
+
+
+def test_attempted_hold_is_retired_when_acknowledgement_is_cancelled() -> None:
+    async def scenario(session: BrowserSession) -> None:
+        await put(session, '<div class="banner"><span class="counter">1</span></div>')
+        offered = await session.page.query_selector("span.counter")
+        assert offered is not None
+        acknowledged = asyncio.Event()
+        block = asyncio.Event()
+        hold_body: str | None = None
+
+        async def delayed_query(
+            element: ElementHandle, body: str
+        ) -> list[ElementHandle]:
+            nonlocal hold_body
+            found = await _query(element, body)
+            if body.startswith("hold:"):
+                hold_body = body
+                acknowledged.set()
+                await block.wait()
+            return found
+
+        async def enter() -> None:
+            async with held_region(session.page, COUNT):
+                raise AssertionError("cancelled entry must not enter its body")
+
+        try:
+            async with held_region(session.page, COUNT) as normal:
+                assert normal is not None
+                assert await normal.bound(offered)
+            assert not await normal.bound(offered)
+            with patch.object(binding, "_query", delayed_query):
+                task = asyncio.create_task(enter())
+                try:
+                    await asyncio.wait_for(acknowledged.wait(), 5)
+                    task.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await task
+                finally:
+                    if not task.done():
+                        task.cancel()
+                        with pytest.raises(asyncio.CancelledError):
+                            await task
+            assert hold_body is not None
+            token = hold_body.removeprefix("hold:")
+            assert not await _passes(
+                offered, f"bound:{token}|div.banner|span.counter|leaf"
+            )
+        finally:
+            if hold_body is not None:
+                await _query(offered, "drop:" + hold_body.removeprefix("hold:"))
+            await offered.dispose()
+
+    in_session(scenario)
+
+
+def cause_chain(
+    error: BaseException | None, failures: dict[str, BaseException]
+) -> tuple[str, ...]:
+    names = {id(failure): name for name, failure in failures.items()}
+    found: list[str] = []
+    while error is not None:
+        found.append(names.get(id(error), repr(error)))
+        error = error.__cause__
+    return tuple(found)
+
+
+@pytest.mark.parametrize(
+    ("body", "disposal_fails", "expected"),
+    [
+        (None, False, ("drop",)),
+        (None, True, ("disposal", "drop")),
+        (ValueError, False, ("drop", "body")),
+        (ValueError, True, ("disposal", "drop", "body")),
+        (asyncio.CancelledError, False, ("body", "drop")),
+        (asyncio.CancelledError, True, ("body", "disposal", "drop")),
+    ],
+)
+def test_an_open_document_drop_error_propagates_and_does_not_claim_retirement(
+    body: type[BaseException] | None, *, disposal_fails: bool, expected: tuple[str, ...]
+) -> None:
+    async def scenario(session: BrowserSession) -> None:
+        await put(session, '<div class="banner"><span class="counter">1</span></div>')
+        offered = await session.page.query_selector("span.counter")
+        assert offered is not None
+        original_dispose = ElementHandle.dispose
+        failures: dict[str, BaseException] = {
+            "drop": Error("fake drop failure"),
+            "disposal": Error("fake disposal failure"),
+        }
+        if body is not None:
+            failures["body"] = body("fixture stop")
+        disposed: list[ElementHandle] = []
+        held: HeldRegion | None = None
+
+        async def fail_drop(element: ElementHandle, text: str) -> list[ElementHandle]:
+            if text.startswith("drop:"):
+                raise failures["drop"]
+            return await _query(element, text)
+
+        async def dispose(element: ElementHandle) -> None:
+            disposed.append(element)
+            await original_dispose(element)
+            if disposal_fails and held is not None and element is held.element:
+                raise failures["disposal"]
+
+        async def exit_held() -> None:
+            nonlocal held
+            async with held_region(session.page, COUNT) as held:
+                assert held is not None
+                assert await held.bound(offered)
+                if "body" in failures:
+                    raise failures["body"]
+
+        try:
+            with (
+                patch.object(binding, "_query", fail_drop),
+                patch.object(ElementHandle, "dispose", dispose),
+                pytest.raises((Error, asyncio.CancelledError)) as caught,
+            ):
+                await exit_held()
+            assert cause_chain(caught.value, failures) == expected
+            assert held is not None
+            assert held.element in disposed
+            assert not session.page.is_closed()
+            assert await held.bound(offered)
+            await _query(offered, f"drop:{held.token}")
+            assert not await held.bound(offered)
+        finally:
+            if held is not None:
+                await _query(offered, f"drop:{held.token}")
+            await offered.dispose()
+
+    in_session(scenario)
+
+
+def test_successful_cleanup_preserves_body_cancellation() -> None:
+    async def scenario(session: BrowserSession) -> None:
+        await put(session, '<div class="banner"><span class="counter">1</span></div>')
+        offered = await session.page.query_selector("span.counter")
+        assert offered is not None
+        cancellation = asyncio.CancelledError()
+        retired: list[HeldRegion] = []
+
+        async def cancel() -> None:
+            async with held_region(session.page, COUNT) as held:
+                assert held is not None
+                retired.append(held)
+                raise cancellation
+
+        try:
+            with pytest.raises(asyncio.CancelledError) as caught:
+                await cancel()
+            assert caught.value is cancellation
+            assert caught.value.__cause__ is None
+            assert not await retired[0].bound(offered)
+        finally:
+            await offered.dispose()
+
+    in_session(scenario)
+
+
+def test_a_cancelled_drop_still_disposes_and_is_not_retried() -> None:
+    async def scenario(session: BrowserSession) -> None:
+        await put(session, '<div class="banner"><span class="counter">1</span></div>')
+        offered = await session.page.query_selector("span.counter")
+        assert offered is not None
+        original_dispose = ElementHandle.dispose
+        dropping = asyncio.Event()
+        stop = ValueError("fixture stop")
+        disposed: list[ElementHandle] = []
+        held: HeldRegion | None = None
+
+        async def block_drop(element: ElementHandle, text: str) -> list[ElementHandle]:
+            if text.startswith("drop:"):
+                dropping.set()
+                await asyncio.Event().wait()
+            return await _query(element, text)
+
+        async def dispose(element: ElementHandle) -> None:
+            disposed.append(element)
+            await original_dispose(element)
+
+        async def fail() -> None:
+            nonlocal held
+            async with held_region(session.page, COUNT) as held:
+                raise stop
+
+        try:
+            with (
+                patch.object(binding, "_query", block_drop),
+                patch.object(ElementHandle, "dispose", dispose),
+            ):
+                task = asyncio.create_task(fail())
+                try:
+                    await asyncio.wait_for(dropping.wait(), 5)
+                finally:
+                    task.cancel()
+                with pytest.raises(asyncio.CancelledError) as caught:
+                    await task
+            assert caught.value.__cause__ is stop
+            assert held is not None
+            assert held.element in disposed
+            assert await held.bound(offered)
+        finally:
+            if held is not None:
+                await _query(offered, f"drop:{held.token}")
+            await offered.dispose()
+
+    in_session(scenario)
