@@ -64,6 +64,15 @@ class ModelRouter:
         self._roles = roles
         self._factory = client_factory
         self._clients: dict[tuple[str, str, Effort | None], ChatClient] = {}
+        self._completed_calls: list[CostRecord] = []
+
+    @property
+    def completed_calls(self) -> tuple[CostRecord, ...]:
+        """The cost record of every response this router's calls received, once
+        each and in order. An interruption (Ctrl-C or a cancellation) skips
+        `Routed` and `ModelCallError`, so this is what keeps its charges
+        (ADR-0007's #161 amendment)."""
+        return tuple(self._completed_calls)
 
     @classmethod
     def from_config(cls, config: ProjectConfig, client_factory: ClientFactory) -> Self:
@@ -114,16 +123,16 @@ class ModelRouter:
                     raise ModelCallError(records) from error
                 raise
             status = _status(reply, schema)
-            records.append(
-                cost_record(
-                    role=role,
-                    mode=mode,
-                    model=model,
-                    usage=reply.usage,
-                    latency_ms=round((time.perf_counter() - started) * 1000),
-                    status=status,
-                )
+            record = cost_record(
+                role=role,
+                mode=mode,
+                model=model,
+                usage=reply.usage,
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                status=status,
             )
+            records.append(record)
+            self._completed_calls.append(record)
             if status != "refusal":
                 break
         return Routed(reply.message, reply.parsed, status, tuple(records))
