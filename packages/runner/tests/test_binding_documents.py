@@ -439,3 +439,19 @@ def test_regions_only_in_shadow_trees_are_ambiguous_not_absent() -> None:
         )
 
     in_session(scenario)
+
+
+def test_a_flood_of_shadow_duplicates_is_drift_not_an_error() -> None:
+    async def scenario(session: BrowserSession) -> None:
+        await put(session, f"{HIDDEN}<x-host></x-host>")
+        offered = await element(session, "span.counter")
+        async with held_region(session.page, COUNT) as held:
+            assert held is not None
+            await session.page.evaluate(
+                "document.querySelector('x-host').attachShadow({mode: 'open'})"
+                ".innerHTML = '<div class=\"banner\"></div>'.repeat(150000)"
+            )
+            assert await held.absent() is False
+            assert await held.bound(offered) is False
+
+    in_session(scenario)

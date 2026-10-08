@@ -39,11 +39,11 @@ SCRIPT = """(() => {
     const inDocument = native("Document", "querySelectorAll");
     const inShadow = native("DocumentFragment", "querySelectorAll");
     const createRange = native("Document", "createRange");
-    const matches = (scope, css) => {
+    const matches = (scope, css, found = []) => {
         const query = scope === document ? inDocument : inShadow;
-        const found = [...query(scope, css)];
+        for (const e of query(scope, css)) found.push(e);
         for (const e of query(scope, "*")) {
-            const tree = shadowRoot(e); if (tree) found.push(...matches(tree, css));
+            const tree = shadowRoot(e); if (tree) matches(tree, css, found);
         }
         return found;
     };
