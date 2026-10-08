@@ -313,8 +313,8 @@ class PilotInputTests(unittest.TestCase):
         for reset in invalid.split("|"):
             with self.subTest(reset=reset):
                 self.spec["preconditions"]["reset"] = {"http": reset}
-                self.save()
-                self.refuses(self.load, "invalid pilot input")
+                self.save(fresh=False)
+                self.refuses(self.load, "invalid pilot input", self.qa)
         self.spec = json.loads(SPEC)
         self.save()
         self.assertEqual(self.load()[0].reset, RESET)
