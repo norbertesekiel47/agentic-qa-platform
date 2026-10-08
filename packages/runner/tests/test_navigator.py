@@ -583,6 +583,11 @@ def test_assert_check_takes_a_null_ref_for_a_check_that_reads_no_element() -> No
     assert taken.call == AssertCheck(check_id="a2", ref=None)
 
 
+BROKEN = {"name": "click", "args": '{"ref":', "id": "toolu_fake", "error": None}
+SIGN_IN = {"name": "click", "args": {"ref": "e3", "meaning": "the sign-in link"}}
+MALFORMED = "a tool call in the reply was malformed, so nothing ran"
+
+
 @pytest.mark.parametrize(
     ("message", "outcome", "expected"),
     [
@@ -595,23 +600,18 @@ def test_assert_check_takes_a_null_ref_for_a_check_that_reads_no_element() -> No
             ),
         ),
         (
+            AIMessage(content="", invalid_tool_calls=[BROKEN]),
+            "ok",
+            Decision(Unrunnable(MALFORMED), 0, ""),
+        ),
+        (
             AIMessage(
                 content="",
-                invalid_tool_calls=[
-                    {
-                        "name": "click",
-                        "args": '{"ref":',
-                        "id": "toolu_fake",
-                        "error": None,
-                    }
-                ],
+                tool_calls=[SIGN_IN | {"id": "toolu_fake_0"}],
+                invalid_tool_calls=[BROKEN],
             ),
             "ok",
-            Decision(
-                Unrunnable("a tool call in the reply was malformed, so nothing ran"),
-                0,
-                "",
-            ),
+            Decision(Unrunnable(MALFORMED), 1, ""),
         ),
     ],
 )

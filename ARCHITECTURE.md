@@ -122,7 +122,7 @@ A checkpoint preserves graph state, not the browser. Resuming therefore requires
 | `restart()` | Explore: start a new attempt, allowed only under the reset rule in §3.3 (ADR-0024) |
 | `finish(steps)` | Explore: name the log's step numbers that form the path. Heal: a structured verdict (Pydantic-validated) with evidence refs |
 
-A navigator turn runs one tool call: the first call of a reply runs, and any others are reported unrun. Every tool's schema is strict, and no request forces a tool choice (ADR-0024's #53 amendment).
+A navigator turn runs one tool call: the first call of a reply runs, and any others are reported unrun; a refused reply, or one holding a call LangChain couldn't parse, runs nothing. Every tool's schema is strict, and no request forces a tool choice (ADR-0024's #53 amendment).
 
 Page content is **untrusted data**:
 - Observations enter the model context inside delimited blocks, after secret-value redaction. Each block is scanned again as the request is built and holds no `<`, so no text can close it (ADR-0024's #53 amendment).
