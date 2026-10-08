@@ -20,6 +20,7 @@ from aqa_core.project import (
     SecretDestination,
     SpecError,
     allowed_origins,
+    contracts_fingerprint,
     effective_browser,
     load_config,
     load_project,
@@ -28,6 +29,7 @@ from aqa_core.project import (
     secret_destinations,
     start_origin,
     start_url,
+    subject_contracts,
 )
 from aqa_core.spec import Account, Spec
 
@@ -665,3 +667,92 @@ def test_a_key_that_is_not_printable_is_shown_with_repr(
         load_config(config)
 
     assert raised.value.problems == (f"{config}: {shown}: unknown key",)
+
+
+def test_a_subject_contract_naming_an_unknown_spec_is_refused_at_project_load(
+    tmp_path: Path,
+) -> None:
+    root = write_project(
+        tmp_path / "qa",
+        BOUND
+        + "subjects: [{spec: absent, expect: 0, region: div.banner, part: a.author}]\n",
+    )
+    write_spec(root / "login.spec.md")
+    with pytest.raises(SpecError) as raised:
+        load_project(root)
+    assert raised.value.problems == (
+        f"{root / 'config.yaml'}: subjects[0]: no spec named absent",
+    )
+
+
+def test_a_subject_contract_past_the_specs_last_expectation_is_refused(
+    tmp_path: Path,
+) -> None:
+    root = write_project(
+        tmp_path / "qa",
+        BOUND
+        + "subjects: [{spec: login, expect: 1, region: div.banner, part: a.author}]\n",
+    )
+    write_spec(root / "login.spec.md")
+    with pytest.raises(SpecError) as raised:
+        load_project(root)
+    assert raised.value.problems == (
+        f"{root / 'config.yaml'}: subjects[0]: login has 1 expectations, so it has no expect 1",
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("expect", 1), ("region", "section.main"), ("part", "span.date"), ("leaf", True)],
+)
+def test_the_contracts_fingerprint_changes_with_a_rows_index_region_part_or_leaf_and_ignores_other_specs_rows(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    row: dict[str, object] = {
+        "spec": "login",
+        "expect": 0,
+        "region": "div.banner",
+        "part": "a.author",
+    }
+    config = load_config(
+        write_project(tmp_path / "qa", json.dumps({"subjects": [row]})) / "config.yaml"
+    )
+    before = contracts_fingerprint(config, "login")
+    assert subject_contracts(config, "login")[0].model_dump() == {
+        "region": "div.banner",
+        "part": "a.author",
+        "leaf": False,
+    }
+    assert (
+        contracts_fingerprint(config, "absent")
+        == "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    )
+    other = {**row, "spec": "other", "leaf": True}
+    same = load_config(
+        write_project(
+            tmp_path / "qa", json.dumps({"subjects": [other, {**row, "leaf": False}]})
+        )
+        / "config.yaml"
+    )
+    assert contracts_fingerprint(same, "login") == before
+    altered = load_config(
+        write_project(
+            tmp_path / "qa", json.dumps({"subjects": [{**row, field: value}]})
+        )
+        / "config.yaml"
+    )
+    assert contracts_fingerprint(altered, "login") != before
+    two_rows = [row, {**row, "expect": 2, "part": "span.date"}]
+    ordered = load_config(
+        write_project(tmp_path / "qa", json.dumps({"subjects": two_rows}))
+        / "config.yaml"
+    )
+    reversed_rows = load_config(
+        write_project(tmp_path / "qa", json.dumps({"subjects": two_rows[::-1]}))
+        / "config.yaml"
+    )
+    assert contracts_fingerprint(ordered, "login") == contracts_fingerprint(
+        reversed_rows, "login"
+    )

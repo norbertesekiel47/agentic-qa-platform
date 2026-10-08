@@ -4,24 +4,32 @@ a crash between them, the requests each step owns, how settling ended, no
 model involved, and the script's own browser settings. The browser tests
 launch real Chromium on the OS that runs them: Linux in CI, macOS locally."""
 
+import asyncio
 import json
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import cast
+from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs, urlsplit
 
 import anthropic
 import pytest
-from aqa_core.config import ProjectConfig
+from aqa_core.compiled import CompiledScript
+from aqa_core.config import ProjectConfig, SubjectContract
+from aqa_core.project import SpecError, contracts_fingerprint, parse_compiled
 from aqa_runner import settling
 from aqa_runner.anthropic_client import AnthropicClient
-from aqa_runner.egress_proxy import EgressBlocks
+from aqa_runner.egress_proxy import EgressBlocks, EgressProxy
+from aqa_runner.executor import RunSetup, replay
 from aqa_runner.invariants import InvariantResult
 from aqa_runner.model_router import ModelRouter
 from aqa_runner.run_record import RunRecord
 from langchain_anthropic import ChatAnthropic
+from playwright.async_api import BrowserType
 
+from packages.runner.tests.egress_fixtures import gate
 from packages.runner.tests.executor_fixtures import (
     FORM_STEPS,
     FORM_TARGETS,
@@ -384,3 +392,146 @@ def test_an_expected_blocked_request_doesnt_end_the_run(
         InvariantResult("broken_images", "held", (), 0),
     )
     assert not (done.record.path / "egress.json").exists()
+
+
+SUBJECT_CONFIG = ProjectConfig(
+    subjects=(
+        SubjectContract(spec="replay", expect=0, region="div.banner", part="a.author"),
+    )
+)
+
+
+def stamped(script: CompiledScript, config: ProjectConfig) -> CompiledScript:
+    data = script.model_dump(mode="json")
+    data["compiled_by"]["subject_contracts"] = contracts_fingerprint(
+        config, script.spec_id
+    )
+    return parse_compiled(json.dumps(data), config, source=Path("fixture.json"))
+
+
+def refused_before_browser(
+    tmp_path: Path, script: CompiledScript, config: ProjectConfig
+) -> tuple[str, ...]:
+    chromium = MagicMock(spec=BrowserType)
+    chromium.launch = AsyncMock(
+        side_effect=AssertionError("browser launched before contract agreement")
+    )
+    proxy = MagicMock(spec=EgressProxy)
+    proxy.url = "http://127.0.0.1:4100"
+    record = RunRecord.create(tmp_path)
+    spec = a_spec(tmp_path, config, start_url="/page/form")
+    setup = RunSetup(spec, config, "http://127.0.0.1:4100", record)
+    with pytest.raises(SpecError) as raised:
+        asyncio.run(
+            replay(
+                script,
+                setup,
+                chromium=cast(BrowserType, chromium),
+                proxy=cast(EgressProxy, proxy),
+                gate=gate(allowed=(setup.start,)),
+            )
+        )
+    chromium.launch.assert_not_awaited()
+    assert read_steps(record.path) == []
+    return raised.value.problems
+
+
+@pytest.mark.parametrize(
+    "assertion",
+    [
+        {
+            "id": "a1",
+            "expect_index": 0,
+            "check": "text_in_target",
+            "target": "shown",
+            "text": "saved",
+        },
+        {"id": "a1", "expect_index": 0, "check": "not_visible", "target": "shown"},
+        {
+            "id": "a1",
+            "expect_index": 0,
+            "check": "visible_unoccluded",
+            "target": "shown",
+            "min_size_px": [1, 1],
+            "in_viewport": True,
+        },
+    ],
+)
+def test_replay_refuses_a_listed_expectations_target_without_its_contract_before_the_browser(
+    tmp_path: Path, assertion: dict[str, object]
+) -> None:
+    script = compiled(
+        [],
+        targets={
+            "shown": {
+                "semantic": "the form",
+                "locators": [
+                    {**by_role("button", "Save"), "scope": {"css": "div.banner"}}
+                ],
+            }
+        },
+        assertions=[assertion],
+    )
+    problems = refused_before_browser(
+        tmp_path, stamped(script, SUBJECT_CONFIG), SUBJECT_CONFIG
+    )
+    assert problems == ("targets.shown: lacks subject contract for replay expect 0",)
+
+
+def test_replay_refuses_a_script_compiled_under_other_subject_contracts(
+    tmp_path: Path,
+) -> None:
+    # Unsupported press would make _accepted refuse first if admission moved below it.
+    script = compiled(
+        [{"seq": 1, "action": "press", "key": "a+b", "side_effect": False}]
+    )
+    data = script.model_dump(mode="json")
+    data["compiled_by"]["subject_contracts"] = "sha256:" + "0" * 64
+    script = parse_compiled(
+        json.dumps(data), ProjectConfig(), source=Path("fixture.json")
+    )
+    problems = refused_before_browser(tmp_path, script, ProjectConfig())
+    assert problems == ("compiled under other subject contracts: explore it again",)
+
+
+def test_replay_refuses_a_target_sharing_a_listed_meaning_without_its_contract(
+    tmp_path: Path,
+) -> None:
+    script = compiled(
+        [],
+        targets={
+            "shown": {"semantic": "the form", "locators": [by_role("button", "Save")]},
+            "decoy": {"semantic": "the form", "locators": [by_role("button", "Other")]},
+            "unrelated": {
+                "semantic": "another meaning",
+                "locators": [by_role("button", "Else")],
+            },
+        },
+        assertions=[
+            {
+                "id": "a1",
+                "expect_index": 0,
+                "check": "text_in_target",
+                "target": "shown",
+                "text": "saved",
+            }
+        ],
+    )
+    problems = refused_before_browser(
+        tmp_path, stamped(script, SUBJECT_CONFIG), SUBJECT_CONFIG
+    )
+    assert problems == (
+        "targets.decoy: lacks subject contract for replay expect 0",
+        "targets.shown: lacks subject contract for replay expect 0",
+    )
+
+
+def test_replay_refuses_a_listed_expectation_checked_without_a_target(
+    tmp_path: Path,
+) -> None:
+    problems = refused_before_browser(
+        tmp_path, stamped(compiled([]), SUBJECT_CONFIG), SUBJECT_CONFIG
+    )
+    assert problems == (
+        "subjects replay expect 0: no target carries its subject contract",
+    )

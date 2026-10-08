@@ -307,3 +307,16 @@ The Decision's "only the checks with fields" left `probe_equals` refused until #
   - `probe_baselines.<name>.json_path`, a `NonEmpty` until now, takes the same grammar. The example's `$.count` already fits it.
   - A key with characters other than ASCII letters, digits, `_` and `-` can't be named yet. A probe that needs one adds a quoted form.
 - **Additive:** a committed script stays valid, and `schema_version` stays 1.
+
+
+## Amendment (2026-10-08): subject-contract schema and replay admission (#53 P7a)
+
+The reviewed #53 v6 rulings MR and MR6 make location a config decision rather than a page-derived guess. Each reviewed subject is keyed by spec ID and zero-based expectation index. The decision's schema and grammar live in DATA_MODEL §7 and §9.
+
+- **Every row requires a region and a part.** A region with a childless-element check alone can accept a flattened control or an unrelated childless decoy. A region without a part can accept a container holding the expected text. The required, value-independent part names the intended element; `leaf` defaults to false and adds childlessness when enforced. Region, PartSelector and Contract are shared core types, avoiding a config/compiled import cycle.
+- **Rows are a list with distinct subject keys.** Config parsing validates strict fields, required part, the restricted grammars and duplicate `(spec, expect)` keys. Project loading also checks the named spec and index. A row cannot silently shift onto another subject or become a partial contract.
+- **Provenance includes the contracts.** Every compiled script requires `compiled_by.subject_contracts`, the canonical hash of its spec's normalized `{expect, region, part, leaf}` rows sorted by index. Other specs' rows do not change it, and no rows has the hash of `[]`. A changed contract requires exploration again, as a changed spec does.
+- **Replay checks agreement before accepting steps.** It refuses a different fingerprint, a listed expectation without its governing target contract, and every target sharing that target's semantic meaning without that contract. A listed expectation with no target is refused too. Refusal is a spec error before secret binding, browser launch or an intent. Correctly fingerprinted no-row scripts remain admissible.
+- **Contracts become loadable with enforcement (D46).** P7a's target format still forbids unknown fields, including `contract`, so all scripts of listed specs fail closed. P7b adds Target.contract with region-rooted resolution, the held-region postcondition and the reviewed Conduit rows in one change. P7b precedes the compiler, and P7a's public replay refusal tests remain true afterwards.
+  - Alternatives were a temporary blanket refusal removed in P7b, which would require changing an earlier boundary test, or one atomic schema/enforcement PR beyond the approved production-size bar. The persistent agreement rule gives each intermediate revision an enforceable format.
+- **Consequences.** Handwritten fixture scripts carry the no-row fingerprint. Benchmark builders compute it from their own loaded temporary projects. Existing scripts missing the required field are invalid rather than silently upgraded. This adds no dependency, model call, paid resource or tenant surface. Target enforcement and Conduit rows remain P7b work.

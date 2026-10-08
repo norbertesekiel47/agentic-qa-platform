@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from aqa_core.project import load_project, parse_compiled
+from aqa_core.project import contracts_fingerprint, load_project, parse_compiled
 from aqa_core.spec import canonical_hash
 from pilot_inputs import PilotInput, ResetRequest, load_pilots, validate_pilot
 from pilot_rebinding import apply_rebinding
@@ -22,7 +22,7 @@ CONFIG = '{"base_url":"http://127.0.0.1:4100","secrets":{"TEST_PASSWORD":{"origi
 SPEC = '{"id":"pilot","goal":"Read an article","preconditions":{"start_url":"/","reset":{"http":"POST /test-api/reset?fixture=seed"},"probes":{"count":"GET /test-api/count"}},"expect":["Title is visible","Body is visible"],"tags":["articles"]}'
 COMPILED = """{
 "schema_version":1,"spec_id":"pilot","spec_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000",
-"compiled_at":"2026-10-01T00:00:00Z","compiled_by":{"mode":"explore","models":{},"price_map":"handwritten-admission-fixture"},"confirmed":false,
+"compiled_at":"2026-10-01T00:00:00Z","compiled_by":{"mode":"explore","models":{},"price_map":"handwritten-admission-fixture","subject_contracts":"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"},"confirmed":false,
 "browser":{"timezone":"UTC","locale":"en-US","viewport":[1280,800],"device_scale_factor":1,"color_scheme":"light"},
 "coverage":{"plan_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","requires":[],"expectations":[
 {"expect_index":0,"subject":"article","claim":"title","assertions":["a0"]},
@@ -67,7 +67,11 @@ class PilotInputTests(unittest.TestCase):
         (self.qa / "config.yaml").write_text(json.dumps(self.config))
         (self.qa / "pilot.spec.md").write_text(f"---\n{json.dumps(self.spec)}\n---\n")
         if fresh:
-            self.data["spec_hash"] = load_project(self.qa).specs["pilot"].spec_hash
+            project = load_project(self.qa)
+            self.data["spec_hash"] = project.specs["pilot"].spec_hash
+            self.data["compiled_by"]["subject_contracts"] = contracts_fingerprint(
+                project.config, "pilot"
+            )
         self.source.write_text(json.dumps(self.data))
 
     def load(self, selected: tuple[str, ...] = ()) -> tuple[PilotInput, ...]:
@@ -95,8 +99,16 @@ class PilotInputTests(unittest.TestCase):
     def test_selection_is_complete_and_explicit(self) -> None:
         spec = (self.qa / "pilot.spec.md").read_text()
         (self.qa / "zeta.spec.md").write_text(spec.replace('"pilot"', '"zeta"'))
-        zeta_hash = load_project(self.qa).specs["zeta"].spec_hash
-        zeta = self.data | {"spec_id": "zeta", "spec_hash": zeta_hash}
+        project = load_project(self.qa)
+        zeta_hash = project.specs["zeta"].spec_hash
+        zeta = self.data | {
+            "spec_id": "zeta",
+            "spec_hash": zeta_hash,
+            "compiled_by": {
+                **self.data["compiled_by"],
+                "subject_contracts": contracts_fingerprint(project.config, "zeta"),
+            },
+        }
         (self.compiled / "zeta.json").write_text(json.dumps(zeta))
         self.assertEqual(self.ids(), ("pilot", "zeta"))
         self.assertEqual(self.ids(("zeta", "pilot")), ("zeta", "pilot"))

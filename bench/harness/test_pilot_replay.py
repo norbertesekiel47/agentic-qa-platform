@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import anthropic
 from aqa_core.compiled import Press
-from aqa_core.project import load_project
+from aqa_core.project import contracts_fingerprint, load_project
 from aqa_runner import browser_session
 from aqa_runner.anthropic_client import AnthropicClient
 from aqa_runner.egress import EgressGate
@@ -40,7 +40,7 @@ from playwright.async_api import async_playwright
 PAGE = "<!doctype html><h1>Title</h1><form method=post action=/submit><button>Send</button></form>"
 COMPILED = """{
 "schema_version":1,"spec_id":"pilot","spec_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000",
-"compiled_at":"2026-10-01T00:00:00Z","compiled_by":{"mode":"explore","models":{},"price_map":"handwritten-replay-fixture"},"confirmed":false,
+"compiled_at":"2026-10-01T00:00:00Z","compiled_by":{"mode":"explore","models":{},"price_map":"handwritten-replay-fixture","subject_contracts":"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"},"confirmed":false,
 "browser":{"timezone":"UTC","locale":"en-US","viewport":[1280,800],"device_scale_factor":1,"color_scheme":"light"},
 "coverage":{"plan_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","requires":[],
 "expectations":[{"expect_index":0,"subject":"page","claim":"title","assertions":["a0"]}]},
@@ -147,8 +147,12 @@ class PilotReplayTests(unittest.TestCase):
         compiled.mkdir(exist_ok=True)
         (qa / "config.yaml").write_text(json.dumps(self.config))
         (qa / "pilot.spec.md").write_text(f"---\n{json.dumps(self.spec)}\n---\n")
-        fresh = {"spec_hash": load_project(qa).specs["pilot"].spec_hash}
+        project = load_project(qa)
+        fresh = {"spec_hash": project.specs["pilot"].spec_hash}
         script = json.loads(COMPILED) | fresh | {"steps": self.steps}
+        script["compiled_by"]["subject_contracts"] = contracts_fingerprint(
+            project.config, "pilot"
+        )
         (compiled / "pilot.json").write_text(json.dumps(script))
         return load_pilots(qa, compiled, ("pilot",))[0]
 

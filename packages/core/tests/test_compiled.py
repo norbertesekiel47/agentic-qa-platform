@@ -893,3 +893,20 @@ def test_a_url_pattern_must_compile_as_a_python_regex(check: str, pattern: str) 
 
     assert location == ("assertions", 1, check, "url_pattern")
     assert "is not a Python regex" in message
+
+
+def test_compiled_by_records_the_subject_contracts_fingerprint() -> None:
+    script = example()
+    fingerprint = (
+        "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    )
+    script["compiled_by"]["subject_contracts"] = fingerprint
+    parsed = CompiledScript.model_validate_json(json.dumps(script))
+    assert parsed.compiled_by.subject_contracts == fingerprint
+    del script["compiled_by"]["subject_contracts"]
+    [(location, kind, _)] = errors(script)
+    assert (location, kind) == (("compiled_by", "subject_contracts"), "missing")
+    for value in ("sha256:bad", "0" * 64, 1, None):
+        script["compiled_by"]["subject_contracts"] = value
+        [(location, _, _)] = errors(script)
+        assert location == ("compiled_by", "subject_contracts")

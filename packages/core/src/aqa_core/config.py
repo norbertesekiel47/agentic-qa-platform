@@ -1,15 +1,17 @@
 """The project config, `qa/config.yaml` (DATA_MODEL §9). Every key is
 optional, and unknown keys are errors."""
 
-from typing import Annotated, Literal, get_args
+from typing import Annotated, Literal, Self, get_args
 
 from pydantic import (
     AfterValidator,
     BeforeValidator,
     Field,
     PlainValidator,
+    StrictBool,
     StrictInt,
     StrictStr,
+    model_validator,
 )
 
 from aqa_core.browser import BrowserOverrides
@@ -17,11 +19,14 @@ from aqa_core.price_map import Capability
 from aqa_core.schema import (
     AriaRole,
     AtLeastOne,
+    Contract,
     DistinctListOf,
     Host,
     NonEmpty,
     Origin,
+    PartSelector,
     PositiveNumber,
+    Region,
     SecretName,
     StrictModel,
     parse_origin,
@@ -124,6 +129,20 @@ class Budgets(StrictModel):
     resolve_seconds: PositiveNumber = 10
 
 
+class SubjectContract(StrictModel):
+    """A reviewed subject, keyed by spec and expectation (ADR-0025)."""
+
+    spec: NonEmpty
+    expect: Annotated[StrictInt, Field(ge=0)]
+    region: Region
+    part: PartSelector
+    leaf: StrictBool = False
+
+    @property
+    def contract(self) -> Contract:
+        return Contract(region=self.region, part=self.part, leaf=self.leaf)
+
+
 class ProjectConfig(StrictModel):
     """The settings every spec under one spec root shares."""
 
@@ -135,3 +154,15 @@ class ProjectConfig(StrictModel):
     secrets: dict[SecretName, SecretBinding] = Field(default_factory=dict)
     models: dict[NonEmpty, ModelOverride] = Field(default_factory=dict)
     budgets: Budgets = Budgets()
+
+    subjects: DistinctListOf[SubjectContract] = ()
+
+    @model_validator(mode="after")
+    def unique_subjects(self) -> Self:
+        seen: set[tuple[str, int]] = set()
+        for row in self.subjects:
+            key = (row.spec, row.expect)
+            if key in seen:
+                raise ValueError(f"subjects lists {row.spec} expect {row.expect} twice")
+            seen.add(key)
+        return self

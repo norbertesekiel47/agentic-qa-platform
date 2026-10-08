@@ -1,5 +1,6 @@
 """The project config, qa/config.yaml, is read strictly (DATA_MODEL §9, #39)."""
 
+import json
 import typing
 from pathlib import Path
 
@@ -472,3 +473,146 @@ def test_a_field_binding_takes_every_role_playwright_knows() -> None:
     roles = typing.get_args(AriaRole)
 
     assert [RoleField(role=role, name="Key").role for role in roles] == list(roles)
+
+
+def test_a_subject_contract_row_takes_a_spec_an_expectation_a_region_a_part_and_leaf(
+    tmp_path: Path,
+) -> None:
+    config = load_config(
+        write(
+            tmp_path,
+            "subjects: [{spec: login, expect: 0, region: div.banner, part: a.author, leaf: true}]\n",
+        )
+    )
+
+    row = config.subjects[0]
+    assert (row.spec, row.expect) == ("login", 0)
+    assert row.contract.model_dump() == {
+        "region": "div.banner",
+        "part": "a.author",
+        "leaf": True,
+    }
+
+
+@pytest.mark.parametrize(
+    "region",
+    [
+        "div .banner",
+        "div > a",
+        "div+a",
+        "div~a",
+        "div:scope",
+        "div[x]",
+        "div'",
+        'div"',
+        "div,a",
+        "div|a",
+        "div>>a",
+        "Div.banner",
+        "div" + ".a" * 9,
+        "div." + "a" * 197,
+    ],
+)
+def test_a_region_with_a_combinator_pseudo_class_attribute_quote_or_space_is_refused_naming_the_row(
+    tmp_path: Path,
+    region: str,
+) -> None:
+    data = {
+        "subjects": [
+            {"spec": "login", "expect": 0, "region": region, "part": "a.author"}
+        ]
+    }
+    with pytest.raises(SpecError) as raised:
+        load_config(write(tmp_path, json.dumps(data)))
+    assert "subjects[0].region:" in str(raised.value)
+    assert "not a region" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        ":scope > a",
+        "a + i",
+        "a ~ i",
+        "a[x]",
+        "a:hover",
+        "a|i",
+        "a>>i",
+        "a,b",
+        "a'",
+        'a"',
+        "a >a",
+        "a  i",
+        "a b c d e",
+        "a." + "b" * 199,
+    ],
+)
+def test_a_part_selector_with_scope_a_sibling_combinator_an_attribute_a_pseudo_class_or_a_pipe_is_refused_naming_the_row(
+    tmp_path: Path,
+    part: str,
+) -> None:
+    data = {
+        "subjects": [
+            {"spec": "login", "expect": 0, "region": "div.banner", "part": part}
+        ]
+    }
+    with pytest.raises(SpecError) as raised:
+        load_config(write(tmp_path, json.dumps(data)))
+    assert "subjects[0].part:" in str(raised.value)
+    assert "not a part selector" in str(raised.value)
+
+
+def test_a_row_without_a_part_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(SpecError, match=r"subjects\[0\].part: missing key"):
+        load_config(
+            write(tmp_path, "subjects: [{spec: login, expect: 0, region: div.banner}]")
+        )
+
+
+@pytest.mark.parametrize("second", ["div.banner", "section.other"])
+def test_a_subject_listed_twice_is_refused_naming_it(
+    tmp_path: Path, second: str
+) -> None:
+    text = f"subjects: [{{spec: login, expect: 0, region: div.banner, part: a.author}}, {{spec: login, expect: 0, region: {second}, part: span.date}}]"
+    with pytest.raises(SpecError, match="subjects lists login expect 0 twice"):
+        load_config(write(tmp_path, text))
+
+
+def test_subjects_are_optional_and_leaf_defaults_to_false(tmp_path: Path) -> None:
+    assert load_config(write(tmp_path, "{}")).subjects == ()
+    config = load_config(
+        write(
+            tmp_path,
+            "subjects: [{spec: login, expect: 0, region: app-favorite-button#main.primary, part: div.meta > a.author span.name}]",
+        )
+    )
+    assert config.subjects[0].leaf is False
+    assert config.subjects[0].contract.leaf is False
+    assert config.subjects[0].part == "div.meta > a.author span.name"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("spec", ""),
+        ("expect", -1),
+        ("expect", True),
+        ("expect", "0"),
+        ("leaf", "false"),
+        ("leaf", 0),
+        ("extra", True),
+    ],
+)
+def test_a_subject_rows_fields_are_strict(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    row: dict[str, object] = {
+        "spec": "login",
+        "expect": 0,
+        "region": "div.banner",
+        "part": "a.author",
+    }
+    row[field] = value
+    with pytest.raises(SpecError) as raised:
+        load_config(write(tmp_path, json.dumps({"subjects": [row]})))
+    assert f"subjects[0].{field}:" in str(raised.value)
