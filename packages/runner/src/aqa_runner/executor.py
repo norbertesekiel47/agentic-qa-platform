@@ -139,8 +139,9 @@ class _Replay:
 
     @property
     def withheld(self) -> bool:
-        """Whether the result keeps no page text a scan can't clear: the run
-        binds a test secret, filled or not (ADR-0026's #50 D amendment)."""
+        """Whether the result's reasons and invariants keep no page text: the
+        run binds a test secret, filled or not. Its other fields keep what
+        ADR-0026's #50 D amendment lists."""
         return not self.redactor.empty
 
     def reason(self, error: _Raised) -> str:
