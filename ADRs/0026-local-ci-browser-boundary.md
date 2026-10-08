@@ -731,7 +731,7 @@ Options: (1) redact them, as slice D planned, which keeps the pieces; (2) keep w
 
 Option 3 (the maintainer, 2026-10-08); slice D is closed. When a run's redactor isn't empty (any test secret is bound, filled or not), `egress.json` is `{error_code, refused_count, overflowed, hosts_and_ports_withheld: true}`, every invariant's `seen` is empty with its outcome and total kept, and every reason built from a Playwright error keeps only its type and the call it names. A run that binds none keeps all three.
 
-- *Two predicates, equal today.* `_Replay.withheld` decides what the returned result keeps (reasons and `seen`); a local `secret_bound` decides `egress.json`. A caller that one day may keep the returned texts for its own presentation (#53) can relax only the first: a saved file never names a host or port in a run that binds a secret.
+- *Two predicates, equal today.* `_Replay.withheld` decides what the returned result keeps (reasons and `seen`); a local `secret_bound` decides `egress.json`. A caller that one day may keep the returned texts for its own presentation (#53) can relax only the first: `egress.json` never names a host or port in a run that binds a secret.
 - *No counts-only retry.* Only a run that binds nothing writes the named form, and an empty scan refuses nothing, so a refused `egress.json` is left out.
 - *Not changed here.* A policy event's or a `fill_secret` refusal's own message, which names an origin, is still kept as ours (`_owned`); a fixed reason for it is #53's. The withheld wording still says "since the page was handed a test secret", also in a run that never fills one; rewording it (`redaction._WITHHELD`) is a follow-up.
 
