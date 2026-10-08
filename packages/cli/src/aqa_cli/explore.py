@@ -31,11 +31,12 @@ from aqa_runner.run_record import RunRecord
 
 # How a plan-only run that doesn't plan ends (ADR-0024's outcomes), and its
 # exit code (API.md §7). A run that plans exits 0.
-Failure = Literal["gave_up", "spec_error", "no_response"]
+Failure = Literal["gave_up", "spec_error", "no_response", "record_error"]
 EXIT_CODES: Final[Mapping[Failure, int]] = {
     "gave_up": 3,
     "spec_error": 5,
     "no_response": 11,
+    "record_error": 15,
 }
 # What the run record says: "planned", a failure, or "error", a fault of
 # ours, which is raised as it is.
@@ -191,6 +192,12 @@ def explore(
     # the run before anything is billed.
     try:
         record = RunRecord.create(root)
+    except OSError:
+        _stop(
+            "record_error",
+            str(spec_path),
+            "the run record could not be created; nothing was planned",
+        )
     except ValueError as error:  # a .aqa or .aqa/runs that is a link
         _stop("spec_error", str(spec_path), "nothing was planned", (str(error),))
     try:

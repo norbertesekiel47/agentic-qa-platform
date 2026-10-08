@@ -74,7 +74,8 @@ def _key(loc: tuple[int | str, ...]) -> str:
         if isinstance(part, int):
             key += f"[{part}]"
         elif part != "[key]":  # Pydantic's marker for an invalid mapping key
-            key += f".{part}" if key else part
+            shown = part if part.isprintable() else repr(part)
+            key += f".{shown}" if key else shown
     return key
 
 

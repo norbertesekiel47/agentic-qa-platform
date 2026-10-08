@@ -18,6 +18,7 @@ from aqa_runner.browser_session import BrowserSession
 from aqa_runner.document_origins import PolicyEvent, PolicyEventError
 from aqa_runner.redaction import Redactor
 from aqa_runner.secret_fields import SecretNotFilledError, SecretRefusedError
+from aqa_runner.settling import Traffic
 from playwright.async_api import ElementHandle, Error
 from pydantic import SecretStr
 
@@ -499,6 +500,178 @@ def test_a_session_fills_no_secret_its_redactor_does_not_cover(
             element = await field(session, "textbox", "Password")
             error = await refused(session, element, bound, ValueError)
             assert "session redactor does not cover" in str(error)
+            assert await held_value(element) == ""
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("check", "path", "name", "message"),
+    [
+        (
+            "destination",
+            "other/signin",
+            "Password",
+            "the page is on {other}, which isn't one of its destinations: {app}",
+        ),
+        (
+            "document_origin",
+            "/ugc",
+            "Password",
+            "the page's document is on an opaque origin (sandboxed), though its URL is on {app}",
+        ),
+        (
+            "frame_origin",
+            "/sandwich",
+            "Password",
+            "the field is in a frame on {other}, not on the page's origin, {app}",
+        ),
+        ("field", "/fields", "Name", 'the field isn\'t an <input type="password">'),
+    ],
+)
+def test_each_secret_refusal_names_its_secret_and_check(
+    redactor: Redactor,
+    sites: Sites,
+    *,
+    check: str,
+    path: str,
+    name: str,
+    message: str,
+) -> None:
+    async def scenario() -> None:
+        async with browsing(sites, redactor=redactor) as session:
+            url = (
+                f"{sites.other}/signin"
+                if path == "other/signin"
+                else f"{sites.app}{path}"
+            )
+            await session.navigate(url)
+            element = await field(session, "textbox", name)
+            error = await refused(
+                session, element, password(sites.app), SecretRefusedError
+            )
+            assert error.secret == password(sites.app).name
+            assert error.check == check
+            assert str(error) == (
+                "fill_secret refused TEST_PASSWORD: "
+                + message.format(app=sites.app, other=sites.other)
+            )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("path", "name", "check"),
+    [
+        ("other/signin", "Password", "destination"),
+        ("/ugc", "Password", "document_origin"),
+        ("/sandwich", "Password", "frame_origin"),
+        ("/fields", "Name", "field"),
+    ],
+)
+def test_secret_refusal_gives_the_same_refusal_as_fill_secret_without_filling(
+    redactor: Redactor,
+    sites: Sites,
+    path: str,
+    name: str,
+    check: str,
+) -> None:
+    async def scenario() -> None:
+        async with browsing(sites, redactor=redactor) as session:
+            url = (
+                f"{sites.other}/signin"
+                if path == "other/signin"
+                else f"{sites.app}{path}"
+            )
+            await session.navigate(url)
+            element = await field(session, "textbox", name)
+            before = await held_value(element)
+            with pytest.raises(SecretRefusedError) as raised:
+                await session.secret_refusal(element, password(sites.app))
+            filled = await refused(
+                session, element, password(sites.app), SecretRefusedError
+            )
+            assert str(raised.value) == str(filled)
+            assert (raised.value.secret, raised.value.check) == ("TEST_PASSWORD", check)
+            assert await held_value(element) == before
+            assert FAKE_VALUE not in str(raised.value)
+
+    asyncio.run(scenario())
+
+
+def test_a_passed_secret_precheck_fills_nothing_and_starts_no_traffic_window(
+    redactor: Redactor,
+    sites: Sites,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        async with browsing(sites, redactor=redactor) as session:
+            await session.navigate(f"{sites.app}/signin")
+            element = await field(session, "textbox", "Password")
+
+            def refuse_window(_traffic: Traffic) -> None:
+                pytest.fail("a secret precheck started a traffic window")
+
+            monkeypatch.setattr(Traffic, "next_window", refuse_window)
+            await session.secret_refusal(element, password(sites.app))
+            assert await held_value(element) == ""
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("change", ["destination", "field"])
+def test_fill_secret_still_refuses_after_a_passed_precheck_if_the_page_moved(
+    redactor: Redactor,
+    sites: Sites,
+    change: str,
+) -> None:
+    async def scenario() -> None:
+        async with browsing(sites, redactor=redactor) as session:
+            await session.navigate(f"{sites.app}/signin")
+            element = await field(session, "textbox", "Password")
+            await session.secret_refusal(element, password(sites.app))
+            if change == "destination":
+                await session.navigate(f"{sites.other}/signin")
+                element = await field(session, "textbox", "Password")
+            else:
+                await element.evaluate("e => e.type = 'text'")
+            error = await refused(
+                session, element, password(sites.app), SecretRefusedError
+            )
+            assert error.check == change
+            assert await held_value(element) == ""
+
+    asyncio.run(scenario())
+
+
+def test_a_page_error_from_the_precheck_reaches_no_error_context(
+    redactor: Redactor,
+    sites: Sites,
+) -> None:
+    async def scenario() -> None:
+        async with browsing(sites, redactor=redactor) as session:
+            await session.navigate(f"{sites.app}/rethrows")
+            element = await field(session, "textbox", "Password")
+            await session.fill_secret(element, password(sites.app))
+            with pytest.raises(SecretNotFilledError) as raised:
+                await session.secret_refusal(element, password(sites.app))
+            assert raised.value.message == NOT_FILLED
+            assert raised.value.__cause__ is None
+            assert raised.value.__context__ is None
+            assert FAKE_VALUE not in repr(raised.value)
+
+    asyncio.run(scenario())
+
+
+def test_a_secret_precheck_requires_the_session_redactor_to_cover_the_value(
+    sites: Sites,
+) -> None:
+    async def scenario() -> None:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/signin")
+            element = await field(session, "textbox", "Password")
+            with pytest.raises(ValueError, match="session redactor does not cover"):
+                await session.secret_refusal(element, password(sites.app))
             assert await held_value(element) == ""
 
     asyncio.run(scenario())

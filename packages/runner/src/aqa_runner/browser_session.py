@@ -8,6 +8,7 @@ run's allowed origins (#44, ADR-0026's amendment on document origins)."""
 
 import asyncio
 import re
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Literal, overload
@@ -16,7 +17,7 @@ from aqa_core.browser import BrowserSettings
 from aqa_core.compiled import NetworkNone, NetworkSeen, Target
 from playwright.async_api import ElementHandle, Error, Frame, Page
 
-from aqa_runner import settling, snapshot_refs
+from aqa_runner import keys, settling, snapshot_refs
 from aqa_runner.bound_secrets import BoundSecret
 from aqa_runner.document_origins import (
     DocumentChangedError,
@@ -45,7 +46,13 @@ from aqa_runner.locators import (
 from aqa_runner.locators import resolve as resolve_target
 from aqa_runner.redaction import NO_SECRETS, Redacted, Redactor
 from aqa_runner.routing import install_routes
-from aqa_runner.sandbox import Chromium, launch
+from aqa_runner.sandbox import (
+    HOST_FIXES,
+    OTHER_FIX,
+    Chromium,
+    SandboxUnavailableError,
+    launch,
+)
 from aqa_runner.secret_fields import (
     SecretNotFilledError,
     SecretRefusedError,
@@ -175,9 +182,10 @@ NOTHING_FOCUSED = """(element) =>
     element === element.ownerDocument.body ||
     element === element.ownerDocument.documentElement"""
 
-# The keys `press` may hold down before the key it presses
-# (https://playwright.dev/python/docs/api/class-keyboard#keyboard-press).
-MODIFIERS = frozenset({"Shift", "Control", "Alt", "Meta", "ControlOrMeta"})
+# Existing public names, bound to the unchanged key helpers.
+MODIFIERS = keys.MODIFIERS
+one_key = keys.one_key
+press_keys = keys.press_keys
 
 # A ref this session gives.
 SESSION_REF = re.compile(r"e([1-9][0-9]{0,17})")
@@ -216,8 +224,8 @@ class BrowserSession:
     Each action returns the settle window of the requests it starts, which
     `settle` waits on (`aqa_runner.settling`).
 
-    `page` is public until #53 makes it private. No production code outside
-    this module may use it: it observes and acts without the checks."""
+    `page` remains public for tests. Production observations outside this
+    module use `observing_page`, whose checks and lock cover the observation."""
 
     def __init__(
         self,
@@ -257,6 +265,18 @@ class BrowserSession:
     def redactor(self) -> Redactor:
         """The scan for all secrets bound to this run."""
         return self._redactor
+
+    @asynccontextmanager
+    async def observing_page(self) -> AsyncIterator[Page]:
+        """Observe the allowed page under the session lock. A frame change
+        discards the completed observation with `DocumentChangedError`."""
+        async with self._turn:
+            changes = self._frame_changes
+            await self._require_allowed_page()
+            yield self.page
+            await self._require_allowed_page()
+            if self._frame_changes != changes:
+                raise DocumentChangedError
 
     async def snapshot(self, *, record_refusal: bool = True) -> Redacted:
         """The page's accessibility snapshot in Playwright's AI mode
@@ -405,6 +425,26 @@ class BrowserSession:
                     "or its page changed the value"
                 )
             return window
+
+    async def secret_refusal(self, element: ElementHandle, secret: BoundSecret) -> None:
+        """Check the binding without filling, before an intent is recorded.
+        A passed check never replaces the checks inside `fill_secret`."""
+        async with self._turn:
+            if not self.redactor.covers(secret):
+                raise ValueError(
+                    f"fill_secret refused {secret.name}: the session redactor does not cover it"
+                )
+            failed = False
+            try:
+                await self._require_secret_binding(element, secret)
+            except Error:
+                failed = True
+            if failed:
+                raise SecretNotFilledError(
+                    f"fill_secret: {secret.name} wasn't filled: the field takes no "
+                    "text, its page changed the value, or the page broke or closed "
+                    "during the fill or its checks"
+                )
 
     async def fill_secret(self, element: ElementHandle, secret: BoundSecret) -> Window:
         """Fill `element` with `secret`'s value, as `fill` fills, once the page
@@ -700,32 +740,46 @@ class BrowserSession:
     ) -> Window | None:
         """`fill_secret`'s checks, then its fill: the fill's settle window, or
         None when the field didn't take the value."""
+        await self._require_secret_binding(element, secret)
+        window = self._traffic.next_window()
+        filled = await element.evaluate(FILL, secret.value.get_secret_value())
+        return window if filled else None
+
+    async def _require_secret_binding(
+        self, element: ElementHandle, secret: BoundSecret
+    ) -> None:
+        """The same fresh binding checks for a precheck and the actual fill."""
         frame = await self._require_actionable(element)
         page = await frame_origin(self.page.main_frame)
         origins = secret.destination.origins
         if page not in origins:
             raise SecretRefusedError(
+                secret.name,
+                "destination",
                 f"fill_secret refused {secret.name}: the page is on {page}, "
-                f"which isn't one of its destinations: {', '.join(origins)}"
+                f"which isn't one of its destinations: {', '.join(origins)}",
             )
         if (document := await isolated_origin(self.page)) != page:
             raise SecretRefusedError(
+                secret.name,
+                "document_origin",
                 f"fill_secret refused {secret.name}: the page's document is on "
-                f"{document or 'an opaque origin (sandboxed)'}, though its URL is on {page}"
+                f"{document or 'an opaque origin (sandboxed)'}, though its URL is on {page}",
             )
         if (outside := await frames_off_origin(frame, page)) is not None:
             raise SecretRefusedError(
+                secret.name,
+                "frame_origin",
                 f"fill_secret refused {secret.name}: the field is in {outside}, "
-                f"not on the page's origin, {page}"
+                f"not on the page's origin, {page}",
             )
         if not await field_matches(frame, element, secret.destination.field):
             raise SecretRefusedError(
+                secret.name,
+                "field",
                 f"fill_secret refused {secret.name}: the field isn't "
-                f"{describe_field(secret.destination.field)}"
+                f"{describe_field(secret.destination.field)}",
             )
-        window = self._traffic.next_window()
-        filled = await element.evaluate(FILL, secret.value.get_secret_value())
-        return window if filled else None
 
     async def _require_actionable(self, element: ElementHandle) -> Frame:
         """Record and raise a policy event unless the page, and the frame of
@@ -881,28 +935,6 @@ class BrowserSession:
         return settling.recorded_url(self.redactor, url)
 
 
-def one_key(key: str) -> bool:
-    """Whether `key` is what `BrowserSession.press` takes: one key, with only
-    modifiers held down before it."""
-    *held, pressed = press_keys(key)
-    return bool(pressed) and set(held) <= MODIFIERS
-
-
-def press_keys(key: str) -> list[str]:
-    """`key` split into the keys Playwright's press holds down and then the
-    key it presses, as Playwright 1.63's Keyboard.press splits it: a `+`
-    ends a key only after one, so `Shift++` is Shift and `+`."""
-    keys: list[str] = []
-    building = ""
-    for char in key:
-        if char == "+" and building:
-            keys.append(building)
-            building = ""
-        else:
-            building += char
-    return [*keys, building]
-
-
 @asynccontextmanager
 async def open_browser_session(
     chromium: Chromium,
@@ -916,7 +948,13 @@ async def open_browser_session(
     through routing and `egress`, the run's egress proxy, and close the
     browser, its temporary profile with it, when the session ends."""
     proxy = egress.url  # an egress proxy that isn't serving fails before a launch
-    browser = await launch(chromium)
+    try:
+        browser = await launch(chromium)
+    except (Error, KeyError, ValueError, OSError) as error:
+        raise SandboxUnavailableError(
+            "Chromium could not be launched or its sandbox checked "
+            f"({type(error).__name__}). {HOST_FIXES.get(sys.platform, OTHER_FIX)}"
+        ) from error
     try:
         width, height = settings.viewport
         # https://playwright.dev/python/docs/api/class-browser#browser-new-context
