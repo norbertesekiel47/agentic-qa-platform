@@ -23,6 +23,7 @@ h11 frames HTTP/1.1 on both sides: https://h11.readthedocs.io/en/v0.16.0/api.htm
 
 import asyncio
 import contextlib
+import errno
 from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from dataclasses import dataclass, field
 from functools import partial
@@ -237,7 +238,9 @@ class EgressProxy:
         if self._phase is not None:
             raise RuntimeError("the egress proxy has a phase open or ending")
         phase = _Phase()
-        listener = LoopbackServer(partial(self._serve, phase))
+        listener = LoopbackServer(
+            partial(self._serve, phase), on_retired=partial(self._retired, phase)
+        )
         await listener.__aenter__()
         phase.listener, phase.port = listener, listener.port
         self._phase = phase
@@ -297,6 +300,21 @@ class EgressProxy:
                 if host.host not in expected_blocked
             ),
             self.blocked_attempts.overflowed,
+        )
+
+    def _retired(self, phase: _Phase, error: BaseException) -> None:
+        """The phase's listener retired after an accept error (#162). Nothing
+        reopens it (#141's R2), so the browser can no longer reach the
+        proxy: an infrastructure event, kept in the run's gate whatever
+        phase comes next. Fixed text and the error's name, never more."""
+        name = type(error).__name__
+        if isinstance(error, OSError) and error.errno is not None:
+            name = errno.errorcode.get(error.errno, name)
+        self._gate.record_failure(
+            "127.0.0.1",
+            phase.port,
+            "the egress proxy stopped accepting the browser's connections after "
+            f"an accept error ({name})",
         )
 
     @property

@@ -5,7 +5,9 @@ model involved, and the script's own browser settings. The browser tests
 launch real Chromium on the OS that runs them: Linux in CI, macOS locally."""
 
 import asyncio
+import errno
 import json
+import socket
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
@@ -21,13 +23,14 @@ from aqa_core.config import ProjectConfig, SubjectContract
 from aqa_core.project import SpecError, contracts_fingerprint, parse_compiled
 from aqa_runner import settling
 from aqa_runner.anthropic_client import AnthropicClient
+from aqa_runner.egress import EgressGate, InfrastructureEvent
 from aqa_runner.egress_proxy import EgressBlocks, EgressProxy
-from aqa_runner.executor import RunSetup, replay
+from aqa_runner.executor import RunResult, RunSetup, replay
 from aqa_runner.invariants import InvariantResult
 from aqa_runner.model_router import ModelRouter
 from aqa_runner.run_record import RunRecord
 from langchain_anthropic import ChatAnthropic
-from playwright.async_api import BrowserType
+from playwright.async_api import BrowserType, async_playwright
 
 from packages.runner.tests.egress_fixtures import gate
 from packages.runner.tests.executor_fixtures import (
@@ -534,3 +537,78 @@ def test_replay_refuses_a_listed_expectation_checked_without_a_target(
     assert problems == (
         "subjects replay expect 0: no target carries its subject contract",
     )
+
+
+RETIRED = (
+    "the egress proxy stopped accepting the browser's connections after an "
+    "accept error (EMFILE)"
+)
+
+
+def port_of(proxy: EgressProxy) -> int:
+    return int(urlsplit(proxy.url).port or 0)
+
+
+def replay_with(
+    app: App,
+    tmp_path: Path,
+    script: CompiledScript,
+    prepare: Callable[[EgressProxy, EgressGate], None],
+) -> tuple[RunResult, RunRecord, int]:
+    """Replay `script` from the app's start page as `run` does, once
+    `prepare` has had the run's proxy and gate; with the proxy's first
+    port."""
+    config = ProjectConfig()
+    run_gate = gate(allowed=(app.origin,))
+    record = RunRecord.create(tmp_path)
+    app.record = record.path
+    setup = RunSetup(
+        a_spec(tmp_path, config, start_url="/page/start"), config, app.origin, record
+    )
+
+    async def scenario() -> tuple[RunResult, int]:
+        async with async_playwright() as playwright, EgressProxy(run_gate) as proxy:
+            port = port_of(proxy)
+            prepare(proxy, run_gate)
+            async with asyncio.timeout(60):
+                result = await replay(
+                    script,
+                    setup,
+                    chromium=playwright.chromium,
+                    proxy=proxy,
+                    gate=run_gate,
+                )
+            return result, port
+
+    result, port = asyncio.run(scenario())
+    return result, record, port
+
+
+def test_emfile_on_accept_after_the_first_navigation_makes_the_replay_an_infrastructure_error(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    accept = socket.socket.accept
+
+    def prepare(proxy: EgressProxy, _gate: EgressGate) -> None:
+        port = port_of(proxy)
+
+        def accepting(listener: socket.socket) -> tuple[socket.socket, object]:
+            # Once the app has served the start page, the proxy's listener
+            # runs out of file descriptors.
+            if listener.getsockname()[1] == port and "/page/start" in app.paths():
+                raise OSError(errno.EMFILE, "Too many open files")
+            return accept(listener)
+
+        monkeypatch.setattr(socket.socket, "accept", accepting)
+
+    script = compiled([{"seq": 1, "action": "reload", "side_effect": False}])
+
+    result, _, port = replay_with(app, tmp_path, script, prepare)
+
+    assert result.outcome == "errored"
+    assert result.infrastructure_events == (
+        InfrastructureEvent("127.0.0.1", port, RETIRED),
+    )
+    assert (result.steps[0].seq, result.steps[0].outcome) == (0, "completed")
+    assert [assertion.outcome for assertion in result.assertions] == ["not_evaluated"]
+    assert result.error_code is None
