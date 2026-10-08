@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 import anthropic
 import pytest
 from aqa_core.compiled import CompiledScript
-from aqa_core.config import ProjectConfig, SubjectContract
+from aqa_core.config import Budgets, ProjectConfig, SubjectContract
 from aqa_core.project import SpecError, contracts_fingerprint, parse_compiled
 from aqa_runner import settling
 from aqa_runner.anthropic_client import AnthropicClient
@@ -27,6 +27,7 @@ from aqa_runner.egress import EgressGate, InfrastructureEvent
 from aqa_runner.egress_proxy import EgressBlocks, EgressProxy, PhaseTraffic, RefusedHost
 from aqa_runner.executor import RunResult, RunSetup, replay
 from aqa_runner.invariants import InvariantResult
+from aqa_runner.locator_generation import register_identity_engine
 from aqa_runner.model_router import ModelRouter
 from aqa_runner.run_record import RunRecord
 from aqa_runner.sandbox import Chromium, launch
@@ -38,6 +39,7 @@ from packages.runner.tests.egress_fixtures import gate, get, unused_port
 from packages.runner.tests.executor_fixtures import (
     FORM_STEPS,
     FORM_TARGETS,
+    PAGES,
     App,
     a_spec,
     by_role,
@@ -757,3 +759,160 @@ def test_an_infrastructure_event_recorded_while_the_replays_phase_ends_errs_the_
         ("127.0.0.1", dead)
     ]
     assert result.error_code is None
+
+
+@pytest.mark.parametrize(
+    "contract",
+    [
+        {"region": "div.banner", "part": "span.date"},
+        {"region": "div.banner", "part": "a.author", "leaf": True},
+        {"region": "div.info", "part": "a.author"},
+    ],
+    ids=["part", "leaf", "region"],
+)
+def test_replay_refuses_a_target_whose_contract_differs_from_its_row(
+    tmp_path: Path, contract: dict[str, object]
+) -> None:
+    script = compiled(
+        [],
+        targets={
+            "shown": {
+                "semantic": "the author",
+                "locators": [{"css": "a.author"}],
+                "contract": contract,
+            }
+        },
+        assertions=[
+            {
+                "id": "a1",
+                "expect_index": 0,
+                "check": "text_in_target",
+                "target": "shown",
+                "text": "anna",
+            }
+        ],
+    )
+    problems = refused_before_browser(
+        tmp_path, stamped(script, SUBJECT_CONFIG), SUBJECT_CONFIG
+    )
+    assert problems == ("targets.shown: lacks subject contract for replay expect 0",)
+
+
+def test_replay_refuses_a_contract_that_no_row_gives_its_target(
+    app: App, tmp_path: Path
+) -> None:
+    # A forged region would hold none of the status, so its absence would
+    # pass while the status shows: the control shows the status is visible.
+    status = {
+        "semantic": "the status",
+        "locators": [{"css": "p", "scope": {"css": "section#status-area"}}],
+    }
+    gone = [{"id": "a1", "expect_index": 0, "check": "not_visible", "target": "status"}]
+    forged = {**status, "contract": {"region": "section.empty", "part": "p"}}
+    shop = a_spec(tmp_path / "control", ProjectConfig(), start_url="/page/shop")
+
+    problems = refused_before_browser(
+        tmp_path,
+        compiled([], targets={"status": forged}, assertions=gone),
+        ProjectConfig(),
+    )
+    control = run(
+        app,
+        tmp_path / "control",
+        compiled([], targets={"status": status}, assertions=gone),
+        spec=shop,
+    ).result
+
+    assert problems == ("targets.status: carries a subject contract no row gives it",)
+    assert [a.outcome for a in control.assertions] == ["failed"]
+
+
+def copies(banner: str, lower: str) -> str:
+    return (
+        f'<div class="banner"><div class="article-meta"><span class="counter">{banner}'
+        '</span></div></div><div class="container page"><div class="article-meta">'
+        f'<span class="counter">{lower}</span></div></div>'
+    )
+
+
+COUNT_ROW = ProjectConfig(
+    subjects=(
+        SubjectContract(
+            spec="replay", expect=0, region="div.banner", part="span.counter", leaf=True
+        ),
+    ),
+    budgets=Budgets(resolve_seconds=1),
+)
+
+
+def counted(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, css: str, html: str
+) -> RunResult:
+    """A strict public replay of the banner count's text check, the target
+    carrying the count's row contract, with the binding engine registered."""
+    monkeypatch.setitem(PAGES, "copies", html)
+    script = compiled(
+        [],
+        targets={
+            "count": {
+                "semantic": "the favorites count in the banner",
+                "locators": [{"css": css}],
+                "contract": {
+                    "region": "div.banner",
+                    "part": "span.counter",
+                    "leaf": True,
+                },
+            }
+        },
+        assertions=[
+            {
+                "id": "a1",
+                "expect_index": 0,
+                "check": "text_in_target",
+                "target": "count",
+                "text": "(1)",
+            }
+        ],
+    )
+    setup = RunSetup(
+        a_spec(tmp_path, COUNT_ROW, start_url="/page/copies"),
+        COUNT_ROW,
+        app.origin,
+        RunRecord.create(tmp_path),
+    )
+    run_gate = gate(allowed=(app.origin,))
+
+    async def scenario() -> RunResult:
+        async with async_playwright() as playwright, EgressProxy(run_gate) as proxy:
+            await register_identity_engine(playwright)
+            async with asyncio.timeout(60):
+                return await replay(
+                    stamped(script, COUNT_ROW),
+                    setup,
+                    chromium=playwright.chromium,
+                    proxy=proxy,
+                    gate=run_gate,
+                )
+
+    return asyncio.run(scenario())
+
+
+def test_replay_admits_a_target_carrying_its_rows_contract(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = counted(app, tmp_path, monkeypatch, "span.counter", copies("(1)", "(3)"))
+
+    assert [(a.outcome, a.misses) for a in result.assertions] == [("pass", ())]
+    assert result.outcome == "passed"
+
+
+def test_a_public_replay_of_a_contracted_target_whose_locator_reaches_the_lower_copy_never_reads_it(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    css = ":scope + div.container.page span.counter"
+    result = counted(app, tmp_path, monkeypatch, css, copies("(3)", "(1)"))
+
+    assert [(a.outcome, a.misses) for a in result.assertions] == [
+        ("binding_unresolved", ("outside region",))
+    ]
+    assert result.outcome == "failed"

@@ -598,7 +598,13 @@ class BrowserSession:
         async with self._turn:
             changes = self._frame_changes
             await self._require_allowed_page()
-            found = await resolve_target(self.page, target, use)
+            try:
+                found = await resolve_target(self.page, target, use)
+            except Error as error:
+                # A navigation inside a held region breaks its release.
+                if self._frame_changes == changes:
+                    raise
+                raise DocumentChangedError from error
             await self._require_allowed_page()
             if self._frame_changes != changes:
                 if isinstance(found, Resolved):

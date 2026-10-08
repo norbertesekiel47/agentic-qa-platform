@@ -17,16 +17,20 @@ from aqa_core.compiled import (
     Locator,
     Target,
 )
-from playwright.async_api import ElementHandle, Error, Page
+from aqa_core.schema import Contract
+from playwright.async_api import ElementHandle, Error, JSHandle, Page
 from playwright.async_api import Locator as PlaywrightLocator
+
+from aqa_runner.binding import BindingMiss, HeldRegion, held_region
 
 # What the target is for: an element a step acts on, an element an
 # assertion checks, or an element a negative check (not_visible) expects
 # not to see.
 type Use = Literal["action", "assertion", "negative_check"]
 
-# Why one locator didn't give the match its use needs.
-type Miss = Literal["no scope", "no match", "ambiguous", "not actionable"]
+# Why one locator didn't give the match its use needs: the page's misses,
+# then a contracted target's region misses (`aqa_runner.binding`).
+type Miss = Literal["no scope", "no match", "ambiguous", "not actionable"] | BindingMiss
 
 
 @dataclass(frozen=True)
@@ -118,16 +122,34 @@ def _query(
 
 
 async def _scoped(
-    page: Page, locator: Locator, *, hidden: bool = False
-) -> PlaywrightLocator | None:
-    """`locator`'s query inside its scope, or None when the scope doesn't
-    resolve to exactly one element on the page. A scope is judged as an
-    assertion's target is, so it never sees hidden elements by role."""
+    root: Page | PlaywrightLocator,
+    locator: Locator,
+    held: HeldRegion | None,
+    *,
+    hidden: bool = False,
+) -> PlaywrightLocator | Miss:
+    """`locator`'s query inside its scope under `root`, or `"no scope"` when
+    the scope doesn't resolve to exactly one element there. A scope is judged
+    as an assertion's target is, so it never sees hidden elements by role.
+    Inside a held region, each scope's element must be in it too: a `:scope`
+    sibling selector can reach past the region root."""
     if locator.scope is None:
-        return _query(page, locator, hidden=hidden)
-    scope = await _scoped(page, locator.scope)
-    if scope is None or await scope.count() != 1:
-        return None
+        return _query(root, locator, hidden=hidden)
+    scope = await _scoped(root, locator.scope, held)
+    if isinstance(scope, str):
+        return scope
+    if await scope.count() != 1:
+        return "no scope"
+    if held is not None:
+        found = await scope.element_handles()
+        try:
+            if len(found) != 1:
+                return "no scope"
+            if not await held.contains(found[0]):
+                return "outside region"
+        finally:
+            for element in found:
+                await element.dispose()
     return _query(scope, locator, hidden=hidden)
 
 
@@ -195,12 +217,16 @@ def _miss(count: int) -> Miss:
     return "no match" if count == 0 else "ambiguous"
 
 
-async def _match(page: Page, locator: Locator, use: Use) -> ElementHandle | Miss:
-    """The one element `locator` finds for `use`, or why it doesn't."""
+async def _match(
+    page: Page, locator: Locator, use: Use, held: HeldRegion | None
+) -> ElementHandle | Miss:
+    """The one element `locator` finds for `use`, or why it doesn't. Inside
+    a held region, the element must be its part, judged last."""
     negative = use == "negative_check"
-    query = await _scoped(page, locator, hidden=negative)
-    if query is None:
-        return "no scope"
+    root = page if held is None else held.root
+    query = await _scoped(root, locator, held, hidden=negative)
+    if isinstance(query, str):
+        return query
     if negative:
         # A negative check counts what is on screen: a role locator sees past
         # the accessibility tree (aria-hidden), and only visible matches
@@ -221,6 +247,11 @@ async def _match(page: Page, locator: Locator, use: Use) -> ElementHandle | Miss
     if use == "action" and not await _actionable(page, element):
         await element.dispose()
         return "not actionable"
+    if held is not None and not await held.bound(element):
+        try:
+            return await held.miss(element)
+        finally:
+            await element.dispose()
     return element
 
 
@@ -250,18 +281,81 @@ async def resolve(
       element absent; otherwise it is drift. An unscoped locator's scope is
       the page.
 
+    A target with a contract (ADR-0025's #53 P7b-II amendment) holds its
+    region's one element for the call, and each locator looks inside the
+    region selector's match. A found element must still be the held
+    region's part, childless when the contract says leaf; absence needs one
+    read proving the held region is still the selector's only match and
+    shows no part. Otherwise the misses are the region's: no region,
+    outside region, not the part, not a leaf. A missing or repeated region
+    is drift for every use, never absence.
+
     A css value that isn't valid CSS raises Playwright's Error: the script is
     broken, which is not drift.
     """
+    if target.contract is None:
+        return await _resolve(page, target, use, None)
+    return await _resolve_held(page, target, use, target.contract)
+
+
+# Whether a held region's node left the page's document. A region that
+# another document adopted makes Playwright refuse every utility-world query
+# on it with its own error, so this main-world read is the evidence that
+# makes that drift. A page that lies here can only make it raise.
+_LEFT = "(region) => !region.isConnected || region.ownerDocument !== document"
+
+
+async def _resolve_held(
+    page: Page, target: Target, use: Use, contract: Contract
+) -> Resolved | Absent | Unresolved:
+    drift = Unresolved(tuple("no region" for _ in target.locators))
+    found: Resolved | Absent | Unresolved = drift
+    region: JSHandle | None = None
+    try:
+        async with held_region(page, contract) as held:
+            if held is not None:
+                region = await held.element.evaluate_handle("(element) => element")
+                found = await _resolve(page, target, use, held)
+    except Error:
+        if isinstance(found, Resolved):
+            await found.element.dispose()
+        left = region is not None and await region.evaluate(_LEFT)
+        if region is not None:
+            await region.dispose()
+        if not left:
+            raise
+        return drift
+    if region is not None:
+        await region.dispose()
+    return found
+
+
+async def _resolve(
+    page: Page, target: Target, use: Use, held: HeldRegion | None
+) -> Resolved | Absent | Unresolved:
     misses: list[Miss] = []
     for index, locator in enumerate(target.locators):
-        found = await _match(page, locator, use)
+        found = await _match(page, locator, use, held)
         if isinstance(found, ElementHandle):
             return Resolved(index, found)
         misses.append(found)
-    if use == "negative_check" and "ambiguous" not in misses and "no match" in misses:
-        return Absent(misses.index("no match"))
+    if (
+        use == "negative_check"
+        and "no match" in misses
+        and set(misses) <= {"no scope", "no match"}
+    ):
+        return await _absence(held, misses)
     return Unresolved(tuple(misses))
+
+
+async def _absence(held: HeldRegion | None, misses: list[Miss]) -> Absent | Unresolved:
+    """A negative check's verdict once no locator found a visible element:
+    inside a held region, one read decides whether that is absence (P11's
+    every-locator negatives reuse it)."""
+    if held is None or await held.absent():
+        return Absent(misses.index("no match"))
+    shown: Miss = "not the part" if await held.contains(held.element) else "no region"
+    return Unresolved(tuple(shown if miss == "no match" else miss for miss in misses))
 
 
 async def rendered_text(element: ElementHandle) -> str:

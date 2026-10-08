@@ -37,6 +37,7 @@ from aqa_core.config import ModelRoleName
 from aqa_core.schema import (
     AriaRole,
     AtLeastOne,
+    Contract,
     DistinctListOf,
     ListOf,
     NonEmpty,
@@ -374,10 +375,12 @@ type Locator = Annotated[
 
 
 class Target(StrictModel):
-    """An element's meaning, and the locators tried in order to find it."""
+    """An element's meaning, the locators tried in order to find it, and, for
+    a listed subject, the reviewed contract its element must meet."""
 
     semantic: NonEmpty
     locators: Annotated[DistinctListOf[Locator], AtLeastOne]
+    contract: Contract | None = None
 
 
 class _Step(StrictModel):
