@@ -561,3 +561,15 @@ Explore writes two phases into one run record, decides exit 4 and non-resumabili
 - The instructions and the tools' descriptions are part of every navigator request: a change to either changes the cassettes the fixture explore records.
 - The tools' results reach `<results>` as the attempt's tools write them, through `redaction.error_text` (#50's ruling for every navigator tool error), and are scanned again here.
 - Only `<` is escaped, so a page that writes `&lt;` reads the same as one that writes `<`. The model can't tell them apart; nothing can close a block either way, and escaping `&` too would add another spelling to scan around.
+
+## Amendment (2026-10-09): one assertion's evaluation (#53 P9+P10)
+
+The navigator's check tools (#53) evaluate one planned check at a time on the attempt's page, and replay evaluates every assertion after its last step. Both now go through one seam.
+
+- **The seam.** `aqa_runner.executor.evaluate(session, check, evaluation)` gives one assertion's outcome on the page as it stands: `pass`, `failed`, `binding_unresolved` with each locator's miss, `check_timed_out`, or `not_evaluated` with its reason. `Evaluation` holds what that needs: the script's targets, the spec and start origin its probes are read from through the run's egress gate, the run's `resolve_seconds`, the run's redactor, and the probe baselines captured so far. Its `withheld` is the run's any-bound predicate (ADR-0026's #53 P9+P10 amendment).
+- **Each assertion looks at the page first.** This supersedes *The page must answer first* above: the bounded look at the page's visible text is now each evaluation's own precondition, not one look before every assertion. Recorded traffic, a URL, a probe or a target's state can be read from a page whose renderer has stopped or that left the allowed origins, so no check of any kind is evaluated on such a page.
+  - *Options:* (1) one look before every assertion, as #46 chose; (2) a look per assertion.
+  - *Chosen: 2.* The navigator evaluates one check at a time, long after any first look, so the precondition must travel with the check. Replay's assertions go through the same function, one by one, and stop at the first look that raises, as before.
+  - *What changes for replay:* a page that answers for the first assertion and stops before the second used to let the second pass when it read only recorded traffic or a probe; now the second is `not_evaluated` with its reason, every later one names it, and the run is `errored`. After a page that never answered, the first assertion carries the reason and the later ones name it, where each used to repeat it. Each assertion costs one more read of the page's visible text.
+- **No dependency, paid resource or model call.** Tests: `packages/runner/tests/test_evaluate.py`, and `test_executor_runs.py`'s two tests of a page that stops answering.
+
