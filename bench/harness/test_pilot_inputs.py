@@ -392,6 +392,18 @@ class PilotInputTests(unittest.TestCase):
             self.save()
             self.refuses(self.load, "invalid pilot input")
 
+    def test_every_selected_spec_problem_outranks_an_unusable_secret(self) -> None:
+        self.spec["preconditions"]["account"] = ACCOUNT
+        self.save()
+        spec = (self.qa / "pilot.spec.md").read_text()
+        (self.qa / "zeta.spec.md").write_text(spec.replace('"pilot"', '"zeta"'))
+        zeta = self.compiled / "zeta.json"
+        zeta.write_text(json.dumps(self.data | {"spec_id": "zeta"}))
+        self.refuses(partial(self.load, ("pilot",)), "unusable test secret")
+        for selected in (("pilot", "zeta"), ("zeta", "pilot")):
+            with self.subTest(selected=selected):
+                self.refuses(partial(self.load, selected), "invalid pilot input", zeta)
+
     def test_in_memory_rebound_candidate_uses_same_admission(self) -> None:
         before = self.source.read_bytes()
         project = load_project(self.qa)
