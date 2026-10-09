@@ -709,6 +709,7 @@ def favorite_project(tmp_path: Path) -> tuple[Any, ...]:
         ],
     ).model_dump(mode="json")
     data["spec_id"] = "favorite-article"
+    data["spec_hash"] = project.specs["favorite-article"].spec_hash
     data["compiled_by"]["subject_contracts"] = contracts_fingerprint(
         config, "favorite-article"
     )

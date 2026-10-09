@@ -14,13 +14,19 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping
 from pathlib import Path
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 import anthropic
 import pytest
 from aqa_core.compiled import CompiledScript
 from aqa_core.config import Budgets, ProjectConfig, SubjectContract
-from aqa_core.project import SpecError, contracts_fingerprint, parse_compiled
+from aqa_core.project import (
+    SpecError,
+    contracts_fingerprint,
+    load_config,
+    parse_compiled,
+)
+from aqa_core.spec import Spec
 from aqa_runner import settling
 from aqa_runner.anthropic_client import AnthropicClient
 from aqa_runner.browser_session import BrowserSession
@@ -45,11 +51,13 @@ from packages.runner.tests.executor_fixtures import (
     a_spec,
     by_role,
     compiled,
+    for_spec,
     paths,
     read_steps,
     run,
     serving_app,
 )
+from packages.runner.tests.secret_fixtures import FAKE_VALUE, copies_found, secret_spec
 
 
 @pytest.fixture
@@ -157,7 +165,7 @@ def test_a_crash_between_intent_and_completion_leaves_the_intent_unresolved(
         json.dumps(
             {
                 "config": config.model_dump(mode="json"),
-                "script": script.model_dump_json(),
+                "script": for_spec(script, spec).model_dump_json(),
                 "spec": str(spec.path),
                 "origin": app.origin,
                 "run_id": record.run_id,
@@ -418,7 +426,10 @@ def stamped(script: CompiledScript, config: ProjectConfig) -> CompiledScript:
 
 
 def refused_before_browser(
-    tmp_path: Path, script: CompiledScript, config: ProjectConfig
+    tmp_path: Path,
+    script: CompiledScript,
+    config: ProjectConfig,
+    spec: Spec | None = None,
 ) -> tuple[str, ...]:
     chromium = MagicMock(spec=BrowserType)
     chromium.launch = AsyncMock(
@@ -427,12 +438,12 @@ def refused_before_browser(
     proxy = MagicMock(spec=EgressProxy)
     proxy.url = "http://127.0.0.1:4100"
     record = RunRecord.create(tmp_path)
-    spec = a_spec(tmp_path, config, start_url="/page/form")
+    spec = spec or a_spec(tmp_path, config, start_url="/page/form")
     setup = RunSetup(spec, config, "http://127.0.0.1:4100", record)
     with pytest.raises(SpecError) as raised:
         asyncio.run(
             replay(
-                script,
+                for_spec(script, spec),
                 setup,
                 chromium=cast(BrowserType, chromium),
                 proxy=cast(EgressProxy, proxy),
@@ -579,7 +590,7 @@ def replay_with(
             prepare(proxy, run_gate)
             async with asyncio.timeout(60):
                 result = await replay(
-                    script,
+                    for_spec(script, setup.spec),
                     setup,
                     chromium=playwright.chromium,
                     proxy=proxy,
@@ -890,7 +901,7 @@ def counted(
             await register_identity_engine(playwright)
             async with asyncio.timeout(60):
                 return await replay(
-                    stamped(script, COUNT_ROW),
+                    for_spec(stamped(script, COUNT_ROW), setup.spec),
                     setup,
                     chromium=playwright.chromium,
                     proxy=proxy,
@@ -1033,3 +1044,172 @@ def test_a_page_that_stops_answering_after_the_first_assertion_keeps_its_outcome
     ]
     assert app.probe_reads == {}
     assert result.outcome == "errored"
+
+
+def test_replay_refuses_a_stale_script_before_the_browser_opens(tmp_path: Path) -> None:
+    chromium = MagicMock(spec=BrowserType)
+    chromium.launch = AsyncMock(side_effect=AssertionError("a stale script launched"))
+    proxy = MagicMock(spec=EgressProxy)
+    proxy.url = "http://127.0.0.1:4100"
+    record = RunRecord.create(tmp_path)
+    config = ProjectConfig()
+    spec = a_spec(tmp_path, config, start_url="/page/form")
+    # Compiled from another version of the spec, and under other subject
+    # contracts too: being stale is all it says.
+    data = compiled([]).model_dump(mode="json")
+    data["compiled_by"]["subject_contracts"] = "sha256:" + "0" * 64
+    script = parse_compiled(json.dumps(data), config, source=Path("fixture.json"))
+    setup = RunSetup(spec, config, "http://127.0.0.1:4100", record)
+
+    with pytest.raises(SpecError) as raised:
+        asyncio.run(
+            replay(
+                script,
+                setup,
+                chromium=cast(BrowserType, chromium),
+                proxy=cast(EgressProxy, proxy),
+                gate=gate(allowed=(setup.start,)),
+            )
+        )
+
+    assert raised.value.problems == (
+        "compiled from another version of the spec: explore it again",
+    )
+    chromium.launch.assert_not_awaited()
+    assert read_steps(record.path) == []
+
+
+REFUSED = "a bound value's spelling is in it, so the replay doesn't start"
+
+
+def test_a_start_path_holding_a_bound_value_is_refused_before_any_intent_or_browser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
+    spec = secret_spec(tmp_path, start_url=f"/page/form?q={quote(FAKE_VALUE)}")
+
+    config = load_config(tmp_path / "qa" / "config.yaml")
+
+    problems = refused_before_browser(tmp_path, compiled([]), config, spec)
+
+    assert problems == (f"preconditions.start_url: {REFUSED}",)
+    assert copies_found(FAKE_VALUE, texts=problems) == []
+
+
+# A bound value with a backslash-n in it, which JSON writes for a line feed.
+ESCAPED = "fake\\nvalue"
+LINE_FED = "fake\nvalue"
+
+TYPED = {"semantic": "the name field", "locators": [{"css": "input"}]}
+
+
+@pytest.mark.parametrize(
+    ("value", "steps", "targets", "place"),
+    [
+        (
+            FAKE_VALUE,
+            [{"seq": 1, "action": "fill", "target": "name", "value": FAKE_VALUE}],
+            {"name": TYPED},
+            "steps[0] (seq 1)",
+        ),
+        (
+            FAKE_VALUE,
+            [
+                {
+                    "seq": 1,
+                    "action": "navigate",
+                    "url": f"/page/form?q={quote(FAKE_VALUE)}",
+                }
+            ],
+            {},
+            "steps[0] (seq 1)",
+        ),
+        (
+            FAKE_VALUE,
+            [{"seq": 1, "action": "select", "target": "name", "option": FAKE_VALUE}],
+            {"name": TYPED},
+            "steps[0] (seq 1)",
+        ),
+        (
+            ESCAPED,
+            [{"seq": 1, "action": "fill", "target": "name", "value": LINE_FED}],
+            {"name": TYPED},
+            "steps[0] (seq 1)",
+        ),
+        (FAKE_VALUE, [], {FAKE_VALUE: TYPED}, "targets[0]"),
+        (
+            FAKE_VALUE,
+            [],
+            {"name": {**TYPED, "locators": [{"css": f"[title='{FAKE_VALUE}']"}]}},
+            "targets[0]",
+        ),
+        (
+            FAKE_VALUE,
+            [],
+            {"name": {**TYPED, "locators": [{"role": "button", "name": FAKE_VALUE}]}},
+            "targets[0]",
+        ),
+        (
+            FAKE_VALUE,
+            [],
+            {
+                "name": {
+                    **TYPED,
+                    "locators": [
+                        {"css": "input", "scope": {"css": f"[title='{FAKE_VALUE}']"}}
+                    ],
+                }
+            },
+            "targets[0]",
+        ),
+        (
+            ESCAPED,
+            [],
+            {"name": {**TYPED, "locators": [{"label": LINE_FED}]}},
+            "targets[0]",
+        ),
+        (
+            ESCAPED,
+            [],
+            {
+                "name": {
+                    **TYPED,
+                    "locators": [{"css": "input", "scope": {"label": LINE_FED}}],
+                }
+            },
+            "targets[0]",
+        ),
+    ],
+    ids=[
+        "fill",
+        "navigate",
+        "select",
+        "fill-json-escaped",
+        "target-id",
+        "css",
+        "role-name",
+        "scope",
+        "label-json-escaped",
+        "scope-json-escaped",
+    ],
+)
+def test_an_action_or_locator_holding_a_bound_value_is_refused_before_any_intent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    value: str,
+    steps: list[dict[str, object]],
+    targets: dict[str, object],
+    place: str,
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", value)
+    spec = secret_spec(tmp_path, start_url="/page/form")
+    script = compiled(
+        [{**step, "side_effect": False} for step in steps], targets=targets
+    )
+
+    config = load_config(tmp_path / "qa" / "config.yaml")
+
+    problems = refused_before_browser(tmp_path, script, config, spec)
+
+    assert problems == (f"{place}: {REFUSED}",)

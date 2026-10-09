@@ -8,6 +8,7 @@ Browser observations use the session methods, which check every document
 they touch (ADR-0026). Probe reads use the same egress gate as the browser."""
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
@@ -251,27 +252,25 @@ async def replay(
     read the run's egress blocks and infrastructure events, so the proxy is
     between phases when it returns.
 
-    Before accepting steps or binding secrets, the script must agree with the
-    project's subject contracts. A mismatch raises `SpecError`.
+    Before accepting steps or binding secrets, the script must be compiled
+    from the spec as it is (its `spec_hash`) and agree with the project's
+    subject contracts. A stale script or a mismatch raises `SpecError`.
 
     Before the browser starts, it binds the test secrets the spec references
     (`aqa_runner.bound_secrets.bound_secrets`): a missing value raises
     `MissingSecretError`, Playwright's protocol logging `SecretLoggedError`,
-    and a binding the run doesn't allow `SpecError`. When the run binds a
-    test secret, filled or not, every reason keeps nothing of Playwright's
-    messages (`_Replay.reason`), the invariants keep no text, and
-    `egress.json` names no host or port (ADR-0026's #50 D amendment).
+    and a binding the run doesn't allow `SpecError`. A bound value's
+    spelling in the start path, a step's action or a target's name or
+    locators raises `SpecError` too (`_spelling_bound_values`). When the run
+    binds a test secret, filled or not, every reason keeps nothing of
+    Playwright's messages and names no origin of ours (`Evaluation.reason`),
+    the invariants keep no text, and `egress.json` names no host or port
+    (ADR-0026's #50 D and #53 P9+P10 amendments).
 
     After every step it keeps, it saves the step's evidence in the record,
     which scans what it writes with the session's redactor
     (`aqa_runner.evidence`)."""
-    # The script's own problems first, so a spec error wins over a missing
-    # value (exit 5 before 12).
-    if problems := contract_problems(script, setup.config):
-        raise SpecError(problems)
-    runnable, checks = _accepted(script, setup.spec)
-    bound = bound_secrets(setup.spec, setup.start)
-    redactor = Redactor(bound.values())
+    runnable, checks, bound, redactor = _admitted(script, setup)
     setup = replace(setup, record=setup.record.redacting(redactor))
     run = _Replay(
         setup,
@@ -398,6 +397,90 @@ async def _observed(session: BrowserSession, budget: float) -> Redacted | None:
         )
     except Error, PolicyEventError, DocumentChangedError, UnansweredError:
         return None
+
+
+def _admitted(
+    script: CompiledScript, setup: RunSetup
+) -> tuple[
+    list[Targeted | Untargeted], list[Assertion], Mapping[str, BoundSecret], Redactor
+]:
+    """`script`'s steps and assertions, and the test secrets the run binds
+    with their scan, once nothing stops `script` before anything is opened:
+    it is compiled from the spec as it is, agrees with the project's subject
+    contracts and runs in M1 (`_accepted`); every secret the spec references
+    has a value (`bound_secrets`); and no bound value is spelled where the
+    run would write or use it (`_spelling_bound_values`). Otherwise
+    `SpecError`, or `bound_secrets`' own error. The script's own problems
+    come first, so a spec error wins over a missing value (exit 5 before
+    12), and a stale script's other problems are moot."""
+    if script.spec_hash != setup.spec.spec_hash:
+        raise SpecError(["compiled from another version of the spec: explore it again"])
+    if problems := contract_problems(script, setup.config):
+        raise SpecError(problems)
+    runnable, checks = _accepted(script, setup.spec)
+    bound = bound_secrets(setup.spec, setup.start)
+    redactor = Redactor(bound.values())
+    if problems := _spelling_bound_values(
+        setup.spec, runnable, script.targets, redactor
+    ):
+        raise SpecError(problems)
+    return runnable, checks, bound, redactor
+
+
+def _spelling_bound_values(
+    spec: Spec,
+    steps: list[Targeted | Untargeted],
+    targets: Mapping[str, Target],
+    redactor: Redactor,
+) -> list[str]:
+    """Each place, among what replay writes to the steps journal or hands
+    the browser to find a target with, holding a spelling of a value
+    `redactor` binds, as written or JSON-escaped, as the journal writes it:
+    the start path, each step's action as its intent records it, and each
+    target's name and every string of its locators, scopes included. A
+    place is named by its position, never by its text (SECURITY §5: keeping
+    values out of `steps.jsonl` is the caller's preflight)."""
+    places = [("preconditions.start_url", [spec.frontmatter.preconditions.start_url])]
+    places.extend(
+        (f"steps[{index}] (seq {step.seq})", _strings(_action(step)))
+        for index, step in enumerate(steps)
+    )
+    places.extend(
+        (
+            f"targets[{index}]",
+            [
+                name,
+                *_strings([found.model_dump(mode="json") for found in target.locators]),
+            ],
+        )
+        for index, (name, target) in enumerate(targets.items())
+    )
+    return [
+        f"{place}: a bound value's spelling is in it, so the replay doesn't start"
+        for place, texts in places
+        if any(
+            redactor.finds(text) or redactor.finds(json.dumps(text)) for text in texts
+        )
+    ]
+
+
+def _strings(value: object) -> list[str]:
+    """Every string in `value`, a JSON value, its keys aside."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        value = list(value.values())
+    if isinstance(value, list):
+        return [text for item in value for text in _strings(item)]
+    return []
+
+
+def _action(step: Targeted | Untargeted) -> dict[str, object]:
+    """`step` as its intent records it: as compiled, less its seq, which the
+    line holds, its side-effect fields and its links to the coverage plan."""
+    return step.model_dump(
+        mode="json", exclude={"seq", "side_effect", "side_effect_basis", "satisfies"}
+    )
 
 
 def _accepted(
@@ -677,9 +760,7 @@ async def _run(
         return StepResult(step.seq, "failed", error=run.evaluation.reason(error))
     setup = run.setup
     budget = setup.config.budgets.resolve_seconds
-    action = step.model_dump(
-        mode="json", exclude={"seq", "side_effect", "side_effect_basis", "satisfies"}
-    )
+    action = _action(step)
     if isinstance(step, Navigate | Reload | Press):
         wait = budget if isinstance(step, Press) else NAVIGATION_SECONDS
         return (
