@@ -126,26 +126,31 @@ class RunSetup:
 
 
 @dataclass(frozen=True)
-class _Replay:
-    """State belonging to one replay. Captured baselines stay in memory;
-    they never enter the result or the run record."""
+class Evaluation:
+    """What evaluating an assertion needs (`evaluate`): the script's targets;
+    the spec and the run's start origin its probes are read from, through
+    the run's egress gate; the run's `resolve_seconds`; the scan of every
+    value the run binds; and the probe baselines, captured into
+    `baseline_values` as the run goes. Captured baselines stay in memory;
+    they never enter a result or the run record."""
 
-    setup: RunSetup
     targets: Mapping[str, Target]
-    secrets: Mapping[str, BoundSecret]
+    spec: Spec
+    start: str
     gate: EgressGate
+    budget: float
     redactor: Redactor
-    baseline_definitions: Mapping[str, ProbeBaseline]
+    baseline_definitions: Mapping[str, ProbeBaseline] = field(default_factory=dict)
     baseline_values: dict[str, probes.JsonValue] = field(default_factory=dict)
 
     @property
     def withheld(self) -> bool:
-        """Whether the result's reasons and invariants keep no page text: the
-        run binds a test secret, filled or not. Its other fields keep what
-        ADR-0026's #50 D amendment lists."""
+        """Whether reasons and invariants keep no page text and name no
+        origin of ours: the run binds a test secret, filled or not. A
+        result's other fields keep what ADR-0026's #50 D amendment lists."""
         return not self.redactor.empty
 
-    def reason(self, error: Raised) -> str:
+    def reason(self, error: Raised) -> Redacted:
         """`error` as a failed step's or an unevaluated assertion's reason
         (`aqa_runner.reasons`: scanned for every bound value, the ones the
         script never fills too). When the run binds a test secret,
@@ -153,6 +158,16 @@ class _Replay:
         whole run: a page can throw a value back split into pieces no scan
         finds, or choose the origin a refusal would name."""
         return reason(error, self.redactor, withheld=self.withheld)
+
+
+@dataclass(frozen=True)
+class _Replay:
+    """State belonging to one replay: its setup, the secrets its script
+    fills, and what evaluating its assertions needs."""
+
+    setup: RunSetup
+    secrets: Mapping[str, BoundSecret]
+    evaluation: Evaluation
 
 
 @dataclass(frozen=True)
@@ -260,15 +275,20 @@ async def replay(
     setup = replace(setup, record=setup.record.redacting(redactor))
     run = _Replay(
         setup,
-        script.targets,
         {
             step.secret: bound[step.secret]
             for step in runnable
             if isinstance(step, FillSecret)
         },
-        gate,
-        redactor,
-        script.probe_baselines,
+        Evaluation(
+            script.targets,
+            setup.spec,
+            setup.start,
+            gate,
+            setup.config.budgets.resolve_seconds,
+            redactor,
+            script.probe_baselines,
+        ),
     )
     record = setup.record
     steps: list[StepResult] = []
@@ -316,11 +336,11 @@ async def replay(
                 for check in checks
             )
         else:
-            assertions = await _evaluate_each(session, checks, run)
+            assertions = await _evaluate_each(session, checks, run.evaluation)
         invariants = invariant_results(
             session.invariant_observers.seen, setup.spec.frontmatter.invariants
         )
-        if run.withheld:
+        if run.evaluation.withheld:
             invariants = tuple(replace(result, seen=()) for result in invariants)
         policy_events = tuple(session.policy_events.kept)
     # Ending the phase joins every connection the browser opened, so no
@@ -432,78 +452,68 @@ def _accepted(
     return runnable, checks
 
 
-async def _evaluate_each(
-    session: BrowserSession, checks: list[Assertion], run: _Replay
-) -> tuple[AssertionResult, ...]:
-    """Every assertion, in order, each evaluated once, as the last step left
-    the page; each gets the run's `resolve_seconds` of its own. First the
-    page must answer one look (its visible text): a URL or a target's state
-    can be read from a page whose renderer has stopped. Once a look at the
-    page raises, what remains isn't evaluated, and each says which
-    assertion's look it was."""
-    budget = run.setup.config.budgets.resolve_seconds
+async def evaluate(
+    session: BrowserSession, check: Assertion, evaluation: Evaluation
+) -> AssertionResult:
+    """`check`'s outcome on the page as it stands (DATA_MODEL §7, Replay
+    outcomes), evaluated once within `evaluation.budget`. First the page
+    must answer one look (its visible text): a URL, a target's state,
+    recorded traffic or a probe can be read from a page whose renderer has
+    stopped, or that is on an origin the run doesn't allow, and none is
+    evaluated then. A look that raises leaves `check` not evaluated, with
+    the reason."""
+    budget = evaluation.budget
     try:
         await _bounded(_looked(session.visible_text, budget), budget)
-    except (Error, PolicyEventError, DocumentChangedError, UnansweredError) as error:
-        # As below: the page couldn't be looked at, so nothing on it can be
-        # evaluated.
-        reason = run.reason(error)
-        return tuple(
-            AssertionResult(check.id, "not_evaluated", error=reason) for check in checks
-        )
-    results: list[AssertionResult] = []
-    raised: str | None = None
-    for check in checks:
-        if raised is not None:
-            reason = run.redactor.redact(
-                f"not evaluated after {raised}'s look at the page raised"
-            )
-            results.append(AssertionResult(check.id, "not_evaluated", error=reason))
-            continue
-        try:
-            results.append(await _evaluate(session, check, run, budget))
-        except (
-            Error,
-            PolicyEventError,
-            DocumentChangedError,
-            UnansweredError,
-            probes.ProbeError,
-            EgressRefusedError,
-            EgressUpstreamError,
-            network.WindowsOverflowError,
-            UnsupportedVisualFrameError,
-        ) as error:
-            raised = check.id
-            results.append(
-                AssertionResult(
-                    check.id,
-                    "not_evaluated",
-                    error=run.reason(error),
-                )
-            )
-    return tuple(results)
-
-
-async def _evaluate(
-    session: BrowserSession,
-    check: Assertion,
-    run: _Replay,
-    budget: float,
-) -> AssertionResult:
-    """`check`'s outcome (DATA_MODEL §7, Replay outcomes)."""
-    try:
-        held = await _held(session, check, run, budget)
+        held = await _held(session, check, evaluation, budget)
     except SearchTimeoutError, probes.ProbeUnstableError:
         return AssertionResult(check.id, "check_timed_out")
+    except (
+        Error,
+        PolicyEventError,
+        DocumentChangedError,
+        UnansweredError,
+        probes.ProbeError,
+        EgressRefusedError,
+        EgressUpstreamError,
+        network.WindowsOverflowError,
+        UnsupportedVisualFrameError,
+    ) as error:
+        return AssertionResult(
+            check.id, "not_evaluated", error=evaluation.reason(error)
+        )
     if isinstance(held, Unresolved):
         return AssertionResult(check.id, "binding_unresolved", held.misses)
     return AssertionResult(check.id, "pass" if held else "failed")
 
 
+async def _evaluate_each(
+    session: BrowserSession, checks: list[Assertion], evaluation: Evaluation
+) -> tuple[AssertionResult, ...]:
+    """Every assertion, in order, each evaluated once (`evaluate`), as the
+    last step left the page; each gets the run's `resolve_seconds` of its
+    own. Once an assertion's look at the page raises, what remains isn't
+    evaluated, and each says which assertion's look it was."""
+    results: list[AssertionResult] = []
+    raised: str | None = None
+    for check in checks:
+        if raised is not None:
+            reason = evaluation.redactor.redact(
+                f"not evaluated after {raised}'s look at the page raised"
+            )
+            results.append(AssertionResult(check.id, "not_evaluated", error=reason))
+            continue
+        result = await evaluate(session, check, evaluation)
+        if result.error is not None:
+            raised = check.id
+        results.append(result)
+    return tuple(results)
+
+
 async def _held(
     session: BrowserSession,
     check: Assertion,
-    run: _Replay,
+    evaluation: Evaluation,
     budget: float,
 ) -> bool | Unresolved:
     """Whether `check` holds, through the session's observations and the
@@ -512,14 +522,16 @@ async def _held(
     `MARGIN_SECONDS` past them."""
     match check:
         case TextVisible() | TextInTarget():
-            return await _text_held(session, check, run.targets, budget)
+            return await _text_held(session, check, evaluation.targets, budget)
         case UrlMatches(pattern=pattern):
             return await url_matches(pattern, await _bounded(session.url(), budget))
         case NotVisible(target=name):
-            return await _bounded(_absent(session, run.targets[name], budget), budget)
+            return await _bounded(
+                _absent(session, evaluation.targets[name], budget), budget
+            )
         case VisibleUnoccluded(target=name):
             return await _bounded(
-                _visual(session, run.targets[name], check, budget), budget
+                _visual(session, evaluation.targets[name], check, budget), budget
             )
         case NetworkNone() | NetworkSeen():
             return await session.network_held(check)
@@ -528,9 +540,9 @@ async def _held(
             if isinstance(check, ProbeEquals):
                 path, expected = check.json_path, check.value
             else:
-                path = run.baseline_definitions[check.probe].json_path
-                expected = run.baseline_values[check.probe]
-            value = await _read_probe(run, check.probe, path)
+                path = evaluation.baseline_definitions[check.probe].json_path
+                expected = evaluation.baseline_values[check.probe]
+            value = await _read_probe(evaluation, check.probe, path)
             return probes.same(value, expected)
         case _:
             assert_never(check)
@@ -565,20 +577,20 @@ async def _visual(
         await found.element.dispose()
 
 
-async def _read_probe(run: _Replay, name: str, path: str) -> probes.JsonValue:
+async def _read_probe(evaluation: Evaluation, name: str, path: str) -> probes.JsonValue:
     try:
         return await probes.read_stable(
-            run.gate, probe_url(run.setup.spec, name, run.setup.start), path
+            evaluation.gate, probe_url(evaluation.spec, name, evaluation.start), path
         )
     except ValueError:
         raise probes.ProbeError("the probe could not be read") from None
 
 
-async def _capture_baselines(run: _Replay, seq: int) -> None:
-    for name, definition in run.baseline_definitions.items():
+async def _capture_baselines(evaluation: Evaluation, seq: int) -> None:
+    for name, definition in evaluation.baseline_definitions.items():
         if definition.capture_before_seq == seq:
-            run.baseline_values[name] = await _read_probe(
-                run, name, definition.json_path
+            evaluation.baseline_values[name] = await _read_probe(
+                evaluation, name, definition.json_path
             )
 
 
@@ -655,14 +667,14 @@ async def _run(
     None when the run was interrupted during capture or resolution, so no
     next action is dispatched."""
     try:
-        await _capture_baselines(run, step.seq)
+        await _capture_baselines(run.evaluation, step.seq)
     except (
         probes.ProbeError,
         probes.ProbeUnstableError,
         EgressRefusedError,
         EgressUpstreamError,
     ) as error:
-        return StepResult(step.seq, "failed", error=run.reason(error))
+        return StepResult(step.seq, "failed", error=run.evaluation.reason(error))
     setup = run.setup
     budget = setup.config.budgets.resolve_seconds
     action = step.model_dump(
@@ -681,12 +693,14 @@ async def _run(
             )
         )
     try:
-        found = await _resolve(session, run.targets[step.target], "action", budget)
+        found = await _resolve(
+            session, run.evaluation.targets[step.target], "action", budget
+        )
     except (Error, PolicyEventError) as error:
         # A look the session refused (a page off the allowed origins), or
         # Playwright's general error type (a crashed page): nothing was
         # dispatched, so there is no intent, and the run stops.
-        return StepResult(step.seq, "failed", error=run.reason(error))
+        return StepResult(step.seq, "failed", error=run.evaluation.reason(error))
     if not isinstance(found, Resolved):
         return StepResult(step.seq, "drifted", misses=found.misses)
     if interrupted():
@@ -813,14 +827,16 @@ async def _dispatched(
         # intent; its intent stays unresolved too, as a dispatch's that
         # failed (DATA_MODEL §7), so a side-effect fill_secret refused makes
         # the run non-resumable.
-        return StepResult(seq, "failed", error=run.reason(error))
+        return StepResult(seq, "failed", error=run.evaluation.reason(error))
     except TimeoutError:
         if not limit.expired():
             raise  # not the action's own limit
         return StepResult(
             seq,
             "failed",
-            error=run.redactor.redact(f"the action didn't finish within {seconds:g} s"),
+            error=run.evaluation.redactor.redact(
+                f"the action didn't finish within {seconds:g} s"
+            ),
         )
     record.step_completed(seq, locator_used=index, settled=settled)
     return StepResult(seq, "completed", window, index, settled)
