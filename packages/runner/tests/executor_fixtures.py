@@ -566,6 +566,12 @@ def compiled(
     )
 
 
+def for_spec(script: CompiledScript, spec: Spec) -> CompiledScript:
+    """`script`, compiled from `spec` as it is now: its `spec_hash` is the
+    spec's, so replay doesn't refuse it as stale."""
+    return script.model_copy(update={"spec_hash": spec.spec_hash})
+
+
 def a_spec(
     tmp_path: Path,
     config: ProjectConfig,
@@ -628,7 +634,7 @@ def run(
             # No executor test may hang the suite.
             async with asyncio.timeout(60):
                 return await replay(
-                    script,
+                    for_spec(script, setup.spec),
                     setup,
                     chromium=playwright.chromium,
                     proxy=proxy,
