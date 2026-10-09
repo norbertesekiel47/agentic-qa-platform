@@ -28,6 +28,7 @@ from aqa_runner.document_origins import (
 )
 from aqa_runner.egress import EgressRefusedError, EgressUpstreamError
 from aqa_runner.redaction import Redacted, Redactor, error_text
+from aqa_runner.run_record import RefusedWriteError
 from aqa_runner.secret_fields import SecretNotFilledError, SecretRefusedError
 
 
@@ -52,6 +53,7 @@ type Raised = (
     | EgressUpstreamError
     | network.WindowsOverflowError
     | UnsupportedVisualFrameError
+    | RefusedWriteError
 )
 
 # Owned errors whose reason is always this fixed text: a probe's message can
@@ -112,7 +114,8 @@ def _owned(error: Raised, *, withheld: bool) -> str | None:
         | UnansweredError
         | SecretRefusedError
         | SecretNotFilledError
-        | network.WindowsOverflowError,
+        | network.WindowsOverflowError
+        | RefusedWriteError,
     ):
         return str(error)
     return None

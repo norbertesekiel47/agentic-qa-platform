@@ -21,6 +21,7 @@ from aqa_runner.browser_session import BrowserSession
 from aqa_runner.document_origins import PolicyEvent, PolicyEventError
 from aqa_runner.egress_proxy import EgressBlocks, EgressProxy, RefusedHost
 from aqa_runner.executor import RunResult
+from aqa_runner.run_record import RunRecord
 
 from packages.runner.tests.executor_fixtures import (
     FORM_TARGETS,
@@ -679,3 +680,86 @@ def test_a_refused_fill_secret_in_a_bound_replay_names_no_origin(
         "fill_secret refused TEST_PASSWORD: the page is on none of its destinations",
     )
     assert app.bodies == []
+
+
+@pytest.mark.usefixtures("with_the_value")
+def test_a_bound_replay_into_an_attempt_part_never_names_a_refused_host_in_its_egress_record(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    created = RunRecord.create
+
+    def attempt(base: Path) -> RunRecord:
+        return created(base).part("attempt-1")
+
+    # A replay into an explore run's attempt part (#53), binding a secret it
+    # never fills, on a page that fetches a host the run doesn't declare.
+    monkeypatch.setattr(RunRecord, "create", attempt)
+    spec = secret_spec(
+        tmp_path,
+        start_url="/page/fetches?to=http%3A%2F%2Fundeclared.example.test%3A8080%2Fx",
+    )
+
+    done = run(app, tmp_path, compiled([]), spec=spec)
+
+    runs = tmp_path / ".aqa" / "runs" / done.result.run_id
+    assert [path.relative_to(runs) for path in runs.rglob("egress.json")] == [
+        Path("attempt-1", "egress.json")
+    ]
+    assert json.loads((runs / "attempt-1" / "egress.json").read_text()) == {
+        "error_code": "egress_blocked",
+        "refused_count": 1,
+        "overflowed": False,
+        "hosts_and_ports_withheld": True,
+    }
+    # Kept in memory only, for #53's presenter to count.
+    assert done.result.egress_blocks == EgressBlocks(
+        (RefusedHost("undeclared.example.test", 8080),), False
+    )
+    assert [invariant.seen for invariant in done.result.invariants] == [()] * 4
+
+
+UNWRITTEN = "steps.jsonl: a bound value's spelling is in it, so it isn't written"
+
+
+# Values only an intent line's own fields and time spell: its side_effect
+# flag, a key, and the time's UTC offset.
+@pytest.mark.parametrize("value", ["false", "target_used", "+00:00"])
+def test_an_intent_line_spelling_a_bound_value_is_never_written_or_dispatched(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", value)
+    spec = secret_spec(tmp_path, start_url="/page/form")
+
+    done = run(app, tmp_path, compiled([]), spec=spec)
+
+    assert [(s.seq, s.outcome, s.error) for s in done.result.steps] == [
+        (0, "failed", UNWRITTEN)
+    ]
+    assert read_steps(done.record.path) == []
+    assert app.paths() == []
+    assert done.result.outcome == "errored"
+
+
+def test_a_completion_line_spelling_a_bound_value_leaves_the_intent_unresolved(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Only a completion line says "completed".
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "completed")
+    spec = secret_spec(tmp_path, start_url="/page/form")
+
+    done = run(app, tmp_path, compiled([]), spec=spec)
+
+    assert [(s.seq, s.outcome, s.error) for s in done.result.steps] == [
+        (0, "failed", UNWRITTEN)
+    ]
+    assert read_steps(done.record.path) == [
+        {
+            "seq": 0,
+            "state": "intent",
+            "action": {"action": "navigate", "url": "/page/form"},
+            "side_effect": False,
+            "target_used": None,
+        }
+    ]
+    assert app.paths() == ["/page/form"]
+    assert done.result.outcome == "errored"

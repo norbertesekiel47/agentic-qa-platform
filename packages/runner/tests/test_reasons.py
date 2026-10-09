@@ -21,6 +21,7 @@ from aqa_runner.egress import (
 )
 from aqa_runner.reasons import Raised, UnansweredError, reason
 from aqa_runner.redaction import NO_SECRETS, Redactor
+from aqa_runner.run_record import RefusedWriteError
 from aqa_runner.secret_fields import SecretNotFilledError, SecretRefusedError
 from playwright.async_api import Error
 
@@ -30,6 +31,7 @@ EVIL = "http://evil.example.test:31337"
 APP = "http://app.example.test:8080"
 BOUND = Redactor([fake_secret("TEST_PASSWORD", "fake-bound-value", APP)])
 WITHHELD = "(withheld: the run has a test secret)"
+UNWRITTEN = "steps.jsonl: a bound value's spelling is in it, so it isn't written"
 
 
 def policy(kind: PolicyEventKind, origin: str | None = EVIL) -> PolicyEventError:
@@ -144,6 +146,10 @@ REFUSED_FIELD = SecretRefusedError(
         (
             UnsupportedVisualFrameError(EVIL),
             "visible_unoccluded does not support elements inside frames",
+        ),
+        (
+            RefusedWriteError(UNWRITTEN),
+            UNWRITTEN,
         ),
         (
             Error(f"Page.goto: net::ERR_FAILED at {EVIL}/"),
@@ -261,6 +267,7 @@ def test_an_owned_reason_outside_a_withheld_run_keeps_its_origin(
             UnsupportedVisualFrameError("framed"),
             "visible_unoccluded does not support elements inside frames",
         ),
+        (RefusedWriteError(UNWRITTEN), UNWRITTEN),
         (
             Error("Page.evaluate: Target crashed\n    at the page's own line"),
             "Error: Page.evaluate: Target crashed",

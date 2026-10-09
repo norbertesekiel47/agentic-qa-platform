@@ -72,7 +72,7 @@ from aqa_runner.invariants import InvariantResult, invariant_results
 from aqa_runner.locators import Absent, Miss, Resolved, Unresolved, Use
 from aqa_runner.reasons import Raised, UnansweredError, reason
 from aqa_runner.redaction import Redacted, Redactor
-from aqa_runner.run_record import RefusedWriteError, RunRecord
+from aqa_runner.run_record import STEPS, RefusedWriteError, RunRecord, require_clean
 from aqa_runner.secret_fields import SecretRefusedError
 from aqa_runner.settling import Settled, Window
 from aqa_runner.text_search import SearchTimeoutError, text_matches, url_matches
@@ -883,15 +883,26 @@ async def _dispatched(
 ) -> StepResult:
     """Record `dispatch`'s intent in `run`'s record, then dispatch its step
     with `act`, giving it up to `MARGIN_SECONDS` past its wait, settle it,
-    and record its completion with the locator that found its target."""
+    and record its completion with the locator that found its target.
+
+    Each line is checked as the exact text written, its own fields and time
+    included: one that spells a bound value isn't written (the record's
+    `RefusedWriteError`), and the step fails with that refusal. A refused
+    intent dispatches nothing; after a refused completion, the intent stays
+    unresolved, as a dispatch's that failed (DATA_MODEL §7)."""
     record = run.setup.record
     seq, index = dispatch.seq, dispatch.locator_index
-    record.step_intent(
-        seq,
-        dispatch.action,
-        side_effect=dispatch.side_effect,
-        target_used=dispatch.target,
-    )
+    clean = require_clean(run.evaluation.redactor, STEPS)
+    try:
+        record.step_intent(
+            seq,
+            dispatch.action,
+            side_effect=dispatch.side_effect,
+            target_used=dispatch.target,
+            check=clean,
+        )
+    except RefusedWriteError as error:
+        return StepResult(seq, "failed", error=run.evaluation.reason(error))
     seconds = dispatch.wait + MARGIN_SECONDS
     limit = asyncio.timeout(seconds)
     try:
@@ -919,7 +930,10 @@ async def _dispatched(
                 f"the action didn't finish within {seconds:g} s"
             ),
         )
-    record.step_completed(seq, locator_used=index, settled=settled)
+    try:
+        record.step_completed(seq, locator_used=index, settled=settled, check=clean)
+    except RefusedWriteError as error:
+        return StepResult(seq, "failed", error=run.evaluation.reason(error))
     return StepResult(seq, "completed", window, index, settled)
 
 
