@@ -23,7 +23,6 @@ from aqa_core.project import (
     path_on_origin,
     start_origin,
 )
-from aqa_core.schema import StartPath
 from aqa_core.spec import Spec, secret_references
 from aqa_runner.bound_secrets import (
     MissingSecretError,
@@ -31,9 +30,6 @@ from aqa_runner.bound_secrets import (
     bound_secrets,
 )
 from aqa_runner.browser_session import one_key
-from pydantic import TypeAdapter
-
-_PATH: TypeAdapter[str] = TypeAdapter(StartPath)
 
 
 class UnusableSecretError(ValueError):
@@ -101,7 +97,7 @@ def validate_pilot(
     run; values are read to check, never kept. Otherwise raises ValueError
     naming `source` and a fixed category (UnusableSecretError for the
     environment's)."""
-    prepared = _quietly(partial(_prepare, spec, config), SpecError, ValueError)
+    prepared = _quietly(partial(_prepare, spec, config), SpecError)
     admitted = _admitted(spec, script) and not contract_problems(script, config)
     if prepared is None or not admitted:
         raise ValueError(f"{source}: invalid pilot input")
@@ -136,16 +132,10 @@ def _prepare(
 
 
 def _reset(spec: Spec, start: str) -> ResetRequest | None:
-    """The spec's reset hook: POST and a path held to start_url's rules,
-    ASCII and without a fragment, as a request line carries it, on `start`.
-    Raises ValueError for any other hook."""
+    """The spec's reset hook on `start`, joined as text, as replay's reset is:
+    loading the spec held it to POST and a path (`Reset.http`)."""
     hook = spec.frontmatter.preconditions.reset
-    if hook is None:
-        return None
-    method, _, path = hook.http.partition(" ")
-    if method != "POST" or "#" in path or not path.isascii():
-        raise ValueError("a reset hook is POST and a path")
-    return ResetRequest(path_on_origin(start, _PATH.validate_python(path)))
+    return None if hook is None else ResetRequest(path_on_origin(start, hook.path))
 
 
 def _admitted(spec: Spec, script: CompiledScript) -> bool:
