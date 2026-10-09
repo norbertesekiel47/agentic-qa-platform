@@ -419,9 +419,11 @@ class PilotInputTests(unittest.TestCase):
             with self.subTest(origin=origin):
                 self.refuses(partial(self.load, origin=origin), MISMATCH)
                 self.refuses(partial(self.memory, origin), MISMATCH)
-        self.config["base_url"] = f"{ORIGIN}/"
-        self.save()
-        self.assertEqual(self.load()[0].start, ORIGIN)
+        default = ("http://127.0.0.1", "http://127.0.0.1:80", "http://127.0.0.1")
+        for base_url, origin, start in ((f"{ORIGIN}/", ORIGIN, ORIGIN), default):
+            self.config["base_url"] = base_url
+            self.save()
+            self.assertEqual(self.load(origin=origin)[0].start, start)
         private = {"private_origins": [FOREIGN]}
         extra: dict[str, Callable[[], object]] = {
             "allowed": lambda: self.spec.update(allowed_origins=[FOREIGN]),
