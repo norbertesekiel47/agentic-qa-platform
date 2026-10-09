@@ -10,7 +10,7 @@ import json
 import socket
 import subprocess
 import sys
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from pathlib import Path
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
@@ -845,18 +845,28 @@ COUNT_ROW = ProjectConfig(
 )
 
 
+TEXT_CHECK = {"check": "text_in_target", "text": "(1)"}
+
+
 def counted(
-    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, css: str, html: str
+    app: App,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    locator: Mapping[str, object],
+    html: str,
+    *,
+    check: Mapping[str, object] = TEXT_CHECK,
 ) -> RunResult:
-    """A strict public replay of the banner count's text check, the target
-    carrying the count's row contract, with the binding engine registered."""
+    """A strict public replay of a check on the banner count, by default its
+    text, the target carrying the count's row contract, with the binding
+    engine registered."""
     monkeypatch.setitem(PAGES, "copies", html)
     script = compiled(
         [],
         targets={
             "count": {
                 "semantic": "the favorites count in the banner",
-                "locators": [{"css": css}],
+                "locators": [locator],
                 "contract": {
                     "region": "div.banner",
                     "part": "span.counter",
@@ -864,15 +874,7 @@ def counted(
                 },
             }
         },
-        assertions=[
-            {
-                "id": "a1",
-                "expect_index": 0,
-                "check": "text_in_target",
-                "target": "count",
-                "text": "(1)",
-            }
-        ],
+        assertions=[{"id": "a1", "expect_index": 0, "target": "count", **check}],
     )
     setup = RunSetup(
         a_spec(tmp_path, COUNT_ROW, start_url="/page/copies"),
@@ -900,7 +902,9 @@ def counted(
 def test_replay_admits_a_target_carrying_its_rows_contract(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    result = counted(app, tmp_path, monkeypatch, "span.counter", copies("(1)", "(3)"))
+    result = counted(
+        app, tmp_path, monkeypatch, {"css": "span.counter"}, copies("(1)", "(3)")
+    )
 
     assert [(a.outcome, a.misses) for a in result.assertions] == [("pass", ())]
     assert result.outcome == "passed"
@@ -910,9 +914,29 @@ def test_a_public_replay_of_a_contracted_target_whose_locator_reaches_the_lower_
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     css = ":scope + div.container.page span.counter"
-    result = counted(app, tmp_path, monkeypatch, css, copies("(3)", "(1)"))
+    result = counted(app, tmp_path, monkeypatch, {"css": css}, copies("(3)", "(1)"))
 
     assert [(a.outcome, a.misses) for a in result.assertions] == [
         ("binding_unresolved", ("outside region",))
     ]
+    assert result.outcome == "failed"
+
+
+def test_a_visible_count_moved_into_a_shadow_root_is_never_absent(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The count now renders inside the banner's open shadow root, and the
+    # script's scoped locator is stale: nothing it finds, yet the count shows.
+    shadowed = (
+        '<div class="banner"><app-counter></app-counter></div><script>'
+        'document.querySelector("app-counter").attachShadow({mode: "open"})'
+        ".innerHTML = '<span class=\"counter\">(3)</span>';</script>"
+    )
+    stale = {"css": "span.old", "scope": {"css": "app-counter"}}
+
+    result = counted(
+        app, tmp_path, monkeypatch, stale, shadowed, check={"check": "not_visible"}
+    )
+
+    assert [a.outcome for a in result.assertions] == ["binding_unresolved"]
     assert result.outcome == "failed"

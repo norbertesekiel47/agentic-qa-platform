@@ -77,6 +77,10 @@ ADOPTED = (
     'document.implementation.createHTMLDocument("").body'
     '.appendChild(document.querySelector("div.banner"))'
 )
+FRAMED = (
+    'const f = document.createElement("iframe"); document.body.append(f);'
+    "f.contentDocument.body.appendChild(r)"
+)
 
 
 def contracted(*locators: dict[str, Any], contract: Contract = COUNT) -> Target:
@@ -141,7 +145,14 @@ def test_an_escaping_scope_is_outside_the_region_and_a_missing_one_is_no_scope()
 
 
 @pytest.mark.parametrize(
-    "change", [MOVED, SECOND, ADOPTED], ids=["moved", "second", "adopted"]
+    "change",
+    [
+        MOVED,
+        SECOND,
+        ADOPTED,
+        f'(() => {{ const r = document.querySelector("div.banner"); {FRAMED} }})()',
+    ],
+    ids=["moved", "second", "adopted", "adopted into a frame"],
 )
 def test_a_region_changed_between_counting_and_retrieving_is_drift(
     monkeypatch: pytest.MonkeyPatch, change: str
@@ -264,9 +275,18 @@ def test_a_contracted_negative_check_is_absent_only_inside_its_present_region() 
         "r.after(r.cloneNode(true))",
         "r.remove()",
         'document.implementation.createHTMLDocument("").body.appendChild(r)',
+        FRAMED,
         "",
     ],
-    ids=["replaced", "relabelled", "second", "removed", "adopted", "control"],
+    ids=[
+        "replaced",
+        "relabelled",
+        "second",
+        "removed",
+        "adopted",
+        "adopted into a frame",
+        "control",
+    ],
 )
 def test_a_region_change_after_a_zero_result_is_drift_not_absence(
     monkeypatch: pytest.MonkeyPatch, change: str
