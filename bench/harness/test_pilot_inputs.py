@@ -18,6 +18,9 @@ from aqa_core.spec import canonical_hash
 from pilot_inputs import PilotInput, ResetRequest, load_pilots, validate_pilot
 from pilot_rebinding import apply_rebinding
 
+ORIGIN, FOREIGN = "http://127.0.0.1:4100", "http://127.0.0.1:4101"
+MISMATCH = "base_url is not the stack's origin"
+EXTRA = "declares an origin beyond the stack's"
 RESET = ResetRequest("http://127.0.0.1:4100/test-api/reset?fixture=seed")
 CONFIG = '{"base_url":"http://127.0.0.1:4100","secrets":{"TEST_PASSWORD":{"origins":["start"],"field":"password"}}}'
 SPEC = '{"id":"pilot","goal":"Read an article","preconditions":{"start_url":"/","reset":{"http":"POST /test-api/reset?fixture=seed"},"probes":{"count":"GET /test-api/count"}},"expect":["Title is visible","Body is visible"],"tags":["articles"]}'
@@ -76,18 +79,20 @@ class PilotInputTests(unittest.TestCase):
             )
         self.source.write_text(json.dumps(self.data))
 
-    def load(self, selected: tuple[str, ...] = ()) -> tuple[PilotInput, ...]:
-        return load_pilots(self.qa, self.compiled, selected)
+    def load(
+        self, selected: tuple[str, ...] = (), origin: str = ORIGIN
+    ) -> tuple[PilotInput, ...]:
+        return load_pilots(self.qa, self.compiled, selected, origin=origin)
 
     def ids(self, selected: tuple[str, ...] = ()) -> tuple[str, ...]:
         return tuple(pilot.spec.frontmatter.id for pilot in self.load(selected))
 
-    def memory(self) -> PilotInput:
+    def memory(self, origin: str = ORIGIN) -> PilotInput:
         project = load_project(self.qa)
         text = self.source.read_text()
         script = parse_compiled(text, project.config, source=self.source)
-        spec = project.specs["pilot"]
-        return validate_pilot(spec, project.config, script, source=self.source)
+        admit = partial(validate_pilot, source=self.source, origin=origin)
+        return admit(project.specs["pilot"], project.config, script)
 
     def refuses(
         self, call: Callable[[], object], category: str, source: Path | None = None
@@ -120,12 +125,12 @@ class PilotInputTests(unittest.TestCase):
                 self.refuses(partial(self.load, ids), "invalid selection", self.qa)
         (self.qa / "zeta.spec.md").write_text("---\nid: [\n---\n")
         self.refuses(self.load, "invalid pilot input", self.qa)
-        unreadable = partial(load_pilots, self.source, self.compiled, ())
+        unreadable = partial(load_pilots, self.source, self.compiled, (), origin=ORIGIN)
         self.refuses(unreadable, "invalid pilot input", self.source)
         empty = self.root / "empty"
         empty.mkdir()
         (empty / "config.yaml").write_text(CONFIG)
-        call = partial(load_pilots, empty, self.compiled, ())
+        call = partial(load_pilots, empty, self.compiled, (), origin=ORIGIN)
         self.refuses(call, "invalid selection", empty)
 
     def test_selected_compiled_inputs_must_exist_under_root(self) -> None:
@@ -133,7 +138,7 @@ class PilotInputTests(unittest.TestCase):
         (self.qa / "missing.spec.md").write_text(spec.replace('"pilot"', '"missing"'))
         alias = self.root / "alias"
         alias.symlink_to(self.compiled)
-        pilots = load_pilots(self.qa, alias, ("pilot",))
+        pilots = load_pilots(self.qa, alias, ("pilot",), origin=ORIGIN)
         self.assertEqual([pilot.spec.frontmatter.id for pilot in pilots], ["pilot"])
         missing = self.compiled / "missing.json"
         self.refuses(self.load, "invalid compiled input", missing)
@@ -404,6 +409,42 @@ class PilotInputTests(unittest.TestCase):
             with self.subTest(selected=selected):
                 self.refuses(partial(self.load, selected), "invalid pilot input", zeta)
 
+    def test_start_origin_must_be_the_stacks(self) -> None:
+        for origin in (ORIGIN, f"{ORIGIN}/", "HTTP://127.0.0.1:4100"):
+            with self.subTest(origin=origin):
+                starts = (self.load(origin=origin)[0].start, self.memory(origin).start)
+                self.assertEqual(starts, (ORIGIN, ORIGIN))
+        others = (FOREIGN, "http://localhost:4100", "http://127.0.0.2:4100")
+        for origin in (*others, "https://127.0.0.1:4100"):
+            with self.subTest(origin=origin):
+                self.refuses(partial(self.load, origin=origin), MISMATCH)
+                self.refuses(partial(self.memory, origin), MISMATCH)
+        self.config["base_url"] = f"{ORIGIN}/"
+        self.save()
+        self.assertEqual(self.load()[0].start, ORIGIN)
+        private = {"private_origins": [FOREIGN]}
+        extra: dict[str, Callable[[], object]] = {
+            "allowed": lambda: self.spec.update(allowed_origins=[FOREIGN]),
+            "private": lambda: self.config.update(egress=private),
+            "the stack's own": lambda: self.spec.update(allowed_origins=[ORIGIN]),
+        }
+        for name, change in extra.items():
+            with self.subTest(name):
+                self.config, self.spec = json.loads(CONFIG), json.loads(SPEC)
+                change()
+                self.save()
+                self.refuses(self.load, EXTRA)
+                self.refuses(self.memory, EXTRA)
+
+    def test_a_foreign_origin_outranks_an_unusable_secret(self) -> None:
+        self.spec["preconditions"]["account"] = ACCOUNT
+        self.save()
+        self.refuses(self.load, "unusable test secret")
+        self.refuses(partial(self.load, origin=FOREIGN), MISMATCH)
+        self.spec["allowed_origins"] = [FOREIGN]
+        self.save()
+        self.refuses(self.load, EXTRA)
+
     def test_in_memory_rebound_candidate_uses_same_admission(self) -> None:
         before = self.source.read_bytes()
         project = load_project(self.qa)
@@ -415,17 +456,17 @@ class PilotInputTests(unittest.TestCase):
         operation = {"op": "replace", "path": path, "value": locators}
         text = json.dumps({"base_hash": base, "operations": [operation]})
         candidate = apply_rebinding(original, text, project.config, source=self.source)
-        admitted = validate_pilot(spec, project.config, candidate, source=self.source)
+        admit = partial(
+            validate_pilot, spec, project.config, source=self.source, origin=ORIGIN
+        )
+        admitted = admit(candidate)
         rebound = admitted.script.targets["article"].locators
         self.assertEqual(
             [each.model_dump(exclude_none=True) for each in rebound], locators
         )
         self.assertEqual(self.source.read_bytes(), before)
         malformed = candidate.model_copy(update={"spec_id": "other"})
-        call = partial(
-            validate_pilot, spec, project.config, malformed, source=self.source
-        )
-        self.refuses(call, "invalid pilot input")
+        self.refuses(partial(admit, malformed), "invalid pilot input")
 
     def test_inputs_and_errors_exclude_answers_and_secret_values(self) -> None:
         self.spec["preconditions"]["account"] = ACCOUNT
@@ -443,8 +484,10 @@ class PilotInputTests(unittest.TestCase):
             tuple(inspect.signature(seam).parameters)
             for seam in (load_pilots, validate_pilot)
         ]
-        self.assertEqual(parameters[0], ("qa_root", "compiled_dir", "selected_ids"))
-        self.assertEqual(parameters[1], ("spec", "config", "script", "source"))
+        loads = ("qa_root", "compiled_dir", "selected_ids", "origin")
+        validates = ("spec", "config", "script", "source", "origin")
+        self.assertEqual(parameters[0], loads)
+        self.assertEqual(parameters[1], validates)
         self.source.write_text('{"fake-sensitive-sentinel": "fake-password-value"}')
         self.refuses(self.load, "invalid compiled input")
         with self.assertRaises(ValueError) as caught:

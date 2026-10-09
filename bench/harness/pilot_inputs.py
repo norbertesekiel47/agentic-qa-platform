@@ -23,6 +23,7 @@ from aqa_core.project import (
     path_on_origin,
     start_origin,
 )
+from aqa_core.schema import parse_origin
 from aqa_core.spec import Spec, secret_references
 from aqa_runner.bound_secrets import (
     MissingSecretError,
@@ -56,13 +57,14 @@ class PilotInput:
 
 
 def load_pilots(
-    qa_root: Path, compiled_dir: Path, selected_ids: Sequence[str]
+    qa_root: Path, compiled_dir: Path, selected_ids: Sequence[str], *, origin: str
 ) -> tuple[PilotInput, ...]:
     """Every selected pilot, or every pilot by ID when none is selected, each
-    from `<compiled_dir>/<id>.json`. Unless all are admitted, raises
-    ValueError naming `qa_root` or the script's path and a fixed category,
-    never the problem's text; an unusable test secret only once no selected
-    input has another problem, so the exit code doesn't depend on their order."""
+    from `<compiled_dir>/<id>.json` and admitted to run on `origin` alone
+    (`validate_pilot`). Unless all are admitted, raises ValueError naming
+    `qa_root` or the script's path and a fixed category, never the problem's
+    text; an unusable test secret only once no selected input has another
+    problem, so the exit code doesn't depend on their order."""
     project = _quietly(partial(load_project, qa_root), OSError, SpecError)
     if project is None:
         raise ValueError(f"{qa_root}: invalid pilot input")
@@ -83,9 +85,9 @@ def load_pilots(
         )
         if script is None:
             raise ValueError(f"{source}: invalid compiled input")
-        spec = project.specs[spec_id]
+        admit = partial(validate_pilot, source=source, origin=origin)
         try:
-            pilots.append(validate_pilot(spec, project.config, script, source=source))
+            pilots.append(admit(project.specs[spec_id], project.config, script))
         except UnusableSecretError as error:
             unusable = unusable or error
     if unusable is not None:
@@ -94,21 +96,32 @@ def load_pilots(
 
 
 def validate_pilot(
-    spec: Spec, config: ProjectConfig, script: CompiledScript, *, source: Path
+    spec: Spec,
+    config: ProjectConfig,
+    script: CompiledScript,
+    *,
+    source: Path,
+    origin: str,
 ) -> PilotInput:
     """`script`, already read strictly, admitted for `spec`: compiled from the
     spec as it is now, covering each of its expectations, agreeing with the
     project's subject contracts as replay requires (`contract_problems`),
     runnable by the executor, reset by a valid hook when a step has side
     effects, and with every test secret the spec references bound for this
-    run; values are read to check, never kept. Otherwise raises ValueError
-    naming `source` and a fixed category (UnusableSecretError for the
-    environment's)."""
+    run; values are read to check, never kept. The run may reach `origin`, the
+    app's stack, alone: base_url must be that origin, compared as origins, and
+    neither the spec nor the config may add another. Otherwise raises
+    ValueError naming `source` and a fixed category, checking the test secrets
+    last (UnusableSecretError, the environment's)."""
     prepared = _quietly(partial(_prepare, spec, config), SpecError)
     admitted = _admitted(spec, script) and not contract_problems(script, config)
     if prepared is None or not admitted:
         raise ValueError(f"{source}: invalid pilot input")
     start, reset, usable = prepared
+    if start != parse_origin(origin):
+        raise ValueError(f"{source}: base_url is not the stack's origin")
+    if spec.frontmatter.allowed_origins or config.egress.private_origins:
+        raise ValueError(f"{source}: declares an origin beyond the stack's")
     if not usable:
         raise UnusableSecretError(f"{source}: unusable test secret")
     return PilotInput(spec, config, script, start, reset)

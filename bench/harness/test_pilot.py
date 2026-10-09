@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import flags
 import pilot
 import pilot_report
 from aqa_core.project import SpecError, load_project
@@ -37,6 +38,9 @@ FAILING = replace(PASSED, outcome="failed", assertions=MISSED, failed_expectatio
 FAILED_0 = replace(OK, observation=FAILING)
 PRESS_AB = {"seq": 1, "action": "press", "key": "a+b", "side_effect": False}
 INPUT = "pilot.json: invalid pilot input"
+OFF_STACK = "pilot.json: base_url is not the stack's origin"
+BEYOND = "pilot.json: declares an origin beyond the stack's"
+FOREIGN = "http://127.0.0.1:4101"
 HELD = FailedAttempt("r9", PRIVATE, "operation_timeout", "incomplete", "unknown")
 REJECTED = FailedAttempt("r9", PRIVATE, "reset_rejected", "completed", "closed")
 ROW = {"spec": "pilot", "expect": 0, "region": "main", "part": "button"}
@@ -156,7 +160,9 @@ class PilotCommandTests(unittest.TestCase):
 
     def patch_to(self, label: str, path: str = "/targets/send/locators") -> None:
         self.save()
-        script = load_pilots(self.qa, self.compiled, ("pilot",))[0].script
+        origin = self.config["base_url"]
+        (admitted,) = load_pilots(self.qa, self.compiled, ("pilot",), origin=origin)
+        script = admitted.script
         value = [{"role": "button", "name": label}]
         operation = {"op": "replace", "path": path, "value": value}
         base = canonical_hash(script.model_dump(mode="json"))
@@ -273,7 +279,21 @@ class PilotCommandTests(unittest.TestCase):
         def unparsed() -> None:
             self.cases["conduit-bug-001"]["flag"] = "fake-sensitive"
 
+        def off_stack(base_url: str = FOREIGN) -> None:
+            self.config["base_url"] = base_url
+
+        def both() -> None:
+            secret()
+            off_stack()
+
+        allowed = {"allowed_origins": [FOREIGN]}
+        private = {"private_origins": [FOREIGN]}
         cases: list[tuple[str, Callable[[], object], int, str]] = [
+            ("foreign port", off_stack, 2, OFF_STACK),
+            ("foreign host", lambda: off_stack("http://localhost:4100"), 2, OFF_STACK),
+            ("origin before secret", both, 2, OFF_STACK),
+            ("allowed origin", lambda: self.spec.update(allowed), 2, BEYOND),
+            ("private origin", lambda: self.config.update(egress=private), 2, BEYOND),
             ("stale", lambda: None, 2, INPUT),
             ("press", lambda: self.steps.__setitem__(0, PRESS_AB), 2, INPUT),
             ("no reset", lambda: self.spec["preconditions"].pop("reset"), 2, INPUT),
@@ -380,15 +400,29 @@ class PilotCommandTests(unittest.TestCase):
                 ended = (doc["halt"], doc["switched_back_clean"], len(doc["pairs"]))
                 self.assertEqual(ended, ("switch_failed", False, judged))
 
-    def serve(self) -> FlagServer:
+    def serve(self, *, stack: bool = True) -> FlagServer:
+        """A loopback base_url, also Conduit's stack unless `stack` is false."""
         server = FlagServer()
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
-        self.config["base_url"] = f"http://127.0.0.1:{server.server_address[1]}"
+        origin = f"http://127.0.0.1:{server.server_address[1]}"
+        self.config["base_url"] = origin
         self.config["budgets"] = {"resolve_seconds": 1}
+        if stack:
+            moved = replace(flags.STACKS["conduit"], host_origin=origin)
+            self.enterContext(patch.dict(flags.STACKS, conduit=moved))
         self.docker = FlagDocker(server)
         return server
+
+    def test_a_base_url_off_the_stack_never_receives_the_reset(self) -> None:
+        """B3b's P1: no other instance gets the reset POST or the replay."""
+        server = self.serve(stack=False)
+        self.cases = {}
+        code, shown = self.command(replay_pilot)
+        self.assertEqual((code, self.docker.calls, server.log), (2, [], []))
+        self.assertEqual(shown, f"error: {self.compiled}/{OFF_STACK}\n")
+        self.assertFalse(self.out.exists())
 
     def test_benign_patch_replays_fresh_and_preserves_original(self) -> None:
         server = self.serve()
