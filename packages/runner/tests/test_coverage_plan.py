@@ -6,21 +6,30 @@ import asyncio
 import json
 from collections.abc import Callable
 from contextlib import AbstractContextManager
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, get_args
 
 import pytest
 from aqa_core.coverage_plan import CheckType, CoveragePlan, M2Check, PlannedCheck
-from aqa_core.model_costs import Usage
+from aqa_core.model_costs import CostRecord, Usage
 from aqa_core.project import load_project
 from aqa_core.spec import Spec
 from aqa_runner import text_search
 from aqa_runner.anthropic_client import AnthropicClient
 from aqa_runner.coverage_plan import INSTRUCTIONS, Planned, make_plan, plan_request
-from aqa_runner.model_router import ModelCallError, ModelRouter
+from aqa_runner.model_router import ModelCallError, ModelRouter, Spend
+from aqa_runner.run_record import UnrecordedCostError
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from packages.runner.tests.test_model_router import Factory, FakeClient, reply
+from packages.runner.tests.test_model_router_accounting import (
+    EXACT,
+    EXACT_CONFIG,
+    EXACT_COST,
+    priced,
+    tokens,
+)
 
 pytestmark = pytest.mark.usefixtures("reset_tracing")
 
@@ -409,6 +418,96 @@ def test_a_retry_that_fails_keeps_the_first_answers_cost(tmp_path: Path) -> None
 
     assert [record.status for record in raised.value.records] == ["ok"]
     assert raised.value.__cause__ is failure
+
+
+def scripted(
+    root: Path, config: str, **clients: FakeClient
+) -> tuple[ModelRouter, Spec]:
+    """`checkout`'s router, `config` added to its project's, and its spec."""
+    spec = checkout(root)
+    with (root / "config.yaml").open("a") as file:
+        file.write(config)
+    return ModelRouter.from_config(load_project(root).config, Factory(**clients)), spec
+
+
+NAVIGATOR_FALLBACK = "roles: { navigator: { fallback: claude-opus-5-5 } }\n"
+SONNET_REFUSAL = ("claude-sonnet-5-5", "refusal", Decimal("0.00328"))
+OPUS_ANSWER = ("claude-opus-5-5", "ok", Decimal("0.00648"))
+
+
+@pytest.mark.parametrize(
+    ("ceiling", "after_the_first", "plan"),
+    [
+        ("0.00976", [], SHORT),
+        ("0.01304", [SONNET_REFUSAL], None),
+        ("0.01305", [SONNET_REFUSAL, OPUS_ANSWER], PLAN),
+    ],
+)
+def test_make_plan_forwards_on_priced_and_the_ceiling(
+    tmp_path: Path,
+    ceiling: str,
+    after_the_first: list[tuple[str, str, Decimal]],
+    plan: CoveragePlan | None,
+) -> None:
+    # The first answer, a refusal and its fallback, costs $0.00976, so the
+    # retry may spend nothing, $0.00328 (its refusal's cost) or $0.00329.
+    sonnet = FakeClient(reply(refused=True), reply(refused=True))
+    opus = FakeClient(reply(parsed=SHORT), reply(parsed=PLAN))
+    clients = {"claude-sonnet-5-5": sonnet, "claude-opus-5-5": opus}
+    router, spec = scripted(tmp_path / "qa", NAVIGATOR_FALLBACK, **clients)
+    delivered: list[CostRecord] = []
+
+    planned = asyncio.run(
+        make_plan(router, spec, spend=Spend(delivered.append, Decimal(ceiling)))
+    )
+
+    assert priced(delivered) == [SONNET_REFUSAL, OPUS_ANSWER, *after_the_first]
+    # No request beyond those delivered.
+    assert len(sonnet.calls) + len(opus.calls) == len(delivered)
+    assert planned.plan == plan
+    assert planned.routed.calls == tuple(delivered)
+
+
+def test_no_retry_once_a_first_answer_past_28_digits_reached_the_ceiling(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient(reply(parsed=SHORT, usage=tokens(100)), reply(parsed=PLAN))
+    router, spec = scripted(tmp_path / "qa", EXACT_CONFIG, **{EXACT: client})
+    spend = Spend(lambda _record: None, EXACT_COST)
+
+    planned = asyncio.run(make_plan(router, spec, spend=spend))
+
+    assert planned.plan == SHORT
+    assert len(client.calls) == 1
+    assert spend.after(planned.routed.calls).ceiling_usd == Decimal(0)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [UnrecordedCostError, lambda record: ModelCallError((record,))],
+    ids=["cost_line_refused", "model_call_error"],
+)
+@pytest.mark.parametrize("answer", [0, 1])
+def test_an_on_priced_failure_leaves_make_plan_as_it_came(
+    tmp_path: Path, answer: int, failure: Callable[[CostRecord], Exception]
+) -> None:
+    # Even a ModelCallError from on_priced is the caller's own, not a failed
+    # call's, so the first answer's records aren't merged into it.
+    client = FakeClient(reply(parsed=SHORT), reply(parsed=PLAN))
+    router, spec = scripted(tmp_path / "qa", "", **{"claude-sonnet-5-5": client})
+    raised: list[Exception] = []
+
+    def on_priced(record: CostRecord) -> None:
+        if len(router.completed_calls) > answer:
+            raised.append(failure(record))
+            raise raised[-1]
+
+    with pytest.raises((UnrecordedCostError, ModelCallError)) as caught:
+        asyncio.run(make_plan(router, spec, spend=Spend(on_priced)))
+
+    assert caught.value is raised[0]
+    assert len(client.calls) == answer + 1
+    assert [c.status for c in router.completed_calls] == ["ok"] * (answer + 1)
 
 
 def with_first_check(check: dict[str, str]) -> CoveragePlan:
