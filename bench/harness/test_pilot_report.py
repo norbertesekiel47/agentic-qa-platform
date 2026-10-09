@@ -275,6 +275,8 @@ class PilotReportTests(unittest.TestCase):
         del values["omitted"]
         with self.assertRaisesRegex(TypeError, "omitted"):
             Report(**values)
+        bare = encoded(Report("conduit", "c" * 40, "t" * 40, 3, ("pilot",), (), {}))
+        self.assertEqual((bare["source_unchanged"], bare["exit"]), (False, 3))
 
     def test_an_observed_error_makes_a_pair_without_a_row_fatal(self) -> None:
         nav = StepResult(0, "completed", settled="idle")
