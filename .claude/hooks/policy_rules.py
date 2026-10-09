@@ -81,15 +81,60 @@ class NameShapes:
     under: str = ".+"
 
 
-def path_pattern(shapes: NameShapes) -> AnyCase:
+class PathCheck:
+    """Match each file shape only at its final segments; inspect each tail once."""
+
+    def __init__(self, shapes: NameShapes, *, folded: bool = True) -> None:
+        if shapes.dirs and shapes.under not in {
+            r".+",
+            r".*\.(?:py|[cm]?[jt]sx?)",
+            r"[^/]+\.ya?ml",
+        }:
+            raise ValueError("unsupported directory under grammar")
+        self.shapes, self.folded = shapes, folded
+        flags = re.IGNORECASE if folded else 0
+        self.files = []
+        for shape in shapes.files:
+            # Commit the first tsconfig: a later one cannot cross its .json suffix.
+            body = (
+                r"(?=([^/]*?tsconfig))\1[^/]*\.json"
+                if shape == r"{name}tsconfig{name}\.json"
+                else shape.replace("{name}", "[^/]*")
+            )
+            self.files.append(
+                (shape.count("/"), re.compile(rf"(?:{body})[^/]*$", flags))
+            )
+        self.dirs = (
+            re.compile(rf"(?=(?:^|/)((?:{'|'.join(shapes.dirs)})/))", flags)
+            if shapes.dirs
+            else None
+        )
+        self.tail = re.compile(rf"(?:{shapes.under})\Z", flags)
+
+    def search(self, raw: str) -> bool:
+        text = raw.casefold() if self.folded else raw
+        starts = [0] + [i + 1 for i, char in enumerate(text) if char == "/"]
+        if not text.endswith(".bak"):
+            for count, pattern in self.files:
+                if len(starts) > count and pattern.match(text, starts[-count - 1]):
+                    return True
+        if self.dirs is None:
+            return False
+        tails = [m.end(1) for m in self.dirs.finditer(text)]
+        # Python's $ also permits one terminal LF, without trimming CR or internal LF.
+        endpoints = [len(text)] + ([len(text) - 1] if text.endswith("\n") else [])
+        delimiter = "/" if self.shapes.under == r"[^/]+\.ya?ml" else "\n"
+        for end in endpoints:
+            begin = text.rfind(delimiter, 0, end) + 1
+            tail = next((p for p in tails if begin <= p <= end), None)
+            if tail is not None and self.tail.fullmatch(text[tail:end]):
+                return True
+        return False
+
+
+def path_pattern(shapes: NameShapes) -> PathCheck:
     """The check for a project-relative path."""
-    names = []
-    if shapes.files:
-        names.append(rf"(?:{'|'.join(shapes.files)})[^/]*(?<!\.bak)")
-    if shapes.dirs:
-        names.append(f"(?:{'|'.join(shapes.dirs)})/(?:{shapes.under})")
-    body = "|".join(names).replace("{name}", "[^/]*")
-    return AnyCase(f"(?:^|/)(?:{body})$")
+    return PathCheck(shapes)
 
 
 # In a shell command a name also ends at whitespace, a quote or a shell
@@ -113,26 +158,40 @@ def shell_pattern(*kinds: NameShapes) -> AnyCase:
     Search it in `command` and in resolved_paths(command)."""
 
     def shell(shape: str) -> str:
+        if shape == r"tsconfig{name}\.json":
+            return "tsconfig" + rf"(?:(?!tsconfig)[^/{_BREAK}]){{0,765}}" + r"\.json"
         return shape.replace("/", "/+").replace("{name}", _SHELL_NAME)
 
-    files = [
-        # Whatever comes before a shape's leading {name} belongs to the name,
-        # so its literal may match anywhere (LAB_NOTES, 2026-10-02).
-        (
-            shell(shape.removeprefix("{name}"))
-            if shape.startswith("{name}")
-            else _NAME_START + shell(shape)
-        )
-        + _NOT_A_BACKUP
-        for kind in kinds
-        for shape in kind.files
+    files = [shape for kind in kinds for shape in kind.files]
+    prefixed = [
+        shell(s) + _NOT_A_BACKUP
+        for s in files
+        if not s.startswith("{name}") and s != r"test_{name}\.py"
     ]
-    dirs = [
-        _NAME_START + _NOT_TEST_COMMAND + shell(d) + r"(?![\w.-])"
+    prefixed.extend(
+        _NOT_TEST_COMMAND + shell(d) + r"(?![\w.-])"
         for kind in kinds
         for d in kind.dirs
-    ]
-    return AnyCase("|".join(files + dirs))
+    )
+    branches = [_NAME_START + "(?:" + "|".join(prefixed) + ")"] if prefixed else []
+    branches.extend(
+        shell(s.removeprefix("{name}")) + _NOT_A_BACKUP
+        for s in files
+        if s.startswith("{name}")
+    )
+    if r"test_{name}\.py" in files:
+        # A dollar word commits its rightmost test_; the wildcard stops at a full restart.
+        start = (
+            r"(?:(?<![\w.-])(?:-[A-Za-z]+)?test_"
+            r"|\$(?=(?P<variable_test>\w+test_))(?P=variable_test))"
+        )
+        branches.append(
+            start
+            + rf"(?:(?!{_NAME_START}test_)[^/{_BREAK}]){{0,765}}"
+            + r"\.py"
+            + _NOT_A_BACKUP
+        )
+    return AnyCase("|".join(branches))
 
 
 # A shell word, quotes and substitutions included, and the quoting the shell
@@ -210,7 +269,7 @@ TEST_FILE = path_pattern(TEST_NAMES)
 # The same names as typed. pytest matches test names case-sensitively, so it
 # never collects `Test_a.py`: a test name only in another case keeps the
 # source rules too.
-TEST_FILE_AS_TYPED = re.compile(TEST_FILE.regex.pattern)
+TEST_FILE_AS_TYPED = PathCheck(TEST_NAMES, folded=False)
 TEST_PATH_IN_SHELL = shell_pattern(TEST_NAMES)
 GATE_WHOLE_FILE = path_pattern(GATE_WHOLE_NAMES)
 GATE_SECTION_FILE = path_pattern(GATE_SECTION_NAMES)
@@ -326,8 +385,8 @@ CONTENT_RULES = (
     _rule(
         "tautological assertion",
         WEAK_ASSERTION,
-        r"^\s*assert\s+(?:True|1|not\s+(?:False|None|0))\s*(?:[,#].*)?$"
-        r"|^\s*assert\s+(?P<lhs>[\w.]+)\s*==\s*(?P=lhs)\s*(?:[,#].*)?$"
+        r"^[^\S\n]*assert\s+(?:True|1|not\s+(?:False|None|0))\s*(?:[,#].*)?$"
+        r"|^[^\S\n]*assert\s+(?P<lhs>[\w.]+)\s*==\s*(?P=lhs)\s*(?:[,#].*)?$"
         r"|\bself\.assertTrue\(\s*True\s*\)"
         r"|\bexpect\(\s*(?:true|1)\s*\)\.(?:toBe|toEqual|toStrictEqual)\(\s*(?:true|1)\s*\)"
         r"|\bexpect\(\s*true\s*\)\.toBeTruthy\(\)"
@@ -346,7 +405,9 @@ CONTENT_RULES = (
         r"\bsuppress\(\s*(?:[\w.]+\s*,\s*)*(?:Base)?Exception\b",
     ),
     _rule("`--no-sandbox`", SANDBOX, r"--no-sandbox\b"),
-    _rule("`--disable-*sandbox`", SANDBOX, r"--disable-[\w-]*sandbox\b"),
+    _rule(
+        "`--disable-*sandbox`", SANDBOX, r"--disable-(?:(?!--disable-)[\w-])*?sandbox\b"
+    ),
     _rule(
         "`chromium_sandbox` disabled",
         SANDBOX,
@@ -387,9 +448,9 @@ SECRET_SLOTS = (
     (
         "secret-named variable",
         re.compile(
-            r"(?i)\b(?P<name>[A-Za-z0-9_]*"
-            r"(?:API_?KEY|SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE_KEY|ACCESS_KEY)"
-            r"[A-Za-z0-9_]*)=" + _VALUE
+            r"(?i)\b(?P<name>(?=[A-Za-z0-9_]*?"
+            r"(?:API_?KEY|SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE_KEY|ACCESS_KEY))"
+            r"[A-Za-z0-9_]+)=" + _VALUE
         ),
     ),
     (
@@ -415,7 +476,7 @@ NON_SECRET_SUFFIX = re.compile(
 )
 PLACEHOLDER = re.compile(
     r"(?i)dummy|fake|placeholder|example|changeme|redacted|not[-_]?real|test"
-    r"|x{4,}|\*{3,}|<[^>]*>|\.\.\."
+    r"|x{4,}|\*{3,}|<[^<>]*>|\.\.\."
 )
 ENV_REFERENCE = re.compile(r"\$[({A-Za-z_]")
 DSN = re.compile(
@@ -442,7 +503,9 @@ FILE_SECRET_GUIDANCE = (
 
 # --- rule 4: quality-gate configs -------------------------------------------------
 
-SECTION_HEADER = re.compile(r"^\[\[?\s*([A-Za-z_][\w.:\s\"-]*?)\s*\]\]?\s*(?:#.*)?$")
+SECTION_HEADER = re.compile(
+    r"^\[\[?\s*([A-Za-z_](?:\s*[\w.:\"-])*)\s*\]\]?\s*(?:#.*)?$"
+)
 # [tool.uv] holds the litellm ban, which a [tool.uv.sources] entry can override;
 # a workspace member's entry can't, so it doesn't gate.
 GATE_SECTION = re.compile(
@@ -462,11 +525,11 @@ WORKFLOW_FREE_LINE = re.compile(r"^\s*#|^name\s*:[^&*]*$")
 # --- rule 5: assertions ---------------------------------------------------------------
 
 ASSERTION = re.compile(
-    r"^\s*assert\b|\bself\.assert\w+\(|\bpytest\.raises\(|\bexpect\(|\bassert\.\w+\(",
+    r"^[^\S\n]*assert\b|\bself\.assert\w+\(|\bpytest\.raises\(|\bexpect\(|\bassert\.\w+\(",
     re.MULTILINE,
 )
 # Counted too: renaming a test away drops it without touching an assertion.
-TEST_DEF = re.compile(r"^\s*(?:async\s+)?def\s+test|\b(?:it|test)\(", re.MULTILINE)
+TEST_DEF = re.compile(r"^[^\S\n]*(?:async\s+)?def\s+test|\b(?:it|test)\(", re.MULTILINE)
 # The tests that prove the bar, under the root tests/ (CONSTRAINTS.md's threshold
 # checks, AGENTS.md §4's command checks). Flipping an expected outcome there
 # weakens the bar and keeps every assertion, so --diff asks about any change to
