@@ -10,6 +10,7 @@ import hashlib
 import subprocess
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import NamedTuple, cast
@@ -17,7 +18,7 @@ from typing import NamedTuple, cast
 import flags
 import manifest
 import pilot_report as report
-from aqa_core.project import SpecError
+from aqa_core.project import SpecError, load_project
 from aqa_core.spec import canonical_hash
 from manifest import DRIFT, Case
 from pilot_inputs import PilotInput, UnusableSecretError, load_pilots, validate_pilot
@@ -187,6 +188,7 @@ def _prepare(
     cases = tuple(c for _, c in loaded if c.app == app and c.split == "dev")
     qa = root / manifest.APPS / app / "qa"
     pilots = load_pilots(qa, args.compiled_dir or qa / ".compiled", args.spec)
+    every = _spec_ids(qa)
     patches = _patches(folder, cases, pilots)
     hashes = {"manifest": _sha256(root / manifest.MANIFEST)}
     for pilot in pilots:
@@ -195,9 +197,18 @@ def _prepare(
         hashes[f"script:{spec}"] = canonical_hash(pilot.script.model_dump(mode="json"))
     hashes |= {f"patch:{c}/{s}": _sha256(folder / f"{c}.{s}.json") for c, s in patches}
     selected = tuple(_id(p) for p in pilots)
-    base = Report(app, start.commit, start.tree, args.repeat, selected, (), hashes)
+    omitted = tuple(sorted(every.difference(selected)))
+    base = Report(app, start.commit, start.tree, args.repeat, selected, omitted, hashes)
     (out / "attempts").mkdir(parents=True)
     return Run(root, out, base, pilots, cases, patches, start, docker, replay, source)
+
+
+def _spec_ids(qa: Path) -> set[str]:
+    """Every spec ID in the QA project, for the report's `omitted`. A failed
+    read raises a fixed ValueError, without its own error, which can quote a spec."""
+    with suppress(OSError, SpecError):
+        return set(load_project(qa).specs)
+    raise ValueError(f"{qa}: invalid pilot input")
 
 
 def _patches(

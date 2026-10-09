@@ -14,7 +14,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pilot
-from aqa_core.project import load_project
+from aqa_core.project import SpecError, load_project
 from aqa_core.spec import canonical_hash
 from pilot_inputs import PilotInput, load_pilots
 from pilot_replay import FailedAttempt, ObservedAttempt, replay_pilot
@@ -161,10 +161,12 @@ class PilotCommandTests(unittest.TestCase):
         *extra: str,
         source: Callable[[Path, Path], Any] = lambda *_: SOURCE,
         stale: bool = False,
+        specs: tuple[str, ...] = ("pilot",),
     ) -> tuple[int, str]:
         self.save(stale=stale)
         argv = ["--root", str(self.root), "conduit", "--out", str(self.out)]
-        argv += ["--spec", "pilot", "--compiled-dir", str(self.compiled)]
+        argv += [arg for spec in specs for arg in ("--spec", spec)]
+        argv += ["--compiled-dir", str(self.compiled)]
         argv += ["--repeat", "1", "--patches", str(self.root / "patches"), *extra]
         shown = StringIO()
         with redirect_stdout(shown), redirect_stderr(shown):
@@ -197,6 +199,37 @@ class PilotCommandTests(unittest.TestCase):
         legs = ["clean", "clean", "diagnostic", "acceptance", "unscored"]
         self.assertEqual(roles, legs)
         self.assertEqual(self.report()["switched_back_clean"], True)
+
+    def test_reports_the_selection_and_every_omitted_spec(self) -> None:
+        self.cases, other = {}, self.compiled / "other.json"
+        self.save()
+        spec_hash = load_project(self.qa).specs["other"].spec_hash
+        script = json.loads((self.compiled / "pilot.json").read_text())
+        script |= {"spec_id": "other", "spec_hash": spec_hash}
+        other.write_text(json.dumps(script))
+        found: list[tuple[object, ...]] = []
+        for specs in ((), ("other", "pilot"), ("pilot", "other"), ("pilot",)):
+            if specs == ("pilot",):
+                other.unlink()
+            self.docker, self.out = FakeDocker(), self.root / f"out-{len(found)}"
+            replay = FakeReplay(self.docker, {"": [OK, OK]})
+            code, _ = self.command(replay, specs=specs)
+            doc, seen = self.report(), [p.spec.frontmatter.id for _, p in replay.seen]
+            found.append((code, doc["selected"], seen, doc["omitted"]))
+        both, back = ["other", "pilot"], ["pilot", "other"]
+        want: list[tuple[object, ...]] = [(0, both, both, []), (0, both, both, [])]
+        want += [(0, back, back, []), (0, ["pilot"], ["pilot"], ["other"])]
+        self.assertEqual(found, want)
+
+    def test_an_unreadable_project_stops_before_build(self) -> None:
+        for error in (SpecError(["fake-sensitive spec"]), OSError("fake-sensitive")):
+            with self.subTest(type(error).__name__):
+                replay = FakeReplay(self.docker, {})
+                with patch("pilot.load_project", side_effect=error):
+                    code, shown = self.command(replay)
+                self.assertEqual((code, self.docker.calls, replay.seen), (2, [], []))
+                self.assertEqual(shown, f"error: {self.qa}: invalid pilot input\n")
+                self.assertFalse(self.out.exists())
 
     def test_manifest_answers_never_cross_replay_boundary(self) -> None:
         found = []
