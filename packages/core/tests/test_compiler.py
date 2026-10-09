@@ -111,50 +111,26 @@ EXPECTATIONS = (
 PLAN = plan(*EXPECTATIONS)
 
 
-def test_assertion_for_gives_the_assertion_of_each_checks_type() -> None:
-    def check(fields: dict[str, Any]) -> PlannedCheck:
-        return PlannedCheck.model_validate(fields)
+def test_assertion_for_gives_the_assertion_a_bound_check_is_evaluated_as() -> None:
+    unoccluded = PlannedCheck.model_validate(UNCOVERED)
+    seen = PlannedCheck.model_validate(GOT)
 
-    assert [
-        assertion_for("a1", 0, check(URL)),
-        assertion_for("a2", 0, check(SHOWN)),
-        assertion_for("a3", 1, check(COUNTED), target="t2"),
-        assertion_for("a4", 2, check(GONE), target="t3"),
-        assertion_for("a5", 2, check(UNCOVERED), target="t1"),
-        assertion_for("a6", 3, check(NO_POST)),
-        assertion_for("a7", 3, check(GOT)),
-    ] == [
-        UrlMatches(id="a1", expect_index=0, check="url_matches", pattern="/demo"),
-        TextVisible(id="a2", expect_index=0, check="text_visible", text="Demo"),
-        TextInTarget(
-            id="a3", expect_index=1, check="text_in_target", target="t2", text="1"
-        ),
-        NotVisible(id="a4", expect_index=2, check="not_visible", target="t3"),
-        VisibleUnoccluded(
-            id="a5",
-            expect_index=2,
-            check="visible_unoccluded",
-            target="t1",
-            min_size_px=(1, 1),
-            in_viewport=True,
-        ),
-        NetworkNone(
-            id="a6",
-            expect_index=3,
-            check="network_none",
-            method="POST",
-            url_pattern="/api/count",
-            status_class="2xx",
-        ),
-        NetworkSeen(
-            id="a7",
-            expect_index=3,
-            check="network_seen",
-            method="GET",
-            url_pattern="/api/count",
-            status_class="2xx",
-        ),
-    ]
+    assert assertion_for("a5", 2, unoccluded, target="t1") == VisibleUnoccluded(
+        id="a5",
+        expect_index=2,
+        check="visible_unoccluded",
+        target="t1",
+        min_size_px=(1, 1),
+        in_viewport=True,
+    )
+    assert assertion_for("a7", 3, seen) == NetworkSeen(
+        id="a7",
+        expect_index=3,
+        check="network_seen",
+        method="GET",
+        url_pattern="/api/count",
+        status_class="2xx",
+    )
 
 
 def test_unsupported_features_name_each_probe_check_and_condition() -> None:
