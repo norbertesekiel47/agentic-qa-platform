@@ -194,6 +194,7 @@ class PilotCommandTests(unittest.TestCase):
         return [e["BENCH_FLAGS"] for _, a, e in self.docker.calls if a[0] == "up"]
 
     def test_runs_clean_repeats_then_each_dev_flag_serially(self) -> None:
+        self.config["egress"] = {"subresource_hosts": []}
         self.patch_to("Post")
         answers = {"": [OK, OK], "bug1": [LOST], "ben1": [LOST, OK]}
         replay = FakeReplay(self.docker, answers)
@@ -286,14 +287,33 @@ class PilotCommandTests(unittest.TestCase):
             secret()
             off_stack()
 
+        def hosts_and_secret() -> None:
+            secret()
+            self.config.update(egress=subresources)
+
         allowed = {"allowed_origins": [FOREIGN]}
         private = {"private_origins": [FOREIGN]}
+        subresources = {"subresource_hosts": ["fake-cdn.test"]}
+        stack_host = {"subresource_hosts": ["127.0.0.1"]}
         cases: list[tuple[str, Callable[[], object], int, str]] = [
             ("foreign port", off_stack, 2, OFF_STACK),
             ("foreign host", lambda: off_stack("http://localhost:4100"), 2, OFF_STACK),
             ("origin before secret", both, 2, OFF_STACK),
             ("allowed origin", lambda: self.spec.update(allowed), 2, BEYOND),
             ("private origin", lambda: self.config.update(egress=private), 2, BEYOND),
+            (
+                "subresource host",
+                lambda: self.config.update(egress=subresources),
+                2,
+                BEYOND,
+            ),
+            (
+                "stack subresource",
+                lambda: self.config.update(egress=stack_host),
+                2,
+                BEYOND,
+            ),
+            ("subresource before secret", hosts_and_secret, 2, BEYOND),
             ("stale", lambda: None, 2, INPUT),
             ("press", lambda: self.steps.__setitem__(0, PRESS_AB), 2, INPUT),
             ("no reset", lambda: self.spec["preconditions"].pop("reset"), 2, INPUT),
