@@ -413,13 +413,39 @@ class PilotCommandTests(unittest.TestCase):
         want = {"commit": SOURCE.commit, "tree": SOURCE.tree}
         self.assertEqual(self.report()["source"], want)
 
-    def test_git_source_reads_head_and_skips_the_output(self) -> None:
+    def git(self, *args: str) -> str:
+        """Git, after dropping every inherited GIT_* variable (setUp restores
+        them) for this and git_source's calls: under `git rebase --exec` one
+        aimed `git init` at the real repository (LAB_NOTES, 2026-10-09)."""
+        for name in [name for name in os.environ if name.startswith("GIT_")]:
+            del os.environ[name]
+        git = ["git", "-c", "user.name=fake", "-c", "user.email=fake@example.invalid"]
+        return subprocess.check_output([*git, *args], text=True)
+
+    def git_repo(self) -> tuple[Path, Path]:
+        """A disposable repo with one commit, and its `out` directory."""
         repo, out = self.root / "repo", self.root / "repo" / "out"
         out.mkdir(parents=True)
-        git = ["git", "-c", "user.name=fake", "-c", "user.email=fake@example.invalid"]
-        subprocess.run([*git, "init", "-q", str(repo)], check=True)
+        self.git("init", "-q", str(repo))
         commit = ["commit", "-q", "--allow-empty", "--no-verify", "--no-gpg-sign"]
-        subprocess.run([*git, "-C", str(repo), *commit, "-m", "x"], check=True)
+        self.git("-C", str(repo), *commit, "-m", "x")
+        return repo, out
+
+    def test_git_runs_in_the_temp_repo_despite_an_inherited_git_dir(self) -> None:
+        decoy = self.root / "decoy"
+        self.git("init", "-q", str(decoy))
+        os.environ["GIT_DIR"] = str(decoy / ".git")
+        repo, out = self.git_repo()
+        commit_id = pilot.git_source(repo, out).commit
+        found = (
+            self.git("-C", str(decoy), "config", "core.bare"),
+            self.git("-C", str(decoy), "rev-list", "--all"),
+            self.git("-C", str(repo), "rev-parse", "HEAD"),
+        )
+        self.assertEqual(found, ("false\n", "", f"{commit_id}\n"))
+
+    def test_git_source_reads_head_and_skips_the_output(self) -> None:
+        repo, out = self.git_repo()
         (out / "report.json").write_text("{}")
         commit_id, tree, dirty = pilot.git_source(repo, out)
         self.assertEqual((len(commit_id), len(tree), dirty), (40, 40, False))
