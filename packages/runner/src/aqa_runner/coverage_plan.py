@@ -253,7 +253,7 @@ async def make_plan(
     if first.plan is None or not first.problems:
         return first
     if spend is not None and spend.reached(first.routed.calls):
-        return first  # no retry once the first answer spent the ceiling
+        return first
     retry = [
         *request,
         AIMessage(content=first.plan.model_dump_json(exclude_none=True)),
@@ -265,9 +265,9 @@ async def make_plan(
     ]
     billed = first.routed.calls
     raised: list[Exception] = []
-    left = None if spend is None else _keeping(spend.after(billed), raised)
+    retry_spend = None if spend is None else _keeping(spend.after(billed), raised)
     try:
-        routed = await ask(retry, spend=left)
+        routed = await ask(retry, spend=retry_spend)
     except Exception as error:
         if raised and error is raised[0]:
             raise  # the caller's own on_priced failed: it leaves as it came
