@@ -78,7 +78,7 @@ def git_source(root: Path, out: Path) -> Source:
 
 @dataclass
 class Run:
-    """One command's run: `all` changes the app, `finish` writes the report."""
+    """One command's run: `execute` changes the app, `finish` writes the report."""
 
     root: Path
     out: Path
@@ -160,14 +160,15 @@ class Run:
         return pair.status == "fatal"
 
     def finish(self) -> int:
-        """Read the source, switch back if every resource closed, then write
-        and print the report. An unreadable source or a failed report halts
-        the run as `unexpected`; a report failing twice is main's exit 3."""
+        """Read the source before and after any switch back, then write and print
+        the report; an error halts it (`unexpected`), twice is main's exit 3."""
         if self.code is not None:
             return self.code
-        unchanged = self._held(partial(self.source, self.root, self.out)) == self.start
+        read = partial(self.source, self.root, self.out)
+        unchanged = self._held(read) == self.start
         released = report.releasable(self.pairs, self.halt)
         switched = released and self._held(self._switch) is not None
+        unchanged = unchanged and self._held(read) == self.start
         write = partial(self._write, unchanged, switched)
         doc = self._held(write) or write()
         for pair in self.pairs:
@@ -212,7 +213,6 @@ def _prepare(
     cases = tuple(c for _, c in loaded if c.app == app and c.split == "dev")
     qa = root / manifest.APPS / app / "qa"
     pilots = load_pilots(qa, args.compiled_dir or qa / ".compiled", args.spec)
-    every = _spec_ids(qa)
     patches = _patches(folder, cases, pilots)
     hashes = {"manifest": _sha256(root / manifest.MANIFEST)}
     for pilot in pilots:
@@ -221,7 +221,7 @@ def _prepare(
         hashes[f"script:{spec}"] = canonical_hash(pilot.script.model_dump(mode="json"))
     hashes |= {f"patch:{c}/{s}": _sha256(folder / f"{c}.{s}.json") for c, s in patches}
     selected = tuple(_id(p) for p in pilots)
-    omitted = tuple(sorted(every.difference(selected)))
+    omitted = tuple(sorted(_spec_ids(qa).difference(selected)))
     base = Report(app, start.commit, start.tree, args.repeat, selected, omitted, hashes)
     (out / "attempts").mkdir(parents=True)
     return Run(root, out, base, pilots, cases, patches, start, docker, replay, source)
@@ -257,7 +257,7 @@ def _patches(
         try:
             text = path.read_text()
             candidate = apply_rebinding(pilot.script, text, pilot.config, source=path)
-        except (OSError, ValueError, SpecError):
+        except (OSError, ValueError, SpecError, RecursionError):
             candidate = None
         # Raised outside the handler, so the patch's own error isn't kept.
         if candidate is None:

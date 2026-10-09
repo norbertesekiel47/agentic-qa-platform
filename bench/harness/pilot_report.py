@@ -60,7 +60,7 @@ class Report:
     hashes: Mapping[str, str]
     pairs: tuple[Pair, ...] = ()
     halt: Halt | None = None
-    unchanged: bool = True
+    unchanged: bool = False
     switched_back: bool = False
 
 
