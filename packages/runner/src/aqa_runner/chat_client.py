@@ -27,6 +27,12 @@ class Reply:
     complete: bool
     parsed: BaseModel | None
 
+    def __post_init__(self) -> None:
+        # The router passes `parsed` on whatever the outcome, so a parse of half
+        # an answer (LangChain repairs cut-off JSON) must never get this far.
+        if self.parsed is not None and not self.complete:
+            raise ValueError("a reply the model didn't finish carries no parse")
+
 
 class ChatClient(Protocol):
     """One provider's way of calling one model. A call has tools or a schema,
