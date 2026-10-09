@@ -26,10 +26,13 @@ KEY_VARIABLE = "ANTHROPIC_API_KEY"
 # error, a timeout, an HTTP error. langchain-anthropic raises the SDK's own
 # errors, subclassed (AnthropicConnectionError and the like).
 ProviderError = anthropic.APIError
-# The one stop reason that ends a complete answer. Anything else (`max_tokens`,
-# `pause_turn`, a stop sequence, ...) can leave a half-written one, which
-# LangChain would repair into something that parses.
+# The stop reasons of a finished answer: `end_turn`, or `tool_use` on a call
+# that offered tools. Anything else (`max_tokens`, `pause_turn`, a stop
+# sequence, a reason the SDK adds later, none) can leave a half-written answer,
+# which LangChain would repair into something that parses, or a half-written
+# tool call whose arguments still validate.
 _COMPLETE = "end_turn"
+_CALLED = "tool_use"
 _COUNTS = ("input_tokens", "output_tokens")
 # Bounds on every request, stated here rather than left to langchain-anthropic
 # 1.7.4: it takes max_tokens from its model profiles, 128,000 for
@@ -113,11 +116,11 @@ class AnthropicClient:
         else:
             raw = await self.chat.ainvoke(list(messages))
         stop_reason = raw.response_metadata.get("stop_reason")
-        if stop_reason != _COMPLETE:
-            parsed = None
+        complete = stop_reason == _COMPLETE or (bool(tools) and stop_reason == _CALLED)
         return Reply(
             message=raw,
             usage=_usage(raw),
             refused=stop_reason == "refusal",
-            parsed=parsed,
+            complete=complete,
+            parsed=parsed if complete else None,
         )

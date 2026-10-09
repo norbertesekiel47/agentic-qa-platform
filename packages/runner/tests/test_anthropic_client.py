@@ -8,10 +8,10 @@ import json
 import re
 import socket
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast, override
 
 import anthropic
 import pytest
@@ -23,9 +23,11 @@ from aqa_runner import anthropic_client
 from aqa_runner.anthropic_client import MAX_OUTPUT_TOKENS, AnthropicClient
 from aqa_runner.chat_client import Reply
 from langchain_anthropic import ChatAnthropic
+from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.tools import tool
+from langchain_core.runnables import Runnable, RunnableLambda
+from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel
 
 CASSETTES = Path(__file__).parent / "cassettes"
@@ -522,4 +524,138 @@ def test_an_answer_cut_off_at_max_tokens_is_not_trusted_as_parsed(
     assert not reply.refused
     assert reply.usage == Usage(
         input_tokens=205, cached_input_tokens=0, output_tokens=4096
+    )
+
+
+def test_a_tool_call_cut_off_at_max_tokens_comes_back_incomplete(
+    sonnet: RoutedModel, cassette: Cassette
+) -> None:
+    # The control: LangChain hands back a cut-off call whose input validates
+    # (e1, where the prompt said e12), as it does any tool_use block.
+    with cassette("tools_truncated"):
+        reply = ask_with_tools(sonnet)
+
+    assert [(call["name"], call["args"]) for call in reply.message.tool_calls] == [
+        ("click", {"ref": "e1"})
+    ]
+    assert (reply.complete, reply.refused, reply.parsed) == (False, False, None)
+    assert reply.usage == Usage(
+        input_tokens=388, cached_input_tokens=0, output_tokens=4096
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "complete"),
+    [
+        ("structured_output", True),
+        # Finished, so complete, though it doesn't validate: the router records
+        # it `invalid` for the schema.
+        ("structured_invalid", True),
+        ("structured_truncated", False),
+        ("refusal", False),
+    ],
+)
+def test_a_schema_answer_is_complete_only_when_it_ended_its_turn(
+    sonnet: RoutedModel, cassette: Cassette, name: str, complete: bool
+) -> None:
+    with cassette(name):
+        reply = ask_for_a_verdict(sonnet)
+
+    assert reply.complete is complete
+
+
+class Answers(GenericFakeChatModel):
+    """A stand-in for the one Anthropic call, offered tools or a schema: it
+    answers with the next message, and a schema's answer is its text, parsed."""
+
+    @override
+    def bind_tools(
+        self,
+        tools: Sequence[dict[str, Any] | type | Callable[..., Any] | BaseTool],
+        *,
+        tool_choice: str | None = None,
+        **kwargs: Any,
+    ) -> Runnable[LanguageModelInput, AIMessage]:
+        return self
+
+    @override
+    def with_structured_output(
+        self,
+        schema: dict[str, Any] | type,
+        *,
+        include_raw: bool = False,
+        **kwargs: Any,
+    ) -> Runnable[LanguageModelInput, dict[str, Any] | BaseModel]:
+        def parse(raw: AIMessage) -> dict[str, Any]:
+            return {"raw": raw, "parsed": Verdict.model_validate_json(raw.text)}
+
+        return self | RunnableLambda(parse)
+
+
+Kind = Literal["tools", "plain", "schema"]
+VERDICT_TEXT = '{"ok": true, "reason": "The cart shows no items."}'
+
+
+def answered(sonnet: RoutedModel, kind: Kind, stop_reason: str | None) -> Reply:
+    """A `kind` of call answered with `stop_reason`, or with none."""
+    metadata: dict[str, Any] = {"usage": {"input_tokens": 388, "output_tokens": 47}}
+    if stop_reason is not None:
+        metadata["stop_reason"] = stop_reason
+    if kind == "tools":
+        block = {"type": "tool_use", "id": "toolu_1", "name": "click"}
+        answer = AIMessage(
+            content=[block | {"input": {"ref": "e12"}}],
+            tool_calls=[{"name": "click", "args": {"ref": "e12"}, "id": "toolu_1"}],
+        )
+    else:
+        answer = AIMessage(content=VERDICT_TEXT)
+    answer.usage_metadata = {
+        "input_tokens": 388,
+        "output_tokens": 47,
+        "total_tokens": 435,
+    }
+    answer.response_metadata = metadata
+    client = AnthropicClient(sonnet, None)
+    client.chat = cast(ChatAnthropic, Answers(messages=iter([answer])))
+    tools = [click] if kind == "tools" else []
+    schema = Verdict if kind == "schema" else None
+    return asyncio.run(client.call([HumanMessage(content="go")], tools, schema))
+
+
+VERDICT = Verdict(ok=True, reason="The cart shows no items.")
+
+
+@pytest.mark.parametrize(
+    ("kind", "stop_reason", "expected"),
+    [
+        ("tools", "end_turn", (True, False, None)),
+        ("tools", "tool_use", (True, False, None)),
+        ("tools", "max_tokens", (False, False, None)),
+        ("tools", "pause_turn", (False, False, None)),
+        ("tools", "stop_sequence", (False, False, None)),
+        ("tools", "model_context_window_exceeded", (False, False, None)),
+        ("tools", "refusal", (False, True, None)),
+        ("tools", None, (False, False, None)),
+        # A stop reason the SDK doesn't name yet is not a finished answer.
+        ("tools", "future_stop", (False, False, None)),
+        ("plain", "end_turn", (True, False, None)),
+        # Only a call that offered tools can finish by calling one.
+        ("plain", "tool_use", (False, False, None)),
+        ("plain", "future_stop", (False, False, None)),
+        ("schema", "end_turn", (True, False, VERDICT)),
+        ("schema", "tool_use", (False, False, None)),
+        ("schema", "future_stop", (False, False, None)),
+    ],
+)
+def test_a_reply_is_complete_only_when_the_model_finished(
+    sonnet: RoutedModel,
+    kind: Kind,
+    stop_reason: str | None,
+    expected: tuple[bool, bool, Verdict | None],
+) -> None:
+    reply = answered(sonnet, kind, stop_reason)
+
+    assert (reply.complete, reply.refused, reply.parsed) == expected
+    assert reply.usage == Usage(
+        input_tokens=388, cached_input_tokens=0, output_tokens=47
     )

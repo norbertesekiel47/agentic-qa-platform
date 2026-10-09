@@ -37,11 +37,16 @@ def reply(
     text: str = "done",
     *,
     refused: bool = False,
+    complete: bool = True,
     parsed: BaseModel | None = None,
     usage: Usage = USAGE,
 ) -> Reply:
     return Reply(
-        message=AIMessage(content=text), usage=usage, refused=refused, parsed=parsed
+        message=AIMessage(content=text),
+        usage=usage,
+        refused=refused,
+        complete=complete,
+        parsed=parsed,
     )
 
 
@@ -365,6 +370,156 @@ def test_a_refusal_through_the_real_adapter_is_recorded_and_the_fallback_answers
     # 33 out at Opus 5.5's $4 and $20, per million tokens.
     assert refused.cost_usd == Decimal("0.00041")
     assert answered.cost_usd == Decimal("0.00148")
+
+
+# Keyed like VERDICT_PROMPT: test_anthropic_client.py builds the same request.
+CLICK_PROMPT = "Click the Sign in button (ref e12)."
+
+
+@tool
+def click(ref: str) -> str:
+    """Click the element with this ref."""
+    return ref
+
+
+def healer_through_the_adapter(
+    tmp_path: Path,
+    prompt: str,
+    *,
+    tools: Sequence[BaseTool] = (),
+    schema: type[BaseModel] | None = None,
+) -> tuple[ModelRouter, Routed]:
+    """A healer call through the real Anthropic adapter, whose fallback model
+    is called only if the first refuses."""
+    path = tmp_path / "config.yaml"
+    path.write_text(FALLBACK)
+    model_router = ModelRouter.from_config(load_config(path), AnthropicClient)
+    routed = asyncio.run(
+        model_router.call(
+            "healer",
+            "heal",
+            [HumanMessage(content=prompt)],
+            tools=tools,
+            schema=schema,
+        )
+    )
+    return model_router, routed
+
+
+def test_a_tool_reply_cut_off_at_the_output_bound_is_invalid_and_billed(
+    tmp_path: Path, cassette: Callable[..., AbstractContextManager[Any]]
+) -> None:
+    # Half a call that still validates: e1, where the page's ref is e12.
+    with cassette("tools_truncated") as recording:
+        model_router, result = healer_through_the_adapter(
+            tmp_path, CLICK_PROMPT, tools=[click]
+        )
+
+    # One request: an invalid reply is neither retried nor sent to the fallback.
+    assert [body["model"] for body in recording.sent] == ["claude-sonnet-5-5"]
+    assert result.outcome == "invalid"
+    assert [(call["name"], call["args"]) for call in result.message.tool_calls] == [
+        ("click", {"ref": "e1"})
+    ]
+    assert [
+        (r.model, r.status, r.input_tokens, r.cached_input_tokens, r.output_tokens)
+        for r in result.calls
+    ] == [("claude-sonnet-5-5", "invalid", 388, 0, 4096)]
+    # 388 in at $2 and 4096 out at $10, per million tokens.
+    assert result.calls[0].cost_usd == Decimal("0.041736")
+    assert model_router.completed_calls == result.calls
+
+
+def test_a_tool_reply_that_finished_is_ok(
+    tmp_path: Path, cassette: Callable[..., AbstractContextManager[Any]]
+) -> None:
+    # A recorded answer: its stop reason is `tool_use`, and a re-recording
+    # passes too, since the usage is read from the response played.
+    with cassette("tools") as recording:
+        model_router, result = healer_through_the_adapter(
+            tmp_path, CLICK_PROMPT, tools=[click]
+        )
+
+    (response,) = recording.responses
+    assert response["stop_reason"] == "tool_use"
+    assert result.outcome == "ok"
+    (record,) = result.calls
+    assert (record.status, record.output_tokens) == (
+        "ok",
+        response["usage"]["output_tokens"],
+    )
+    assert model_router.completed_calls == result.calls
+
+
+def test_a_schema_answer_cut_off_stays_invalid_and_unparsed(
+    tmp_path: Path, cassette: Callable[..., AbstractContextManager[Any]]
+) -> None:
+    # LangChain repairs this answer into a Verdict that validates; the router
+    # hands back none.
+    with cassette("structured_truncated") as recording:
+        model_router, result = healer_through_the_adapter(
+            tmp_path, VERDICT_PROMPT, schema=Verdict
+        )
+
+    assert [body["model"] for body in recording.sent] == ["claude-sonnet-5-5"]
+    assert (result.outcome, result.parsed) == ("invalid", None)
+    assert [
+        (r.status, r.input_tokens, r.cached_input_tokens, r.output_tokens)
+        for r in result.calls
+    ] == [("invalid", 205, 0, 4096)]
+    # 205 in at $2 and 4096 out at $10, per million tokens.
+    assert result.calls[0].cost_usd == Decimal("0.04137")
+    assert model_router.completed_calls == result.calls
+
+
+def test_a_refusal_stays_a_refusal_though_it_is_not_complete(tmp_path: Path) -> None:
+    opus = FakeClient(reply("here you go"))
+    factory = Factory(
+        **{
+            "claude-sonnet-5-5": FakeClient(
+                reply("I can't help", refused=True, complete=False)
+            ),
+            "claude-opus-5-5": opus,
+        }
+    )
+
+    result = call(router(tmp_path, FALLBACK, factory), role="healer")
+
+    assert [record.status for record in result.calls] == ["refusal", "ok"]
+    assert result.outcome == "ok"
+    assert len(opus.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("tools", "schema", "parsed"),
+    [
+        ([click], None, None),
+        # A parse the router must not trust once the answer wasn't finished.
+        ((), Verdict, Verdict(ok=True, reason="cart empty")),
+    ],
+    ids=["tools", "schema"],
+)
+def test_an_answer_the_model_did_not_finish_is_invalid_and_not_retried(
+    tmp_path: Path,
+    tools: Sequence[BaseTool],
+    schema: type[BaseModel] | None,
+    parsed: BaseModel | None,
+) -> None:
+    opus = FakeClient()
+    cut_off = reply("half an answer", complete=False, parsed=parsed)
+    factory = Factory(
+        **{"claude-sonnet-5-5": FakeClient(cut_off), "claude-opus-5-5": opus}
+    )
+    model_router = router(tmp_path, FALLBACK, factory)
+
+    result = call(model_router, role="healer", tools=tools, schema=schema)
+
+    assert (result.outcome, [record.status for record in result.calls]) == (
+        "invalid",
+        ["invalid"],
+    )
+    assert opus.calls == []
+    assert model_router.completed_calls == result.calls
 
 
 def ask_a_verdict_through(client: ChatClient) -> Reply:

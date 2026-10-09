@@ -14,13 +14,17 @@ from pydantic import BaseModel
 
 @dataclass(frozen=True)
 class Reply:
-    """What a provider's client brings back from one call. `parsed` is the
-    answer to a schema, or None when the call gave no schema or the output did
-    not parse and validate."""
+    """What a provider's client brings back from one call. `complete` says
+    the model finished: it ended its answer, or stopped to call a tool the
+    call offered. A refusal or an answer cut off before its end (at the output
+    bound, say) is not complete. `parsed` is the answer to a schema, or None
+    when the call gave no schema, the answer wasn't complete, or the output
+    did not parse and validate."""
 
     message: AIMessage
     usage: Usage
     refused: bool
+    complete: bool
     parsed: BaseModel | None
 
 

@@ -1,0 +1,31 @@
+# HAND-WRITTEN RESPONSES, BY DESIGN. Nothing in this file was recorded from
+# api.anthropic.com: a live API won't produce this scenario on demand, so it is not
+# re-recorded (the cassette fixture never records it). The request body is the one
+# aqa_runner.anthropic_client sent for tools.yaml's recording; the response was
+# written by hand in the Messages API's shape (TESTING.md section 4): a tool call
+# cut off at max_tokens whose input still validates (ref e1 of e12).
+interactions:
+- request:
+    body: '{"max_tokens":4096,"messages":[{"role":"user","content":"Click the Sign
+      in button (ref e12)."}],"model":"claude-sonnet-5-5","tool_choice":{"type":"auto"},"tools":[{"name":"click","input_schema":{"properties":{"ref":{"type":"string"}},"required":["ref"],"type":"object","additionalProperties":false},"description":"Click
+      the element with this ref.","strict":true}]}'
+    headers:
+      anthropic-version:
+      - '2023-06-01'
+      content-type:
+      - application/json
+    method: POST
+    uri: https://api.anthropic.com/v1/messages
+  response:
+    body:
+      string: '{"id": "msg_handwritten_09", "type": "message", "role": "assistant",
+        "model": "claude-sonnet-5-5", "content": [{"type": "tool_use", "id": "toolu_handwritten_09",
+        "name": "click", "input": {"ref": "e1"}}], "stop_reason": "max_tokens",
+        "stop_sequence": null, "usage": {"input_tokens": 388, "output_tokens": 4096}}'
+    headers:
+      content-type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+version: 1

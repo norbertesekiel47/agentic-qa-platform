@@ -304,7 +304,9 @@ class Model:
         if Model.calls == 1:
             usage = Usage(input_tokens=100, cached_input_tokens=0, output_tokens=7)
             plan = CoveragePlan.model_validate_json(sys.argv[2])
-            return Reply(AIMessage(content=""), usage, False, plan)
+            return Reply(
+                AIMessage(content=""), usage, refused=False, complete=True, parsed=plan
+            )
         print("SECOND_REQUEST_READY", flush=True)
         await asyncio.Event().wait()
 
