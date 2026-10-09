@@ -14,9 +14,13 @@ import unittest
 from collections.abc import Mapping, Sequence
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from typing import Any
 
 import flags
 import manifest
+from aqa_core import strict_yaml
+from aqa_core.project import load_config
+from aqa_core.schema import authority
 from test_manifest import Workspace, valid_data
 
 
@@ -142,6 +146,20 @@ class SwitchTest(unittest.TestCase):
         with self.assertRaisesRegex(flags.FlagError, "no stack for app 'shop'"):
             flags.build(self.root, "shop", self.docker)
         self.assertEqual(self.docker.calls, [])
+
+
+class StackTest(unittest.TestCase):
+    def test_the_conduit_stack_is_where_compose_publishes_it(self) -> None:
+        """The committed files agree; a Compose override from the environment at
+        run time is outside what this can see (ADR-0023)."""
+        stack = flags.stack_for("conduit")
+        app = manifest.REPO_ROOT / manifest.APPS / "conduit"
+        compose: Any = strict_yaml.parse((app / "compose.yaml").read_text())
+        host, port = authority(stack.host_origin)
+        published = compose["services"][stack.frontend]["ports"]
+        self.assertEqual(published, [f"{host}:{port}:{stack.frontend_port}"])
+        base_url = load_config(app / "qa" / "config.yaml").base_url
+        self.assertEqual((stack.host_origin, base_url), ("http://127.0.0.1:4100",) * 2)
 
 
 class ManifestBackedTest(unittest.TestCase):

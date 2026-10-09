@@ -45,6 +45,8 @@ class Stack:
     ``network`` and ``internal_url`` are where the toggle checks reach the app
     from a container, and ``password_arg`` names the build argument in
     compose.yaml that holds the seeded accounts' public fixture password.
+    ``host_origin`` is where compose.yaml publishes the frontend on the host,
+    the only origin a pilot may start at or reach (ADR-0023).
     """
 
     backend: str
@@ -53,6 +55,7 @@ class Stack:
     network: str
     internal_url: str
     password_arg: str
+    host_origin: str
 
 
 STACKS = {
@@ -63,6 +66,7 @@ STACKS = {
         network="conduit-bench_default",
         internal_url="http://frontend",
         password_arg="CONDUIT_SEED_PASSWORD",
+        host_origin="http://127.0.0.1:4100",
     )
 }
 
