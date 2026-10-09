@@ -29,9 +29,10 @@ class Reply:
 
     def __post_init__(self) -> None:
         # The router passes `parsed` on whatever the outcome, so a parse of half
-        # an answer (LangChain repairs cut-off JSON) must never get this far.
-        if self.parsed is not None and not self.complete:
-            raise ValueError("a reply the model didn't finish carries no parse")
+        # an answer (LangChain repairs cut-off JSON), or of a refused one, must
+        # never get this far.
+        if self.parsed is not None and (self.refused or not self.complete):
+            raise ValueError("a refused or unfinished reply carries no parse")
 
 
 class ChatClient(Protocol):

@@ -511,13 +511,20 @@ def test_an_answer_the_model_did_not_finish_is_invalid_and_not_retried(
     assert model_router.completed_calls == result.calls
 
 
-def test_a_reply_the_model_did_not_finish_carries_no_parse() -> None:
-    # A client can't hand the router a repaired parse of half an answer:
-    # `Routed.parsed` is what a caller such as the coverage plan reads.
-    with pytest.raises(ValueError, match="didn't finish carries no parse"):
+@pytest.mark.parametrize(
+    ("refused", "complete"), [(False, False), (True, True)], ids=["cut_off", "refused"]
+)
+def test_a_reply_refused_or_not_finished_carries_no_parse(
+    refused: bool, complete: bool
+) -> None:
+    # A client can't hand the router a parse of half an answer, or of one the
+    # model refused: `Routed.parsed` is what a caller such as the coverage plan
+    # reads, whatever the outcome.
+    with pytest.raises(ValueError, match="carries no parse"):
         reply(
-            "half an answer",
-            complete=False,
+            "an answer",
+            refused=refused,
+            complete=complete,
             parsed=Verdict(ok=True, reason="cart empty"),
         )
 
