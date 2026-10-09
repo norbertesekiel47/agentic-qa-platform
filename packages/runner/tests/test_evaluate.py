@@ -17,12 +17,13 @@ from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.document_origins import PolicyEvent
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.executor import AssertionResult, Evaluation, evaluate
-from aqa_runner.redaction import NO_SECRETS
+from aqa_runner.redaction import NO_SECRETS, Redactor
 from playwright.async_api import async_playwright
 
 from packages.runner.tests.document_fixtures import until
 from packages.runner.tests.egress_fixtures import gate
 from packages.runner.tests.executor_fixtures import App, a_spec, compiled, serving_app
+from packages.runner.tests.result_redaction_fixtures import fake_secret
 
 TARGETS = {
     "never": {"semantic": "text that never comes", "locators": [{"css": "#never"}]},
@@ -196,3 +197,37 @@ def test_each_check_kind_is_not_evaluated_on_a_page_that_stopped_answering(
     assert events == ()
     assert app.probe_reads == {}
     assert time.monotonic() - started < 20
+
+
+def test_an_evaluation_scanning_with_another_redactor_than_its_sessions_is_refused(
+    app: App, tmp_path: Path
+) -> None:
+    # The run binds a secret, so its session scans for it; an evaluation
+    # built without that scan would neither withhold nor scan its reasons.
+    bound = Redactor([fake_secret("TEST_PASSWORD", "fake-bound-value", app.origin)])
+    spec = a_spec(tmp_path, ProjectConfig(), start_url="/page/form")
+    script = compiled([], assertions=[{"id": "a1", "expect_index": 0, **KINDS["url"]}])
+    run_gate = gate(allowed=(app.origin,))
+
+    async def scenario() -> None:
+        async with (
+            async_playwright() as playwright,
+            EgressProxy(run_gate) as proxy,
+            open_browser_session(
+                playwright.chromium, egress=proxy, redactor=bound
+            ) as session,
+        ):
+            evaluation = Evaluation(
+                targets=script.targets,
+                spec=spec,
+                start=app.origin,
+                gate=run_gate,
+                budget=1,
+                redactor=NO_SECRETS,
+            )
+            with pytest.raises(
+                ValueError, match=r"^an evaluation scans with its session's redactor$"
+            ):
+                await evaluate(session, script.assertions[0], evaluation)
+
+    asyncio.run(scenario())

@@ -1140,6 +1140,12 @@ TYPED = {"semantic": "the name field", "locators": [{"css": "input"}]}
         (
             FAKE_VALUE,
             [],
+            {"name": {**TYPED, "locators": [{"css": "input"}, {"testid": FAKE_VALUE}]}},
+            "targets[0]",
+        ),
+        (
+            FAKE_VALUE,
+            [],
             {"name": {**TYPED, "locators": [{"css": f"[title='{FAKE_VALUE}']"}]}},
             "targets[0]",
         ),
@@ -1186,6 +1192,7 @@ TYPED = {"semantic": "the name field", "locators": [{"css": "input"}]}
         "select",
         "fill-json-escaped",
         "target-id",
+        "second-locator",
         "css",
         "role-name",
         "scope",

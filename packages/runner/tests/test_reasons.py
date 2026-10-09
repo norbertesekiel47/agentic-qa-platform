@@ -163,7 +163,7 @@ REFUSED_FIELD = SecretRefusedError(
 def test_every_owned_reason_in_a_withheld_run_is_fixed_text(
     error: Raised, expected: str
 ) -> None:
-    shown = reason(error, BOUND, withheld=True)
+    shown = reason(error, BOUND)
 
     assert shown == expected
     assert "evil.example.test" not in shown
@@ -215,7 +215,7 @@ def test_every_owned_reason_in_a_withheld_run_is_fixed_text(
 def test_an_owned_reason_outside_a_withheld_run_keeps_its_origin(
     error: Raised, expected: str
 ) -> None:
-    assert reason(error, NO_SECRETS, withheld=False) == expected
+    assert reason(error, NO_SECRETS) == expected
 
 
 @pytest.mark.parametrize(
@@ -277,4 +277,4 @@ def test_an_owned_reason_outside_a_withheld_run_keeps_its_origin(
 def test_outside_a_withheld_run_every_reason_is_presented_as_before(
     error: Raised, expected: str
 ) -> None:
-    assert reason(error, NO_SECRETS, withheld=False) == expected
+    assert reason(error, NO_SECRETS) == expected
