@@ -578,7 +578,7 @@ def test_a_run_that_binds_a_secret_keeps_no_text_of_any_invariant(
         ),
         # The counts-only form's own JSON spells it, and its marker breaks it:
         # nothing.
-        ("false", None),
+        ("true", None),
     ],
 )
 def test_an_egress_record_its_scan_cant_clear_leaves_the_result_whole(
