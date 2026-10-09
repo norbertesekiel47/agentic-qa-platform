@@ -171,7 +171,14 @@ What #38 records for each candidate, with the command and the commit that produc
   - *When billing starts:* Lambda bills the baseline "while your MicroVM is running", so from `startedAt`. #38 checks that against the compute seconds `collect.sh` reports.
   - *Burst* is billed only for use above the baseline. The trial's peak memory sits below 2 GB, so any burst is CPU during the launch; #38 reads its cost from `collect.sh`.
   - *Snapshot reads:* each MicroVM reads its snapshot on start. The per-run cost is `R × $0.00155`, where R is the GB that `collect.sh` bills as snapshot reads, divided by the number of MicroVMs run.
-  - *Snapshot storage:* $0.08 per GB-month for the image's snapshot, with a one-week minimum per image version. Per run, it is the monthly storage cost divided by the runs in a month. #38 reports it at 1,000 and at 10,000 runs a month. The snapshot's size is the memory and disk snapshot sizes `get-microvm-image-build` reports for each build; #37 missed that call, and #38 records it before the teardown. As a cross-check, the snapshot-storage GB-hours `collect.sh` shows for one whole UTC day inside the image's life, divided by 24, should match. AWS doesn't describe how the one-week minimum is billed. #38 runs `collect.sh` at least eight days after the image's creation, so the minimum has posted, and records how it shows up.
+  - *Snapshot storage:* $0.08 per GB-month for the image's snapshot, with a one-week minimum per image version.
+    Per run, it is the monthly storage cost divided by the runs in a month.
+    #38 reports it at 1,000 and at 10,000 runs a month.
+    The snapshot's size is the memory and disk snapshot sizes `get-microvm-image-build` reports for each build listed by `list-microvm-image-builds`. #38 saves those measurements before teardown.
+    The approved trial sequence tears down the image in the same session after the trials or the first failure, after saving the logs.
+    AWS doesn't describe how the one-week minimum is billed. #38 runs `collect.sh` at least eight days after the image's creation and checks that billed usage has finished posting.
+    #38 records the billed snapshot-storage GB-hours and costs, including how the minimum appears, from Cost Explorer.
+    Build API sizes alone do not establish billed storage cost. Collection requires no live image or whole UTC day of image retention.
   - *Snapshot writes* ($0.0038 per GB): the successful October 1 trials terminated before the one-minute idle window. A failed trial can outlast that window; the October 4 attempt did, without a report that establishes whether suspension occurred. Suspending writes a snapshot. Whether either the image build or the failed attempt bills a write is for `collect.sh` to show.
 - **Every candidate** also stores its package: ECR at $0.10 per GB-month for the Lambda function's and the Fargate task's image, and S3 Standard ([S3](https://aws.amazon.com/s3/pricing/)) for the MicroVM's zip. Per run: the package's GB × the monthly price ÷ the runs in a month.
 
