@@ -438,6 +438,37 @@ class PilotInputTests(unittest.TestCase):
                 self.refuses(self.load, EXTRA)
                 self.refuses(self.memory, EXTRA)
 
+    def test_subresource_hosts_do_not_widen_pilot_admission(self) -> None:
+        declarations = (
+            ["fake-cdn.test"],
+            ["fake-cdn.test", "fake-static.test"],
+            ["127.0.0.1"],
+        )
+        for hosts in declarations:
+            for call in (self.load, self.memory):
+                with self.subTest(hosts=hosts, seam=call.__name__):
+                    self.config["egress"] = {"subresource_hosts": hosts}
+                    self.save()
+                    self.refuses(call, EXTRA)
+        self.config["egress"] = {"subresource_hosts": []}
+        self.save()
+        starts = (self.load()[0].start, self.memory().start)
+        self.assertEqual(starts, (ORIGIN, ORIGIN))
+        self.spec["preconditions"]["account"] = ACCOUNT
+        self.save()
+        self.refuses(self.load, "unusable test secret")
+        self.refuses(self.memory, "unusable test secret")
+        self.config["egress"] = {"subresource_hosts": ["fake-cdn.test"]}
+        self.save()
+        self.refuses(self.load, EXTRA)
+        self.refuses(self.memory, EXTRA)
+        self.refuses(partial(self.load, origin=FOREIGN), MISMATCH)
+        self.refuses(partial(self.memory, FOREIGN), MISMATCH)
+        self.data["spec_id"] = "other"
+        self.save(fresh=False)
+        self.refuses(self.load, "invalid pilot input")
+        self.refuses(self.memory, "invalid pilot input")
+
     def test_a_foreign_origin_outranks_an_unusable_secret(self) -> None:
         self.spec["preconditions"]["account"] = ACCOUNT
         self.save()

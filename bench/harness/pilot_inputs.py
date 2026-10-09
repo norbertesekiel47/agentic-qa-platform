@@ -120,7 +120,11 @@ def validate_pilot(
     start, reset, usable = prepared
     if start != parse_origin(origin):
         raise ValueError(f"{source}: base_url is not the stack's origin")
-    if spec.frontmatter.allowed_origins or config.egress.private_origins:
+    if (
+        spec.frontmatter.allowed_origins
+        or config.egress.private_origins
+        or config.egress.subresource_hosts
+    ):
         raise ValueError(f"{source}: declares an origin beyond the stack's")
     if not usable:
         raise UnusableSecretError(f"{source}: unusable test secret")
