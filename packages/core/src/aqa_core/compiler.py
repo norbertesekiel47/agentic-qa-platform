@@ -50,10 +50,11 @@ _STEP: Final[TypeAdapter[Step]] = TypeAdapter(Step)
 _BASIS: Final = "no positive evidence that the step changes nothing"
 # The step fields a problem may name: the ones the actions take, and the
 # ones compiling owns. Any other key came from the caller and is never shown.
-_TAKEN: Final = frozenset({"url", "value", "secret", "option", "key", "target"})
-_OWNED: Final = frozenset(
+_ACTION_FIELDS: Final = frozenset({"url", "value", "secret", "option", "key", "target"})
+_COMPILER_FIELDS: Final = frozenset(
     {"seq", "target", "side_effect", "side_effect_basis", "satisfies"}
 )
+_NOT_ITS_CONTRACT: Final = "its target's subject contract isn't its meaning's"
 _LOADER: Final = (
     "the compiled script doesn't pass the loader's checks "
     '(DATA_MODEL §7, "Checked by the loader")'
@@ -113,24 +114,25 @@ def _contracts(
     problems: list[str] = []
     contracts: dict[str, Contract | None] = {}
     first: dict[str, int] = {}
+    clashed: set[str] = set()
     for planned in plan.expectations:
         index = planned.expect_index
-        meanings = [
-            c.target_meaning for c in planned.checks if c.target_meaning is not None
-        ]
-        if index in rows and planned.unsupported is not None:
-            problems.append(
-                f"subjects expect {index}: the plan leaves expectation {index} "
-                "unsupported, so no target can carry its subject contract"
+        meanings = [c.target_meaning for c in planned.checks if c.target_meaning]
+        if index in rows and not meanings:
+            how = (
+                f"leaves expectation {index} unsupported"
+                if planned.unsupported
+                else f"checks expectation {index} with no element"
             )
-        elif index in rows and not meanings:
             problems.append(
-                f"subjects expect {index}: the plan checks expectation {index} with "
-                "no element, so no target can carry its subject contract"
+                f"subjects expect {index}: the plan {how}, so no target can carry its "
+                "subject contract"
             )
         for meaning in meanings:
             contract = rows.get(index)
-            if contracts.setdefault(meaning, contract) != contract:
+            known = contracts.setdefault(meaning, contract)
+            if known != contract and meaning not in clashed:
+                clashed.add(meaning)
                 problems.append(
                     f'meaning "{meaning}" is planned under different subject contracts, '
                     f"for expect {first[meaning]} and expect {index}: one meaning has "
@@ -186,6 +188,12 @@ class Provenance(StrictModel):
     at: AwareDatetime
 
 
+def _carries(target: Target, contracts: Mapping[str, Contract | None]) -> bool:
+    """Whether `target` carries exactly its meaning's contract. A meaning no
+    planned check reads, such as an action's, has none."""
+    return target.contract == contracts.get(target.semantic)
+
+
 def _named(names: dict[Target, str], target: Target) -> str:
     """`target`'s name, `t1`, `t2`, ... in order of first use. Equal targets
     are one target."""
@@ -203,12 +211,8 @@ def _steps(
     problems: list[str] = []
     for seq, number in enumerate(taken, start=1):
         step = path.steps[number]
-        if step.target is not None and step.target.contract != contracts.get(
-            step.target.semantic
-        ):
-            problems.append(
-                f"step {number}: its target's subject contract isn't its meaning's"
-            )
+        if step.target is not None and not _carries(step.target, contracts):
+            problems.append(f"step {number}: {_NOT_ITS_CONTRACT}")
         compiled = _step(number, step, seq, names)
         if isinstance(compiled, str):
             problems.append(compiled)
@@ -221,10 +225,9 @@ def _step(
     number: int, step: PathStep, seq: int, names: dict[Target, str]
 ) -> Step | str:
     """Step `number` of the attempt compiled as step `seq`, or the problem with
-    it. The problem names only a known action, a field of `_TAKEN` or
-    `_OWNED`, or a kind of mistake, never a value: pydantic's messages quote
-    their input."""
-    if owned := sorted(_OWNED & step.fields.keys()):
+    it, which names only a known action, a listed field or a kind of mistake,
+    never a value: pydantic's messages quote their input."""
+    if owned := sorted(_COMPILER_FIELDS & step.fields.keys()):
         return f"step {number}: sets {owned[0]}, which compiling owns"
     fields: dict[str, object] = {
         **step.fields,
@@ -249,7 +252,7 @@ def _invalid(error: str, loc: tuple[int | str, ...]) -> str:
     kind, field = loc[0], loc[1] if len(loc) > 1 else None
     # The fields compiling adds are valid, so any other field is a key the
     # caller added, never named.
-    if field not in _TAKEN:
+    if field not in _ACTION_FIELDS:
         return f"a {kind} step takes a field it doesn't know"
     if error == "missing":
         return f"a {kind} step needs {field}"
@@ -268,9 +271,7 @@ def _binding_problem(
         return "bound to no element, but it reads one"
     if target.semantic != check.target_meaning:
         return f'bound to a target of another meaning than "{check.target_meaning}"'
-    if target.contract != contracts.get(target.semantic):
-        return "its target's subject contract isn't its meaning's"
-    return None
+    return None if _carries(target, contracts) else _NOT_ITS_CONTRACT
 
 
 def _assertions(
@@ -305,6 +306,16 @@ def _assertions(
     return assertions, problems
 
 
+def _loads(script: CompiledScript, config: ProjectConfig) -> bool:
+    """Whether the strict loader reads `script`'s JSON back. Its problems can
+    quote a name the model wrote, so the caller reports one fixed line."""
+    try:
+        parse_compiled(script.model_dump_json(), config, source=Path("compiled.json"))
+    except SpecError:
+        return False
+    return True
+
+
 def compile_script(
     spec: Spec,
     config: ProjectConfig,
@@ -316,6 +327,7 @@ def compile_script(
     attempt's order, and the checks it bound, unconfirmed (DATA_MODEL §7).
     CompileError names every problem. `plan` must fit `spec`
     (`coverage_plan.misfits`)."""
+    plan_problems = [*uncovered(plan, spec.frontmatter), *unsupported_features(plan)]
     spec_id = spec.frontmatter.id
     contracts, meaning_problems = _contracts(plan, subject_contracts(config, spec_id))
     kept = sorted(set(path.kept))
@@ -324,8 +336,7 @@ def compile_script(
     steps, step_problems = _steps(path, taken, contracts, names)
     assertions, check_problems = _assertions(plan, path, contracts, names)
     problems = [
-        *uncovered(plan, spec.frontmatter),
-        *unsupported_features(plan),
+        *plan_problems,
         *meaning_problems,
         *(
             f"finish names step {number}, which the attempt never took"
@@ -337,7 +348,6 @@ def compile_script(
     ]
     if problems:
         raise CompileError(problems) from None
-    checks = planned_checks(plan)
     script = CompiledScript(
         schema_version=1,
         spec_id=spec_id,
@@ -359,9 +369,9 @@ def compile_script(
                     subject=planned.subject,
                     claim=planned.claim,
                     assertions=tuple(
-                        i
-                        for i, (index, _) in checks.items()
-                        if index == planned.expect_index
+                        a.id
+                        for a in assertions
+                        if a.expect_index == planned.expect_index
                     ),
                 )
                 for planned in plan.expectations
@@ -380,13 +390,3 @@ def compile_script(
     if problems:
         raise CompileError(problems) from None
     return script
-
-
-def _loads(script: CompiledScript, config: ProjectConfig) -> bool:
-    """Whether the strict loader reads `script`'s JSON back. Its problems can
-    quote a name the model wrote, so the caller reports one fixed line."""
-    try:
-        parse_compiled(script.model_dump_json(), config, source=Path("compiled.json"))
-    except SpecError:
-        return False
-    return True
