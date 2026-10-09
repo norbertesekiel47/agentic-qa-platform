@@ -146,7 +146,8 @@ class PilotCommandTests(unittest.TestCase):
         patches = self.root / "patches"
         patches.mkdir(exist_ok=True)
         for name, document in self.patches.items():
-            (patches / name).write_text(json.dumps(document))
+            text = document if isinstance(document, str) else json.dumps(document)
+            (patches / name).write_text(text)
 
     def write_specs(self) -> None:
         for spec_id in ("pilot", "other"):
@@ -206,6 +207,8 @@ class PilotCommandTests(unittest.TestCase):
         legs = ["clean", "clean", "diagnostic", "acceptance", "unscored"]
         self.assertEqual(roles, legs)
         self.assertEqual(self.report()["switched_back_clean"], True)
+        kinds = [name.partition(":")[0] for name in sorted(self.report()["hashes"])]
+        self.assertEqual(kinds, ["manifest", "patch", "script", "spec"])
 
     def test_reports_the_selection_and_every_omitted_spec(self) -> None:
         self.cases, other = {}, self.compiled / "other.json"
@@ -256,6 +259,9 @@ class PilotCommandTests(unittest.TestCase):
             self.spec["preconditions"]["account"] = ACCOUNT
             self.config["secrets"] = BINDING
 
+        def deep() -> None:
+            self.patches["conduit-benign-001.pilot.json"] = "[" * 1_000_000
+
         def stray() -> None:
             self.cases["conduit-bug-001"] = case("bug", "bug1", expect=[0])
             self.patches["conduit-bug-001.pilot.json"] = {}
@@ -273,6 +279,7 @@ class PilotCommandTests(unittest.TestCase):
             ("existing out", lambda: self.out.mkdir(exist_ok=False), 2, "out: exists"),
             ("bad manifest", unparsed, 2, "error: ManifestError"),
             ("subject row", lambda: self.config.update(subjects=[ROW]), 2, INPUT),
+            ("deep patch", deep, 2, "invalid patch"),
         ]
         for name, change, want, message in cases:
             with self.subTest(name), patch.dict(os.environ):
@@ -310,8 +317,7 @@ class PilotCommandTests(unittest.TestCase):
         at: list[int] = []
 
         def fails(error: Exception, real: Callable[..., Any], call: int) -> Any:
-            """`real`, except that call number `call` notes how many Docker
-            calls came before it and raises `error`."""
+            """`real`, but call number `call` notes Docker's call count, then raises."""
             calls = iter(range(1, 100))
 
             def answer(*args: Any, **kwargs: Any) -> Any:
@@ -469,10 +475,8 @@ class PilotCommandTests(unittest.TestCase):
             (pair,) = doc["pairs"]
             seen = (pair["status"], len(pair["attempts"]), doc["reservation_release"])
             found[name] = (code, *seen, self.ups())
-        full = (0, "passed", 3, "allowed", ["", ""])
-        self.assertEqual(
-            found, {"full": full, "held": (3, "fatal", 2, "forbidden", [""])}
-        )
+        want = {"full": (0, "passed", 3, "allowed", ["", ""])}
+        self.assertEqual(found, want | {"held": (3, "fatal", 2, "forbidden", [""])})
 
     def test_an_enter_failing_after_the_cancel_prints_nothing(self) -> None:
         self.config["budgets"] = {"minutes": 0.005, "resolve_seconds": 0.1}
@@ -521,17 +525,19 @@ class PilotCommandTests(unittest.TestCase):
                 )
 
     def test_a_source_change_during_the_run_is_not_citable(self) -> None:
-        identities = iter([SOURCE, SOURCE._replace(commit="d" * 40)])
-        replay = FakeReplay(self.docker, {"": [OK], "ben1": [OK], "bug1": [OK]})
-        code, _ = self.command(replay, source=lambda *_: next(identities))
-        self.assertEqual((code, self.report()["source_unchanged"]), (3, False))
-        want = {"commit": SOURCE.commit, "tree": SOURCE.tree}
-        self.assertEqual(self.report()["source"], want)
+        changed = SOURCE._replace(commit="d" * 40)
+        # The last read follows the switch back.
+        for reads in ([SOURCE, changed], [SOURCE, SOURCE, changed]):
+            self.docker, self.out = FakeDocker(), self.root / f"out-{len(reads)}"
+            replay = FakeReplay(self.docker, {"": [OK], "ben1": [OK], "bug1": [OK]})
+            code, _ = self.command(replay, source=MagicMock(side_effect=reads))
+            self.assertEqual((code, self.report()["source_unchanged"]), (3, False))
+            want = {"commit": SOURCE.commit, "tree": SOURCE.tree}
+            self.assertEqual(self.report()["source"], want)
 
     def git(self, *args: str) -> str:
-        """Git, after dropping every inherited GIT_* variable (setUp restores
-        them): under `git rebase --exec`, one aimed `git init` at the real
-        repository (LAB_NOTES, 2026-10-09)."""
+        """Git without inherited GIT_* (setUp restores them): one from `git rebase
+        --exec` aimed `git init` at the real repository (LAB_NOTES, 2026-10-09)."""
         for name in [name for name in os.environ if name.startswith("GIT_")]:
             del os.environ[name]
         git = ["git", "-c", "user.name=fake", "-c", "user.email=fake@example.invalid"]

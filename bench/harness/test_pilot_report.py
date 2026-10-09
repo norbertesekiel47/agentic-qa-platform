@@ -75,9 +75,8 @@ def seen(
 
 def report(*pairs: Pair, **changes: Any) -> Report:
     hashes = {"manifest": "sha256:m", "script:pilot": "sha256:s"}
-    base = Report(
-        "conduit", "c" * 40, "t" * 40, 3, ("pilot",), (), hashes, switched_back=True
-    )
+    base = Report("conduit", "c" * 40, "t" * 40, 3, ("pilot",), (), hashes)
+    base = replace(base, unchanged=True, switched_back=True)
     return replace(base, pairs=pairs, **changes)
 
 
