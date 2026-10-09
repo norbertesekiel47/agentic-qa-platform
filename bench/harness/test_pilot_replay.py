@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import anthropic
 from aqa_core.compiled import ByRole, Locator, Press
-from aqa_core.project import contracts_fingerprint, load_project
+from aqa_core.project import contracts_fingerprint, load_compiled, load_project
 from aqa_runner import browser_session
 from aqa_runner.anthropic_client import AnthropicClient
 from aqa_runner.egress import EgressGate, EgressPolicy
@@ -439,7 +439,17 @@ class PilotReplayTests(unittest.TestCase):
         # Admission refuses another origin (ADR-0023); replay's own gate is tested.
         self.assertRaisesRegex(ValueError, "an origin beyond the stack's", self.pilot)
         project = load_project(self.root / "qa")
-        widened = replace(admitted, spec=project.specs["pilot"], config=project.config)
+        widened = replace(
+            admitted,
+            spec=project.specs["pilot"],
+            config=project.config,
+            script=load_compiled(self.root / "compiled" / "pilot.json", project.config),
+        )
+        self.assertEqual(widened.script.spec_hash, widened.spec.spec_hash)
+        self.assertEqual(
+            widened.script.compiled_by.subject_contracts,
+            contracts_fingerprint(widened.config, "pilot"),
+        )
         for image, health in cases:
             with self.subTest(image=image):
                 self.server.image = image
