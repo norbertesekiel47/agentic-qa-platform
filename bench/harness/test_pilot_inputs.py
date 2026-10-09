@@ -43,6 +43,7 @@ CHECKS = json.loads("""[
 {"check":"probe_equals","probe":"count","json_path":"$.count","value":0},
 {"check":"probe_equals_baseline","probe":"count"},
 {"check":"visible_unoccluded","target":"article","min_size_px":[1,1],"in_viewport":true}]""")
+CONTRACT = {"region": "div.banner", "part": "h1", "leaf": True}
 ACCOUNT = {"password": {"secret": "TEST_PASSWORD"}}
 SECRET = {"AQA_SECRET_TEST_PASSWORD": "fake-password-value"}
 RELOAD = {"seq": 2, "action": "reload", "side_effect": False}
@@ -331,6 +332,43 @@ class PilotInputTests(unittest.TestCase):
         self.spec = json.loads(SPEC)
         self.save()
         self.assertEqual(self.memory().reset, RESET)
+
+    def test_subject_contracts_agree_as_replay_requires(self) -> None:
+        self.data["assertions"][0] = {"id": "a0", "expect_index": 0, **CHECKS[1]}
+        self.data["targets"]["article"]["contract"] = CONTRACT
+        self.save()
+        self.refuses(self.load, "invalid pilot input")
+        self.config["subjects"] = [{"spec": "pilot", "expect": 0, **CONTRACT}]
+        self.save()
+        contract = self.load()[0].script.targets["article"].contract
+        self.assertEqual(contract and contract.model_dump(), CONTRACT)
+        good, stale = json.dumps(self.data), "sha256:" + "1" * 64
+        copy = {"semantic": "article", "locators": [{"testid": "copy"}]}
+
+        def untargeted(data: dict[str, Any]) -> None:
+            data["assertions"][0] = {"id": "a0", "expect_index": 0, **CHECKS[0]}
+            del data["targets"]["article"]["contract"]
+
+        changes: dict[str, Callable[[dict[str, Any]], object]] = {
+            "stale": lambda d: d["compiled_by"].update(subject_contracts=stale),
+            "bare": lambda d: d["targets"]["article"].pop("contract"),
+            "other": lambda d: d["targets"]["article"]["contract"].update(part="h2"),
+            "shared meaning": lambda d: d["targets"].update(copy=copy),
+            "untargeted": untargeted,
+        }
+        for name, change in changes.items():
+            with self.subTest(name):
+                self.data = json.loads(good)
+                change(self.data)
+                self.save(fresh=False)
+                self.refuses(self.load, "invalid pilot input")
+                self.refuses(self.memory, "invalid pilot input")
+        self.data = json.loads(good)
+        self.spec["preconditions"]["account"] = ACCOUNT
+        self.save()
+        self.data["compiled_by"]["subject_contracts"] = stale
+        self.save(fresh=False)
+        self.refuses(self.load, "invalid pilot input")
 
     def test_secret_admission_precedes_resource_use(self) -> None:
         self.assertEqual(self.ids(), ("pilot",))
