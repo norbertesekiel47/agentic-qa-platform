@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # The account's billed usage in us-east-2, by usage type and day, from Cost
-# Explorer (ADR-0008 amendment, 2026-09-30), printed as JSON. It is the only
-# source for a MicroVM's snapshot storage (GB-hours) and snapshot reads (GB):
-# no MicroVM API reports a snapshot's size. Cost Explorer lags by about a day,
-# and each request costs $0.01.
+# Explorer, printed as JSON. It reports billed snapshot storage (GB-hours)
+# and snapshot reads (GB). Build API memory and disk snapshot sizes are
+# separate measurements, saved before the approved same-session teardown.
+# Collect at least eight days after image creation and check that billed
+# usage has finished posting. Collection requires no live image.
+# API sizes alone do not establish billed cost (ADR-0032).
+# Cost Explorer lags by about a day, and each request costs $0.01.
 # https://docs.aws.amazon.com/cli/latest/reference/ce/get-cost-and-usage.html
 #
 # Usage: spikes/hosted-chromium/scripts/collect.sh <first day> <day after the last>
