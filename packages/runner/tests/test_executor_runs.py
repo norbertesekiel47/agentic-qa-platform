@@ -23,6 +23,7 @@ from aqa_core.config import Budgets, ProjectConfig, SubjectContract
 from aqa_core.project import SpecError, contracts_fingerprint, parse_compiled
 from aqa_runner import settling
 from aqa_runner.anthropic_client import AnthropicClient
+from aqa_runner.browser_session import BrowserSession
 from aqa_runner.egress import EgressGate, InfrastructureEvent
 from aqa_runner.egress_proxy import EgressBlocks, EgressProxy, PhaseTraffic, RefusedHost
 from aqa_runner.executor import RunResult, RunSetup, replay
@@ -32,7 +33,7 @@ from aqa_runner.model_router import ModelRouter
 from aqa_runner.run_record import RunRecord
 from aqa_runner.sandbox import Chromium, launch
 from langchain_anthropic import ChatAnthropic
-from playwright.async_api import Browser, BrowserType, async_playwright
+from playwright.async_api import Browser, BrowserType, Error, async_playwright
 
 from packages.runner.tests.document_fixtures import until
 from packages.runner.tests.egress_fixtures import gate, get, unused_port
@@ -940,3 +941,95 @@ def test_a_visible_count_moved_into_a_shadow_root_is_never_absent(
 
     assert [a.outcome for a in result.assertions] == ["binding_unresolved"]
     assert result.outcome == "failed"
+
+
+CRASHED = "Error: Page.evaluate: Target crashed"
+
+# A check of each kind after the first: a probe, read through the gate, and
+# the URL.
+LATER = [
+    {
+        "id": "a2",
+        "expect_index": 0,
+        "check": "probe_equals",
+        "probe": "count",
+        "json_path": "$.count",
+        "value": 2,
+    },
+    {"id": "a3", "expect_index": 0, "check": "url_matches", "pattern": "/"},
+]
+
+
+def answering(monkeypatch: pytest.MonkeyPatch, times: int) -> None:
+    """The page answers `times` looks at its visible text, then crashes."""
+    visible_text = BrowserSession.visible_text
+    looks: list[None] = []
+
+    async def then_crashed(session: BrowserSession) -> str:
+        looks.append(None)
+        if len(looks) > times:
+            raise Error("Page.evaluate: Target crashed")
+        return await visible_text(session)
+
+    monkeypatch.setattr(BrowserSession, "visible_text", then_crashed)
+
+
+def test_after_a_page_stops_answering_no_later_assertion_is_looked_at(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answering(monkeypatch, 0)
+    app.probes["count"] = [2]
+    spec = a_spec(
+        tmp_path,
+        ProjectConfig(),
+        start_url="/page/form",
+        probes={"count": "GET /probe/count"},
+    )
+    first = {"id": "a1", "expect_index": 0, "check": "url_matches", "pattern": "/"}
+
+    result = run(
+        app, tmp_path, compiled([], assertions=[first, *LATER]), spec=spec
+    ).result
+
+    assert [(a.id, a.outcome, a.error) for a in result.assertions] == [
+        ("a1", "not_evaluated", CRASHED),
+        ("a2", "not_evaluated", "not evaluated after a1's look at the page raised"),
+        ("a3", "not_evaluated", "not evaluated after a1's look at the page raised"),
+    ]
+    assert app.probe_reads == {}
+    assert result.outcome == "errored"
+
+
+def test_a_page_that_stops_answering_after_the_first_assertion_keeps_its_outcome_and_evaluates_nothing_after(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Recorded traffic and the URL can be read from a page whose renderer
+    # has stopped: each assertion's own look at the page comes first.
+    answering(monkeypatch, 1)
+    app.probes["count"] = [2]
+    spec = a_spec(
+        tmp_path,
+        ProjectConfig(),
+        start_url="/page/form",
+        probes={"count": "GET /probe/count"},
+    )
+    first = {
+        "id": "a1",
+        "expect_index": 0,
+        "check": "network_none",
+        "method": "POST",
+        "url_pattern": "/write/save",
+        "status_class": "2xx",
+    }
+
+    result = run(
+        app, tmp_path, compiled([], assertions=[first, *LATER]), spec=spec
+    ).result
+
+    assert [(a.id, a.outcome, a.error) for a in result.assertions] == [
+        ("a1", "pass", None),
+        ("a2", "not_evaluated", CRASHED),
+        ("a3", "not_evaluated", "not evaluated after a2's look at the page raised"),
+    ]
+    assert app.probe_reads == {}
+    assert result.outcome == "errored"
