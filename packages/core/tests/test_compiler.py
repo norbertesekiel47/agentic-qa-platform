@@ -102,12 +102,13 @@ def plan(
 
 # The demo spec's four expectations, planned with one check of each type the
 # compiler compiles: a1 and a2, a3, a4 and a5, a6 and a7.
-PLAN = plan(
+EXPECTATIONS = (
     expectation(0, URL, SHOWN),
     expectation(1, COUNTED),
     expectation(2, GONE, UNCOVERED),
     expectation(3, NO_POST, GOT),
 )
+PLAN = plan(*EXPECTATIONS)
 
 
 def test_assertion_for_gives_the_assertion_of_each_checks_type() -> None:
@@ -321,7 +322,7 @@ BOUND: dict[str, Target | None] = {
 
 def demo(tmp_path: Path, subjects: str = ROW) -> tuple[Spec, ProjectConfig]:
     root = tmp_path / "qa"
-    root.mkdir()
+    root.mkdir(parents=True)
     rows = f"subjects:\n{subjects}" if subjects else ""
     (root / "config.yaml").write_text(SECRETS + rows)
     (root / "demo.spec.md").write_text(SPEC)
@@ -690,3 +691,162 @@ def test_a_compiled_listed_conduit_script_passes_replays_contract_agreement() ->
         "t2": AUTHOR,
         "t3": DATE,
     }
+
+
+def problems(tmp_path: Path, **changes: Any) -> tuple[str, ...]:
+    with pytest.raises(CompileError) as caught:
+        compiled(tmp_path, **changes)
+    return caught.value.problems
+
+
+def test_an_unbound_planned_check_fails_by_name(tmp_path: Path) -> None:
+    unbound = {check_id: t for check_id, t in BOUND.items() if check_id != "a3"}
+
+    assert problems(tmp_path, bound=unbound) == (
+        "a3 (expect[1], text_in_target): never bound",
+    )
+
+
+def test_a_required_condition_fails_by_name_until_the_path_can_satisfy_it(
+    tmp_path: Path,
+) -> None:
+    reload = {"id": "c1", "condition": "checked after a reload"}
+
+    assert problems(tmp_path, planned=plan(*EXPECTATIONS, requires=(reload,))) == (
+        (
+            'requires c1 ("checked after a reload"): exploring can\'t keep a required '
+            "condition in the path yet"
+        ),
+    )
+
+
+def test_a_zero_step_path_with_a_baseline_check_fails_by_name(tmp_path: Path) -> None:
+    baseline = plan(*EXPECTATIONS[:3], expectation(3, BASELINE))
+    bound = {check_id: t for check_id, t in BOUND.items() if check_id != "a7"}
+    unsupported = (
+        "a6 (expect[3], probe_equals_baseline): exploring can't compile a "
+        "probe_equals_baseline check yet"
+    )
+
+    assert problems(tmp_path, planned=baseline, kept=(), bound=bound) == (
+        unsupported,
+        (
+            "a6 (expect[3], probe_equals_baseline): a path with no steps has no step "
+            "to capture its baseline before"
+        ),
+    )
+    assert problems(tmp_path / "with-steps", planned=baseline, bound=bound) == (
+        unsupported,
+    )
+
+
+@pytest.mark.parametrize(
+    ("check_id", "target", "problem"),
+    [
+        (
+            "a3",
+            None,
+            "a3 (expect[1], text_in_target): bound to no element, but it reads one",
+        ),
+        (
+            "a1",
+            ADD_TARGET,
+            "a1 (expect[0], url_matches): reads no element, but is bound to one",
+        ),
+        (
+            "a4",
+            ADD_TARGET,
+            f'a4 (expect[2], not_visible): bound to a target of another meaning than "{NOTICE}"',
+        ),
+    ],
+)
+def test_a_check_bound_against_its_shape_fails_by_name(
+    tmp_path: Path, check_id: str, target: Target | None, problem: str
+) -> None:
+    assert problems(tmp_path, bound=BOUND | {check_id: target}) == (problem,)
+
+
+def test_finish_naming_a_step_the_attempt_never_took_fails_by_name(
+    tmp_path: Path,
+) -> None:
+    assert problems(tmp_path, kept=(1, 12)) == (
+        "finish names step 12, which the attempt never took",
+    )
+
+
+def test_an_unsupported_expectation_fails_the_compile_naming_it(tmp_path: Path) -> None:
+    planned = plan(*EXPECTATIONS[:3], expectation(3))
+    bound = {
+        check_id: t for check_id, t in BOUND.items() if check_id not in {"a6", "a7"}
+    }
+
+    assert problems(tmp_path, planned=planned, bound=bound) == (
+        (
+            'expect[3] "Reading the count sends no write": no M1 check can establish '
+            "it: no M1 check reads it"
+        ),
+    )
+
+
+def test_a_plan_contradicting_a_subject_contract_fails_the_compile(
+    tmp_path: Path,
+) -> None:
+    planned = plan(*EXPECTATIONS[:3], expectation(3, {**GONE, "target_meaning": COUNT}))
+    hidden = Target(
+        semantic=COUNT,
+        locators=(ByCss(css="span.counter", scope=ByCss(css="app-favorite-button")),),
+        contract=BANNER,
+    )
+
+    assert problems(tmp_path, planned=planned, bound=BOUND | {"a6": hidden}) == (
+        (
+            f'meaning "{COUNT}" is planned under different subject contracts, for '
+            "expect 1 and expect 3: one meaning has one contract or none"
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "contract",
+    [
+        None,
+        Contract(region="div.footer", part="span.counter", leaf=True),
+        Contract(region="div.banner", part="span.count", leaf=True),
+        Contract(region="div.banner", part="span.counter", leaf=False),
+    ],
+    ids=["none", "region", "part", "leaf"],
+)
+def test_a_target_whose_contract_is_not_its_meanings_fails_by_name(
+    tmp_path: Path, contract: Contract | None
+) -> None:
+    checked = COUNT_TARGET.model_copy(update={"contract": contract})
+    clicked = COUNT_BUTTON.model_copy(update={"contract": contract})
+
+    assert problems(tmp_path, bound=BOUND | {"a3": checked}) == (
+        "a3 (expect[1], text_in_target): its target's subject contract isn't its meaning's",
+    )
+    assert problems(
+        tmp_path / "clicked", steps=STEPS | {4: PathStep({"action": "click"}, clicked)}
+    ) == ("step 4: its target's subject contract isn't its meaning's",)
+
+
+def test_an_action_only_target_with_a_contract_fails_by_name(tmp_path: Path) -> None:
+    contracted = SEARCH.model_copy(update={"contract": BANNER})
+    steps = STEPS | {5: PathStep({"action": "fill", "value": "flaky"}, contracted)}
+
+    assert problems(tmp_path, steps=steps) == (
+        "step 5: its target's subject contract isn't its meaning's",
+    )
+
+
+def test_every_problem_is_reported_in_one_error(tmp_path: Path) -> None:
+    uncontracted = COUNT_BUTTON.model_copy(update={"contract": None})
+
+    assert problems(
+        tmp_path,
+        steps=STEPS | {4: PathStep({"action": "click"}, uncontracted)},
+        bound={check_id: t for check_id, t in BOUND.items() if check_id != "a1"},
+    ) == (
+        "step 4: its target's subject contract isn't its meaning's",
+        "a1 (expect[0], url_matches): never bound",
+    )
