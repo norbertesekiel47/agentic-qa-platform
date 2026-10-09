@@ -3,8 +3,9 @@ amendments): a model per role, a cost record for every response, and the role's
 fallback when a model refuses."""
 
 import time
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from decimal import MAX_PREC, Decimal, localcontext
 from typing import Self, get_args
 
 from aqa_core.config import Effort, ModelRoleName, ProjectConfig
@@ -40,6 +41,30 @@ class ModelCallError(Exception):
     def __init__(self, records: Sequence[CostRecord]) -> None:
         super().__init__(f"the call failed after {len(records)} billed response(s)")
         self.records = tuple(records)
+
+
+@dataclass(frozen=True)
+class Spend:
+    """What a call does with each priced response (ADR-0007's #53 P3 amendment):
+    `on_priced` gets its record before any further provider call, and what it
+    raises leaves as it came; no fallback once the call's records cost `ceiling_usd`."""
+
+    on_priced: Callable[[CostRecord], None]
+    ceiling_usd: Decimal | None = None
+
+    def reached(self, records: Sequence[CostRecord]) -> bool:
+        """Whether `records` cost the ceiling or more."""
+        left = self.after(records).ceiling_usd
+        return left is not None and left <= 0
+
+    def after(self, records: Sequence[CostRecord]) -> Self:
+        """This spend, with what `records` cost taken off its ceiling."""
+        if self.ceiling_usd is None:
+            return self
+        # Exact, as each cost is: 28 digits would round a sum under its ceiling.
+        with localcontext(prec=MAX_PREC):
+            spent = sum((record.cost_usd for record in records), Decimal(0))
+            return replace(self, ceiling_usd=self.ceiling_usd - spent)
 
 
 def _status(reply: Reply, schema: type[BaseModel] | None) -> Status:
@@ -97,13 +122,15 @@ class ModelRouter:
         *,
         tools: Sequence[BaseTool] = (),
         schema: type[BaseModel] | None = None,
+        spend: Spend | None = None,
     ) -> Routed:
         """Call `role`'s model. A refusal is recorded and, if the role has a
         fallback model, answered by calling it. A response that doesn't parse
         against `schema` is recorded as `invalid` and returned, not retried. A
         call whose first attempt gets no response raises that failure and
         records nothing; a fallback that fails after a billed refusal raises
-        `ModelCallError`, which carries the refusal's record."""
+        `ModelCallError`, which carries the refusal's record. `spend` gets each
+        record as it is priced, and may stop a fallback (`Spend`)."""
         if mode not in get_args(Mode):
             # Strict replay makes zero model calls (AGENTS.md §6).
             raise ValueError(
@@ -136,6 +163,8 @@ class ModelRouter:
             )
             records.append(record)
             self._completed_calls.append(record)
-            if status != "refusal":
+            if spend is not None:
+                spend.on_priced(record)
+            if status != "refusal" or (spend is not None and spend.reached(records)):
                 break
         return Routed(reply.message, reply.parsed, status, tuple(records))

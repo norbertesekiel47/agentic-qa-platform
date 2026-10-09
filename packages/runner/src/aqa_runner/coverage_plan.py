@@ -5,14 +5,16 @@ own text, and nothing from a page, a run or the machine."""
 import json
 import re
 from dataclasses import dataclass, replace
+from functools import partial
 from typing import cast
 
 from aqa_core.coverage_plan import CoveragePlan, PlannedCheck, misfits
+from aqa_core.model_costs import CostRecord
 from aqa_core.spec import UNHASHED_KEYS, Spec
 from aqa_core.text import has_text
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
-from aqa_runner.model_router import ModelCallError, ModelRouter, Routed
+from aqa_runner.model_router import ModelCallError, ModelRouter, Routed, Spend
 from aqa_runner.text_search import SearchTimeoutError, pattern_matches
 
 # The plan's system prompt. Static: a change to it changes every plan request,
@@ -220,7 +222,22 @@ _CORRECTION = (
 )
 
 
-async def make_plan(router: ModelRouter, spec: Spec) -> Planned:
+def _keeping(spend: Spend, raised: list[Exception]) -> Spend:
+    """`spend`, whose `on_priced` also keeps in `raised` what it raises."""
+
+    def on_priced(record: CostRecord) -> None:
+        try:
+            spend.on_priced(record)
+        except Exception as error:
+            raised.append(error)
+            raise
+
+    return replace(spend, on_priced=on_priced)
+
+
+async def make_plan(
+    router: ModelRouter, spec: Spec, *, spend: Spend | None = None
+) -> Planned:
     """Ask the navigator role's model for `spec`'s coverage plan: a call in
     explore mode, with the plan as its response format and no tools, so no
     tool choice at all (ADR-0007 amendment). A plan that can't be used is
@@ -228,14 +245,15 @@ async def make_plan(router: ModelRouter, spec: Spec) -> Planned:
     after it, and the second answer is final (ADR-0024's #161 amendment). A
     refusal falls back as the router does; a call that gets no response raises
     as the router does, and a retry's failure raises `ModelCallError` holding
-    the first answer's record too."""
+    the first answer's record too. The retry gets what the first answer left
+    of `spend`'s ceiling, and none once it is reached (ADR-0007's #53 P3)."""
     request = plan_request(spec)
-    first = await _planned(
-        await router.call("navigator", "explore", request, schema=CoveragePlan),
-        spec,
-    )
+    ask = partial(router.call, "navigator", "explore", schema=CoveragePlan)
+    first = await _planned(await ask(request, spend=spend), spec)
     if first.plan is None or not first.problems:
         return first
+    if spend is not None and spend.reached(first.routed.calls):
+        return first  # no retry once the first answer spent the ceiling
     retry = [
         *request,
         AIMessage(content=first.plan.model_dump_json(exclude_none=True)),
@@ -246,11 +264,15 @@ async def make_plan(router: ModelRouter, spec: Spec) -> Planned:
         ),
     ]
     billed = first.routed.calls
+    raised: list[Exception] = []
+    left = None if spend is None else _keeping(spend.after(billed), raised)
     try:
-        routed = await router.call("navigator", "explore", retry, schema=CoveragePlan)
-    except ModelCallError as error:
-        raise ModelCallError((*billed, *error.records)) from error.__cause__
+        routed = await ask(retry, spend=left)
     except Exception as error:
+        if raised and error is raised[0]:
+            raise  # the caller's own on_priced failed: it leaves as it came
+        if isinstance(error, ModelCallError):
+            raise ModelCallError((*billed, *error.records)) from error.__cause__
         # The first answer was billed: its record must outlive the failure.
         raise ModelCallError(billed) from error
     return await _planned(replace(routed, calls=(*billed, *routed.calls)), spec)
