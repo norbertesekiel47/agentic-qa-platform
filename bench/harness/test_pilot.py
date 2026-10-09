@@ -33,6 +33,7 @@ PRESS_AB = {"seq": 1, "action": "press", "key": "a+b", "side_effect": False}
 INPUT = "pilot.json: invalid pilot input"
 HELD = FailedAttempt("r9", PRIVATE, "operation_timeout", "incomplete", "unknown")
 REJECTED = FailedAttempt("r9", PRIVATE, "reset_rejected", "completed", "closed")
+ROW = {"spec": "pilot", "expect": 0, "region": "main", "part": "button"}
 
 
 def case(kind: str, flag: str, split: str = "dev", **row: object) -> dict[str, Any]:
@@ -265,6 +266,7 @@ class PilotCommandTests(unittest.TestCase):
             ("non-drift patch", stray, 2, "not a patch for a selected"),
             ("existing out", lambda: self.out.mkdir(exist_ok=False), 2, "out: exists"),
             ("bad manifest", unparsed, 2, "error: ManifestError"),
+            ("subject row", lambda: self.config.update(subjects=[ROW]), 2, INPUT),
         ]
         for name, change, want, message in cases:
             with self.subTest(name), patch.dict(os.environ):

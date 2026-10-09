@@ -17,6 +17,7 @@ from aqa_core.compiled import (
 from aqa_core.config import ProjectConfig
 from aqa_core.project import (
     SpecError,
+    contract_problems,
     load_compiled,
     load_project,
     path_on_origin,
@@ -93,13 +94,16 @@ def validate_pilot(
     spec: Spec, config: ProjectConfig, script: CompiledScript, *, source: Path
 ) -> PilotInput:
     """`script`, already read strictly, admitted for `spec`: compiled from the
-    spec as it is now, covering each of its expectations, runnable by the
-    executor, reset by a valid hook when a step has side effects, and with
-    every test secret the spec references bound for this run; values are
-    read to check, never kept. Otherwise raises ValueError naming `source`
-    and a fixed category (UnusableSecretError for the environment's)."""
+    spec as it is now, covering each of its expectations, agreeing with the
+    project's subject contracts as replay requires (`contract_problems`),
+    runnable by the executor, reset by a valid hook when a step has side
+    effects, and with every test secret the spec references bound for this
+    run; values are read to check, never kept. Otherwise raises ValueError
+    naming `source` and a fixed category (UnusableSecretError for the
+    environment's)."""
     prepared = _quietly(partial(_prepare, spec, config), SpecError, ValueError)
-    if prepared is None or not _admitted(spec, script):
+    admitted = _admitted(spec, script) and not contract_problems(script, config)
+    if prepared is None or not admitted:
         raise ValueError(f"{source}: invalid pilot input")
     start, reset, usable = prepared
     if not usable:
