@@ -69,9 +69,10 @@ from aqa_runner.egress_proxy import EgressBlocks, EgressProxy
 from aqa_runner.evidence import capture_evidence
 from aqa_runner.invariants import InvariantResult, invariant_results
 from aqa_runner.locators import Absent, Miss, Resolved, Unresolved, Use
-from aqa_runner.redaction import Redacted, Redactor, error_text
+from aqa_runner.reasons import Raised, UnansweredError, reason
+from aqa_runner.redaction import Redacted, Redactor
 from aqa_runner.run_record import RefusedWriteError, RunRecord
-from aqa_runner.secret_fields import SecretNotFilledError, SecretRefusedError
+from aqa_runner.secret_fields import SecretRefusedError
 from aqa_runner.settling import Settled, Window
 from aqa_runner.text_search import SearchTimeoutError, text_matches, url_matches
 
@@ -144,15 +145,14 @@ class _Replay:
         ADR-0026's #50 D amendment lists."""
         return not self.redactor.empty
 
-    def reason(self, error: _Raised) -> str:
+    def reason(self, error: Raised) -> str:
         """`error` as a failed step's or an unevaluated assertion's reason
-        (`_owned`, then `error_text`: scanned for every bound value, the
-        ones the script never fills too). When the run binds a test secret,
-        Playwright's message is withheld for the whole run: a page can throw
-        a value back split into pieces no scan finds."""
-        return error_text(
-            error, self.redactor, ours=_owned(error), withheld=self.withheld
-        )
+        (`aqa_runner.reasons`: scanned for every bound value, the ones the
+        script never fills too). When the run binds a test secret,
+        Playwright's message and every origin of ours are withheld for the
+        whole run: a page can throw a value back split into pieces no scan
+        finds, or choose the origin a refusal would name."""
+        return reason(error, self.redactor, withheld=self.withheld)
 
 
 @dataclass(frozen=True)
@@ -376,7 +376,7 @@ async def _observed(session: BrowserSession, budget: float) -> Redacted | None:
         return await _bounded(
             _looked(lambda: session.snapshot(record_refusal=False), budget), budget
         )
-    except Error, PolicyEventError, DocumentChangedError, _UnansweredError:
+    except Error, PolicyEventError, DocumentChangedError, UnansweredError:
         return None
 
 
@@ -432,14 +432,6 @@ def _accepted(
     return runnable, checks
 
 
-class _UnansweredError(Exception):
-    """A look at the page that didn't finish within its budget: Playwright's
-    reads of a page take no timeout of their own."""
-
-    def __init__(self, seconds: float) -> None:
-        super().__init__(f"the page didn't answer within {seconds:g} s")
-
-
 async def _evaluate_each(
     session: BrowserSession, checks: list[Assertion], run: _Replay
 ) -> tuple[AssertionResult, ...]:
@@ -452,7 +444,7 @@ async def _evaluate_each(
     budget = run.setup.config.budgets.resolve_seconds
     try:
         await _bounded(_looked(session.visible_text, budget), budget)
-    except (Error, PolicyEventError, DocumentChangedError, _UnansweredError) as error:
+    except (Error, PolicyEventError, DocumentChangedError, UnansweredError) as error:
         # As below: the page couldn't be looked at, so nothing on it can be
         # evaluated.
         reason = run.reason(error)
@@ -474,7 +466,7 @@ async def _evaluate_each(
             Error,
             PolicyEventError,
             DocumentChangedError,
-            _UnansweredError,
+            UnansweredError,
             probes.ProbeError,
             EgressRefusedError,
             EgressUpstreamError,
@@ -591,7 +583,7 @@ async def _capture_baselines(run: _Replay, seq: int) -> None:
 
 
 async def _bounded[T](look: Awaitable[T], budget: float) -> T:
-    """`look`'s result, or `_UnansweredError` when the page hasn't answered
+    """`look`'s result, or `UnansweredError` when the page hasn't answered
     within `budget` seconds and `MARGIN_SECONDS` past them."""
     seconds = budget + MARGIN_SECONDS
     limit = asyncio.timeout(seconds)
@@ -601,7 +593,7 @@ async def _bounded[T](look: Awaitable[T], budget: float) -> T:
     except TimeoutError:
         if not limit.expired():
             raise  # not the look's own limit
-        raise _UnansweredError(seconds) from None
+        raise UnansweredError(seconds) from None
 
 
 async def _looked[T](look: Callable[[], Awaitable[T]], budget: float) -> T:
@@ -636,7 +628,7 @@ def _answered[R: Resolved | Absent | Unresolved](found: R, budget: float) -> R:
     is a page that didn't answer, not drift (every target has a locator, so
     a finished look leaves a miss)."""
     if isinstance(found, Unresolved) and not found.misses:
-        raise _UnansweredError(budget)
+        raise UnansweredError(budget)
     return found
 
 
@@ -832,59 +824,6 @@ async def _dispatched(
         )
     record.step_completed(seq, locator_used=index, settled=settled)
     return StepResult(seq, "completed", window, index, settled)
-
-
-# What a step or an assertion's look can raise that becomes its reason.
-type _Raised = (
-    Error
-    | PolicyEventError
-    | DocumentChangedError
-    | _UnansweredError
-    | SecretRefusedError
-    | probes.ProbeError
-    | probes.ProbeUnstableError
-    | EgressRefusedError
-    | EgressUpstreamError
-    | network.WindowsOverflowError
-    | UnsupportedVisualFrameError
-)
-
-
-def _owned(error: _Raised) -> str | None:
-    """The executor's or the session's own message for an error it owns (a
-    policy event's names only an origin, a fill_secret refusal only the
-    secret, origins and field), or its fixed diagnostic for a probe's; None
-    for Playwright's, which the page may have chosen. `error_text` presents
-    either, and withholds the rest of Playwright's message in a run that
-    binds a test secret: a page can throw a value back from any call,
-    encoded or split as it likes (ADR-0026's fill_secret and #50 D
-    amendments)."""
-    for kind, reason in (
-        (probes.ProbeError, "the probe could not be read"),
-        (
-            UnsupportedVisualFrameError,
-            "visible_unoccluded does not support elements inside frames",
-        ),
-        (
-            probes.ProbeUnstableError,
-            "the probe value did not stabilize within its read bound",
-        ),
-        (EgressRefusedError, "the probe request was refused by the egress policy"),
-        (EgressUpstreamError, "the probe request could not reach its allowed origin"),
-    ):
-        if isinstance(error, kind):
-            return reason
-    if isinstance(
-        error,
-        PolicyEventError
-        | DocumentChangedError
-        | _UnansweredError
-        | SecretRefusedError
-        | SecretNotFilledError
-        | network.WindowsOverflowError,
-    ):
-        return str(error)
-    return None
 
 
 def _scanned(event: InfrastructureEvent, redactor: Redactor) -> InfrastructureEvent:

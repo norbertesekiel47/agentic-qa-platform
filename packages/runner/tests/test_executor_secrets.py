@@ -13,9 +13,12 @@ from urllib.parse import quote_plus
 
 import pytest
 from aqa_core.compiled import CompiledScript
+from aqa_core.config import ProjectConfig
 from aqa_core.project import SpecError
 from aqa_runner import executor
 from aqa_runner.bound_secrets import MissingSecretError, SecretLoggedError
+from aqa_runner.browser_session import BrowserSession
+from aqa_runner.document_origins import PolicyEvent, PolicyEventError
 from aqa_runner.egress_proxy import EgressBlocks, EgressProxy, RefusedHost
 from aqa_runner.executor import RunResult
 
@@ -23,6 +26,7 @@ from packages.runner.tests.executor_fixtures import (
     FORM_TARGETS,
     PAGES,
     App,
+    a_spec,
     by_role,
     compiled,
     read_steps,
@@ -593,3 +597,85 @@ def test_an_unusable_value_stops_replay_before_the_browser_opens(
         run(app, tmp_path, signing_in([FILL_PASSWORD]), spec=spec)
     assert refused.value.exit_code == 12
     assert app.paths() == []
+
+
+# A document on an origin the run doesn't allow, with a port, as a page that
+# chose it could encode a value in its host and port.
+EVIL = "http://evil.example.test:31337"
+
+
+@pytest.mark.parametrize("where", ["step", "assertion"])
+@pytest.mark.parametrize(
+    ("binds", "expected"),
+    [
+        (
+            True,
+            (
+                "the page is on an origin the run doesn't allow (withheld: the run has "
+                "a test secret)"
+            ),
+        ),
+        (
+            False,
+            (
+                f"the page is on {EVIL}, which isn't one of the run's allowed origins: "
+                "nothing there is observed or acted on; navigate to an allowed origin, "
+                "or restart"
+            ),
+        ),
+    ],
+    ids=["binds", "binds-none"],
+)
+def test_a_policy_refusal_in_a_withheld_replay_names_no_origin_or_port(
+    app: App,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    where: str,
+    binds: bool,
+    expected: str,
+) -> None:
+    async def refused(_: BrowserSession) -> str:
+        raise PolicyEventError(PolicyEvent("document", f"{EVIL}/x?q=1", EVIL))
+
+    monkeypatch.setattr(BrowserSession, "reload" if where == "step" else "url", refused)
+    if binds:
+        monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
+        spec = secret_spec(tmp_path, start_url="/page/form")
+    else:
+        spec = a_spec(tmp_path, ProjectConfig(), start_url="/page/form")
+    steps = [{"seq": 1, "action": "reload", "side_effect": False}]
+
+    result = run(
+        app, tmp_path, compiled(steps if where == "step" else []), spec=spec
+    ).result
+
+    reasons = [step.error for step in result.steps] + [
+        assertion.error for assertion in result.assertions
+    ]
+    assert next(reason for reason in reasons if reason is not None) == expected
+    assert result.outcome == "errored"
+
+
+@pytest.mark.usefixtures("with_the_value")
+def test_a_refused_fill_secret_in_a_bound_replay_names_no_origin(
+    app: App, tmp_path: Path
+) -> None:
+    # The secret goes only to another allowed origin, so the page is on none
+    # of its destinations.
+    elsewhere = "http://elsewhere.example.test:8081"
+    spec = secret_spec(
+        tmp_path,
+        f"TEST_PASSWORD: {{ origins: ['{elsewhere}'], field: password }}",
+        start_url="/page/signin",
+        allowed_origins=(elsewhere,),
+    )
+
+    done = run(app, tmp_path, signing_in([FILL_PASSWORD]), spec=spec)
+
+    step = done.result.steps[1]
+    assert (step.outcome, step.error) == (
+        "failed",
+        "fill_secret refused TEST_PASSWORD: the page is on none of its destinations",
+    )
+    assert app.bodies == []
