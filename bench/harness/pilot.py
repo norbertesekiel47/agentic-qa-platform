@@ -7,6 +7,7 @@ Run: uv run python bench/harness/pilot.py conduit --out DIR [--spec ID ...]
 import argparse
 import asyncio
 import hashlib
+import os
 import subprocess
 import sys
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
@@ -60,10 +61,12 @@ def _halting(halt: Halt) -> Iterator[None]:
 
 
 def git_source(root: Path, out: Path) -> Source:
-    """The Source at `root`, untracked files counted, except under `out`."""
+    """The Source at `root`, untracked files counted, except under `out`. Git
+    runs without inherited GIT_* variables: GIT_DIR would outrank `root`."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 
     def git(*args: str) -> str:
-        return subprocess.check_output(["git", "-C", str(root), *args], text=True)
+        return subprocess.check_output(["git", *args], cwd=root, text=True, env=env)
 
     here, there = root.resolve(), out.resolve()
     inside = there.is_relative_to(here)
@@ -138,9 +141,6 @@ class Run:
             attempt = await self.replay(pilot, self.out)
         except asyncio.CancelledError as error:
             raise HaltError("interrupted") from error
-        except Exception as error:
-            # Whatever replay_pilot couldn't classify: its browser may be open.
-            raise HaltError("unexpected") from error
         kind = report.classify(attempt, pilot.spec.frontmatter.invariants)
         self.receipts += 1
         path = self.out / "attempts" / f"{self.receipts:03}.json"

@@ -530,8 +530,8 @@ class PilotCommandTests(unittest.TestCase):
 
     def git(self, *args: str) -> str:
         """Git, after dropping every inherited GIT_* variable (setUp restores
-        them) for this and git_source's calls: under `git rebase --exec` one
-        aimed `git init` at the real repository (LAB_NOTES, 2026-10-09)."""
+        them): under `git rebase --exec`, one aimed `git init` at the real
+        repository (LAB_NOTES, 2026-10-09)."""
         for name in [name for name in os.environ if name.startswith("GIT_")]:
             del os.environ[name]
         git = ["git", "-c", "user.name=fake", "-c", "user.email=fake@example.invalid"]
@@ -551,6 +551,7 @@ class PilotCommandTests(unittest.TestCase):
         self.git("init", "-q", str(decoy))
         os.environ["GIT_DIR"] = str(decoy / ".git")
         repo, out = self.git_repo()
+        os.environ["GIT_DIR"] = str(decoy / ".git")
         commit_id = pilot.git_source(repo, out).commit
         found = (
             self.git("-C", str(decoy), "config", "core.bare"),
