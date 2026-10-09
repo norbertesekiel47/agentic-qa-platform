@@ -43,11 +43,14 @@ class ModelCallError(Exception):
 
 
 def _status(reply: Reply, schema: type[BaseModel] | None) -> Status:
-    """How a response counts: a refusal, an answer that should have parsed
-    against `schema` and didn't (`invalid`), or `ok`."""
+    """How a response counts: a refusal; an answer the model didn't finish, or
+    one that should have parsed against `schema` and didn't (`invalid`); or
+    `ok`. A refusal is not complete either, so it is checked first."""
     if reply.refused:
         return "refusal"
-    return "invalid" if schema is not None and reply.parsed is None else "ok"
+    if not reply.complete or (schema is not None and reply.parsed is None):
+        return "invalid"
+    return "ok"
 
 
 class ModelRouter:

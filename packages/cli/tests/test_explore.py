@@ -518,6 +518,7 @@ def test_a_plan_cut_off_at_the_output_bound_exits_3_and_says_so(
         ),
         usage=Usage(input_tokens=2000, cached_input_tokens=0, output_tokens=4096),
         refused=False,
+        complete=False,
         parsed=None,
     )
 
