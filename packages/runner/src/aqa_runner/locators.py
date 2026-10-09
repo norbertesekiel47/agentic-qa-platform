@@ -5,6 +5,7 @@ Each call is one look at the page. Waiting for a target to resolve, within
 the run's `resolve_seconds`, is the executor's loop around it (#46)."""
 
 import re
+import sys
 from dataclasses import dataclass
 from typing import Literal, overload
 
@@ -315,11 +316,27 @@ async def _resolve_held(
         if region is None or not await _left(region):
             raise
     finally:
-        if isinstance(found, Resolved) and found is not kept:
-            await found.element.dispose()
-        if region is not None:
-            await region.dispose()
+        released = False
+        try:
+            if region is not None:
+                await _let_go(region, sys.exception())
+            released = True
+        finally:
+            if isinstance(found, Resolved) and (found is not kept or not released):
+                await _let_go(found.element, sys.exception())
     return kept
+
+
+async def _let_go(handle: JSHandle, earlier: BaseException | None) -> None:
+    """Dispose `handle`. A cancellation or other non-Exception already being
+    raised stays the exception raised, this failure its cause (ADR-0025's
+    P7b-I amendment)."""
+    try:
+        await handle.dispose()
+    except BaseException as error:
+        if isinstance(earlier, Exception | None):
+            raise
+        raise earlier from error
 
 
 async def _left(region: JSHandle) -> bool:
