@@ -197,10 +197,11 @@ def test_contracts_by_meaning_refuses_a_meaning_under_two_contracts() -> None:
         expectation(2, count_again),
     )
     two_rows = refused(
-        {1: BANNER, 2: FOOTER},
+        {1: BANNER, 2: FOOTER, 3: FOOTER},
         expectation(0, URL),
         expectation(1, COUNTED),
         expectation(2, count_again),
+        expectation(3, count_again),
     )
 
     for problems in (listed_and_unlisted, two_rows):
