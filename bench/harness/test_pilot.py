@@ -207,8 +207,12 @@ class PilotCommandTests(unittest.TestCase):
         legs = ["clean", "clean", "diagnostic", "acceptance", "unscored"]
         self.assertEqual(roles, legs)
         self.assertEqual(self.report()["switched_back_clean"], True)
-        kinds = [name.partition(":")[0] for name in sorted(self.report()["hashes"])]
+        hashes, used = self.report()["hashes"], replay.seen[0][1]
+        kinds = [name.partition(":")[0] for name in sorted(hashes)]
         self.assertEqual(kinds, ["manifest", "patch", "script", "spec"])
+        script = canonical_hash(used.script.model_dump(mode="json"))
+        cited = (hashes["spec:pilot"], hashes["script:pilot"])
+        self.assertEqual(cited, (used.spec.spec_hash, script))
 
     def test_reports_the_selection_and_every_omitted_spec(self) -> None:
         self.cases, other = {}, self.compiled / "other.json"
@@ -526,7 +530,6 @@ class PilotCommandTests(unittest.TestCase):
 
     def test_a_source_change_during_the_run_is_not_citable(self) -> None:
         changed = SOURCE._replace(commit="d" * 40)
-        # The last read follows the switch back.
         for reads in ([SOURCE, changed], [SOURCE, SOURCE, changed]):
             self.docker, self.out = FakeDocker(), self.root / f"out-{len(reads)}"
             replay = FakeReplay(self.docker, {"": [OK], "ben1": [OK], "bug1": [OK]})
