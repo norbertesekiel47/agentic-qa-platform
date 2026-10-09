@@ -417,15 +417,16 @@ def test_a_join_spanning_bound_value_is_scanned_in_a_run_with_no_fill(
 def test_an_owned_message_is_one_line_of_at_most_the_reason_bound(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A refused fill_secret names the page's origin and the field, and the
-    # origins the secret allows after it: what runs past the bound is cut.
+    # A refused fill_secret names the field its binding names, a name the
+    # project config can make as long as it likes: what runs past the bound
+    # is cut. (A refusal that would name an origin has a fixed text in a run
+    # that binds a secret, as every fill_secret run does.)
     monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
-    origins = ", ".join(f"https://long-{n}.example.test" for n in range(12))
+    name = "Account password for the reader " * 8
     spec = secret_spec(
         tmp_path,
-        f"TEST_PASSWORD: {{ origins: [{origins}], field: password }}",
+        f"TEST_PASSWORD: {{ origins: [start], field: {{ role: textbox, name: {name!r} }} }}",
         start_url="/page/form",
-        allowed_origins=tuple(f"https://long-{n}.example.test" for n in range(12)),
     )
     fill = {
         "seq": 1,
@@ -440,7 +441,9 @@ def test_an_owned_message_is_one_line_of_at_most_the_reason_bound(
     ).result
 
     error = result.steps[1].error or ""
-    assert error.startswith("fill_secret refused TEST_PASSWORD: the page is on ")
+    assert error.startswith(
+        "fill_secret refused TEST_PASSWORD: the field isn't the textbox named \"Account"
+    )
     assert len(error) == REASON_CHARS
     assert "\n" not in error
 

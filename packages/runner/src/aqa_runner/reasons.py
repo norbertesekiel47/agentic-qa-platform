@@ -1,0 +1,118 @@
+"""The text a failed step's or an unevaluated assertion's result carries for
+what raised (ADR-0026's #53 P9+P10 amendment), built on
+`redaction.error_text`.
+
+An owned error is one whose message the runner or the session writes; any
+other is Playwright's, whose message the page may have chosen, and which a
+withheld run cuts to its class and the call it names. A run withholds when it
+binds a test secret, filled or not.
+
+In a withheld run an owned reason comes from a closed vocabulary that names no
+origin, host, port, URL or path: a policy refusal names only its kind, and a
+`fill_secret` refusal only the secret and the check that refused it. One
+exception is trusted config: a `field` refusal keeps its description of the
+field the secret's binding names (`secret_fields.describe_field`), which the
+project config writes and the page never does. Outside a withheld run every
+owned reason keeps its own message, origins included."""
+
+from typing import Literal
+
+from playwright.async_api import Error
+
+from aqa_runner import network, probes
+from aqa_runner.browser_session import UnsupportedVisualFrameError
+from aqa_runner.document_origins import (
+    REFUSED_BY_KIND,
+    DocumentChangedError,
+    PolicyEventError,
+)
+from aqa_runner.egress import EgressRefusedError, EgressUpstreamError
+from aqa_runner.redaction import Redacted, Redactor, error_text
+from aqa_runner.secret_fields import SecretNotFilledError, SecretRefusedError
+
+
+class UnansweredError(Exception):
+    """A look at the page that didn't finish within its budget: Playwright's
+    reads of a page take no timeout of their own."""
+
+    def __init__(self, seconds: float) -> None:
+        super().__init__(f"the page didn't answer within {seconds:g} s")
+
+
+# What a step or an assertion's look can raise that becomes its reason.
+type Raised = (
+    Error
+    | PolicyEventError
+    | DocumentChangedError
+    | UnansweredError
+    | SecretRefusedError
+    | probes.ProbeError
+    | probes.ProbeUnstableError
+    | EgressRefusedError
+    | EgressUpstreamError
+    | network.WindowsOverflowError
+    | UnsupportedVisualFrameError
+)
+
+# Owned errors whose reason is always this fixed text: a probe's message can
+# hold what its endpoint answered, and an egress error's names a host.
+_FIXED: tuple[tuple[type[Exception], str], ...] = (
+    (probes.ProbeError, "the probe could not be read"),
+    (
+        UnsupportedVisualFrameError,
+        "visible_unoccluded does not support elements inside frames",
+    ),
+    (
+        probes.ProbeUnstableError,
+        "the probe value did not stabilize within its read bound",
+    ),
+    (EgressRefusedError, "the probe request was refused by the egress policy"),
+    (EgressUpstreamError, "the probe request could not reach its allowed origin"),
+)
+
+# What a withheld run says for each `fill_secret` check that names an origin.
+_WITHHELD_CHECKS: dict[
+    Literal["destination", "document_origin", "frame_origin"], str
+] = {
+    "destination": "the page is on none of its destinations",
+    "document_origin": "the page's document isn't on its URL's origin",
+    "frame_origin": (
+        "the field is in a frame off the page's origin, or one the page can't reach"
+    ),
+}
+
+_WITHHELD = "(withheld: the run has a test secret)"
+
+
+def reason(error: Raised, redactor: Redactor, *, withheld: bool) -> Redacted:
+    """`error` as a result's reason: its owned message (from the closed
+    vocabulary when `withheld`), or else Playwright's, through
+    `error_text`, which scans either for every value `redactor` binds and
+    keeps only Playwright's class and call when `withheld`."""
+    return error_text(
+        error, redactor, ours=_owned(error, withheld=withheld), withheld=withheld
+    )
+
+
+def _owned(error: Raised, *, withheld: bool) -> str | None:
+    """The runner's or the session's own message for `error`, or None for
+    Playwright's."""
+    for kind, text in _FIXED:
+        if isinstance(error, kind):
+            return text
+    if withheld and isinstance(error, PolicyEventError):
+        refused = REFUSED_BY_KIND[error.event.kind]
+        return f"{refused} on an origin the run doesn't allow {_WITHHELD}"
+    if withheld and isinstance(error, SecretRefusedError) and error.check != "field":
+        return f"fill_secret refused {error.secret}: {_WITHHELD_CHECKS[error.check]}"
+    if isinstance(
+        error,
+        PolicyEventError
+        | DocumentChangedError
+        | UnansweredError
+        | SecretRefusedError
+        | SecretNotFilledError
+        | network.WindowsOverflowError,
+    ):
+        return str(error)
+    return None
