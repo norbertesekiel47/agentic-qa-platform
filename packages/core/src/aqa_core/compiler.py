@@ -2,12 +2,11 @@
 "Compilation rules"; ADR-0025's #53 P2 amendment). Pure: no clock, no file,
 no browser and no model.
 
-A problem names a check by its ID and expectation, a step by the attempt's
-number, a condition by its ID, and a meaning only as the plan wrote it. None
-quotes a step's fields, a target's meaning or its locators, which the model and
-the page chose."""
+A problem names a check, a step number, a condition or a row, and may quote
+plan or spec text; never a step's fields, a bound target's meaning or its
+locators, which the attempt and the page chose."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -20,6 +19,7 @@ from aqa_core.compiled import (
     CompiledScript,
     Coverage,
     ExpectationCoverage,
+    FillSecret,
     Step,
     Target,
 )
@@ -55,10 +55,7 @@ _COMPILER_FIELDS: Final = frozenset(
     {"seq", "target", "side_effect", "side_effect_basis", "satisfies"}
 )
 _NOT_ITS_CONTRACT: Final = "its target's subject contract isn't its meaning's"
-_LOADER: Final = (
-    "the compiled script doesn't pass the loader's checks "
-    '(DATA_MODEL §7, "Checked by the loader")'
-)
+_LOADER: Final = "the compiled script doesn't pass the loader's checks (DATA_MODEL §7, \"Checked by the loader\")"
 
 
 class CompileError(Exception):
@@ -74,7 +71,8 @@ def assertion_for(
 ) -> Assertion:
     """The assertion `check` compiles to, reading the target named `target`
     when its type reads an element. A `visible_unoccluded` check must fit the
-    viewport and have a size (DATA_MODEL §7)."""
+    viewport and have a size (DATA_MODEL §7); a `probe_equals` needs the JSON
+    path exploring doesn't bind yet (#53 P20)."""
     fields: dict[str, object] = {
         "id": check_id,
         "expect_index": expect_index,
@@ -93,14 +91,12 @@ def unsupported_features(plan: CoveragePlan) -> tuple[str, ...]:
     a plan before the browser opens."""
     return (
         *(
-            f"{check_id} (expect[{index}], {check.check}): exploring can't compile a "
-            f"{check.check} check yet"
+            f"{check_id} (expect[{index}], {check.check}): exploring can't compile a {check.check} check yet"
             for check_id, (index, check) in planned_checks(plan).items()
             if check.check in _PROBES
         ),
         *(
-            f'requires {condition.id} ("{condition.condition}"): exploring can\'t keep '
-            "a required condition in the path yet"
+            f'requires {condition.id} ("{condition.condition}"): exploring can\'t keep a required condition in the path yet'
             for condition in plan.requires
         ),
     )
@@ -125,8 +121,7 @@ def _contracts(
                 else f"checks expectation {index} with no element"
             )
             problems.append(
-                f"subjects expect {index}: the plan {how}, so no target can carry its "
-                "subject contract"
+                f"subjects expect {index}: the plan {how}, so no target can carry its subject contract"
             )
         for meaning in meanings:
             contract = rows.get(index)
@@ -134,9 +129,7 @@ def _contracts(
             if known != contract and meaning not in clashed:
                 clashed.add(meaning)
                 problems.append(
-                    f'meaning "{meaning}" is planned under different subject contracts, '
-                    f"for expect {first[meaning]} and expect {index}: one meaning has "
-                    "one contract or none"
+                    f'meaning "{meaning}" is planned under different subject contracts, for expect {first[meaning]} and expect {index}: one meaning has one contract or none'
                 )
             first.setdefault(meaning, index)
     return contracts, problems
@@ -205,8 +198,10 @@ def _steps(
     taken: Sequence[int],
     contracts: Mapping[str, Contract | None],
     names: dict[Target, str],
+    secrets: Collection[str],
 ) -> tuple[list[Step], list[str]]:
-    """The kept steps, `taken`, compiled in order, and what's wrong with them."""
+    """The kept steps, `taken`, compiled in order, and what's wrong with them.
+    A secret the spec doesn't bind has no binding at replay (`secrets`)."""
     steps: list[Step] = []
     problems: list[str] = []
     for seq, number in enumerate(taken, start=1):
@@ -216,6 +211,8 @@ def _steps(
         compiled = _step(number, step, seq, names)
         if isinstance(compiled, str):
             problems.append(compiled)
+        elif isinstance(compiled, FillSecret) and compiled.secret not in secrets:
+            problems.append(f"step {number}: fills a secret the spec doesn't bind")
         else:
             steps.append(compiled)
     return steps, problems
@@ -250,8 +247,7 @@ def _invalid(error: str, loc: tuple[int | str, ...]) -> str:
     if not loc:  # no action, or one this format doesn't know
         return "names no action this format knows"
     kind, field = loc[0], loc[1] if len(loc) > 1 else None
-    # The fields compiling adds are valid, so any other field is a key the
-    # caller added, never named.
+    # Compiling's own fields are valid, so any other is the caller's key.
     if field not in _ACTION_FIELDS:
         return f"a {kind} step takes a field it doesn't know"
     if error == "missing":
@@ -279,19 +275,20 @@ def _assertions(
     path: ExploredPath,
     contracts: Mapping[str, Contract | None],
     names: dict[Target, str],
+    has_steps: bool,
 ) -> tuple[list[Assertion], list[str]]:
     """Each bound check's assertion, in plan order, and what's wrong with the
     checks. Probe checks are `unsupported_features`' to name."""
     assertions: list[Assertion] = []
     problems: list[str] = []
-    has_steps = any(number in path.steps for number in path.kept)
+    if path.bound.keys() - planned_checks(plan).keys():
+        problems.append("the path binds a check ID the plan doesn't have")
     for check_id, (index, check) in planned_checks(plan).items():
         where = f"{check_id} (expect[{index}], {check.check})"
         if check.check in _PROBES:
             if check.check == "probe_equals_baseline" and not has_steps:
                 problems.append(
-                    f"{where}: a path with no steps has no step to capture its "
-                    "baseline before"
+                    f"{where}: a path with no steps has no step to capture its baseline before"
                 )
             continue
         if check_id not in path.bound:
@@ -323,18 +320,17 @@ def compile_script(
     path: ExploredPath,
     by: Provenance,
 ) -> CompiledScript:
-    """The compiled script for the steps of `path` that `finish` kept, in the
-    attempt's order, and the checks it bound, unconfirmed (DATA_MODEL §7).
-    CompileError names every problem. `plan` must fit `spec`
-    (`coverage_plan.misfits`)."""
+    """The unconfirmed script for the steps `finish` kept, in the attempt's
+    order, and the bound checks (DATA_MODEL §7), or CompileError naming every
+    problem. `plan` must fit `spec` (`coverage_plan.misfits`)."""
     plan_problems = [*uncovered(plan, spec.frontmatter), *unsupported_features(plan)]
     spec_id = spec.frontmatter.id
     contracts, meaning_problems = _contracts(plan, subject_contracts(config, spec_id))
     kept = sorted(set(path.kept))
     taken = [number for number in kept if number in path.steps]
     names: dict[Target, str] = {}
-    steps, step_problems = _steps(path, taken, contracts, names)
-    assertions, check_problems = _assertions(plan, path, contracts, names)
+    steps, step_problems = _steps(path, taken, contracts, names, spec.secret_bindings)
+    assertions, check_problems = _assertions(plan, path, contracts, names, bool(taken))
     problems = [
         *plan_problems,
         *meaning_problems,
