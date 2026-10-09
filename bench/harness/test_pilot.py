@@ -339,29 +339,24 @@ class PilotCommandTests(unittest.TestCase):
             "source ValueError": (nullcontext(), source(ValueError("fake-")), held, 3),
             "document": (broken("document", ValueError("fake-"), 1), None, ended, 3),
         }
+        answers: dict[str, list[Any]] = {"": [OK], "ben1": [LOST], "bug1": [OK]}
         for name, (trap, read, ups, kept) in cases.items():
             with self.subTest(name), trap:
                 at.clear()
                 self.docker, self.out = FakeDocker(), self.root / name.replace(" ", "-")
-                replay = FakeReplay(
-                    self.docker, {"": [OK], "ben1": [LOST], "bug1": [OK]}
-                )
+                replay = FakeReplay(self.docker, answers)
                 code, shown = self.command(replay, source=read or (lambda *_: SOURCE))
                 doc, written = self.report(), (self.out / "report.json").read_text()
                 receipts = len(list((self.out / "attempts").iterdir()))
                 found = (code, doc["halt"], doc["reservation_release"], self.ups())
-                self.assertEqual(
-                    (*found, receipts), (3, "unexpected", "forbidden", ups, kept)
-                )
-                unchanged = not name.startswith("source")
-                self.assertEqual(
-                    (at, doc["source_unchanged"]), ([len(self.docker.calls)], unchanged)
-                )
+                want = (3, "unexpected", "forbidden", ups, kept)
+                self.assertEqual((*found, receipts), want)
+                fresh = [len(self.docker.calls)], not name.startswith("source")
+                self.assertEqual((at, doc["source_unchanged"]), fresh)
                 self.assertNotIn("fake-", shown + written)
         self.docker, self.out = FakeDocker(), self.root / "interrupted"
-        stopped = FakeReplay(
-            self.docker, {"": [OK], "ben1": [asyncio.CancelledError()]}
-        )
+        answers["ben1"] = [asyncio.CancelledError()]
+        stopped = FakeReplay(self.docker, answers)
         code, _ = self.command(stopped, source=source(OSError("fake-")))
         self.assertEqual((code, self.report()["halt"]), (130, "interrupted"))
 
@@ -436,11 +431,15 @@ class PilotCommandTests(unittest.TestCase):
         )
         bad = replace(OK.observation, outcome="errored", eligible=False, steps=broke)
         failed_step = replace(OK, observation=bad)
+        flagged = (PASSED.steps[0], PASSED.steps[1]._replace(error=True))
         fatal = {
             "infrastructure": infrastructure,
             "check timeout": timed_out,
             "failed step": failed_step,
             "held": HELD,
+            "eligible, error flag": replace(
+                OK, observation=replace(OK.observation, steps=flagged)
+            ),
         }
         self.cases["conduit-benign-001"] = case("benign", "ben1")
         self.cases["conduit-bug-001"] = case("bug", "bug1", spec="other", expect=[0])
@@ -458,6 +457,22 @@ class PilotCommandTests(unittest.TestCase):
         replay = FakeReplay(self.docker, {"": [REJECTED]})
         code, _ = self.command(replay, "--repeat", "3")
         self.assertEqual((code, len(replay.seen), self.ups()), (3, 1, ["", ""]))
+
+    def test_a_short_clean_run_never_passes(self) -> None:
+        self.cases, found = {}, {}
+        runs: dict[str, list[Any]] = {"full": [OK, OK, OK], "held": [OK, HELD]}
+        for name, answers in runs.items():
+            self.docker, self.out = FakeDocker(), self.root / name
+            replay = FakeReplay(self.docker, {"": answers})
+            code, _ = self.command(replay, "--repeat", "3")
+            doc = self.report()
+            (pair,) = doc["pairs"]
+            seen = (pair["status"], len(pair["attempts"]), doc["reservation_release"])
+            found[name] = (code, *seen, self.ups())
+        full = (0, "passed", 3, "allowed", ["", ""])
+        self.assertEqual(
+            found, {"full": full, "held": (3, "fatal", 2, "forbidden", [""])}
+        )
 
     def test_an_enter_failing_after_the_cancel_prints_nothing(self) -> None:
         self.config["budgets"] = {"minutes": 0.005, "resolve_seconds": 0.1}
