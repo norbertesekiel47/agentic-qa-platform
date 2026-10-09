@@ -126,11 +126,12 @@ class ModelRouter:
     ) -> Routed:
         """Call `role`'s model. A refusal is recorded and, if the role has a
         fallback model, answered by calling it. A response that doesn't parse
-        against `schema` is recorded as `invalid` and returned, not retried. A
-        call whose first attempt gets no response raises that failure and
-        records nothing; a fallback that fails after a billed refusal raises
-        `ModelCallError`, which carries the refusal's record. `spend` gets each
-        record as it is priced, and may stop a fallback (`Spend`)."""
+        against `schema`, or an answer the model didn't finish, is recorded as
+        `invalid` and returned, not retried. A call whose first attempt gets no
+        response raises that failure and records nothing; a fallback that fails
+        after a billed refusal raises `ModelCallError`, which carries the
+        refusal's record. `spend` gets each record as it is priced, and may stop
+        a fallback (`Spend`)."""
         if mode not in get_args(Mode):
             # Strict replay makes zero model calls (AGENTS.md §6).
             raise ValueError(
