@@ -157,7 +157,8 @@ class PilotReplayTests(unittest.TestCase):
             project.config, "pilot"
         )
         (compiled / "pilot.json").write_text(json.dumps(script))
-        return load_pilots(qa, compiled, ("pilot",))[0]
+        origin = self.config["base_url"]
+        return load_pilots(qa, compiled, ("pilot",), origin=origin)[0]
 
     def replay(self, pilot: PilotInput) -> ObservedAttempt | FailedAttempt:
         async def bounded() -> ObservedAttempt | FailedAttempt:
@@ -432,12 +433,17 @@ class PilotReplayTests(unittest.TestCase):
             ("http://blocked.test/x.png", AttemptHealth(False, False, True)),
             (f"{unreachable}/x.png", AttemptHealth(False, True, False)),
         )
+        admitted = self.pilot()
         self.spec["allowed_origins"] = [unreachable]
         self.config["egress"] = {"private_origins": [unreachable]}
+        # Admission refuses another origin (ADR-0023); replay's own gate is tested.
+        self.assertRaisesRegex(ValueError, "an origin beyond the stack's", self.pilot)
+        project = load_project(self.root / "qa")
+        widened = replace(admitted, spec=project.specs["pilot"], config=project.config)
         for image, health in cases:
             with self.subTest(image=image):
                 self.server.image = image
-                attempt = self.observed(self.replay(self.pilot()))
+                attempt = self.observed(self.replay(widened))
                 self.assertEqual(attempt.health, health)
                 self.assertEqual(attempt.observation.outcome, "errored")
 

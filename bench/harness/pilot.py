@@ -208,12 +208,13 @@ def _prepare(
         raise ValueError(f"{root}: uncommitted changes, so no report could cite it")
     if out.exists() or args.repeat < 1:
         raise ValueError(f"{out}: exists" if out.exists() else "--repeat below 1")
-    flags.stack_for(app)
+    origin = flags.stack_for(app).host_origin
     loaded = sorted(manifest.load(root).cases.items())
     cases = tuple(c for _, c in loaded if c.app == app and c.split == "dev")
     qa = root / manifest.APPS / app / "qa"
-    pilots = load_pilots(qa, args.compiled_dir or qa / ".compiled", args.spec)
-    patches = _patches(folder, cases, pilots)
+    compiled = args.compiled_dir or qa / ".compiled"
+    pilots = load_pilots(qa, compiled, args.spec, origin=origin)
+    patches = _patches(folder, cases, pilots, origin)
     hashes = {"manifest": _sha256(root / manifest.MANIFEST)}
     for pilot in pilots:
         spec = _id(pilot)
@@ -235,10 +236,13 @@ def _spec_ids(qa: Path) -> set[str]:
 
 
 def _patches(
-    directory: Path | None, cases: Sequence[Case], pilots: Sequence[PilotInput]
+    directory: Path | None,
+    cases: Sequence[Case],
+    pilots: Sequence[PilotInput],
+    origin: str,
 ) -> dict[tuple[str, str], PilotInput]:
     """Each file in `directory`, named `<case>.<spec>.json` for a selected
-    spec's drift_consistent row, applied in memory, then admitted."""
+    spec's drift_consistent row, applied in memory, then admitted on `origin`."""
     if directory is None:
         return {}
     by_id = {_id(p): p for p in pilots}
@@ -262,7 +266,8 @@ def _patches(
         # Raised outside the handler, so the patch's own error isn't kept.
         if candidate is None:
             raise ValueError(f"{path}: invalid patch")
-        patches[key] = validate_pilot(pilot.spec, pilot.config, candidate, source=path)
+        admit = partial(validate_pilot, source=path, origin=origin)
+        patches[key] = admit(pilot.spec, pilot.config, candidate)
     return patches
 
 
