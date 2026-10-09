@@ -469,7 +469,7 @@ def _strings(value: object) -> list[str]:
     if isinstance(value, str):
         return [value]
     if isinstance(value, dict):
-        value = list(value.values())
+        return _strings(list(value.values()))
     if isinstance(value, list):
         return [text for item in value for text in _strings(item)]
     return []
