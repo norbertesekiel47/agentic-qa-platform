@@ -47,7 +47,7 @@ from aqa_core.project import (
 from aqa_core.spec import Spec, secret_references
 from playwright.async_api import BrowserType, ElementHandle, Error
 
-from aqa_runner import network, probes
+from aqa_runner import network, probes, reasons
 from aqa_runner.bound_secrets import BoundSecret, bound_secrets
 from aqa_runner.browser_session import (
     BrowserSession,
@@ -70,7 +70,7 @@ from aqa_runner.egress_proxy import EgressBlocks, EgressProxy
 from aqa_runner.evidence import capture_evidence
 from aqa_runner.invariants import InvariantResult, invariant_results
 from aqa_runner.locators import Absent, Miss, Resolved, Unresolved, Use
-from aqa_runner.reasons import Raised, UnansweredError, reason
+from aqa_runner.reasons import Raised, UnansweredError
 from aqa_runner.redaction import Redacted, Redactor
 from aqa_runner.run_record import STEPS, RefusedWriteError, RunRecord, require_clean
 from aqa_runner.secret_fields import SecretRefusedError
@@ -158,7 +158,7 @@ class Evaluation:
         Playwright's message and every origin of ours are withheld for the
         whole run: a page can throw a value back split into pieces no scan
         finds, or choose the origin a refusal would name."""
-        return reason(error, self.redactor, withheld=self.withheld)
+        return reasons.reason(error, self.redactor)
 
 
 @dataclass(frozen=True)
@@ -544,7 +544,12 @@ async def evaluate(
     recorded traffic or a probe can be read from a page whose renderer has
     stopped, or that is on an origin the run doesn't allow, and none is
     evaluated then. A look that raises leaves `check` not evaluated, with
-    the reason."""
+    the reason.
+
+    `evaluation` must scan with `session`'s redactor, the run's, or this
+    raises `ValueError`: its reasons withhold by that scan."""
+    if evaluation.redactor is not session.redactor:
+        raise ValueError("an evaluation scans with its session's redactor")
     budget = evaluation.budget
     try:
         await _bounded(_looked(session.visible_text, budget), budget)

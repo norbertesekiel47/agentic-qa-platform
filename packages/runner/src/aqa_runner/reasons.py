@@ -5,7 +5,8 @@ what raised (ADR-0026's #53 P9+P10 amendment), built on
 An owned error is one whose message the runner or the session writes; any
 other is Playwright's, whose message the page may have chosen, and which a
 withheld run cuts to its class and the call it names. A run withholds when it
-binds a test secret, filled or not.
+binds a test secret, filled or not: its redactor isn't empty, the one
+predicate replay and explore share, so no caller chooses it.
 
 In a withheld run an owned reason comes from a closed vocabulary that names no
 origin, host, port, URL or path: a policy refusal names only its kind, and a
@@ -83,14 +84,16 @@ _WITHHELD_CHECKS: dict[
     ),
 }
 
-_WITHHELD = "(withheld: the run has a test secret)"
+_ORIGIN_WITHHELD = "(withheld: the run has a test secret)"
 
 
-def reason(error: Raised, redactor: Redactor, *, withheld: bool) -> Redacted:
-    """`error` as a result's reason: its owned message (from the closed
-    vocabulary when `withheld`), or else Playwright's, through
-    `error_text`, which scans either for every value `redactor` binds and
-    keeps only Playwright's class and call when `withheld`."""
+def reason(error: Raised, redactor: Redactor) -> Redacted:
+    """`error` as a result's reason: its owned message, or else
+    Playwright's, through `error_text`, which scans either for every value
+    `redactor`, the run's, binds. When it binds any, the run withholds: an
+    owned message comes from the closed vocabulary, and Playwright's keeps
+    only its class and call."""
+    withheld = not redactor.empty
     return error_text(
         error, redactor, ours=_owned(error, withheld=withheld), withheld=withheld
     )
@@ -104,7 +107,7 @@ def _owned(error: Raised, *, withheld: bool) -> str | None:
             return text
     if withheld and isinstance(error, PolicyEventError):
         refused = REFUSED_BY_KIND[error.event.kind]
-        return f"{refused} on an origin the run doesn't allow {_WITHHELD}"
+        return f"{refused} on an origin the run doesn't allow {_ORIGIN_WITHHELD}"
     if withheld and isinstance(error, SecretRefusedError) and error.check != "field":
         return f"fill_secret refused {error.secret}: {_WITHHELD_CHECKS[error.check]}"
     if isinstance(
