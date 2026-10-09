@@ -248,14 +248,22 @@ class Verdict(BaseModel):
     ok: bool
 
 
+@pytest.mark.parametrize(
+    ("first", "schema"),
+    [
+        (reply(usage=tokens(100)), Verdict),
+        (reply(complete=False, usage=tokens(100)), None),
+    ],
+    ids=["unparsed", "cut_off"],
+)
 def test_an_invalid_response_reaches_on_priced_once_and_gets_no_fallback(
-    tmp_path: Path,
+    tmp_path: Path, first: Reply, schema: type[BaseModel] | None
 ) -> None:
     opus = FakeClient(reply(usage=tokens(100)))
-    model_router, _ = refused_then(tmp_path, opus, reply(usage=tokens(100)))
+    model_router, _ = refused_then(tmp_path, opus, first)
     delivered: list[CostRecord] = []
 
-    routed = ask(model_router, Spend(delivered.append), schema=Verdict)
+    routed = ask(model_router, Spend(delivered.append), schema=schema)
 
     assert priced(delivered) == [(SONNET, "invalid", Decimal("0.00027"))]
     assert list(map(id, delivered)) == list(map(id, routed.calls))
