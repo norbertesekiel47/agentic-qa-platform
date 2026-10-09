@@ -446,6 +446,7 @@ class PilotInputTests(unittest.TestCase):
         self.spec["allowed_origins"] = [FOREIGN]
         self.save()
         self.refuses(self.load, EXTRA)
+        self.refuses(partial(self.load, origin=FOREIGN), MISMATCH)
 
     def test_in_memory_rebound_candidate_uses_same_admission(self) -> None:
         before = self.source.read_bytes()
