@@ -35,8 +35,13 @@ from aqa_core.coverage_plan import (
     PlannedCheck,
     plan_hash,
     planned_checks,
+    uncovered,
 )
-from aqa_core.project import contracts_fingerprint, effective_browser
+from aqa_core.project import (
+    contracts_fingerprint,
+    effective_browser,
+    subject_contracts,
+)
 from aqa_core.schema import Contract, NonEmpty, StrictModel
 from aqa_core.spec import Spec
 
@@ -190,20 +195,80 @@ def _named(names: dict[Target, str], target: Target) -> str:
     return names.setdefault(target, f"t{len(names) + 1}")
 
 
-def _steps(path: ExploredPath, names: dict[Target, str]) -> list[Step]:
+def _steps(
+    path: ExploredPath,
+    taken: Sequence[int],
+    contracts: Mapping[str, Contract | None],
+    names: dict[Target, str],
+) -> tuple[list[Step], list[str]]:
+    """The kept steps, `taken`, compiled in order, and what's wrong with them."""
     steps: list[Step] = []
-    for seq, number in enumerate(sorted(set(path.kept)), start=1):
-        taken = path.steps[number]
+    problems: list[str] = []
+    for seq, number in enumerate(taken, start=1):
+        step = path.steps[number]
+        if step.target is not None and step.target.contract != contracts.get(
+            step.target.semantic
+        ):
+            problems.append(
+                f"step {number}: its target's subject contract isn't its meaning's"
+            )
         fields: dict[str, object] = {
-            **taken.fields,
+            **step.fields,
             "seq": seq,
             "side_effect": True,
             "side_effect_basis": BASIS,
         }
-        if taken.target is not None:
-            fields["target"] = _named(names, taken.target)
-        steps.append(_ACTIONS[taken.fields["action"]].model_validate(fields))
-    return steps
+        if step.target is not None:
+            fields["target"] = _named(names, step.target)
+        steps.append(_ACTIONS[step.fields["action"]].model_validate(fields))
+    return steps, problems
+
+
+def _binding_problem(
+    check: PlannedCheck, target: Target | None, contracts: Mapping[str, Contract | None]
+) -> str | None:
+    """What's wrong with binding `check` to `target`, if anything."""
+    if check.target_meaning is None:
+        return None if target is None else "reads no element, but is bound to one"
+    if target is None:
+        return "bound to no element, but it reads one"
+    if target.semantic != check.target_meaning:
+        return f'bound to a target of another meaning than "{check.target_meaning}"'
+    if target.contract != contracts.get(target.semantic):
+        return "its target's subject contract isn't its meaning's"
+    return None
+
+
+def _assertions(
+    plan: CoveragePlan,
+    path: ExploredPath,
+    contracts: Mapping[str, Contract | None],
+    names: dict[Target, str],
+) -> tuple[list[Assertion], list[str]]:
+    """Each bound check's assertion, in plan order, and what's wrong with the
+    checks. Probe checks are `unsupported_features`' to name."""
+    assertions: list[Assertion] = []
+    problems: list[str] = []
+    has_steps = any(number in path.steps for number in path.kept)
+    for check_id, (index, check) in planned_checks(plan).items():
+        where = f"{check_id} (expect[{index}], {check.check})"
+        if check.check in _PROBES:
+            if check.check == "probe_equals_baseline" and not has_steps:
+                problems.append(
+                    f"{where}: a path with no steps has no step to capture its "
+                    "baseline before"
+                )
+            continue
+        if check_id not in path.bound:
+            problems.append(f"{where}: never bound")
+            continue
+        target = path.bound[check_id]
+        if problem := _binding_problem(check, target, contracts):
+            problems.append(f"{where}: {problem}")
+            continue
+        name = None if target is None else _named(names, target)
+        assertions.append(assertion_for(check_id, index, check, target=name))
+    return assertions, problems
 
 
 def compile_script(
@@ -213,16 +278,32 @@ def compile_script(
     path: ExploredPath,
     by: Provenance,
 ) -> CompiledScript:
-    """The compiled script for the steps of `path` that `finish` kept and the
-    checks it bound, unconfirmed (DATA_MODEL §7)."""
+    """The compiled script for the steps of `path` that `finish` kept, in the
+    attempt's order, and the checks it bound, unconfirmed (DATA_MODEL §7).
+    CompileError names every problem. `plan` must fit `spec`
+    (`coverage_plan.misfits`)."""
+    spec_id = spec.frontmatter.id
+    contracts, problems = _contracts(plan, subject_contracts(config, spec_id))
+    kept = sorted(set(path.kept))
+    taken = [number for number in kept if number in path.steps]
     names: dict[Target, str] = {}
-    steps = _steps(path, names)
+    steps, step_problems = _steps(path, taken, contracts, names)
+    assertions, check_problems = _assertions(plan, path, contracts, names)
+    problems = [
+        *uncovered(plan, spec.frontmatter),
+        *unsupported_features(plan),
+        *problems,
+        *(
+            f"finish names step {number}, which the attempt never took"
+            for number in kept
+            if number not in path.steps
+        ),
+        *step_problems,
+        *check_problems,
+    ]
+    if problems:
+        raise CompileError(problems) from None
     checks = planned_checks(plan)
-    assertions = []
-    for check_id, (index, check) in checks.items():
-        target = path.bound[check_id]
-        name = None if target is None else _named(names, target)
-        assertions.append(assertion_for(check_id, index, check, target=name))
     ids: dict[int, list[str]] = {}
     for check_id, (index, _) in checks.items():
         ids.setdefault(index, []).append(check_id)
