@@ -490,29 +490,18 @@ def test_a_refusal_stays_a_refusal_though_it_is_not_complete(tmp_path: Path) -> 
     assert len(opus.calls) == 1
 
 
-@pytest.mark.parametrize(
-    ("tools", "schema", "parsed"),
-    [
-        ([click], None, None),
-        # A parse the router must not trust once the answer wasn't finished.
-        ((), Verdict, Verdict(ok=True, reason="cart empty")),
-    ],
-    ids=["tools", "schema"],
-)
+@pytest.mark.parametrize("tools", [[click], []], ids=["tools", "plain"])
 def test_an_answer_the_model_did_not_finish_is_invalid_and_not_retried(
-    tmp_path: Path,
-    tools: Sequence[BaseTool],
-    schema: type[BaseModel] | None,
-    parsed: BaseModel | None,
+    tmp_path: Path, tools: Sequence[BaseTool]
 ) -> None:
     opus = FakeClient()
-    cut_off = reply("half an answer", complete=False, parsed=parsed)
+    cut_off = reply("half an answer", complete=False)
     factory = Factory(
         **{"claude-sonnet-5-5": FakeClient(cut_off), "claude-opus-5-5": opus}
     )
     model_router = router(tmp_path, FALLBACK, factory)
 
-    result = call(model_router, role="healer", tools=tools, schema=schema)
+    result = call(model_router, role="healer", tools=tools)
 
     assert (result.outcome, [record.status for record in result.calls]) == (
         "invalid",
@@ -520,6 +509,17 @@ def test_an_answer_the_model_did_not_finish_is_invalid_and_not_retried(
     )
     assert opus.calls == []
     assert model_router.completed_calls == result.calls
+
+
+def test_a_reply_the_model_did_not_finish_carries_no_parse() -> None:
+    # A client can't hand the router a repaired parse of half an answer:
+    # `Routed.parsed` is what a caller such as the coverage plan reads.
+    with pytest.raises(ValueError, match="didn't finish carries no parse"):
+        reply(
+            "half an answer",
+            complete=False,
+            parsed=Verdict(ok=True, reason="cart empty"),
+        )
 
 
 def ask_a_verdict_through(client: ChatClient) -> Reply:
