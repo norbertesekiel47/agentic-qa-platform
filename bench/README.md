@@ -31,7 +31,7 @@ The flag commands need the app's images built (`docker compose build` in `apps/<
 
 ## Pilot acceptance
 
-`pilot.py` replays compiled pilot scripts through the strict executor, with no model client, and scores them against the manifest (ADR-0023). It admits every input before its first Docker call: a clean source tree, a new `--out` directory, the manifest, each selected spec's script (`<compiled-dir>/<id>.json`, by default the app's `qa/.compiled/`) and each patch.
+`pilot.py` replays compiled pilot scripts through the strict executor, with no model client, and scores them against the manifest (ADR-0023). It admits every input before its first Docker call: a clean source tree, a new `--out` directory, the manifest, each selected spec's script (`<compiled-dir>/<id>.json`, by default the app's `qa/.compiled/`) and each patch. The QA project's `base_url` must be the local stack's frontend origin: nothing checks it yet, and any other origin would receive the reset POST and the replay.
 
 - **Selection.** `--spec ID`, repeatable, picks specs in the order given; without it every spec runs, by ID. The report's `selected` lists them, and `omitted` lists every other spec in the app's QA project, sorted. An omitted spec needs no compiled script and gets no pair. A selected spec with no manifest row under a case still gets one, reported `unscored`.
 - **Patches.** `--patches DIR` holds `<case-id>.<spec-id>.json` files, one for each `drift_consistent` row of a selected spec under a dev case. Each one replaces target locators only (ADR-0023's rebinding format). Any other file refuses the run.
