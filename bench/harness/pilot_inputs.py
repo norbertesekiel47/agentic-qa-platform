@@ -61,7 +61,8 @@ def load_pilots(
     """Every selected pilot, or every pilot by ID when none is selected, each
     from `<compiled_dir>/<id>.json`. Unless all are admitted, raises
     ValueError naming `qa_root` or the script's path and a fixed category,
-    never the problem's text."""
+    never the problem's text; an unusable test secret only once no selected
+    input has another problem, so the exit code doesn't depend on their order."""
     project = _quietly(partial(load_project, qa_root), OSError, SpecError)
     if project is None:
         raise ValueError(f"{qa_root}: invalid pilot input")
@@ -70,6 +71,7 @@ def load_pilots(
         raise ValueError(f"{qa_root}: invalid selection")
     root = compiled_dir.resolve()
     pilots: list[PilotInput] = []
+    unusable: UnusableSecretError | None = None
     for spec_id in ids:
         source = compiled_dir / f"{spec_id}.json"
         # Read where the check looked, so a link can't lead outside the root.
@@ -82,7 +84,12 @@ def load_pilots(
         if script is None:
             raise ValueError(f"{source}: invalid compiled input")
         spec = project.specs[spec_id]
-        pilots.append(validate_pilot(spec, project.config, script, source=source))
+        try:
+            pilots.append(validate_pilot(spec, project.config, script, source=source))
+        except UnusableSecretError as error:
+            unusable = unusable or error
+    if unusable is not None:
+        raise unusable
     return tuple(pilots)
 
 
