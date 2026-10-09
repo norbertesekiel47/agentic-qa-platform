@@ -870,6 +870,84 @@ def test_a_contracted_look_releases_its_region_handle_on_every_exit(
     assert all(id(handle) in released for handle in taken)
 
 
+def cancelled_look(
+    monkeypatch: pytest.MonkeyPatch, blocked: str, failing: bool
+) -> tuple[str, bool, bool]:
+    """A contracted look cancelled while `blocked` waits (the `bound:` read,
+    or the release of the look's evidence handle), that release failing
+    when `failing`: the outcome, whether the task counts as cancelled, and
+    whether the banner count the look found was released."""
+    started = asyncio.Event()
+    evidence: list[JSHandle] = []
+    counts: list[ElementHandle] = []
+    released: list[JSHandle] = []
+    evaluate_handle, dispose = ElementHandle.evaluate_handle, JSHandle.dispose
+    query, element_handles = (
+        ElementHandle.query_selector_all,
+        PlaywrightLocator.element_handles,
+    )
+
+    async def taking(self: ElementHandle, expression: str, arg: Any = None) -> JSHandle:
+        handle = await evaluate_handle(self, expression, arg)
+        evidence.append(handle)
+        return handle
+
+    async def finding(self: PlaywrightLocator) -> list[ElementHandle]:
+        found = await element_handles(self)
+        marks = [await each.get_attribute("data-is") for each in found]
+        counts.extend(found if marks == ["banner-count"] else [])
+        return found
+
+    async def blocking(self: ElementHandle, selector: str) -> list[ElementHandle]:
+        if blocked == "bound" and selector.startswith("aqa-binding=bound:"):
+            started.set()
+            await asyncio.sleep(3600)
+        return await query(self, selector)
+
+    async def releasing(self: JSHandle) -> None:
+        released.append(self)
+        if self in evidence and blocked == "evidence" and not started.is_set():
+            started.set()
+            await asyncio.sleep(3600)
+        if self in evidence and failing:
+            raise Error("fake dispose failure")
+        await dispose(self)
+
+    monkeypatch.setattr(ElementHandle, "evaluate_handle", taking)
+    monkeypatch.setattr(PlaywrightLocator, "element_handles", finding)
+    monkeypatch.setattr(ElementHandle, "query_selector_all", blocking)
+    monkeypatch.setattr(JSHandle, "dispose", releasing)
+
+    async def scenario(page: Page) -> tuple[str, bool, bool]:
+        look = asyncio.create_task(
+            resolve(page, contracted({"css": "span.counter"}), "assertion")
+        )
+        await started.wait()
+        look.cancel()
+        [outcome] = await asyncio.gather(look, return_exceptions=True)
+        return type(outcome).__name__, look.cancelled(), counts[0] in released
+
+    return in_regions(scenario)
+
+
+def test_a_cancelled_contracted_look_stays_cancelled_when_a_release_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outcome, cancelled, _ = cancelled_look(monkeypatch, "bound", failing=True)
+
+    assert (outcome, cancelled) == ("CancelledError", True)
+
+
+def test_a_look_cancelled_while_releasing_its_evidence_still_releases_its_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert cancelled_look(monkeypatch, "evidence", failing=False) == (
+        "CancelledError",
+        True,
+        True,
+    )
+
+
 def test_a_page_that_breaks_the_subject_check_binds_nothing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
