@@ -6,7 +6,12 @@ import tempfile
 import threading
 import unittest
 from collections.abc import Callable, Mapping
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import (
+    AbstractContextManager,
+    nullcontext,
+    redirect_stderr,
+    redirect_stdout,
+)
 from dataclasses import replace
 from io import StringIO
 from pathlib import Path
@@ -14,6 +19,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pilot
+import pilot_report
 from aqa_core.project import SpecError, load_project
 from aqa_core.spec import canonical_hash
 from pilot_inputs import PilotInput, load_pilots
@@ -299,6 +305,65 @@ class PilotCommandTests(unittest.TestCase):
             code, shown = self.command(replay)
         self.assertEqual((code, self.ups()), (3, [""]))
         self.assertIn("couldn't be completed", shown)
+
+    def test_an_error_after_docker_holds_the_app_and_still_reports(self) -> None:
+        at: list[int] = []
+
+        def fails(error: Exception, real: Callable[..., Any], call: int) -> Any:
+            """`real`, except that call number `call` notes how many Docker
+            calls came before it and raises `error`."""
+            calls = iter(range(1, 100))
+
+            def answer(*args: Any, **kwargs: Any) -> Any:
+                if next(calls) != call:
+                    return real(*args, **kwargs)
+                at.append(len(self.docker.calls))
+                raise error
+
+            return answer
+
+        def source(error: Exception) -> Any:
+            return fails(error, lambda *_: SOURCE, 2)
+
+        def broken(name: str, error: Exception, call: int) -> Any:
+            real = getattr(pilot_report, name)
+            return patch(f"pilot_report.{name}", fails(error, real, call))
+
+        git = subprocess.CalledProcessError(1, "fake-")
+        held, ended = ["", "ben1", "bug1"], ["", "ben1", "bug1", ""]
+        cases: dict[str, tuple[AbstractContextManager[Any], Any, list[str], int]] = {
+            "receipt": (broken("write_once", OSError("fake-"), 2), None, held[:2], 1),
+            "judge": (broken("judge_case", ValueError("fake-"), 1), None, held[:2], 2),
+            "source OSError": (nullcontext(), source(OSError("fake-")), held, 3),
+            "source git": (nullcontext(), source(git), held, 3),
+            "source ValueError": (nullcontext(), source(ValueError("fake-")), held, 3),
+            "document": (broken("document", ValueError("fake-"), 1), None, ended, 3),
+        }
+        for name, (trap, read, ups, kept) in cases.items():
+            with self.subTest(name), trap:
+                at.clear()
+                self.docker, self.out = FakeDocker(), self.root / name.replace(" ", "-")
+                replay = FakeReplay(
+                    self.docker, {"": [OK], "ben1": [LOST], "bug1": [OK]}
+                )
+                code, shown = self.command(replay, source=read or (lambda *_: SOURCE))
+                doc, written = self.report(), (self.out / "report.json").read_text()
+                receipts = len(list((self.out / "attempts").iterdir()))
+                found = (code, doc["halt"], doc["reservation_release"], self.ups())
+                self.assertEqual(
+                    (*found, receipts), (3, "unexpected", "forbidden", ups, kept)
+                )
+                unchanged = not name.startswith("source")
+                self.assertEqual(
+                    (at, doc["source_unchanged"]), ([len(self.docker.calls)], unchanged)
+                )
+                self.assertNotIn("fake-", shown + written)
+        self.docker, self.out = FakeDocker(), self.root / "interrupted"
+        stopped = FakeReplay(
+            self.docker, {"": [OK], "ben1": [asyncio.CancelledError()]}
+        )
+        code, _ = self.command(stopped, source=source(OSError("fake-")))
+        self.assertEqual((code, self.report()["halt"]), (130, "interrupted"))
 
     def test_a_failed_switch_halts_with_the_app_held(self) -> None:
         for fail_at, judged in ((1, 0), (4, 3)):

@@ -9,9 +9,10 @@ import asyncio
 import hashlib
 import subprocess
 import sys
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from contextlib import suppress
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import NamedTuple, cast
 
@@ -45,6 +46,17 @@ FAILURES = (OSError, subprocess.SubprocessError)
 @dataclass(eq=False)
 class HaltError(Exception):
     halt: Halt
+
+
+@contextmanager
+def _halting(halt: Halt) -> Iterator[None]:
+    """Any error but a HaltError, as HaltError(`halt`), keeping no error text."""
+    try:
+        yield
+    except HaltError:
+        raise
+    except Exception as error:
+        raise HaltError(halt) from error
 
 
 def git_source(root: Path, out: Path) -> Source:
@@ -81,10 +93,11 @@ class Run:
     code: int | None = None
 
     async def execute(self) -> int:
-        """The clean app, then each dev case, up to the first fatal pair; the
-        report is written inside the loop, so a hung shutdown can't lose it."""
+        """The clean app, then each dev case, up to a fatal pair or an error; the
+        report is written in the loop, so a hung shutdown can't lose it."""
         try:
-            await self._pairs()
+            with _halting("unexpected"):
+                await self._pairs()
         except HaltError as halted:
             self.halt = halted.halt
         return self.finish()
@@ -135,13 +148,11 @@ class Run:
         report.write_once(path, report.receipt(case, _id(pilot), entry, pilot.script))
         return attempt
 
-    def _switch(self, *flag_ids: str, build: bool = False) -> None:
-        try:
+    def _switch(self, *flag_ids: str, build: bool = False) -> flags.Switch:
+        with _halting("switch_failed"):  # a switch failing part-way leaves it unknown
             if build:
                 flags.build(self.root, self.base.app, self.docker)
-            flags.switch(self.root, self.base.app, flag_ids, self.docker)
-        except Exception as error:  # a switch failing part-way leaves the app unknown
-            raise HaltError("switch_failed") from error
+            return flags.switch(self.root, self.base.app, flag_ids, self.docker)
 
     def _kept(self, pair: Pair) -> bool:
         """Keep `pair`; whether it stops the run."""
@@ -149,24 +160,37 @@ class Run:
         return pair.status == "fatal"
 
     def finish(self) -> int:
-        """Switch back if every resource closed, write the report, print it."""
+        """Read the source, switch back if every resource closed, then write
+        and print the report. An unreadable source or a failed report halts
+        the run as `unexpected`; a report failing twice is main's exit 3."""
         if self.code is not None:
             return self.code
-        switched = report.releasable(self.pairs, self.halt)
-        if switched:
-            try:
-                self._switch()
-            except HaltError as halted:
-                self.halt, switched = halted.halt, False
-        unchanged = self.source(self.root, self.out) == self.start
-        ended = replace(self.base, unchanged=unchanged, pairs=tuple(self.pairs))
-        ended = replace(ended, halt=self.halt, switched_back=switched)
-        doc = report.document(ended, {_id(p): p.script for p in self.pilots})
-        report.write_once(self.out / "report.json", doc)
+        unchanged = self._held(partial(self.source, self.root, self.out)) == self.start
+        released = report.releasable(self.pairs, self.halt)
+        switched = released and self._held(self._switch) is not None
+        write = partial(self._write, unchanged, switched)
+        doc = self._held(write) or write()
         for pair in self.pairs:
             print(f"{pair.case or 'clean'}  {pair.spec}  {pair.status}")
         self.code = cast(int, doc["exit"])
         return self.code
+
+    def _held[T](self, call: Callable[[], T]) -> T | None:
+        """What `call` returns, or None once its error halts the run."""
+        try:
+            with _halting("unexpected"):
+                return call()
+        except HaltError as halted:
+            self.halt = self.halt or halted.halt
+            return None
+
+    def _write(self, unchanged: bool, switched: bool) -> report.Json:
+        """The report, with the run's halt, written once as `report.json`."""
+        ended = replace(self.base, unchanged=unchanged, pairs=tuple(self.pairs))
+        ended = replace(ended, halt=self.halt, switched_back=switched)
+        doc = report.document(ended, {_id(p): p.script for p in self.pilots})
+        report.write_once(self.out / "report.json", doc)
+        return doc
 
 
 def _id(pilot: PilotInput) -> str:
@@ -204,8 +228,7 @@ def _prepare(
 
 
 def _spec_ids(qa: Path) -> set[str]:
-    """Every spec ID in the QA project, for the report's `omitted`. A failed
-    read raises a fixed ValueError, without its own error, which can quote a spec."""
+    """Every spec ID in the QA project, or a ValueError without the read's error."""
     with suppress(OSError, SpecError):
         return set(load_project(qa).specs)
     raise ValueError(f"{qa}: invalid pilot input")
@@ -270,14 +293,15 @@ def main(
         print(f"error: {shown}", file=sys.stderr)
         return 12 if isinstance(error, UnusableSecretError) else 2
     try:
-        try:
-            return asyncio.run(run.execute())
-        except KeyboardInterrupt:
-            run.halt = "interrupted"
-        except SystemExit:
-            run.halt = "system_exit"
-        return run.finish()
-    except FAILURES:
+        with _halting("unexpected"):  # evidence that can't be written
+            try:
+                return asyncio.run(run.execute())
+            except KeyboardInterrupt:
+                run.halt = "interrupted"
+            except SystemExit:
+                run.halt = "system_exit"
+            return run.finish()
+    except HaltError:
         print(f"error: the run under {run.out} couldn't be completed", file=sys.stderr)
         return 3
 
