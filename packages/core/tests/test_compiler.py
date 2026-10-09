@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import aqa_core.compiler
 import pytest
 from aqa_core.browser import BrowserSettings
 from aqa_core.compiled import (
@@ -14,20 +15,13 @@ from aqa_core.compiled import (
     ByLabel,
     ByRole,
     ByTestId,
-    Click,
     CompiledBy,
     CompiledScript,
     Coverage,
     ExpectationCoverage,
-    Fill,
-    FillSecret,
-    Navigate,
     NetworkNone,
     NetworkSeen,
     NotVisible,
-    Press,
-    Reload,
-    Select,
     Target,
     TextInTarget,
     TextVisible,
@@ -211,6 +205,18 @@ def test_contracts_by_meaning_refuses_a_meaning_under_two_contracts() -> None:
                 "expect 1 and expect 2: one meaning has one contract or none"
             ),
         )
+    assert refused(
+        {1: BANNER, 2: BANNER, 3: FOOTER},
+        expectation(0, URL),
+        expectation(1, COUNTED),
+        expectation(2, count_again),
+        expectation(3, count_again),
+    ) == (
+        (
+            f'meaning "{COUNT}" is planned under different subject contracts, for '
+            "expect 1 and expect 3: one meaning has one contract or none"
+        ),
+    )
 
 
 def test_one_contract_across_expectations_is_one_meanings_contract() -> None:
@@ -228,6 +234,7 @@ id: demo
 goal: A reader favorites an article from the demo page.
 preconditions:
   start_url: /
+  account: { email: reader@example.test, password: { secret: TEST_PASSWORD } }
   probes: { count: "GET /api/count" }
 expect:
   - The page is the demo page
@@ -237,7 +244,10 @@ expect:
 ---
 """
 DECLARED = "TEST_PASSWORD"
-SECRETS = "secrets: { TEST_PASSWORD: { origins: [start], field: password } }\n"
+SECRETS = (
+    "secrets: { TEST_PASSWORD: { origins: [start], field: password },"
+    " OTHER_KEY: { origins: [start], field: password } }\n"
+)
 ROW = "  - { spec: demo, expect: 1, region: div.banner, part: span.counter, leaf: true }\n"
 BASIS = "no positive evidence that the step changes nothing"
 AT = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
@@ -284,7 +294,7 @@ STEPS = {
     8: PathStep({"action": "press", "key": "Enter"}),
     9: PathStep({"action": "click"}, ADD_TARGET),
 }
-KEPT = (9, 1, 3, 4, 5, 6, 7, 8)
+KEPT = (9, 1, 3, 4, 4, 5, 6, 7, 8)
 # a5 reads a copy of step 9's target: equal targets are one target.
 BOUND: dict[str, Target | None] = {
     "a1": None,
@@ -362,63 +372,21 @@ def test_every_compiled_step_is_a_side_effect_step_with_its_basis(
 ) -> None:
     spec, config = demo(tmp_path)
     script = compile_script(spec, config, PLAN, ExploredPath(STEPS, KEPT, BOUND), BY)
-    flag, basis = True, BASIS
 
-    assert script.steps == (
-        Navigate(
-            seq=1,
-            action="navigate",
-            url="/demo",
-            side_effect=flag,
-            side_effect_basis=basis,
-        ),
-        Reload(seq=2, action="reload", side_effect=flag, side_effect_basis=basis),
-        Click(
-            seq=3,
-            action="click",
-            target="t1",
-            side_effect=flag,
-            side_effect_basis=basis,
-        ),
-        Fill(
-            seq=4,
-            action="fill",
-            target="t2",
-            value="flaky",
-            side_effect=flag,
-            side_effect_basis=basis,
-        ),
-        FillSecret(
-            seq=5,
-            action="fill_secret",
-            target="t3",
-            secret=DECLARED,
-            side_effect=flag,
-            side_effect_basis=basis,
-        ),
-        Select(
-            seq=6,
-            action="select",
-            target="t4",
-            option="Newest",
-            side_effect=flag,
-            side_effect_basis=basis,
-        ),
-        Press(
-            seq=7,
-            action="press",
-            key="Enter",
-            side_effect=flag,
-            side_effect_basis=basis,
-        ),
-        Click(
-            seq=8,
-            action="click",
-            target="t5",
-            side_effect=flag,
-            side_effect_basis=basis,
-        ),
-    )
+    def flagged(seq: int, action: str, **fields: str) -> dict[str, Any]:
+        owned = {"side_effect": True, "side_effect_basis": BASIS, "satisfies": []}
+        return {"seq": seq, "action": action, **fields, **owned}
+
+    assert [step.model_dump(mode="json") for step in script.steps] == [
+        flagged(1, "navigate", url="/demo"),
+        flagged(2, "reload"),
+        flagged(3, "click", target="t1"),
+        flagged(4, "fill", target="t2", value="flaky"),
+        flagged(5, "fill_secret", target="t3", secret=DECLARED),
+        flagged(6, "select", target="t4", option="Newest"),
+        flagged(7, "press", key="Enter"),
+        flagged(8, "click", target="t5"),
+    ]
     assert parse_compiled(
         script.model_dump_json(), config, source=Path("demo.json")
     ).steps == (script.steps)
@@ -699,18 +667,26 @@ def test_a_required_condition_fails_by_name_until_the_path_can_satisfy_it(
 
 def test_a_zero_step_path_with_a_baseline_check_fails_by_name(tmp_path: Path) -> None:
     baseline = plan(*EXPECTATIONS[:3], expectation(3, BASELINE))
-    bound = {check_id: t for check_id, t in BOUND.items() if check_id != "a7"}
+    bound = {check_id: t for check_id, t in BOUND.items() if check_id < "a6"}
     unsupported = (
         "a6 (expect[3], probe_equals_baseline): exploring can't compile a "
         "probe_equals_baseline check yet"
     )
+    no_step = (
+        "a6 (expect[3], probe_equals_baseline): a path with no steps has no step "
+        "to capture its baseline before"
+    )
 
     assert problems(tmp_path, planned=baseline, kept=(), bound=bound) == (
         unsupported,
-        (
-            "a6 (expect[3], probe_equals_baseline): a path with no steps has no step "
-            "to capture its baseline before"
-        ),
+        no_step,
+    )
+    assert problems(
+        tmp_path / "unknown", planned=baseline, kept=(12,), bound=bound
+    ) == (
+        unsupported,
+        "finish names step 12, which the attempt never took",
+        no_step,
     )
     assert problems(tmp_path / "with-steps", planned=baseline, bound=bound) == (
         unsupported,
@@ -775,7 +751,9 @@ def test_a_plan_contradicting_a_subject_contract_fails_the_compile(
         contract=BANNER,
     )
 
-    assert problems(tmp_path, planned=planned, bound=BOUND | {"a6": hidden}) == (
+    bound = {check_id: t for check_id, t in BOUND.items() if check_id != "a7"}
+
+    assert problems(tmp_path, planned=planned, bound=bound | {"a6": hidden}) == (
         (
             f'meaning "{COUNT}" is planned under different subject contracts, for '
             "expect 1 and expect 3: one meaning has one contract or none"
@@ -839,10 +817,6 @@ LOADER = (
     "changes",
     [
         {
-            "steps": STEPS
-            | {6: PathStep({"action": "fill_secret", "secret": "OTHER_KEY"}, PASSWORD)}
-        },
-        {
             "bound": BOUND
             | {
                 "a4": NOTICE_TARGET.model_copy(
@@ -851,7 +825,7 @@ LOADER = (
             }
         },
     ],
-    ids=["undeclared-secret", "unscoped-negative"],
+    ids=["unscoped-negative"],
 )
 def test_a_script_the_loader_refuses_fails_with_one_fixed_problem(
     tmp_path: Path, changes: dict[str, Any]
@@ -864,10 +838,31 @@ def test_a_script_the_loader_refuses_fails_with_one_fixed_problem(
     [
         (PathStep({"action": "hover"}), "step 3: names no action this format knows"),
         (PathStep({"key": "Enter"}), "step 3: names no action this format knows"),
-        (
-            PathStep({"action": "reload", "seq": "1"}),
-            "step 3: sets seq, which compiling owns",
+        *(
+            (
+                PathStep({"action": "reload", owned: "x"}),
+                f"step 3: sets {owned}, which compiling owns",
+            )
+            for owned in (
+                "seq",
+                "target",
+                "side_effect",
+                "side_effect_basis",
+                "satisfies",
+            )
         ),
+        *(
+            (
+                PathStep({"action": action}, SORT),
+                f"step 3: a {action} step needs {field}",
+            )
+            for action, field in (
+                ("fill", "value"),
+                ("fill_secret", "secret"),
+                ("select", "option"),
+            )
+        ),
+        (PathStep({"action": "press"}), "step 3: a press step needs key"),
         (PathStep({"action": "navigate"}), "step 3: a navigate step needs url"),
         (PathStep({"action": "click"}), "step 3: a click step needs target"),
         (
@@ -949,3 +944,28 @@ def test_no_problem_quotes_a_steps_value_a_meaning_or_a_locator(
     assert FAKE not in str(error)
     assert error.__cause__ is None
     assert error.__context__ is None
+
+
+@pytest.mark.parametrize("secret", ["OTHER_KEY", "MISSING_KEY"])
+def test_a_fill_secret_the_spec_does_not_bind_fails_by_its_step(
+    tmp_path: Path, secret: str
+) -> None:
+    filled = PathStep({"action": "fill_secret", "secret": secret}, PASSWORD)
+
+    assert problems(tmp_path, steps=STEPS | {6: filled}) == (
+        "step 6: fills a secret the spec doesn't bind",
+    )
+
+
+def test_a_bound_check_the_plan_does_not_have_fails_the_compile(tmp_path: Path) -> None:
+    assert problems(tmp_path, bound=BOUND | {f"a99-{FAKE}": None}) == (
+        "the path binds a check ID the plan doesn't have",
+    )
+
+
+def test_a_script_replays_agreement_refuses_is_never_returned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(aqa_core.compiler, "contract_problems", lambda *_: ["refused"])
+
+    assert problems(tmp_path) == ("refused",)
