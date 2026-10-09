@@ -17,6 +17,7 @@ from aqa_core.project import load_config
 from aqa_runner.anthropic_client import AnthropicClient
 from aqa_runner.chat_client import ChatClient, Reply
 from aqa_runner.model_router import ModelCallError, ModelRouter, Routed
+from aqa_runner.navigator import Decision, Unrunnable, decision, navigator_tools
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool, tool
 from langchain_core.tracers.langchain import wait_for_all_tracers
@@ -527,6 +528,33 @@ def test_a_reply_refused_or_not_finished_carries_no_parse(
             complete=complete,
             parsed=Verdict(ok=True, reason="cart empty"),
         )
+
+
+def test_a_cut_off_tool_reply_runs_nothing_at_the_navigator(tmp_path: Path) -> None:
+    # Half a call that still fits the navigator's click: e1, where the page's
+    # ref is e12 (#53 P4's security probe ran `fill` with "Hello wor").
+    called = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "click",
+                "args": {"ref": "e1", "meaning": "the sign-in link"},
+                "id": "toolu_1",
+            }
+        ],
+    )
+    cut_off = Reply(
+        message=called, usage=USAGE, refused=False, complete=False, parsed=None
+    )
+    model_router = router(
+        tmp_path, "", Factory(**{"claude-sonnet-5-5": FakeClient(cut_off)})
+    )
+
+    routed = call(model_router, tools=navigator_tools())
+
+    assert decision(routed) == Decision(
+        Unrunnable("the reply's outcome was invalid, so nothing ran"), 0, ""
+    )
 
 
 def ask_a_verdict_through(client: ChatClient) -> Reply:
