@@ -850,3 +850,125 @@ def test_every_problem_is_reported_in_one_error(tmp_path: Path) -> None:
         "step 4: its target's subject contract isn't its meaning's",
         "a1 (expect[0], url_matches): never bound",
     )
+
+
+LOADER = (
+    "the compiled script doesn't pass the loader's checks "
+    '(DATA_MODEL §7, "Checked by the loader")'
+)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {
+            "steps": STEPS
+            | {6: PathStep({"action": "fill_secret", "secret": "OTHER_KEY"}, PASSWORD)}
+        },
+        {
+            "bound": BOUND
+            | {
+                "a4": NOTICE_TARGET.model_copy(
+                    update={"locators": (ByCss(css="p.empty"),)}
+                )
+            }
+        },
+    ],
+    ids=["undeclared-secret", "unscoped-negative"],
+)
+def test_a_script_the_loader_refuses_fails_with_one_fixed_problem(
+    tmp_path: Path, changes: dict[str, Any]
+) -> None:
+    assert problems(tmp_path, **changes) == (LOADER,)
+
+
+@pytest.mark.parametrize(
+    ("step", "problem"),
+    [
+        (PathStep({"action": "hover"}), "step 3: names no action this format knows"),
+        (PathStep({"key": "Enter"}), "step 3: names no action this format knows"),
+        (
+            PathStep({"action": "reload", "seq": "1"}),
+            "step 3: sets seq, which compiling owns",
+        ),
+        (PathStep({"action": "navigate"}), "step 3: a navigate step needs url"),
+        (PathStep({"action": "click"}), "step 3: a click step needs target"),
+        (
+            PathStep({"action": "reload"}, SEARCH),
+            "step 3: a reload step takes no target",
+        ),
+        (
+            PathStep({"action": "reload", "value": "x"}),
+            "step 3: a reload step takes no value",
+        ),
+        (
+            PathStep({"action": "reload", "hover": "x"}),
+            "step 3: a reload step takes a field it doesn't know",
+        ),
+        (
+            PathStep({"action": "navigate", "url": "demo"}),
+            "step 3: its url isn't valid for a navigate step",
+        ),
+    ],
+)
+def test_a_malformed_step_fails_by_its_number_alone(
+    tmp_path: Path, step: PathStep, problem: str
+) -> None:
+    assert problems(tmp_path, steps=STEPS | {3: step}) == (problem,)
+
+
+FAKE = "fake-sentinel-0d9e"
+
+
+@pytest.mark.parametrize(
+    ("changes", "expected"),
+    [
+        (
+            {
+                "steps": STEPS
+                | {3: PathStep({"action": "navigate", "url": "/", "value": FAKE})}
+            },
+            ("step 3: a navigate step takes no value",),
+        ),
+        (
+            {
+                "steps": STEPS
+                | {
+                    4: PathStep(
+                        {"action": "click"},
+                        COUNT_BUTTON.model_copy(update={"semantic": FAKE}),
+                    )
+                },
+                "bound": BOUND
+                | {"a4": NOTICE_TARGET.model_copy(update={"semantic": FAKE})},
+            },
+            (
+                "step 4: its target's subject contract isn't its meaning's",
+                f'a4 (expect[2], not_visible): bound to a target of another meaning than "{NOTICE}"',
+            ),
+        ),
+        (
+            {
+                "bound": BOUND
+                | {
+                    "a4": NOTICE_TARGET.model_copy(
+                        update={"locators": (ByCss(css=f"p.{FAKE}"),)}
+                    )
+                }
+            },
+            (LOADER,),
+        ),
+    ],
+    ids=["fill-value", "meaning", "locator"],
+)
+def test_no_problem_quotes_a_steps_value_a_meaning_or_a_locator(
+    tmp_path: Path, changes: dict[str, Any], expected: tuple[str, ...]
+) -> None:
+    with pytest.raises(CompileError) as caught:
+        compiled(tmp_path, **changes)
+    error = caught.value
+
+    assert error.problems == expected
+    assert FAKE not in str(error)
+    assert error.__cause__ is None
+    assert error.__context__ is None

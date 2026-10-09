@@ -9,23 +9,17 @@ the page chose."""
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 
-from pydantic import AwareDatetime, TypeAdapter
+from pydantic import AwareDatetime, TypeAdapter, ValidationError
 
 from aqa_core.compiled import (
     Assertion,
-    Click,
     CompiledBy,
     CompiledScript,
     Coverage,
     ExpectationCoverage,
-    Fill,
-    FillSecret,
-    Navigate,
-    Press,
-    Reload,
-    Select,
     Step,
     Target,
 )
@@ -38,8 +32,11 @@ from aqa_core.coverage_plan import (
     uncovered,
 )
 from aqa_core.project import (
+    SpecError,
+    contract_problems,
     contracts_fingerprint,
     effective_browser,
+    parse_compiled,
     subject_contracts,
 )
 from aqa_core.schema import Contract, NonEmpty, StrictModel
@@ -47,20 +44,20 @@ from aqa_core.spec import Spec
 
 _ASSERTION: Final[TypeAdapter[Assertion]] = TypeAdapter(Assertion)
 _PROBES: Final = frozenset({"probe_equals", "probe_equals_baseline"})
-_ACTIONS: Final[
-    Mapping[str, type[Navigate | Reload | Click | Fill | FillSecret | Select | Press]]
-] = {
-    "navigate": Navigate,
-    "reload": Reload,
-    "click": Click,
-    "fill": Fill,
-    "fill_secret": FillSecret,
-    "select": Select,
-    "press": Press,
-}
+_STEP: Final[TypeAdapter[Step]] = TypeAdapter(Step)
 # Until #54 infers the flag from evidence, every compiled step is a
 # side-effect step (ADR-0025: false needs positive evidence).
-BASIS: Final = "no positive evidence that the step changes nothing"
+_BASIS: Final = "no positive evidence that the step changes nothing"
+# The step fields a problem may name: the ones the actions take, and the
+# ones compiling owns. Any other key came from the caller and is never shown.
+_TAKEN: Final = frozenset({"url", "value", "secret", "option", "key", "target"})
+_OWNED: Final = frozenset(
+    {"seq", "target", "side_effect", "side_effect_basis", "satisfies"}
+)
+_LOADER: Final = (
+    "the compiled script doesn't pass the loader's checks "
+    '(DATA_MODEL §7, "Checked by the loader")'
+)
 
 
 class CompileError(Exception):
@@ -93,18 +90,19 @@ def unsupported_features(plan: CoveragePlan) -> tuple[str, ...]:
     """A line for each probe check and each required condition in `plan`,
     which exploring can't compile yet (ADR-0024's D35): explore refuses such
     a plan before the browser opens."""
-    probes = [
-        f"{check_id} (expect[{index}], {check.check}): exploring can't compile a "
-        f"{check.check} check yet"
-        for check_id, (index, check) in planned_checks(plan).items()
-        if check.check in _PROBES
-    ]
-    conditions = [
-        f'requires {condition.id} ("{condition.condition}"): exploring can\'t keep a '
-        "required condition in the path yet"
-        for condition in plan.requires
-    ]
-    return (*probes, *conditions)
+    return (
+        *(
+            f"{check_id} (expect[{index}], {check.check}): exploring can't compile a "
+            f"{check.check} check yet"
+            for check_id, (index, check) in planned_checks(plan).items()
+            if check.check in _PROBES
+        ),
+        *(
+            f'requires {condition.id} ("{condition.condition}"): exploring can\'t keep '
+            "a required condition in the path yet"
+            for condition in plan.requires
+        ),
+    )
 
 
 def _contracts(
@@ -117,7 +115,9 @@ def _contracts(
     first: dict[str, int] = {}
     for planned in plan.expectations:
         index = planned.expect_index
-        meanings = [c.target_meaning for c in planned.checks if c.target_meaning]
+        meanings = [
+            c.target_meaning for c in planned.checks if c.target_meaning is not None
+        ]
         if index in rows and planned.unsupported is not None:
             problems.append(
                 f"subjects expect {index}: the plan leaves expectation {index} "
@@ -157,13 +157,10 @@ def contracts_by_meaning(
 @dataclass(frozen=True)
 class PathStep:
     """An action the attempt dispatched, and the target its element got.
-
-    `fields` are the step's compiled fields that the action chose: `action`,
-    then `url` for a navigate, `value` for a fill, `secret` for a
-    fill_secret, `option` for a select and `key` for a press; a reload and a
-    click take none. A click, fill, fill_secret or select has a `target`;
-    the others have none. Compiling owns `seq`, `target` (the name),
-    `side_effect`, `side_effect_basis` and `satisfies` (DATA_MODEL §7)."""
+    `fields` are `action` and the action's own field (`url`, `value`,
+    `secret`, `option` or `key`; a reload and a click have none), never what
+    compiling owns: `seq`, `target`, `side_effect`, `side_effect_basis` and
+    `satisfies` (DATA_MODEL §7)."""
 
     fields: Mapping[str, str]
     target: Target | None = None
@@ -212,16 +209,53 @@ def _steps(
             problems.append(
                 f"step {number}: its target's subject contract isn't its meaning's"
             )
-        fields: dict[str, object] = {
-            **step.fields,
-            "seq": seq,
-            "side_effect": True,
-            "side_effect_basis": BASIS,
-        }
-        if step.target is not None:
-            fields["target"] = _named(names, step.target)
-        steps.append(_ACTIONS[step.fields["action"]].model_validate(fields))
+        compiled = _step(number, step, seq, names)
+        if isinstance(compiled, str):
+            problems.append(compiled)
+        else:
+            steps.append(compiled)
     return steps, problems
+
+
+def _step(
+    number: int, step: PathStep, seq: int, names: dict[Target, str]
+) -> Step | str:
+    """Step `number` of the attempt compiled as step `seq`, or the problem with
+    it. The problem names only a known action, a field of `_TAKEN` or
+    `_OWNED`, or a kind of mistake, never a value: pydantic's messages quote
+    their input."""
+    if owned := sorted(_OWNED & step.fields.keys()):
+        return f"step {number}: sets {owned[0]}, which compiling owns"
+    fields: dict[str, object] = {
+        **step.fields,
+        "seq": seq,
+        "side_effect": True,
+        "side_effect_basis": _BASIS,
+    }
+    if step.target is not None:
+        fields["target"] = _named(names, step.target)
+    try:
+        return _STEP.validate_python(fields)
+    except ValidationError as error:
+        first = error.errors(include_input=False)[0]
+    return f"step {number}: {_invalid(first['type'], first['loc'])}"
+
+
+def _invalid(error: str, loc: tuple[int | str, ...]) -> str:
+    """What's wrong with a step, from pydantic's first error type and its
+    location (the action, then the field), never its message."""
+    if not loc:  # no action, or one this format doesn't know
+        return "names no action this format knows"
+    kind, field = loc[0], loc[1] if len(loc) > 1 else None
+    # The fields compiling adds are valid, so any other field is a key the
+    # caller added, never named.
+    if field not in _TAKEN:
+        return f"a {kind} step takes a field it doesn't know"
+    if error == "missing":
+        return f"a {kind} step needs {field}"
+    if error == "extra_forbidden":
+        return f"a {kind} step takes no {field}"
+    return f"its {field} isn't valid for a {kind} step"
 
 
 def _binding_problem(
@@ -283,7 +317,7 @@ def compile_script(
     CompileError names every problem. `plan` must fit `spec`
     (`coverage_plan.misfits`)."""
     spec_id = spec.frontmatter.id
-    contracts, problems = _contracts(plan, subject_contracts(config, spec_id))
+    contracts, meaning_problems = _contracts(plan, subject_contracts(config, spec_id))
     kept = sorted(set(path.kept))
     taken = [number for number in kept if number in path.steps]
     names: dict[Target, str] = {}
@@ -292,7 +326,7 @@ def compile_script(
     problems = [
         *uncovered(plan, spec.frontmatter),
         *unsupported_features(plan),
-        *problems,
+        *meaning_problems,
         *(
             f"finish names step {number}, which the attempt never took"
             for number in kept
@@ -304,11 +338,7 @@ def compile_script(
     if problems:
         raise CompileError(problems) from None
     checks = planned_checks(plan)
-    ids: dict[int, list[str]] = {}
-    for check_id, (index, _) in checks.items():
-        ids.setdefault(index, []).append(check_id)
-    spec_id = spec.frontmatter.id
-    return CompiledScript(
+    script = CompiledScript(
         schema_version=1,
         spec_id=spec_id,
         spec_hash=spec.spec_hash,
@@ -328,7 +358,11 @@ def compile_script(
                     expect_index=planned.expect_index,
                     subject=planned.subject,
                     claim=planned.claim,
-                    assertions=tuple(ids[planned.expect_index]),
+                    assertions=tuple(
+                        i
+                        for i, (index, _) in checks.items()
+                        if index == planned.expect_index
+                    ),
                 )
                 for planned in plan.expectations
             ),
@@ -339,3 +373,20 @@ def compile_script(
         steps=tuple(steps),
         assertions=tuple(assertions),
     )
+    problems = [
+        *(() if _loads(script, config) else (_LOADER,)),
+        *contract_problems(script, config),
+    ]
+    if problems:
+        raise CompileError(problems) from None
+    return script
+
+
+def _loads(script: CompiledScript, config: ProjectConfig) -> bool:
+    """Whether the strict loader reads `script`'s JSON back. Its problems can
+    quote a name the model wrote, so the caller reports one fixed line."""
+    try:
+        parse_compiled(script.model_dump_json(), config, source=Path("compiled.json"))
+    except SpecError:
+        return False
+    return True
