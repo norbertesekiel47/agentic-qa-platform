@@ -23,7 +23,7 @@ from aqa_core.coverage_plan import uncovered
 from aqa_core.model_costs import CostRecord, Usage, cost_record
 from aqa_core.model_roles import RoutedModel, resolve_roles
 from aqa_core.price_map import vendored
-from aqa_core.project import load_project
+from aqa_core.project import load_config, load_spec
 from aqa_core.spec import Spec
 from aqa_runner.anthropic_client import AnthropicClient, ProviderError
 from aqa_runner.coverage_plan import make_plan
@@ -442,7 +442,7 @@ def capture_attempt(
     persister = DeferredPersister()
     vcr.register_persister(persister)
     state = AttemptState()
-    config = load_project(spec.path.parent).config
+    config = load_config(spec.path.parent / "config.yaml")
     model = resolve_roles(config, vendored())["navigator"].model
     call_completed = capture_completed = completed = False
     try:
@@ -488,7 +488,9 @@ def pilot(spec_id: str, root: Path) -> Spec:
     root.mkdir()
     for source in (PILOTS / "config.yaml", PILOTS / f"{spec_id}.spec.md"):
         shutil.copyfile(source, root / source.name)
-    return load_project(root).specs[spec_id]
+    # The reviewed subject rows name the other pilot specs, which a project
+    # load requires; the recording reads only this spec and its config.
+    return load_spec(root / f"{spec_id}.spec.md", load_config(root / "config.yaml"))
 
 
 def record(
@@ -505,7 +507,7 @@ def record(
         spec = pilot(name.removeprefix("plan_"), attempt / "qa")
     else:
         spec = checkout(attempt / "qa")
-    config = load_project(spec.path.parent).config
+    config = load_config(spec.path.parent / "config.yaml")
     if name == "plain_with_effort":
         config = config.model_copy(
             update={"roles": {"navigator": ModelRole(effort="high")}}
