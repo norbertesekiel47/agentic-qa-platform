@@ -61,5 +61,5 @@ The proof is a new file, written once, with the source commit and tree, the repo
 | Exit | Meaning |
 |---|---|
 | 0 | Proven |
-| 1 | A readable report that isn't the proving one, or a dirty source. A missing field or one of the wrong type counts here, unless it's one the proof reads (exit 2). The proof names the problems |
-| 2 | Nothing written: a report that can't be read (bad JSON, a repeated key, a non-finite or fractional number, or pairs, run IDs or invariant counts that don't parse), inputs that don't load (a fixture admission refuses, a plan that isn't the fixture's, an invalid manifest, a root with no commit), or a `--report` that exists |
+| 1 | A readable report that isn't the proving one, or a dirty source. A missing field or one of the wrong type counts here, unless the proof then can't read the pairs, run IDs or invariant entries (exit 2). The proof names the problems |
+| 2 | Nothing written: a report that can't be read (bad JSON, a repeated key, a non-finite or fractional number, nesting deeper than the parser takes, or pairs, run IDs or invariant entries that don't parse), inputs that don't load (a fixture admission refuses, a plan that isn't the fixture's, an invalid manifest, a root with no commit), or a `--report` that exists |
