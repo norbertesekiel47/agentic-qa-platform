@@ -364,3 +364,13 @@ P7b-II makes the reviewed contract loadable together with its enforcement (D46).
 - **What waits.** `probe_equals` (#53 P20), baseline probes (their follow-up) and required conditions (#55) are refused by name, as D35 refuses them before the browser. Every step is a side-effect step until #54 infers the flag. `Provenance` is one value (models, price map, time) under the six-argument limit, and is validated where it is built.
 - **Consequences.** This adds no dependency, model call, paid resource or tenant surface.
 
+
+## Amendment (2026-10-12): dropped locators and refused bindings presented (#53 P13)
+
+- **A candidate that spells a bound value is dropped before it is tried.** `TargetUses(..., drop=)` takes a predicate over locators; a candidate it names, or a scope (`drop(ByCss(css=scope))`), is never resolved, counted or handed to Playwright, at any use.
+  - *Options:* (1) filter the locators after generation; (2) drop before the trial. *Chosen: 2*: after generation, a kind whose first working candidate carried the value would be lost, while before it the next candidate of the kind, or the next scope, is tried.
+  - The navigator's attempt drops by replay's preflight rule (`Redactor.spells` on the locator's JSON, raw or JSON-escaped), so explore never compiles a locator its own confirmation would refuse. A role name comes from the scanned snapshot, so it holds a marker, not a value; it is dropped by the same rule anyway.
+- **A subject contract is config, so it is refused, never dropped**: its region and part reach the browser in the subject's verdict before any candidate (ADR-0024's and ADR-0026's #53 P13 amendments).
+- **A refused binding is presented by its contract.** `BindingRefusedError` keeps its message and carries its `contract` and `use`; `aqa_runner.reasons` gives it fixed text naming the contract's region and part, which the project config writes, in every run: for example `outside_region` reads "this check's subject binds only inside div.banner, and this element is outside it", and `unlisted_copies` on an action adds "; act under the target_meaning of a planned check whose contract covers it". `not_the_part` leaves out the parts tool until #53 P19 adds it.
+  - *Options:* (1) the tool composes the text; (2) the error carries the facts. *Chosen: 2*, so the check tools (#53 P14) present it the same way.
+- **Any other `LocatorError` is fixed text in a run that binds a secret**: it can name the element's tag, which the page chose. Outside one it keeps its words. A stale ref's `RefError` keeps its words in every run: it quotes only the ref the model wrote, which the argument check scanned.
