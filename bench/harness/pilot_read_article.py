@@ -9,6 +9,7 @@ import hashlib
 import json
 import subprocess
 import sys
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -99,9 +100,9 @@ def _attempt(pilot: PilotInput, want: Want, run: _Run) -> ObservedAttempt:
 
 def _current(
     root: Path,
-) -> tuple[PilotInput, tuple[str, ...], dict[str, str], str, list[Case]]:
-    """The fixture as the pilot command admits it, every other QA spec ID, the
-    report's input hashes, the plan's hash and the current Conduit dev cases."""
+) -> tuple[PilotInput, tuple[str, ...], dict[str, str], list[Case]]:
+    """The fixture as the pilot command admits it, with its plan checked, every
+    other QA spec ID, the report's input hashes and the current Conduit dev cases."""
     qa = root / manifest.APPS / "conduit" / "qa"
     origin = flags.stack_for("conduit").host_origin
     (pilot,) = load_pilots(qa, root / FIXTURES, (SPEC,), origin=origin)
@@ -118,7 +119,7 @@ def _current(
     omitted = tuple(sorted(load_project(qa).specs.keys() - {SPEC}))
     cases = sorted(manifest.load(root).cases.items())
     dev = [c for _, c in cases if c.app == "conduit" and c.split == "dev"]
-    return pilot, omitted, hashes, plan_hash(plan), dev
+    return pilot, omitted, hashes, dev
 
 
 def prove_read_article(report_path: Path, *, root: Path) -> Mapping[str, object]:
@@ -127,7 +128,7 @@ def prove_read_article(report_path: Path, *, root: Path) -> Mapping[str, object]
     a proving run writes, but for its run IDs and violated invariants' counts.
     An unreadable report or source raises."""
     now = git_source(root, root.parent)
-    pilot, omitted, hashes, planned, cases = _current(root)
+    pilot, omitted, hashes, cases = _current(root)
     raw = report_path.read_bytes()
     text = raw.decode()
     data = json.loads(
@@ -136,9 +137,9 @@ def prove_read_article(report_path: Path, *, root: Path) -> Mapping[str, object]
         parse_constant=_refuse,
         parse_float=_refuse,
     )
-    runs = {
-        (p.case, p.spec): p.attempts for p in _Report.model_validate_json(text).pairs
-    }
+    listed = _Report.model_validate_json(text).pairs
+    runs = {(p.case, p.spec): p.attempts for p in listed}
+    ids = Counter(r.run_id for p in listed for r in p.attempts)
     shown = {(p["case"], p["spec"]): p for p in data["pairs"]}
     rows = {c.id: e for c in cases for e in c.expected if e.spec == SPEC}
     found = {
@@ -164,7 +165,7 @@ def prove_read_article(report_path: Path, *, root: Path) -> Mapping[str, object]
                     key, SPEC, rows.get(key), *attempts, settings=settings
                 )
             )
-    run = report.Report(
+    proving = report.Report(
         "conduit",
         now.commit,
         now.tree,
@@ -176,7 +177,7 @@ def prove_read_article(report_path: Path, *, root: Path) -> Mapping[str, object]
         unchanged=True,
         switched_back=True,
     )
-    doc = report.document(run, {SPEC: pilot.script})
+    doc = report.document(proving, {SPEC: pilot.script})
     rendered: Any = doc["pairs"]
     built = {(p["case"], p["spec"]): p for p in rendered}
     verdicts = {}
@@ -187,8 +188,9 @@ def prove_read_article(report_path: Path, *, root: Path) -> Mapping[str, object]
         )
         pair = (key, SPEC)
         alike = pair in built and pair in shown and _same(built[pair], shown[pair])
-        complete = (
-            len(given) == len({r.run_id for r in given}) == (3 if key is None else 1)
+        # A run ID names one run record, so no other attempt may reuse it.
+        complete = len(given) == (3 if key is None else 1) and all(
+            ids[r.run_id] == 1 for r in given
         )
         verdicts[key or "clean"] = (
             "passed" if counted and alike and complete else "failed"
@@ -204,7 +206,7 @@ def prove_read_article(report_path: Path, *, root: Path) -> Mapping[str, object]
         "spec": SPEC,
         "source": {"commit": now.commit, "tree": now.tree},
         "report": _sha256(raw),
-        "hashes": hashes | {f"plan:{SPEC}": planned},
+        "hashes": hashes | {f"plan:{SPEC}": pilot.script.coverage.plan_hash},
         "cases": verdicts,
         "problems": problems,
         "proven": not problems and set(verdicts.values()) == {"passed"},

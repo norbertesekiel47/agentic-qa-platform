@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -280,6 +281,14 @@ class FixtureTests(unittest.TestCase):
             click | {"side_effect_basis": step["side_effect_basis"], "satisfies": []},
         )
 
+    def test_conduit_wraps_only_its_comment_loop(self) -> None:
+        pages = ROOT / "bench/apps/conduit/frontend/src/app/features/article/pages"
+        html = (pages / "article/article.component.html").read_text()
+        loop = r"<div class=\"comment-list\">\s*@for \(comment of comments\(\); track"
+        loop += r" comment\) \{\s*<app-article-comment [^>]*/>\s*\}\s*</div>"
+        found = (html.count("comment-list"), html.count("<app-article-comment"))
+        self.assertEqual((*found, len(re.findall(loop, html))), (1, 1, 1))
+
     def test_fixture_carries_only_current_row_contracts(self) -> None:
         config, script = self.config, self.script
         rows = dict(core.subject_contracts(config, "read-article"))
@@ -501,7 +510,7 @@ class ProofTests(unittest.TestCase):
 
     def commit(self) -> None:
         self.git("add", "bench")
-        self.git("commit", "-qm", "fixture")
+        self.git("commit", "--no-verify", "-qm", "fixture")
 
     def pilot(self, answers: dict[str, list[RunResult]] | None = None) -> Any:
         """The pilot command's report, Docker and the replay faked by the flag on."""
@@ -626,13 +635,16 @@ class ProofTests(unittest.TestCase):
     def test_proof_refuses_a_report_that_disagrees_with_the_source(self) -> None:
         report = self.pilot()
         self.assertEqual(self.verdict(report), (0, [], []))
-        first = report["pairs"][0]["attempts"][0]
+        first, bug = (report["pairs"][n]["attempts"][0] for n in (0, 3))
         # (dotted path, value): the problems it must raise and the cases it must fail.
         edits: list[tuple[str, object, list[str], list[str]]] = [
             ("pairs.0.attempts", [], ["report.exit"], ["clean"]),
             ("pairs.0.attempts.2", DROP, [], ["clean"]),
             ("pairs.0.attempts.3", first | {"run_id": "x"}, [], ["clean"]),
             ("pairs.0.attempts.1.run_id", first["run_id"], [], ["clean"]),
+            ("pairs.3.attempts.0.run_id", first["run_id"], [], ["clean", BUGS[0]]),
+            ("pairs.4.attempts.0.run_id", bug["run_id"], [], BUGS[:2]),
+            ("pairs.3.attempts.1", bug | {"run_id": "y"}, [], BUGS[:1]),
             ("pairs.0.attempts.0.eligible", False, [], ["clean"]),
             ("pairs.0.attempts.0.kind", "binding_only", [], ["clean"]),
             ("pairs.0.attempts.0.health", DROP, [], ["clean"]),
@@ -647,7 +659,7 @@ class ProofTests(unittest.TestCase):
             ("pairs.5", DROP, ["inventory"], BUGS[2:3]),
             ("pairs.5.case", "conduit-bug-099", ["inventory"], BUGS[2:3]),
             ("pairs.5.spec", "login", ["inventory"], BUGS[2:3]),
-            ("pairs.8", report["pairs"][5], ["inventory"], []),
+            ("pairs.8", report["pairs"][5], ["inventory"], BUGS[2:3]),
             *(
                 (path, "0" * 40, ["report.source"], [])
                 for path in ("source.commit", "source.tree")
@@ -690,13 +702,15 @@ class ProofTests(unittest.TestCase):
     def test_proof_refuses_unreadable_reports_with_a_fixed_message(self) -> None:
         text = json.dumps(self.pilot())
         swaps = ["NaN", "1e400", "0.0"]
-        broken = [text[:-1], '{"exit": 0, ' + text[1:], "[]", "[" * 100_000]
+        broken = [text[:-1], '{"exit": 0, ' + text[1:], "[]", "[" * 1_000_000]
         for case in [
             *broken,
             *(text.replace('"exit": 0', f'"exit": {s}') for s in swaps),
         ]:
             with self.subTest(case[:20]):
                 self.assertEqual(self.prove(case)[::2], (2, MALFORMED))
+        self.git("update-ref", "-d", "HEAD")
+        self.assertEqual(self.prove(text)[::2], (2, MALFORMED))
 
     def test_proof_refuses_a_changed_source(self) -> None:
         report, review = self.pilot(), self.root / "bench/apps/conduit/qa/REVIEW.md"
@@ -714,6 +728,17 @@ class ProofTests(unittest.TestCase):
         plan.write_text(plan.read_text().replace("is shown as anna", "is anna"))
         self.commit()
         self.assertEqual(self.prove(report)[::2], (2, MALFORMED))
+        short = json.loads((FIXTURES / "read-article.plan.json").read_text())
+        short["expectations"].pop()
+        plan.write_text(json.dumps(short))
+        fixture = plan.with_name("read-article.json")
+        script = json.loads(fixture.read_text())
+        script["coverage"]["plan_hash"] = plan_hash(
+            CoveragePlan.model_validate_json(plan.read_text())
+        )
+        fixture.write_text(json.dumps(script))
+        self.commit()
+        self.assertEqual(self.prove(self.pilot())[::2], (2, MALFORMED))
 
     def test_proof_requires_every_current_dev_case_once(self) -> None:
         listed = self.root / "bench/manifest.v1.json"
