@@ -75,10 +75,9 @@ def _attempt(pilot: PilotInput, want: Want, run: _Run) -> ObservedAttempt:
         Stepped(n, "completed", "idle", None if n == 0 else 0, (), False) for n in seqs
     )
     checks = tuple(
-        Checked(
-            a.id, "failed" if a.expect_index in failed else "pass", (), None, False, 0
-        )
+        Checked(a.id, outcome, (), None, False, locator_index=0)
         for a in script.assertions
+        for outcome in ("failed" if a.expect_index in failed else "pass",)
     )
     invariants = tuple(
         InvariantObservation(
