@@ -75,8 +75,8 @@ class ActionResult:
 class Attempt:
     """One attempt of an explore run: its session, its record part, the
     run's start origin and frozen plan, each planned meaning's contract
-    (`contracts_by_meaning`), the secrets it binds and its
-    `resolve_seconds`. It keeps its completed actions by step number, as
+    (`contracts_by_meaning`), the secrets it binds and its `budget`, the
+    run's `resolve_seconds`. It keeps its completed actions by step number, as
     compiling takes them (`ExploredPath`), and its last observation. A run
     whose admission couldn't keep its secrets is `ValueError`, before any
     use of the browser."""
@@ -226,7 +226,7 @@ class Attempt:
 
     def _unfit(self, tool: str, call: Action) -> str | None:
         """Why `call` can't run as written, never quoting a bound value."""
-        for name, value in call.model_dump().items():
+        for name, value in call.model_dump(mode="json").items():
             if self.session.redactor.spells(value):
                 hint = "; fill a secret with fill_secret" if name == "text" else ""
                 return (
@@ -259,6 +259,8 @@ class Attempt:
             url = path_on_origin(self.start, call.path)
             return None, lambda: session.navigate(url)
         if isinstance(call, Reload | Press):
+            # Checked as every observation is, so a page off the allowed
+            # origins is refused before the intent.
             async with session.observing_page():
                 pass
             key = call.key if isinstance(call, Press) else None

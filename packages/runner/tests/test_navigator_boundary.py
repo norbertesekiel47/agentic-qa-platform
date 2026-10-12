@@ -7,6 +7,7 @@ executor's fixture app, on the OS that runs them."""
 
 import asyncio
 import re
+import threading
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
@@ -14,7 +15,7 @@ from typing import Any
 
 import pytest
 from aqa_runner.document_origins import DocumentChangedError
-from aqa_runner.navigator import Click, Fill, Navigate
+from aqa_runner.navigator import Click, Fill, Navigate, Reload
 from aqa_runner.navigator_tools import ActionResult, Attempt
 from aqa_runner.reasons import UnansweredError, reason
 from aqa_runner.redaction import NO_SECRETS, Redacted
@@ -22,7 +23,12 @@ from aqa_runner.run_record import BrokenJournalError, PendingIntent
 from playwright.async_api import Page
 
 from packages.runner.tests.document_fixtures import until
-from packages.runner.tests.executor_fixtures import App, read_steps, serving_app
+from packages.runner.tests.executor_fixtures import (
+    PAGES,
+    App,
+    read_steps,
+    serving_app,
+)
 from packages.runner.tests.navigator_fixtures import (
     SAVE,
     bound,
@@ -196,6 +202,37 @@ def test_a_cancelled_action_leaves_its_step_pending_and_ends_the_attempt(
 
     assert after.text == ENDED.format(1)
     assert posts(app, "/held/pay") == 1
+
+
+# A page whose reload loads an image the app holds, so the reload takes as
+# long as the test holds it.
+SLOW_RELOAD = """<p>Slow</p><script>
+    if (performance.getEntriesByType("navigation")[0].type === "reload") {
+        const held = new Image();
+        held.src = "/held/reload";
+        document.body.append(held);
+    }
+</script>"""
+
+
+def test_a_reload_waits_as_long_as_a_navigation_not_the_action_budget(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(PAGES, "slow-reload", SLOW_RELOAD)
+
+    async def scenario(attempt: Attempt) -> ActionResult:
+        # Held past the action budget's 2 s and the margin's 1 s.
+        released = threading.Timer(4.5, app.release, ("reload",))
+        released.start()
+        try:
+            return await attempt.act(Reload())
+        finally:
+            released.cancel()
+
+    result = on_app(app, tmp_path, scenario, page="/page/slow-reload", budget=2)
+
+    assert result.text == "step 1 ran, and the page settled"
+    assert written(app) == [(1, "intent"), (1, "completed")]
 
 
 def test_a_snapshot_the_page_changes_under_is_taken_again(

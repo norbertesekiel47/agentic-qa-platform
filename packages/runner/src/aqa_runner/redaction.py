@@ -113,14 +113,17 @@ class Redactor:
 
 
 def _strings(value: object) -> list[str]:
-    """Every string in `value`, a JSON value, its keys aside."""
+    """Every string in `value`, a JSON value, its keys aside; `TypeError` for
+    anything else, so no other object passes as holding no string."""
     if isinstance(value, str):
         return [value]
     if isinstance(value, dict):
         return _strings(list(value.values()))
-    if isinstance(value, list):
+    if isinstance(value, list | tuple):
         return [text for item in value for text in _strings(item)]
-    return []
+    if value is None or isinstance(value, bool | int | float):
+        return []
+    raise TypeError(f"{type(value).__name__} isn't a JSON value")
 
 
 def _transitions(groups: _Groups, text: str) -> dict[int, list[int]]:

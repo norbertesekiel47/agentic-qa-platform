@@ -385,6 +385,18 @@ def test_markers_spell_a_value_when_a_value_is_a_piece_of_any_marker() -> None:
         ).markers_spell_a_value,
         Redactor([secret("secret", "FAKE")]).markers_spell_a_value,
         Redactor([secret("password", "TEST_PASSWORD")]).markers_spell_a_value,
+        # The spelled marker is a later secret's: secrets go longest value first.
+        Redactor(
+            [secret("a-much-longer-fake-value", "A_FAKE"), secret("B_FAKE", "B_FAKE")]
+        ).markers_spell_a_value,
         Redactor([secret("fake-api-token-for-49", "FAKE_TOKEN")]).markers_spell_a_value,
         NO_SECRETS.markers_spell_a_value,
-    ] == [True, True, True, True, False, False]
+    ] == [True, True, True, True, True, False, False]
+
+
+def test_spells_reads_tuples_and_refuses_a_value_that_isnt_json() -> None:
+    redactor = Redactor([secret("fake\\nvalue")])
+    assert redactor.spells(("ok", ["fake\\nvalue"])) is True
+    # Never "no string in it": a model or any other object is no JSON value.
+    with pytest.raises(TypeError, match=r"^BoundSecret isn't a JSON value$"):
+        redactor.spells(secret())
