@@ -771,4 +771,3 @@ Option 1 (the maintainer, 2026-10-09).
 - Not claimed: page-written text in a scanned snapshot, a value split across fragments, and what counts, totals and outcomes can encode.
 - The contract refusals' texts and `BindingRefusedError` join `reasons` with the navigator's check tools (#53 P13 and P14), which hold the contracts they name.
 - No dependency, paid resource or model call. Tests: `packages/runner/tests/test_reasons.py`; `test_executor_secrets.py`'s policy refusal in a withheld replay, refused `fill_secret`, attempt part's `egress.json`, refused intent and refused completion; `test_executor_runs.py`'s stale script and bound-value preflight tests; and `test_result_redaction.py`'s cut test, now on a long `field` refusal (approved by the maintainer).
-
