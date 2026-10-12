@@ -650,7 +650,7 @@ async def _text_held(
     text, index = found
     try:
         held = await text_matches(check, text)
-    except SearchTimeoutError:
+    except SearchTimeoutError:  # after resolution: the timeout keeps the index
         return _Located("check_timed_out", index)
     return _Located("pass" if held else "failed", index)
 
