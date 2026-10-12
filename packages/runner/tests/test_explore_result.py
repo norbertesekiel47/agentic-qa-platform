@@ -138,7 +138,7 @@ CAUSES: dict[str, Callable[[Parts], dict[str, Any]]] = {
     "compiled": lambda _: {"published": "confirmed"},
 }
 
-# D30: each outcome with its exit code, most decisive first.
+# Each outcome with its exit code, most decisive first.
 EXITS = [
     ("egress_blocked", 6),
     ("non_resumable", 4),
@@ -651,6 +651,7 @@ def test_a_failed_confirmation_gives_its_reasons_in_outcome_words(
         steps=(
             StepResult(0, "completed", settled="idle"),
             StepResult(3, "drifted", misses=("not the part",)),
+            StepResult(4, "failed"),
         ),
         assertions=(AssertionResult("a1", "failed"), AssertionResult("a2", "pass")),
         invariants=(
@@ -668,6 +669,7 @@ def test_a_failed_confirmation_gives_its_reasons_in_outcome_words(
     confirmation: Any = document["confirmation"]
     assert document["reasons"] == [
         "confirmation step 3: drifted (not the part)",
+        "confirmation step 4: failed",
         "confirmation a1: failed",
         "confirmation invariant js_exceptions: violated",
     ]

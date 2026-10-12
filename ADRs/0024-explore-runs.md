@@ -589,7 +589,7 @@ An explore run that opened its egress proxy can end with several causes at once:
 - **Non-resumable runs.** An unresolved `side_effect: true` intent in either part is exit 4 and is listed in `non_resumable` whatever the exit. A read-only one is terminal but never 4: its cause decides, else 3. A run that published nothing never exits 0; one that published an unconfirmed script exits 0.
 - **Only the final snapshot decides 6 and 13**: the blocks and infrastructure events read once after the last `end_phase()`. The confirmation result's own never decide.
 - **Reasons use the executor's outcome words**: each stop's reason; each planned check that never passed, such as `a2: never bound`, `a3: binding_unresolved (no match, outside region)` or `a4: not_evaluated: step 4 stopped the run`; and each confirmation step, assertion and invariant that didn't, such as `confirmation step 3: drifted (not the part)` or `confirmation invariant http_5xx: violated`.
-- **Provenance.** `ExploreEnd` refuses a phase whose record isn't the run record's part of that name, made from it (`RunRecord.shares_journals`) and scanning with its redactor, and a confirmation result of another run.
+- **Provenance.** `ExploreEnd` refuses a phase whose record isn't the run record's part of that name by path, run ID, redactor object and journal state (`RunRecord.shares_journals`, so made from it), and a confirmation result of another run.
 - **The #53 P5 amendment's sharing rule, exactly.** Records made from one record (`redacting`, `part`, any `dataclasses.replace`) share its pending-intent state, kept by path as spelled. A record made directly, even at the same path with the same run ID, starts a state of its own and sees none of those intents.
 
 ### What P15 and P16 must hold

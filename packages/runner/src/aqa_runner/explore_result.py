@@ -294,7 +294,7 @@ def _rescanned(reason: str | None, redactor: Redactor) -> Redacted | None:
 
 
 def _reasons(end: ExploreEnd, replayed: RunResult | None) -> Iterator[Redacted]:
-    """Why the run ended as it did, in the executor's outcome words (D12):
+    """Why the run ended as it did, in the executor's outcome words:
     each stop's reason, scanned again; each planned check that never passed
     in the attempt; and each step, assertion and invariant of the
     confirmation that didn't. Each assembly is scanned whole, so a value
@@ -335,4 +335,4 @@ def _assertion_words(result: AssertionResult) -> str:
 def _step_words(step: StepResult) -> str:
     if step.outcome == "drifted":
         return f"drifted ({', '.join(step.misses)})"
-    return f"{step.outcome}: {step.error}"
+    return step.outcome if step.error is None else f"{step.outcome}: {step.error}"
