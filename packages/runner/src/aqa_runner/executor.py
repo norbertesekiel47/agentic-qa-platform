@@ -206,13 +206,15 @@ class AssertionResult:
     (none when no look finished). A `not_evaluated` one has `stopped_at`,
     the step that stopped the run before any assertion was evaluated, or
     `error`, what a look at the page raised (the rest after it aren't
-    evaluated either)."""
+    evaluated either). One whose target resolved, then passed, failed or
+    timed out, has the index of the locator that resolved it."""
 
     id: str
     outcome: AssertionOutcome
     misses: tuple[Miss, ...] = ()
     stopped_at: int | None = None
     error: str | None = None
+    locator_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -558,6 +560,8 @@ async def evaluate(
         )
     if isinstance(held, Unresolved):
         return AssertionResult(check.id, "binding_unresolved", held.misses)
+    if isinstance(held, _Located):
+        return AssertionResult(check.id, held.outcome, locator_index=held.locator_index)
     return AssertionResult(check.id, "pass" if held else "failed")
 
 
@@ -584,12 +588,21 @@ async def _evaluate_each(
     return tuple(results)
 
 
+@dataclass(frozen=True)
+class _Located:
+    """A target's check once a locator resolved the target: its outcome,
+    and that locator's index."""
+
+    outcome: Literal["pass", "failed", "check_timed_out"]
+    locator_index: int
+
+
 async def _held(
     session: BrowserSession,
     check: Assertion,
     evaluation: Evaluation,
     budget: float,
-) -> bool | Unresolved:
+) -> bool | _Located | Unresolved:
     """Whether `check` holds, through the session's observations and the
     bounded text search, or the drift that kept its target from being found.
     What it looks at on the page takes at most `budget` seconds and
@@ -627,28 +640,34 @@ async def _text_held(
     check: TextVisible | TextInTarget,
     targets: Mapping[str, Target],
     budget: float,
-) -> bool | Unresolved:
-    seen = await _bounded(
-        _target_text(session, targets[check.target], budget)
-        if isinstance(check, TextInTarget)
-        else _looked(session.visible_text, budget),
-        budget,
-    )
-    return seen if isinstance(seen, Unresolved) else await text_matches(check, seen)
+) -> bool | _Located | Unresolved:
+    if isinstance(check, TextVisible):
+        seen = await _bounded(_looked(session.visible_text, budget), budget)
+        return await text_matches(check, seen)
+    found = await _bounded(_target_text(session, targets[check.target], budget), budget)
+    if isinstance(found, Unresolved):
+        return found
+    text, index = found
+    try:
+        held = await text_matches(check, text)
+    except SearchTimeoutError:
+        return _Located("check_timed_out", index)
+    return _Located("pass" if held else "failed", index)
 
 
 async def _visual(
     session: BrowserSession, target: Target, check: VisibleUnoccluded, budget: float
-) -> bool | Unresolved:
+) -> _Located | Unresolved:
     found = _answered(await _resolve(session, target, "assertion", budget), budget)
     if not isinstance(found, Resolved):
         return found
     try:
-        return await session.unoccluded(
+        held = await session.unoccluded(
             found.element, check.min_size_px, check.in_viewport
         )
     finally:
         await found.element.dispose()
+    return _Located("pass" if held else "failed", found.locator_index)
 
 
 async def _read_probe(evaluation: Evaluation, name: str, path: str) -> probes.JsonValue:
@@ -698,13 +717,14 @@ async def _looked[T](look: Callable[[], Awaitable[T]], budget: float) -> T:
 
 async def _target_text(
     session: BrowserSession, target: Target, budget: float
-) -> str | Unresolved:
-    """`target`'s rendered text, or why it wasn't found within `budget`."""
+) -> tuple[str, int] | Unresolved:
+    """`target`'s rendered text and the index of the locator that found it,
+    or why it wasn't found within `budget`."""
     found = _answered(await _resolve(session, target, "assertion", budget), budget)
     if not isinstance(found, Resolved):
         return found
     try:
-        return await session.text_of(found.element)
+        return await session.text_of(found.element), found.locator_index
     finally:
         await found.element.dispose()
 
@@ -720,14 +740,14 @@ def _answered[R: Resolved | Absent | Unresolved](found: R, budget: float) -> R:
 
 async def _absent(
     session: BrowserSession, target: Target, budget: float
-) -> bool | Unresolved:
+) -> bool | _Located | Unresolved:
     """Whether `target` is absent: looked at once, so a target that is there
     fails at once (ADR-0024's #46 amendment), and only drift is waited out,
     within `budget`."""
     found = _answered(await _resolve(session, target, "negative_check", budget), budget)
     if isinstance(found, Resolved):
         await found.element.dispose()
-        return False
+        return _Located("failed", found.locator_index)
     return found if isinstance(found, Unresolved) else True
 
 
