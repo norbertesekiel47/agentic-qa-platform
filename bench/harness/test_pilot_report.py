@@ -148,8 +148,8 @@ class PilotReportTests(unittest.TestCase):
             (BUG, seen(FAILING, **JS_VIOLATED), None, "matched"),
             (BUG, seen(), None, "mismatch"),
             (BUG, RESET_500, None, "fatal"),
-            (BENIGN, seen(), seen(), "accepted_pending_C"),
-            (BENIGN, drifted, seen(), "accepted_pending_C"),
+            (BENIGN, seen(), seen(), "accepted"),
+            (BENIGN, drifted, seen(), "accepted"),
             (BENIGN, drifted, None, "patch_missing"),
             (BENIGN, drifted, seen(FAILING), "mismatch"),
             (BENIGN, drifted, RESET_500, "fatal"),
@@ -232,7 +232,6 @@ class PilotReportTests(unittest.TestCase):
                 "selected": ["pilot"],
                 "omitted": [],
                 "hashes": {"manifest": "sha256:m", "script:pilot": "sha256:s"},
-                "assertion_provenance": "pending",
                 "halt": None,
                 "reservation_release": "allowed",
                 "switched_back_clean": True,
@@ -269,7 +268,7 @@ class PilotReportTests(unittest.TestCase):
         )
         pairs = [(p["spec"], p["expected"], p["status"]) for p in partial["pairs"]]
         self.assertEqual(pairs, [("pilot", None, "unscored")])
-        kept = ("source", "hashes", "assertion_provenance", "exit")
+        kept = ("source", "hashes", "exit")
         self.assertEqual([partial[k] for k in kept], [full[k] for k in kept])
         values = {f.name: getattr(report(), f.name) for f in fields(Report)}
         del values["omitted"]
@@ -293,6 +292,29 @@ class PilotReportTests(unittest.TestCase):
             found.append((observed.eligible, doc["pairs"][0]["status"], doc["exit"]))
         self.assertEqual(found, [(True, "unscored", 0), (False, "fatal", 3)])
         self.assertNotIn("fake page error", json.dumps(doc))
+
+    def test_report_shows_which_locator_resolved_each_checks_target(self) -> None:
+        nav = StepResult(0, "completed", settled="idle")
+        steps = (nav, replace(nav, seq=1, locator_index=0))
+        fallback = AssertionResult("a1", "pass", locator_index=1)
+        checks = (AssertionResult("a0", "pass"), fallback)
+        held = tuple(InvariantResult(name, "held", (), 0) for name in INVARIANTS)
+        egress = EgressBlocks((), False)
+        passed = RunResult("r2", "passed", steps, checks, (), (), held, egress, None)
+        patched = seen(observe(SCRIPT, passed, invariants=SETTINGS))
+        pair = judge_case(
+            "c", "pilot", BENIGN, seen(DRIFTED), patched, settings=SETTINGS
+        )
+        doc = encoded(report(pair))
+        shown = doc["pairs"][0]
+        acceptance = shown["attempts"][1]["assertions"]
+        found = [
+            (a["id"], a["target"], a["outcome"], a["locator_index"]) for a in acceptance
+        ]
+        self.assertEqual(
+            (shown["status"], "assertion_provenance" in doc), ("accepted", False)
+        )
+        self.assertEqual(found, [("a0", None, "pass", None), ("a1", "send", "pass", 1)])
 
     def test_an_error_in_any_leg_makes_its_pair_fatal(self) -> None:
         broken = (NAV, CLICK._replace(error=True))

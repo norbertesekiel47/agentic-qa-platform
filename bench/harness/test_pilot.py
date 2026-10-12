@@ -28,6 +28,7 @@ from pilot_replay import FailedAttempt, ObservedAttempt, replay_pilot
 from test_flags import FakeDocker
 from test_pilot_replay import ACCOUNT, BINDING, CLIENTS, COMPILED, SEND, Handler, Server
 from test_pilot_report import A0, DRIFTED, HEALTH, PASSED, PRIVATE
+from test_read_article import trapped
 
 SPEC = '{"id":"pilot","goal":"Send","preconditions":{"start_url":"/","reset":{"http":"POST /reset?fake-sensitive"}},"expect":["Title is visible"]}'
 SOURCE = pilot.Source("c" * 40, "t" * 40, False)
@@ -99,6 +100,21 @@ class FlagDocker(FakeDocker):
         return answer
 
 
+def rows(entries: list[dict[str, Any]]) -> list[tuple[object, ...]]:
+    """Each step's seq or check's ID, its target, outcome, locator and misses."""
+    keys = ("target", "outcome", "locator_index", "misses")
+    return [(e.get("seq", e.get("id")), *(e[k] for k in keys)) for e in entries]
+
+
+class HeadedHandler(FlagHandler):
+    """The clean page's heading carries a test ID; ben1's page drops it."""
+
+    def answer(self, status: int, page: str) -> None:
+        clean = self.server.label == "Send"
+        heading = '<h1 data-testid="heading">' if clean else "<h1>"
+        super().answer(status, page.replace("<h1>", heading))
+
+
 class BrokenDocker(FakeDocker):
     """At its `fail_at`th switch, the app serves a page that won't decode."""
 
@@ -125,6 +141,7 @@ class PilotCommandTests(unittest.TestCase):
         self.config: dict[str, Any] = {"base_url": "http://127.0.0.1:4100"}
         self.spec: dict[str, Any] = json.loads(SPEC)
         self.steps: list[object] = [SEND]
+        self.overrides: dict[str, object] = {}  # other fields of the script
         self.cases = {
             "conduit-benign-001": case("benign", "ben1"),
             "conduit-bug-001": case("bug", "bug1", spec="other", expect=[0]),
@@ -141,6 +158,7 @@ class PilotCommandTests(unittest.TestCase):
         self.write_specs()
         spec_hash = load_project(self.qa).specs["pilot"].spec_hash
         script = json.loads(COMPILED) | {"steps": self.steps, "spec_hash": spec_hash}
+        script |= self.overrides
         (self.compiled / "pilot.json").write_text(json.dumps(script))
         if stale:
             self.spec["expect"] = ["The title is visible"]
@@ -207,7 +225,7 @@ class PilotCommandTests(unittest.TestCase):
         locators = [p.script.targets["send"].locators[0] for _, p in replay.seen[2:4]]
         names = [loc.model_dump()["name"] for loc in locators]
         statuses = [p["status"] for p in self.report()["pairs"]]
-        want = ["passed", "accepted_pending_C", "unscored_binding_blocked"]
+        want = ["passed", "accepted", "unscored_binding_blocked"]
         self.assertEqual((names, statuses), (["Send", "Post"], want))
         kept = sorted((self.out / "attempts").iterdir())
         roles = [json.loads(path.read_text())["role"] for path in kept]
@@ -461,7 +479,7 @@ class PilotCommandTests(unittest.TestCase):
         self.assertEqual(server.log, submit + submit[:2] + submit)
         clean, benign = self.report()["pairs"]
         statuses = (clean["status"], benign["status"])
-        self.assertEqual(statuses, ("passed", "accepted_pending_C"))
+        self.assertEqual(statuses, ("passed", "accepted"))
         legs = [(a["role"], a["kind"], a["outcome"]) for a in benign["attempts"]]
         expected = [
             ("diagnostic", "binding_only", "failed"),
@@ -473,6 +491,62 @@ class PilotCommandTests(unittest.TestCase):
         written = "".join(path.read_text() for path in files) + shown
         self.assertNotIn("fake-sensitive", written)
         self.assertEqual(self.ups(), ["", "ben1", ""])
+
+    def test_a_benign_pair_lists_its_broken_binding_then_each_checks_locator(
+        self,
+    ) -> None:
+        server = self.serve()
+        server.RequestHandlerClass = HeadedHandler
+        self.cases = {"conduit-benign-001": case("benign", "ben1")}
+        title = {
+            "semantic": "title",
+            "locators": [{"testid": "heading"}, {"css": "h1"}],
+        }
+        check = {"check": "text_in_target", "target": "title", "text": "Title"}
+        self.overrides = {
+            "targets": json.loads(COMPILED)["targets"] | {"title": title},
+            "assertions": [{"id": "a0", "expect_index": 0} | check],
+        }
+        self.patch_to("Post")
+        built = trapped(self, CLIENTS)
+        inputs: list[PilotInput] = []
+
+        async def recording(pilot_input: PilotInput, root: Path) -> Any:
+            inputs.append(pilot_input)
+            return await replay_pilot(pilot_input, root)
+
+        code, shown = self.command(recording)
+        self.assertEqual((code, built), (0, []), shown)
+        clean, benign = self.report()["pairs"]
+        statuses = (clean["status"], benign["status"])
+        self.assertEqual(statuses, ("passed", "accepted"))
+        legs = [
+            (a["role"], *(rows(a[k]) for k in ("steps", "assertions")))
+            for a in (*clean["attempts"], *benign["attempts"])
+        ]
+        start: tuple[object, ...] = (0, None, "completed", None, [])
+        bound: tuple[object, ...] = (1, "send", "completed", 0, [])
+        lost = (1, "send", "drifted", None, ["no match"])
+        self.assertEqual(
+            legs,
+            [
+                ("clean", [start, bound], [("a0", "title", "pass", 0, [])]),
+                (
+                    "diagnostic",
+                    [start, lost],
+                    [("a0", "title", "not_evaluated", None, [])],
+                ),
+                ("acceptance", [start, bound], [("a0", "title", "pass", 1, [])]),
+            ],
+        )
+        held = [i["outcome"] for i in benign["attempts"][1]["invariants"]]
+        self.assertEqual(held, ["held"] * 4)
+        # The acceptance replayed the original with only send's locators changed.
+        original, candidate = (p.script.model_dump(mode="json") for p in inputs[1:])
+        changed = candidate["targets"]["send"].pop("locators")
+        self.assertNotEqual(changed, original["targets"]["send"].pop("locators"))
+        self.assertEqual(candidate, original)
+        self.assertNotIn("assertion_provenance", self.report())
 
     def test_fatal_original_never_replays_its_patch(self) -> None:
         self.serve()

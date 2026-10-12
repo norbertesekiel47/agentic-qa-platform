@@ -21,7 +21,7 @@ type Attempt = ObservedAttempt | FailedAttempt
 # or nothing, since something unsafe or unknown happened (any FailedAttempt).
 type Kind = Literal["eligible", "binding_only", "ineligible", "fatal"]
 type Role = Literal["clean", "scored", "diagnostic", "acceptance", "unscored"]
-type Judged = Literal["passed", "matched", "accepted_pending_C", "mismatch", "fatal"]
+type Judged = Literal["passed", "matched", "accepted", "mismatch", "fatal"]
 type Status = Judged | Literal["patch_missing", "unscored", "unscored_binding_blocked"]
 # Why the command stopped short when no attempt's result says so.
 type Halt = Literal["interrupted", "unexpected", "system_exit", "switch_failed"]
@@ -170,7 +170,7 @@ def _accepted(legs: tuple[Entry, ...], row: Expected, settings: Invariants) -> S
         return "mismatch"
     if not patched:
         return "patch_missing"
-    return "accepted_pending_C" if _matches(patched[0].attempt, row) else "mismatch"
+    return "accepted" if _matches(patched[0].attempt, row) else "mismatch"
 
 
 def _failed(pairs: Sequence[Pair]) -> list[FailedAttempt]:
@@ -198,7 +198,7 @@ def _exit_code(report: Report) -> int:
 
 def document(report: Report, scripts: Mapping[str, CompiledScript]) -> Json:
     """`report` as the JSON the command writes; `scripts` name each step's
-    and check's target. C, the assertions' locator provenance, is pending."""
+    and check's target."""
     release = releasable(report.pairs, report.halt)
     return {
         "app": report.app,
@@ -209,7 +209,6 @@ def document(report: Report, scripts: Mapping[str, CompiledScript]) -> Json:
         "selected": list(report.selected),
         "omitted": sorted(report.omitted),
         "hashes": dict(report.hashes),
-        "assertion_provenance": "pending",
         "pairs": [_pair(p, scripts[p.spec]) for p in report.pairs],
         "halt": report.halt,
         "reservation_release": "allowed" if release else "forbidden",

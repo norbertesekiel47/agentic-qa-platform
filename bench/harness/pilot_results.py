@@ -33,6 +33,7 @@ class AssertionObservation(NamedTuple):
     misses: tuple[Miss, ...]
     stopped_at: int | None
     error: bool
+    locator_index: int | None = None
 
 
 class InvariantObservation(NamedTuple):
@@ -90,7 +91,12 @@ def observe(
     )
     checks = tuple(
         AssertionObservation(
-            a.id, a.outcome, a.misses, a.stopped_at, a.error is not None
+            a.id,
+            a.outcome,
+            a.misses,
+            a.stopped_at,
+            a.error is not None,
+            a.locator_index,
         )
         for compiled in script.assertions
         for a in (assertions[compiled.id],)

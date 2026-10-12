@@ -196,6 +196,15 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(self.observe(raw), self.observe(changed))
         self.assertNotIn("fake-", repr(self.observe(changed)))
 
+    def test_projection_keeps_each_checks_locator(self) -> None:
+        checks = self.clean.assertions
+        fallback = replace(checks[1], locator_index=1)
+        result = replace(self.clean, assertions=(checks[0], fallback, *checks[2:]))
+        seen = self.observe(result)
+        found = [a.locator_index for a in seen.assertions]
+        self.assertEqual(found, [None, 1, None, None])
+        self.assertNotEqual(seen, self.observe(self.clean))
+
     def test_keyed_rows_canonicalize_without_hiding_bad_multiplicity(self) -> None:
         self.assertEqual(
             self.observe(self.clean),
