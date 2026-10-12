@@ -779,7 +779,7 @@ Option 1 (the maintainer, 2026-10-09).
 The #53 P9+P10 amendment left explore's protected output to its presenter: what a replay returns in `RunResult` (`steps[*].window`, `policy_events`, `infrastructure_events`, `egress_blocks`) and what the run's own causes say. `aqa_runner.explore_result.present(end)` makes `explore.json`, whose `egress` member is the top-level `egress.json`. Two choices were open:
 
 - **What the document copies.** (1) An allow-list, field by field; (2) serialize the results and redact them; (3) a choice per sink. *Chosen: 1.* (2) presents any field a result gains later, and no scan finds a value a page split across refused hosts and ports. (3) spreads one decision over every sink.
-- **Where the scan comes from.** (1) A redactor the caller passes; (2) the run's record, each phase's part checked as made from it. *Chosen: 2* (the coordinator, 2026-10-12, after the plan's review): with (1), a caller can pass an empty scan and un-withhold a run that binds a value.
+- **Where the scan comes from.** (1) A redactor the caller passes; (2) the run's record, each phase's part checked as made from it. *Chosen: 2* (the coordinator, 2026-10-12, after the plan's review): with (1), any caller can pass an empty scan and un-withhold a run that binds a value; with (2), the scan that withholds is the one that writes the documents, and only the code that makes the run record chooses it. `ExploreEnd` can't check that choice: a `redacting` copy of the whole family passes, so explore checks that the record holds the redactor it built (ADR-0024's #53 P12 amendment).
 
 ### Decision
 

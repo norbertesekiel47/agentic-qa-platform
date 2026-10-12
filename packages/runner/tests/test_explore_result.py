@@ -293,6 +293,7 @@ def test_a_phase_interrupted_mid_dispatch_is_non_resumable_not_gave_up(
     tmp_path: Path,
 ) -> None:
     made = parts(tmp_path)
+    made.attempt.step_intent(4, NAVIGATE, side_effect=False, target_used=None)
     made.attempt.step_intent(5, CLICK, side_effect=True, target_used="save")
     attempt = Phase(made.attempt, PhaseTraffic(1, 0), 0)
 
@@ -302,7 +303,6 @@ def test_a_phase_interrupted_mid_dispatch_is_non_resumable_not_gave_up(
     assert present(end)["reasons"] == ["the minutes budget ran out"]
 
 
-# What the egress proxy's event says once an accept error retired its listener.
 RETIRED = (
     "the egress proxy stopped accepting the browser's connections after an "
     "accept error (EMFILE)"
@@ -757,27 +757,26 @@ def test_a_bound_value_spanning_a_step_reasons_join_is_scanned(
     assert confirmation["steps"][0]["reason"] == "fake-value-x"
 
 
+UNEVALUATED = AssertionResult("a2", "not_evaluated", error="fake-x")
+
+
 @pytest.mark.parametrize(
-    ("redactor", "reason"),
+    ("redactor", "result", "reason"),
     [
-        (spanning("not_evaluated: fake-value-x"), "a2: [SECRET:TEST_PASSWORD]"),
-        (NO_SECRETS, "a2: not_evaluated: fake-value-x"),
+        (spanning("not_evaluated: fake-x"), UNEVALUATED, "a2: [SECRET:TEST_PASSWORD]"),
+        (NO_SECRETS, UNEVALUATED, "a2: not_evaluated: fake-x"),
+        (spanning("a2: never"), None, "[SECRET:TEST_PASSWORD] bound"),
     ],
 )
 def test_a_bound_value_spanning_a_checks_reason_join_is_scanned(
-    tmp_path: Path, redactor: Redactor, reason: str
+    tmp_path: Path, redactor: Redactor, result: AssertionResult | None, reason: str
 ) -> None:
-    checks = {"a2": AssertionResult("a2", "not_evaluated", error="fake-value-x")}
-
-    document = present(ending(parts(tmp_path, redactor), checks=checks))
+    document = present(ending(parts(tmp_path, redactor), checks={"a2": result}))
 
     assert document["reasons"] == [reason]
 
 
-def refused(part: str) -> str:
-    return (
-        f"^{part} isn't a part made from this run's record, scanning with its redactor$"
-    )
+REFUSED = "^{} isn't a part made from this run's record, scanning with its redactor$"
 
 
 def before_scanning(tmp_path: Path) -> Parts:
@@ -806,7 +805,7 @@ def another_run_id(tmp_path: Path) -> Parts:
 def test_a_phase_of_another_record_or_scan_is_refused(
     tmp_path: Path, mismatched: Callable[[Path], Parts]
 ) -> None:
-    with pytest.raises(ValueError, match=refused("attempt-1")):
+    with pytest.raises(ValueError, match=REFUSED.format("attempt-1")):
         ending(mismatched(tmp_path))
 
 
@@ -832,7 +831,7 @@ def test_a_record_made_directly_in_a_parts_place_is_refused(
     direct = RunRecord(real.run_id, real.path, real.redactor)
     place = "attempt" if part == "attempt-1" else "confirmation"
 
-    with pytest.raises(ValueError, match=refused(part)):
+    with pytest.raises(ValueError, match=REFUSED.format(part)):
         confirmed(replace(made, **{place: direct}), published="confirmed")
     if hidden:
         assert real.unresolved() == (PendingIntent(seq=3, side_effect=True),)
@@ -844,7 +843,7 @@ def test_parts_beside_a_run_record_made_directly_are_refused(tmp_path: Path) -> 
     made.attempt.step_intent(3, CLICK, side_effect=True, target_used="save")
     direct = RunRecord(made.record.run_id, made.record.path, made.record.redactor)
 
-    with pytest.raises(ValueError, match=refused("attempt-1")):
+    with pytest.raises(ValueError, match=REFUSED.format("attempt-1")):
         confirmed(replace(made, record=direct), published="confirmed")
 
 

@@ -586,7 +586,7 @@ An explore run that opened its egress proxy can end with several causes at once:
 ### Decision
 
 - **One ordered table.** `EXIT_CODES` lists the outcomes most decisive first: `egress_blocked` 6, `non_resumable` 4, `no_sandbox` 10, `reset_unsafe` 14, `unreachable` 13, `record_error` 15, `no_response` 11, `gave_up` 3, `compiled` 0. The first that holds decides. Blocks, unresolved intents, uncertain traffic and infrastructure events are facts the run left. `no_sandbox`, `reset_unsafe`, `record_error`, `no_response` and `gave_up` are stops the graph made (`Stop`), with fixed or `reasons.reason` text, kept in the order they were made.
-- **Non-resumable runs.** An unresolved `side_effect: true` intent in either part is exit 4 and is listed in `non_resumable` whatever the exit. A read-only one is terminal but never 4: its cause decides, else 3. A run that published nothing never exits 0; one that published an unconfirmed script exits 0.
+- **Non-resumable runs.** An unresolved `side_effect: true` intent in either part makes the run non-resumable: exit 4 unless a block holds (6), and it is listed in `non_resumable` whatever the exit, so resumability is read from that list, never from the exit code. A read-only one is terminal but never 4: its cause decides, else 3. A run that published nothing never exits 0; one that published an unconfirmed script exits 0.
 - **Only the final snapshot decides 6 and 13**: the blocks and infrastructure events read once after the last `end_phase()`. The confirmation result's own never decide.
 - **Reasons use the executor's outcome words**: each stop's reason; each planned check that never passed, such as `a2: never bound`, `a3: binding_unresolved (no match, outside region)` or `a4: not_evaluated: step 4 stopped the run`; and each confirmation step, assertion and invariant that didn't, such as `confirmation step 3: drifted (not the part)` or `confirmation invariant http_5xx: violated`.
 - **Provenance.** `ExploreEnd` refuses a phase whose record isn't the run record's part of that name by path, run ID, redactor object and journal state (`RunRecord.shares_journals`, so made from it), and a confirmation result of another run.
@@ -602,6 +602,6 @@ An explore run that opened its egress proxy can end with several causes at once:
 ### Consequences and limits
 
 - A run that stops early leaves an empty `attempt-1/`, which is not forced (#53 P5).
-- `ExploreEnd` can't tell whether the run record is the run's: a record made directly at the run's path, with parts copied from it by `dataclasses.replace`, passes. Explore finalizes with the record it made at preflight.
+- `ExploreEnd` can't tell whether the run record is the run's, or scans with the run's redactor: a `redacting` or `dataclasses.replace` copy of the whole family with another scan passes, and so does a record made directly at the run's path with parts copied from it. Explore finalizes with the record it made at preflight, checked to hold the redactor it built.
 - API.md §7's rows say when each code is reached; its precedence sentence, and exit 15 for a record that failed after the proxy opened, join it when the CLI exits by this table (#53 P17).
 - No new dependency, paid resource or model call. Tests: `packages/runner/tests/test_explore_result.py`.
