@@ -393,6 +393,7 @@ class ContractTests(unittest.TestCase):
         for name, yes, no in (("TEST_FILE", "teﬆ_a.py", "test_a.py.BAK"),
                              ("TEST_FILE_AS_TYPED", "test_a.py.bak\n", "Test_a.py"),
                              ("GATE_WHOLE_FILE", "tsconf\u0131g.json", "tsconfig.json.bak"),
+                             ("GATE_WHOLE_FILE", "tsconfig.jsontsconfig", "tsconfig.jsontsconfig.bak"),
                              ("PROTECTED", ".claude/hooks/x.bak", ".claude/hooks/"),
                              ("GATE_WHOLE_FILE", ".g\u0131thub/scripts/x", "tsconfİg.json"),
                              ("TEST_PATH_IN_SHELL", "rm /test", "xtest_a.py"),
@@ -417,6 +418,7 @@ class ContractTests(unittest.TestCase):
             self.assertIsNotNone(match)
             if match is not None:
                 self.assertEqual(match[1], expected)
+        self.assertIsNone(r.SECTION_HEADER.search("[tool.uv] x"))
         self.assertEqual(len(list(r.ASSERTION.finditer("\n\n assert x\nself.assertTrue(x)\n"))), 2)
         self.assertEqual(len(list(r.TEST_DEF.finditer("\n async def test_a():\n it(x)"))), 2)
         for whitespace in ("\r\n", "\f", "\v", "\x85", "\u2028"):
