@@ -25,6 +25,7 @@ uv run python bench/harness/flags.py selftest <app>    # alternate the reserved 
 uv run python bench/harness/toggle.py <app> --cycles 5 # every check on the clean app and under each case's flag
 
 uv run python bench/harness/pilot.py <app> --out .scratch/<new dir> [--spec <id> ...] [--repeat 3] [--compiled-dir DIR] [--patches DIR]
+uv run python bench/harness/pilot_read_article.py <dir>/report.json --report .scratch/<new file> [--root DIR]
 ```
 
 The flag commands need the app's images built (`docker compose build` in `apps/<app>/`). The self-test proves flag delivery to both tiers. `toggle.py` proves each case's planted change, and that the case's flag switches nothing else (ADR-0023). It builds the app's images from the working tree and the checks image, then runs every case's check (`toggle_checks.py`, as a non-root user with Chromium's sandbox on) on the clean app and under each case's flag. It fails when a case has no check, or when a check sees anything other than its exact expected state: planted under its own flag, clean otherwise. A pull request that adds or changes cases includes its output.
@@ -50,3 +51,15 @@ The flag commands need the app's images built (`docker compose build` in `apps/<
 | 130 | Interrupted |
 
 When several apply, the highest-ranked wins: 130, then 12, then 3, then 1.
+
+## Read-article proof
+
+`pilot_read_article.py` proves the hand-written read-article script (`harness/fixtures/`, #51) from the report of `pilot.py conduit --spec read-article --compiled-dir bench/harness/fixtures --repeat 3`. It builds the report a proving run writes from the current source, manifest and fixture, and requires the given report to equal it in every field but the run IDs and the violated invariants' counts. That report holds three equal, eligible clean passes. Under `conduit-bug-001` only expectation 2 fails, under `conduit-bug-002` only `js_exceptions` is violated, and every other Conduit dev case passes. A manifest row for read-article that says otherwise is a new contract, which the proof refuses. It never replays, resets or switches the app.
+
+The proof is a new file, written once, with the source commit and tree, the report's sha256, the input hashes, a verdict per case and the names of the problems found, never text from the report. Only a clean source, at the commit the report names, proves.
+
+| Exit | Meaning |
+|---|---|
+| 0 | Proven |
+| 1 | A readable report that isn't the proving one, a field of the wrong type or a missing field included, or a dirty source. The proof names the problems |
+| 2 | Nothing written: a report that can't be read (bad JSON, a repeated key, a non-finite or fractional number, run IDs or counts that don't parse), inputs that don't load (a fixture admission refuses, a plan that isn't the fixture's, an invalid manifest), or a `--report` that exists |
