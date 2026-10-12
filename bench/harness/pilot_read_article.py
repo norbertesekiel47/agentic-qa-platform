@@ -188,7 +188,7 @@ def prove_read_article(report_path: Path, *, root: Path) -> Mapping[str, object]
         )
         pair = (key, SPEC)
         alike = pair in built and pair in shown and _same(built[pair], shown[pair])
-        # A run ID names one run record, so no other attempt may reuse it.
+        # Each attempt is a run of its own, so no two may report the same ID.
         complete = len(given) == (3 if key is None else 1) and all(
             ids[r.run_id] == 1 for r in given
         )
