@@ -36,12 +36,12 @@ from aqa_runner.executor import AssertionResult, RunResult, StepResult
 from aqa_runner.redaction import Redacted, Redactor
 from aqa_runner.run_record import PARTS, PendingIntent, RunRecord
 
-# How an explore run that opened its egress proxy ends, most decisive first,
-# with its exit code (API.md §7): a block, which the user must answer before
-# anything else the run says means much; side effects whose outcome is
-# unknown, which nothing may repeat (AGENTS.md §6); the infrastructure
-# errors; a provider that gave no response; giving up; and compiling, only
-# when nothing else holds.
+# How an explore run that opened its egress proxy ends, with its exit code
+# (API.md §7). The order is the precedence, `final_outcome` taking the first
+# that holds: a block, which the user must answer before anything else the
+# run says means much; side effects whose outcome is unknown, which nothing
+# may repeat (AGENTS.md §6); the infrastructure errors; a provider that gave
+# no response; giving up; and compiling, only when nothing else holds.
 type Outcome = Literal[
     "egress_blocked",
     "non_resumable",
