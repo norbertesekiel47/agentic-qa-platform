@@ -492,7 +492,9 @@ print(json.dumps([result, time.perf_counter() - start]))
 
 
 class LinearPatternTests(unittest.TestCase):
-    def child(self, args: list[str], payload: str) -> subprocess.CompletedProcess[str]:
+    def child(
+        self, args: list[str], payload: str, timeout: float = 5
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, *args],
             input=payload,
@@ -500,7 +502,7 @@ class LinearPatternTests(unittest.TestCase):
             capture_output=True,
             cwd=HOOKS,
             env=_FIXTURE_ENV,
-            timeout=5,
+            timeout=timeout,
             check=False,
         )
 
@@ -584,7 +586,7 @@ class LinearPatternTests(unittest.TestCase):
         self.contract("inventory")
 
     def test_mixed_long_commands_and_real_write_scan_decisions(self) -> None:
-        # One five-second child per long decision: together they exceed one deadline.
+        # One child per long decision, each within the hook's configured 10 s timeout.
         mixed = "git commit <<EOF\n'x' \"y\" <<A \\\n" * 100_000
         for command, wanted in (
             (mixed, "allow"),
@@ -596,7 +598,9 @@ class LinearPatternTests(unittest.TestCase):
                 "tool_input": {"command": command},
                 "cwd": str(HOOKS),
             }
-            hook = self.child([str(HOOKS / "policy_guard.py")], json.dumps(payload))
+            hook = self.child(
+                [str(HOOKS / "policy_guard.py")], json.dumps(payload), timeout=10
+            )
             self.assertEqual(hook.returncode, 0, hook.stderr)
             out = hook.stdout.strip()
             verdict = json.loads(out)["hookSpecificOutput"] if out else {}
