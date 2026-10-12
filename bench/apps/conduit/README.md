@@ -82,6 +82,7 @@ The two apps pin different `realworld` commits, so each carries only the subset 
 3. **`frontend/angular.json`**: one asset entry copies `src/vendor/` into the build.
 4. **`backend/Makefile`**: upstream's `run` and `test-*` targets hard-code a random 44-character `JWT_SECRET`. It is replaced with `${JWT_SECRET:-conduit-bench-jwt-fixture}`, so a live-looking key is never republished here. The Compose setup does not use these targets.
 5. **`backend/server/utils/prisma.ts`**: `closePrisma()` is added (and the client variable may now be `undefined`), so `/test-api/reset` can close the client before restoring the database file (ADR-0022).
+6. **`frontend/src/app/features/article/pages/article/article.component.html`**: a plain `div.comment-list` groups only the repeated comment components, including an empty list, so the read-article fixture binds the comment list independently of the signed-out prompt; it adds no text, CSS rule, route, flag or data change (ADR-0023).
 
 ## Our additions inside the upstream trees
 
@@ -142,6 +143,6 @@ Use the JSON reporter for counts. The line reporter writes cursor-control codes 
 
 ## Updating upstream
 
-Re-export each tree at the new commit with the same exclusions, then re-apply the five changes above and restore our additions and planted changes. After that:
+Re-export each tree at the new commit with the same exclusions, then re-apply the changes listed above and restore our additions and planted changes. After that:
 - Re-run the seed, the checks above, and `gitleaks dir .`.
 - An upstream change that moves a reviewed finding makes CI fail until its `.gitleaksignore` entry is re-reviewed (ADR-0021).

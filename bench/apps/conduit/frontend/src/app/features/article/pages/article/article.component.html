@@ -131,9 +131,11 @@
 
           <app-list-errors [errors]="deleteCommentErrors()" />
 
-          @for (comment of comments(); track comment) {
-            <app-article-comment [comment]="comment" (delete)="deleteComment(comment)" />
-          }
+          <div class="comment-list">
+            @for (comment of comments(); track comment) {
+              <app-article-comment [comment]="comment" (delete)="deleteComment(comment)" />
+            }
+          </div>
         </div>
       </div>
     </div>
