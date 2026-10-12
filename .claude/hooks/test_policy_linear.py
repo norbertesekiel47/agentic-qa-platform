@@ -355,7 +355,7 @@ class ContractTests(unittest.TestCase):
         for shape in ("", "a?", "a//b", "a.*", "a.b", "a+", "a{2}", "a[bc]", "a(?:/b)?", "a(?:/b|)", "a|a/b", "^a", r"a\/b"):
             with self.assertRaises(ValueError):
                 r.path_pattern(r.NameShapes(dirs=(shape,)))
-        for shape in ("", r"a(?:/b)?{name}\.py", r"z._gate\.toml", r"a.*\.py", r"a[bc]\.py", r"a|b\.py", r"{name}{name}\.py", r"a/{name}{name}\.py", r"^a\.py", r"a\/b\.py"):
+        for shape in ("", r"a(?:/b)?{name}\.py", r"z._gate\.toml", r"a.*\.py", r"a[bc]\.py", r"a|b\.py", r"{name}{name}\.py", r"a/{name}{name}\.py", r"^a\.py", r"a\/b\.py", r"{name}Tsconfig{name}\.json"):
             for folded in (True, False):
                 with self.assertRaises(ValueError):
                     r.PathCheck(r.NameShapes(files=(shape,)), folded=folded)
@@ -387,7 +387,7 @@ class ContractTests(unittest.TestCase):
                 padding = letter * (width // len(letter.casefold())) + "x" * (width % len(letter.casefold()))
                 self.assertEqual(len(padding.casefold()), width)
                 self.assertEqual(len(padding), width // len(letter.casefold()) + width % len(letter.casefold()))
-                for name, prefix, end in (("TEST_PATH_IN_SHELL", "test_a", ".py"), ("TEST_PATH_IN_SHELL", "$Dtest_a", ".py"), ("TEST_PATH_IN_SHELL", "$1test_a", ".py"), ("TEST_PATH_IN_SHELL", "-otest_a", ".py"), ("TEST_PATH_IN_SHELL", "+-otest_a", ".py"),
+                for name, prefix, end in (("TEST_PATH_IN_SHELL", "test_a", ".py"), ("TEST_PATH_IN_SHELL", "$Dtest_a", ".py"), ("TEST_PATH_IN_SHELL", "$1test_a", ".py"), ("TEST_PATH_IN_SHELL", "-otest_a", ".py"), ("TEST_PATH_IN_SHELL", "+-otest_a", ".py"), ("TEST_PATH_IN_SHELL", "+test_a", ".py"), ("TEST_PATH_IN_SHELL", "$Dtest_test_a", ".py"),
                                           ("GATE_FILE_IN_SHELL", "tsconfig", ".json"), ("GATE_FILE_IN_SHELL", "$Dtsconfig", ".json"), ("GATE_FILE_IN_SHELL", "-otsconfig", ".json")):
                     self.assertEqual(getattr(r, name).search(prefix + end + padding + ".bak"), width == 256 or letter == "ΐ", (name, prefix, width, letter))
         for name, yes, no in (("TEST_FILE", "teﬆ_a.py", "test_a.py.BAK"),
@@ -478,9 +478,9 @@ _RULE_MEASURE = r"""import json, sys, time
 import policy_rules as r
 name, text = json.loads(sys.stdin.read())
 pattern = (r.path_pattern(r.NameShapes(dirs=('a','a/b'), under=r'[^/]+\.ya?ml')) if name == 'directory_prefix' else
-           r.SECRET_SLOTS[0][1] if name == 'variable' else
-           r.CONTENT_RULES[-2].pattern if name == 'sandbox' else
-           r.CONTENT_RULES[13].pattern if name == 'tautology' else getattr(r, name))
+           dict(r.SECRET_SLOTS)['secret-named variable'] if name == 'variable' else
+           {x.label: x.pattern for x in r.CONTENT_RULES}['`--disable-*sandbox`'] if name == 'sandbox' else
+           {x.label: x.pattern for x in r.CONTENT_RULES}['tautological assertion'] if name == 'tautology' else getattr(r, name))
 start = time.perf_counter()
 result = (len(list(pattern.finditer(text))) if name in
           ('ASSERTION', 'TEST_DEF', 'variable') else bool(pattern.search(text)))
