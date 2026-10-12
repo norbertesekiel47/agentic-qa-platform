@@ -581,16 +581,27 @@ class LinearPatternTests(unittest.TestCase):
         self.contract("inventory")
 
     def test_mixed_long_commands_and_real_write_scan_decisions(self) -> None:
+        # One five-second child per long decision: together they exceed one deadline.
+        mixed = "git commit <<EOF\n'x' \"y\" <<A \\\n" * 100_000
+        for command, wanted in (
+            (mixed, "allow"),
+            (mixed + "rm tests/test_a.py", "ask"),
+        ):
+            payload = {
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+                "cwd": str(HOOKS),
+            }
+            hook = self.child([str(HOOKS / "policy_guard.py")], json.dumps(payload))
+            self.assertEqual(hook.returncode, 0, hook.stderr)
+            out = hook.stdout.strip()
+            verdict = json.loads(out)["hookSpecificOutput"] if out else {}
+            self.assertEqual(verdict.get("permissionDecision", "allow"), wanted)
         script = """import json, os, pathlib, subprocess, sys, tempfile
 root = pathlib.Path.cwd()
 env = dict(os.environ)
 env['PYTHONDONTWRITEBYTECODE'] = '1'
-mixed = "git commit <<EOF\\n'x' \\"y\\" <<A \\\\\\n" * 100_000
-for command, wanted in ((mixed, 'allow'), (mixed + 'rm tests/test_a.py', 'ask')):
- payload = {'hook_event_name':'PreToolUse','tool_name':'Bash','tool_input':{'command':command},'cwd':str(root)}
- child = subprocess.run([sys.executable, str(root/'policy_guard.py')], input=json.dumps(payload), text=True, capture_output=True, timeout=5, env=env)
- decision = 'deny' if child.returncode == 2 else json.loads(child.stdout)['hookSpecificOutput']['permissionDecision'] if child.stdout.strip() else 'allow'
- assert decision == wanted, (wanted, decision, child.stderr)
 with tempfile.TemporaryDirectory() as d:
  p = pathlib.Path(d)
  (p / 'AGENTS.md').write_text('disposable fixture')
