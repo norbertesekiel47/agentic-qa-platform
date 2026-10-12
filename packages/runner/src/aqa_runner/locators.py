@@ -6,6 +6,7 @@ the run's `resolve_seconds`, is the executor's loop around it (#46)."""
 
 import re
 import sys
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal, overload
 
@@ -22,7 +23,7 @@ from aqa_core.schema import Contract
 from playwright.async_api import ElementHandle, Error, JSHandle, Page
 from playwright.async_api import Locator as PlaywrightLocator
 
-from aqa_runner.binding import BindingMiss, HeldRegion, held_region
+from aqa_runner.binding import BindingMiss, HeldRegion, held_region, same_element
 
 # What the target is for: an element a step acts on, an element an
 # assertion checks, or an element a negative check (not_visible) expects
@@ -30,8 +31,13 @@ from aqa_runner.binding import BindingMiss, HeldRegion, held_region
 type Use = Literal["action", "assertion", "negative_check"]
 
 # Why one locator didn't give the match its use needs: the page's misses,
-# then a contracted target's region misses (`aqa_runner.binding`).
-type Miss = Literal["no scope", "no match", "ambiguous", "not actionable"] | BindingMiss
+# then a contracted target's region misses (`aqa_runner.binding`). Under
+# `resolve_every`, a locator that found an element the target's other
+# locators don't all find is not unanimous.
+type Miss = (
+    Literal["no scope", "no match", "ambiguous", "not actionable", "not unanimous"]
+    | BindingMiss
+)
 
 
 @dataclass(frozen=True)
@@ -46,6 +52,15 @@ class Resolved:
 class Absent:
     """A negative check's result: the locator at this index found its scope
     and nothing inside it, and no locator found the element."""
+
+    locator_index: int
+
+
+@dataclass(frozen=True)
+class Shown:
+    """A negative check's failure under `resolve_every`: the locator at this
+    index found a visible match (inside a held region, its part), one or
+    several. It holds no element."""
 
     locator_index: int
 
@@ -296,21 +311,184 @@ async def resolve(
     """
     if target.contract is None:
         return await _resolve(page, target, use, None)
-    return await _resolve_held(page, target, use, target.contract)
+    return await _resolve_held(page, target, use, target.contract, _resolve)
 
 
-async def _resolve_held(
-    page: Page, target: Target, use: Use, contract: Contract
-) -> Resolved | Absent | Unresolved:
+@overload
+async def resolve_every(
+    page: Page, target: Target, use: Literal["action", "assertion"]
+) -> Resolved | Unresolved: ...
+
+
+@overload
+async def resolve_every(
+    page: Page, target: Target, use: Literal["negative_check"]
+) -> Shown | Absent | Unresolved: ...
+
+
+async def resolve_every(
+    page: Page, target: Target, use: Use
+) -> Resolved | Shown | Absent | Unresolved:
+    """`target`'s element for `use` from every locator, each judged as
+    `resolve` judges it, for a confirmation replay (DATA_MODEL §7; ADR-0025's
+    #53 P11 amendment). A contracted target's region is held once for the
+    call. The engines must be registered (`register_identity_engine`).
+
+    - An action or an assertion resolves to the first locator's element only
+      when every locator finds one and the binding engine says they are one
+      node; otherwise a locator that missed keeps its miss and one that found
+      an element is not unanimous.
+    - A negative check fails (`Shown`) as soon as a locator finds a visible
+      match, one or several; inside a held region, a visible match that is
+      its part. A locator's zero counts only when the same read proves each
+      of its scopes is one element (inside a held region, in it, while it is
+      still the region). Absence needs every locator's zero and, for a
+      contracted target, the region read; anything else is drift.
+    """
+    if target.contract is None:
+        return await _every(page, target, use, None)
+    return await _resolve_held(page, target, use, target.contract, _every)
+
+
+async def _every(
+    page: Page, target: Target, use: Use, held: HeldRegion | None
+) -> Resolved | Shown | Absent | Unresolved:
+    if use == "negative_check":
+        return await _unseen(page, target, held)
+    return await _agreed(page, target, use, held)
+
+
+async def _agreed(
+    page: Page, target: Target, use: Use, held: HeldRegion | None
+) -> Resolved | Unresolved:
+    """The first locator's element when every other locator finds that same
+    node, each judged as `resolve` judges it; otherwise a locator that missed
+    keeps its miss and one that found an element is not unanimous. Each other
+    handle is released as soon as it is compared, so at most two are held
+    whatever the number of locators; the first is released unless returned."""
+    first = await _match(page, target.locators[0], use, held)
+    agreed = not isinstance(first, str)
+    misses: list[Miss] = [first if isinstance(first, str) else "not unanimous"]
+    kept: Resolved | None = None
+    try:
+        for locator in target.locators[1:]:
+            found = await _match(page, locator, use, held)
+            if isinstance(found, str):
+                agreed = False
+                misses.append(found)
+                continue
+            try:
+                agreed = (
+                    agreed
+                    and not isinstance(first, str)
+                    and await same_element(first, found)
+                )
+            finally:
+                await _let_go(found, sys.exception())
+            misses.append("not unanimous")
+        if agreed and not isinstance(first, str):
+            kept = Resolved(0, first)
+    finally:
+        if kept is None and not isinstance(first, str):
+            await _let_go(first, sys.exception())
+    return kept or Unresolved(tuple(misses))
+
+
+async def _unseen(
+    page: Page, target: Target, held: HeldRegion | None
+) -> Shown | Absent | Unresolved:
+    misses: list[Miss] = []
+    for index, locator in enumerate(target.locators):
+        seen = await _seen(page, locator, held)
+        if isinstance(seen, str):
+            misses.append(seen)
+        elif seen:
+            return Shown(index)
+        else:
+            misses.append("no match")
+    if set(misses) == {"no match"}:
+        return await _absence(held, misses)
+    return Unresolved(tuple(misses))
+
+
+async def _seen(page: Page, locator: Locator, held: HeldRegion | None) -> bool | Miss:
+    """True when `locator` finds a visible match (inside a held region, its
+    part), False when it finds none, each decided by one utility-world count
+    that also requires every scope, and the held region, to stand: a zero is
+    never read where a scope or the region wasn't. Otherwise why neither,
+    read again. No handle is taken."""
+    stood, visible = _stood(page, locator, held)
+    if stood is None:
+        return await visible.count() > 0
+    shown = visible if held is None else visible.locator(held.bound_part)
+    if await stood.filter(has=shown).count():
+        return True
+    if await stood.filter(has_not=visible).count():
+        return False
+    return await _unstood(page, locator, held)
+
+
+def _stood(
+    page: Page, locator: Locator, held: HeldRegion | None
+) -> tuple[PlaywrightLocator | None, PlaywrightLocator]:
+    """A query that matches one element exactly while each of `locator`'s
+    scopes matches one element (inside a held region, one in the region,
+    while it is still the region), and `locator`'s visible matches read
+    from that element. None for an unscoped locator on the page."""
+    scopes: list[Locator] = []
+    level = locator.scope
+    while level is not None:
+        scopes.insert(0, level)
+        level = level.scope
+    if held is not None:
+        stood = held.root.locator(held.inside)
+    elif scopes:
+        # The outermost scope is unique when its first match is its last.
+        outer = _query(page, scopes.pop(0), hidden=False)
+        stood = outer.first.and_(outer.last)
+    else:
+        return None, _query(page, locator, hidden=True).filter(visible=True)
+    path: Page | PlaywrightLocator = page
+    for scope in scopes:
+        path = _query(path, scope, hidden=False)
+        inside = path if held is None else path.locator(held.inside)
+        stood = stood.filter(has=inside).filter(has_not=path.nth(1))
+    return stood, _query(path, locator, hidden=True).filter(visible=True)
+
+
+async def _unstood(page: Page, locator: Locator, held: HeldRegion | None) -> Miss:
+    """Why neither read held, read again: the region's or a scope's miss; a
+    contracted locator's binding miss for a visible match that isn't the
+    part; otherwise no scope, the page having changed between the reads."""
+    if held is not None and not await held.contains(held.element):
+        return "no region"
+    root = page if held is None else held.root
+    query = await _scoped(root, locator, held, hidden=True)
+    if isinstance(query, str):
+        return query
+    visible = query.filter(visible=True)
+    if held is not None and await visible.count() and not await held.bound(visible):
+        return await held.miss(visible)
+    return "no scope"
+
+
+async def _resolve_held[R: Resolved | Shown | Absent | Unresolved](
+    page: Page,
+    target: Target,
+    use: Use,
+    contract: Contract,
+    look: Callable[[Page, Target, Use, HeldRegion | None], Awaitable[R]],
+) -> R | Unresolved:
+    """`look` at `target` inside its contract's region, held for the call."""
     drift = Unresolved(tuple("no region" for _ in target.locators))
-    found: Resolved | Absent | Unresolved = drift
-    kept: Resolved | Absent | Unresolved = drift
+    found: R | Unresolved = drift
+    kept: R | Unresolved = drift
     region: JSHandle | None = None
     try:
         async with held_region(page, contract) as held:
             if held is not None:
                 region = await held.element.evaluate_handle("(element) => element")
-                found = await _resolve(page, target, use, held)
+                found = await look(page, target, use, held)
         kept = found
     except Error:
         if region is None or not await _left(region):

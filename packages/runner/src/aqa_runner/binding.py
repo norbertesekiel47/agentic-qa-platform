@@ -1,4 +1,5 @@
 import secrets
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -96,6 +97,7 @@ SCRIPT = """(() => {
         const [token, region, part, leaf] = body.slice(colon + 1).split("|");
         if (verb === "hold") { held.set(token, root); return []; }
         if (verb === "drop") { held.delete(token); return []; }
+        if (verb === "is") return held.get(token) === root ? [root] : [];
         if (verb === "regions") return matches(document, token);
         const r = held.get(token);
         if (!valid(r, region, root)) return [];
@@ -126,26 +128,57 @@ async def _query(element: ElementHandle, body: str) -> list[ElementHandle]:
         raise
 
 
-async def _passes(element: ElementHandle, body: str) -> bool:
-    found = await _query(element, body)
+async def _passes(subject: ElementHandle | PlaywrightLocator, body: str) -> bool:
+    """Whether `body` holds for the element, or for any element the locator
+    matches, read with the locator's own query in one utility-world count."""
+    if isinstance(subject, PlaywrightLocator):
+        return await subject.locator(f"{ENGINE}={body}").count() > 0
+    found = await _query(subject, body)
     for handle in found:
         await handle.dispose()
     return bool(found)
 
 
+async def same_element(first: ElementHandle, other: ElementHandle) -> bool:
+    """Whether `other` is `first`'s node: the engine holds `first` under a
+    fresh token and answers `is:` for `other`, in the utility world. The
+    hold is dropped on every exit; a cancellation stays raised."""
+    token = secrets.token_hex(16)
+    try:
+        await _query(first, f"hold:{token}")
+        return await _passes(other, f"is:{token}")
+    finally:
+        await _forget(first, token, sys.exception())
+
+
+async def _forget(
+    element: ElementHandle, token: str, earlier: BaseException | None
+) -> None:
+    try:
+        await _query(element, f"drop:{token}")
+    except BaseException as error:
+        if isinstance(earlier, Exception | None):
+            raise
+        raise earlier from error
+
+
 @dataclass(frozen=True)
 class HeldRegion:
-    """The original region and token; all predicates run in the utility world."""
+    """The original region and token; all predicates run in the utility
+    world. A predicate given a locator holds when any element it matches
+    passes."""
 
     element: ElementHandle
     root: PlaywrightLocator
     contract: Contract
     token: str
 
-    async def contains(self, element: ElementHandle) -> bool:
+    async def contains(self, element: ElementHandle | PlaywrightLocator) -> bool:
         return await _passes(element, f"in:{self.token}|{self.contract.region}")
 
-    async def bound(self, element: ElementHandle, *, leaf: bool | None = None) -> bool:
+    async def bound(
+        self, element: ElementHandle | PlaywrightLocator, *, leaf: bool | None = None
+    ) -> bool:
         required = self.contract.leaf if leaf is None else leaf
         return await _passes(
             element, _body(self, "bound") + ("|leaf" if required else "|any")
@@ -154,7 +187,19 @@ class HeldRegion:
     async def absent(self) -> bool:
         return await _passes(self.element, _body(self, "absent"))
 
-    async def miss(self, element: ElementHandle) -> BindingMiss:
+    @property
+    def inside(self) -> str:
+        """A chain's last part keeping the elements in the region, while the
+        held element is still the region (`in:`), in the utility world."""
+        return f"{ENGINE}=in:{self.token}|{self.contract.region}"
+
+    @property
+    def bound_part(self) -> str:
+        """A chain's last part keeping the region's part (`bound:`)."""
+        leaf = "leaf" if self.contract.leaf else "any"
+        return f"{ENGINE}={_body(self, 'bound')}|{leaf}"
+
+    async def miss(self, element: ElementHandle | PlaywrightLocator) -> BindingMiss:
         if not await self.contains(self.element):
             return "no region"
         if not await self.contains(element):
