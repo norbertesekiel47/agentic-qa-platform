@@ -204,11 +204,16 @@ class LocatorError(LookupError):
 
 class BindingRefusedError(LocatorError):
     """The element a use offered isn't its subject (ADR-0025's #53 P7b-II
-    amendment): `reason` is the verdict's fixed reason, never page text."""
+    amendment): `reason` is the verdict's fixed reason, never page text, and
+    `contract` and `use` what `aqa_runner.reasons` presents it with."""
 
-    def __init__(self, meaning: str, refused: Refused) -> None:
+    def __init__(
+        self, meaning: str, refused: Refused, contract: Contract | None, use: Use
+    ) -> None:
         super().__init__(f"{meaning}: {refused.reason}")
         self.reason = refused.reason
+        self.contract = contract
+        self.use = use
 
 
 def _name_as_written(name: str | None) -> str | None:
@@ -325,6 +330,11 @@ async def _unless_the_page_breaks[T](page: Page, check: Awaitable[T], broken: T)
         if page.is_closed():
             raise
         return broken
+
+
+def _keep(_: Locator) -> bool:
+    """The drop predicate that drops no candidate."""
+    return False
 
 
 def _alone(locator: Locator, contract: Contract | None) -> Target:
@@ -531,19 +541,24 @@ async def _placed(
     use: Use,
     kinds_of: Callable[[_Element], _ByKind],
     contract: Contract | None,
+    *,
+    drop: Callable[[Locator], bool] = _keep,
 ) -> _ByKind:
     """For each of the grammar's kinds, in order, its candidates where they
     find the element `used` for `use`: for an action or an assertion, the
     first (`_first_of_each_kind`); for a negative check, every one under
-    every scope (`_every_scoped`). Raises `LocatorError` when none does."""
+    every scope (`_every_scoped`). A candidate or a scope `drop` names is
+    never tried: the next of its kind, or the next scope, is. Raises
+    `LocatorError` when none does."""
     element = await _facts(page, used.element)
-    kinds = kinds_of(element)
+    kinds = [[each for each in kind if not drop(each)] for kind in kinds_of(element)]
+    scopes = [scope for scope in _scopes(element) if not drop(ByCss(css=scope))]
     placed: _ByKind = [[] for _ in kinds]
     place = _every_scoped if use == "negative_check" else _first_of_each_kind
     async with _holding(page, used.element) as token:
         try:
             trial = _Trial(page, use, token, contract)
-            await place(trial, kinds, _scopes(element), placed)
+            await place(trial, kinds, scopes, placed)
         except _OutOfTriesError:
             # Out of tries, the kinds found so far stand; with none, the
             # budget is the reason.
@@ -594,10 +609,12 @@ async def _generate(
     use: GeneratedUse,
     kinds_of: Callable[[_Element], _ByKind],
     contract: Contract | None,
+    *,
+    drop: Callable[[Locator], bool] = _keep,
 ) -> tuple[Locator, ...]:
     """The first candidate of each kind that finds the element for `use`,
-    in order. Raises `LocatorError` when none does."""
-    placed = await _placed(page, used, use, kinds_of, contract)
+    in order, none that `drop` names. Raises `LocatorError` when none does."""
+    placed = await _placed(page, used, use, kinds_of, contract, drop=drop)
     return tuple(found[0] for found in placed if found)
 
 
@@ -644,14 +661,22 @@ class TargetUses:
     gives it to every target, and every use runs its verdict on the element
     offered before anything else: `BindingRefusedError` starts no target and
     keeps no sighting. A meaning with no contract is refused where copies of
-    the element are detected."""
+    the element are detected. A candidate or scope `drop` names, such as one
+    spelling a bound value, is never tried at any use (ADR-0025's #53 P13
+    amendment)."""
 
     def __init__(
-        self, meaning: str, *, checks_text: bool, contract: Contract | None = None
+        self,
+        meaning: str,
+        *,
+        checks_text: bool,
+        contract: Contract | None = None,
+        drop: Callable[[Locator], bool] = _keep,
     ) -> None:
         self.meaning = meaning
         self.checks_text = checks_text
         self.contract = contract
+        self.drop = drop
         self._targets: list[Target] = []
         # Where a later negative check's element was seen: for each kind,
         # its candidates under every scope that found it there.
@@ -665,7 +690,7 @@ class TargetUses:
     async def add(self, page: Page, used: Seen, use: GeneratedUse) -> int:
         """The index in `targets` of the target this use of the element
         `used` gets."""
-        await self._admit(page, used)
+        await self._admit(page, used, use)
         with self._named():
             joins = False
             if self._targets:
@@ -673,15 +698,12 @@ class TargetUses:
                     trial = _Trial(page, use, token, self.contract)
                     joins = await self._holds(use, trial.finds)
             if not joins:
-                if use == "action":
-                    locators = await generate_for_action(
-                        page, used, contract=self.contract
+                kinds_of = self._kinds_of(used, use)
+                self._start(
+                    await _generate(
+                        page, used, use, kinds_of, self.contract, drop=self.drop
                     )
-                else:
-                    locators = await generate_for_assertion(
-                        page, used, checks_text=self.checks_text, contract=self.contract
-                    )
-                self._start(locators)
+                )
         return len(self._targets) - 1
 
     async def see_for_negative_check(self, page: Page, seen: Seen) -> None:
@@ -689,16 +711,15 @@ class TargetUses:
         later negative check of the meaning starts its target from: an
         assertion's kinds, each scoped (ADR-0025's 2026-10-02 amendment)."""
         self._seen = []
-        await self._admit(page, seen)
+        await self._admit(page, seen, "negative_check")
         with self._named():
             self._seen = await _placed(
                 page,
                 seen,
                 "negative_check",
-                lambda element: _assertion_kinds(
-                    seen, element, checks_text=self.checks_text
-                ),
+                self._kinds_of(seen, "negative_check"),
                 self.contract,
+                drop=self.drop,
             )
 
     async def add_negative_check(self, page: Page) -> int:
@@ -725,21 +746,30 @@ class TargetUses:
                 self._start(kept)
         return len(self._targets) - 1
 
+    def _kinds_of(self, used: Seen, use: Use) -> Callable[[_Element], _ByKind]:
+        """The grammar's kinds for `use` of the element `used`: a negative
+        check's are an assertion's, each scoped later."""
+        if use == "action":
+            return lambda element: _action_kinds(used, element)
+        return lambda element: _assertion_kinds(
+            used, element, checks_text=self.checks_text
+        )
+
     def _start(self, locators: tuple[Locator, ...]) -> None:
         self._targets.append(
             Target(semantic=self.meaning, locators=locators, contract=self.contract)
         )
 
-    async def _admit(self, page: Page, used: Seen) -> None:
-        """The subject's verdict on the element offered (`binding_verdict`).
-        A page that breaks it binds nothing."""
+    async def _admit(self, page: Page, used: Seen, use: Use) -> None:
+        """The subject's verdict on the element offered for `use`
+        (`binding_verdict`). A page that breaks it binds nothing."""
         verdict = await _unless_the_page_breaks(
             page, binding_verdict(page, used.element, self.contract), None
         )
         if verdict is None:
             raise LocatorError(f"{self.meaning}: the page broke the subject check")
         if isinstance(verdict, Refused):
-            raise BindingRefusedError(self.meaning, verdict)
+            raise BindingRefusedError(self.meaning, verdict, self.contract, use)
 
     @contextmanager
     def _named(self) -> Iterator[None]:
