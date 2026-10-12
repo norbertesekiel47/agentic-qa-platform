@@ -151,7 +151,7 @@ class Attempt:
         if problem := self._unfit(tool, call):
             return self._refused(problem)
         try:
-            target, act = await self._prepared(call)
+            target, action = await self._prepared(call)
         except _REFUSED as error:
             reason = reasons.reason(error, self.session.redactor)
             return self._refused(f"{tool} did not run: {reason}")
@@ -168,7 +168,7 @@ class Attempt:
             executor.Dispatch(
                 seq, fields, True, wait, None if target is None else target.semantic
             ),
-            act,
+            action,
         )
         if step.outcome == "completed":
             self.steps[seq] = PathStep(fields, target)
