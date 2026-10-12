@@ -66,7 +66,8 @@ class AnyCase:
 @dataclass(frozen=True)
 class NameShapes:
     """Files by the shapes of their names: regexes with "/" between path
-    segments and {name} for the characters of one segment.
+    segments and {name} for the characters of one segment, limited to the
+    grammar `PathCheck` admits (ADR-0028, PR C).
 
     `files` match the end of a file's path, in any directory. A name may run on
     past its shape (`pyproject.toml5`, `test_a.pyc`), since a tool may read such
@@ -92,13 +93,11 @@ class PathCheck:
             r".*\.(?:py|[cm]?[jt]sx?)",
             r"[^/]+\.ya?ml",
         }:
-            raise ValueError("unsupported directory under grammar")
+            raise ValueError(f"unsupported directory under grammar: {shapes.under!r}")
         segment = r"(?:[A-Za-z0-9_-]|\\\.)+(?:[A-Za-z0-9_-]\?)?"
-        if any(
-            re.fullmatch(rf"{segment}(?:/{segment})*", shape) is None
-            for shape in shapes.dirs
-        ):
-            raise ValueError("unsupported directory shape grammar")
+        for shape in shapes.dirs:
+            if re.fullmatch(rf"{segment}(?:/{segment})*", shape) is None:
+                raise ValueError(f"unsupported directory shape grammar: {shape!r}")
         atoms = r"[A-Za-z0-9_-]\??|\\\.\??|\{name\}|" + "|".join(
             re.escape(token)
             for token in (
@@ -117,8 +116,9 @@ class PathCheck:
                 is None
                 or any(part.count("{name}") > 1 for part in shape.split("/"))
             ):
-                raise ValueError("unsupported file shape grammar")
-        self.shapes, self.folded = shapes, folded
+                raise ValueError(f"unsupported file shape grammar: {shape!r}")
+        self.folded = folded
+        self.delimiter = "/" if shapes.under == r"[^/]+\.ya?ml" else "\n"
         flags = re.IGNORECASE if folded else 0
         self.files = []
         for shape in shapes.files:
@@ -148,9 +148,8 @@ class PathCheck:
         tails = [m.end(1) for pattern in self.dirs for m in pattern.finditer(text)]
         # Python's $ also permits one terminal LF, without trimming CR or internal LF.
         endpoints = [len(text)] + ([len(text) - 1] if text.endswith("\n") else [])
-        delimiter = "/" if self.shapes.under == r"[^/]+\.ya?ml" else "\n"
         for end in endpoints:
-            begin = text.rfind(delimiter, 0, end) + 1
+            begin = text.rfind(self.delimiter, 0, end) + 1
             tail = min((p for p in tails if begin <= p <= end), default=None)
             if tail is not None and self.tail.fullmatch(text[tail:end]):
                 return True
@@ -183,8 +182,6 @@ def shell_pattern(*kinds: NameShapes) -> AnyCase:
     Search it in `command` and in resolved_paths(command)."""
 
     def shell(shape: str) -> str:
-        if shape == r"tsconfig{name}\.json":
-            return "tsconfig" + rf"(?:(?!tsconfig)[^/{_BREAK}]){{0,765}}" + r"\.json"
         return shape.replace("/", "/+").replace("{name}", _SHELL_NAME)
 
     files = [shape for kind in kinds for shape in kind.files]
@@ -199,8 +196,14 @@ def shell_pattern(*kinds: NameShapes) -> AnyCase:
         for d in kind.dirs
     )
     branches = [_NAME_START + "(?:" + "|".join(prefixed) + ")"] if prefixed else []
+    tsconfig = "tsconfig" + rf"(?:(?!tsconfig)[^/{_BREAK}]){{0,765}}" + r"\.json"
     branches.extend(
-        shell(s.removeprefix("{name}")) + _NOT_A_BACKUP
+        (
+            tsconfig
+            if s == r"{name}tsconfig{name}\.json"
+            else shell(s.removeprefix("{name}"))
+        )
+        + _NOT_A_BACKUP
         for s in files
         if s.startswith("{name}")
     )

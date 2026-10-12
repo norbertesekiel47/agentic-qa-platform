@@ -402,6 +402,7 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(r.PROTECTED_IN_SHELL.search("-o.claude//hooks"))
         self.assertFalse(r.TEST_PATH_IN_SHELL.search("test x"))
         self.assertTrue(r.shell_pattern(r.TEST_NAMES, r.TEST_NAMES).search("$Dtest_a.py"))
+        self.assertTrue(r.shell_pattern(r.NameShapes(files=(r"tsconfig{name}\.json",))).search("rm tsconfig.tsconfig.json"))
 
     def test_captures(self) -> None:
         r = RULES
