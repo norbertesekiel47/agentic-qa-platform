@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "spec_id": "read-article",
+  "spec_hash": "sha256:7cf25e3eb39b7e401cb92ca806ac7cacf5383cfcb485ee3c21ad24b32661a38e",
+  "compiled_at": "2026-10-12T05:59:29Z",
+  "compiled_by": {
+    "mode": "explore",
+    "models": {},
+    "price_map": "none: handwritten fixture",
+    "subject_contracts": "sha256:c9158eb1abf58c7d55c86dabec8073ecc969a23c401eda023b135c859aa79b7d"
+  },
+  "confirmed": false,
+  "browser": {
+    "timezone": "UTC",
+    "locale": "en-US",
+    "viewport": [1280, 800],
+    "device_scale_factor": 1,
+    "color_scheme": "light"
+  },
+  "coverage": {
+    "plan_hash": "sha256:9f75e0d5655e8e7f49ac5cadeb44fe3b567fa37376c9aa0e44c665ef33ac1d5c",
+    "expectations": [
+      {
+        "expect_index": 0,
+        "subject": "the article page",
+        "claim": "shows the title \"Testing without flakes\"",
+        "assertions": ["a1"]
+      },
+      {
+        "expect_index": 1,
+        "subject": "the article's author",
+        "claim": "is shown as anna",
+        "assertions": ["a2"]
+      },
+      {
+        "expect_index": 2,
+        "subject": "the article's publication date",
+        "claim": "is shown as January 4, 2026",
+        "assertions": ["a3"]
+      },
+      {
+        "expect_index": 3,
+        "subject": "the article body",
+        "claim": "includes \"Most flaky tests are really flaky data.\"",
+        "assertions": ["a4"]
+      },
+      {
+        "expect_index": 4,
+        "subject": "the article's tags",
+        "claim": "include \"testing\"",
+        "assertions": ["a5"]
+      },
+      {
+        "expect_index": 5,
+        "subject": "reader's comment",
+        "claim": "\"Deterministic data helped us most.\" is shown under the article",
+        "assertions": ["a6"]
+      },
+      {
+        "expect_index": 6,
+        "subject": "the signed-out comment prompt",
+        "claim": "invites the visitor to sign in or sign up to add comments",
+        "assertions": ["a7"]
+      }
+    ],
+    "requires": []
+  },
+  "targets": {
+    "preview_link": {
+      "semantic": "the global feed's preview link to the seeded article",
+      "locators": [{"css": "a.preview-link[href=\"/article/testing-without-flakes\"]"}]
+    },
+    "banner_title": {
+      "semantic": "the article banner's title heading",
+      "locators": [{"css": "div.banner h1"}]
+    },
+    "banner_author": {
+      "semantic": "the article banner's author link",
+      "locators": [{"css": "a.author"}],
+      "contract": {"region": "div.banner", "part": "a.author", "leaf": true}
+    },
+    "banner_date": {
+      "semantic": "the article banner's publication date",
+      "locators": [{"css": "span.date"}],
+      "contract": {"region": "div.banner", "part": "span.date", "leaf": true}
+    },
+    "article_body": {
+      "semantic": "the rendered article body",
+      "locators": [{"css": "div.article-content > div.col-md-12 > div"}]
+    },
+    "article_tags": {
+      "semantic": "the article's tag list",
+      "locators": [{"css": "div.article-content ul.tag-list"}]
+    },
+    "comment_list": {
+      "semantic": "the article's comment list",
+      "locators": [{"css": "div.col-xs-12.col-md-8.offset-md-2 > div.comment-list"}]
+    },
+    "comment_prompt": {
+      "semantic": "the signed-out comment prompt",
+      "locators": [{"css": "div.col-xs-12.col-md-8.offset-md-2 > div:not(.comment-list)"}]
+    }
+  },
+  "probe_baselines": {},
+  "steps": [
+    {
+      "seq": 1,
+      "action": "click",
+      "target": "preview_link",
+      "side_effect": true,
+      "side_effect_basis": "handwritten with no recorded inference, so the click counts as a side effect; the spec's reset hook makes a repeat safe"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "a1",
+      "expect_index": 0,
+      "check": "text_in_target",
+      "target": "banner_title",
+      "text": "Testing without flakes"
+    },
+    {
+      "id": "a2",
+      "expect_index": 1,
+      "check": "text_in_target",
+      "target": "banner_author",
+      "text": "anna"
+    },
+    {
+      "id": "a3",
+      "expect_index": 2,
+      "check": "text_in_target",
+      "target": "banner_date",
+      "text": "January 4, 2026"
+    },
+    {
+      "id": "a4",
+      "expect_index": 3,
+      "check": "text_in_target",
+      "target": "article_body",
+      "text": "Most flaky tests are really flaky data."
+    },
+    {
+      "id": "a5",
+      "expect_index": 4,
+      "check": "text_in_target",
+      "target": "article_tags",
+      "text": "testing"
+    },
+    {
+      "id": "a6",
+      "expect_index": 5,
+      "check": "text_in_target",
+      "target": "comment_list",
+      "text": "Deterministic data helped us most."
+    },
+    {
+      "id": "a7",
+      "expect_index": 6,
+      "check": "text_in_target",
+      "target": "comment_prompt",
+      "text": "Sign in or sign up to add comments on this article"
+    }
+  ]
+}
