@@ -781,8 +781,8 @@ def test_a_bug_planted_only_in_the_banner_copy_fails_the_replay(
     result = replayed(tmp_path, "banner-bug", monkeypatch)
 
     assert result.assertions == (
-        AssertionResult("a0", "pass"),
-        AssertionResult("a1", "failed"),
+        AssertionResult("a0", "pass", locator_index=0),
+        AssertionResult("a1", "failed", locator_index=0),
     )
     assert result.outcome == "failed"
 
@@ -793,8 +793,8 @@ def test_a_bug_planted_only_in_the_article_actions_copy_passes_the_replay(
     result = replayed(tmp_path, "lower-bug", monkeypatch)
 
     assert result.assertions == (
-        AssertionResult("a0", "pass"),
-        AssertionResult("a1", "pass"),
+        AssertionResult("a0", "pass", locator_index=0),
+        AssertionResult("a1", "pass", locator_index=0),
     )
     assert result.outcome == "passed"
 
