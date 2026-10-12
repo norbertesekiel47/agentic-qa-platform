@@ -602,6 +602,6 @@ An explore run that opened its egress proxy can end with several causes at once:
 ### Consequences and limits
 
 - A run that stops early leaves an empty `attempt-1/`, which is not forced (#53 P5).
-- `ExploreEnd` can't tell whether the run record is the run's, or scans with the run's redactor: a `redacting` or `dataclasses.replace` copy of the whole family with another scan passes, and so does a record made directly at the run's path with parts copied from it. Explore finalizes with the record it made at preflight, checked to hold the redactor it built.
+- `ExploreEnd` can't tell whether the run record is the run's, or scans with the run's redactor: a `redacting` or `dataclasses.replace` copy of the whole family with another scan passes, and so does a record made directly at the run's path with parts copied from it. Explore finalizes with the record it made at preflight, checked to hold the redactor it built (#53 P15).
 - API.md §7's rows say when each code is reached; its precedence sentence, and exit 15 for a record that failed after the proxy opened, join it when the CLI exits by this table (#53 P17).
 - No new dependency, paid resource or model call. Tests: `packages/runner/tests/test_explore_result.py`.
