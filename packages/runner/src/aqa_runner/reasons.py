@@ -124,6 +124,8 @@ def reason(error: Raised, redactor: Redactor) -> Redacted:
     owned message comes from the closed vocabulary, and Playwright's keeps
     only its class and call."""
     withheld = not redactor.empty
+    # A refused binding first: its text names only config, while any other
+    # LocatorError's is withheld.
     ours = (
         _refused_binding(error)
         if isinstance(error, BindingRefusedError)

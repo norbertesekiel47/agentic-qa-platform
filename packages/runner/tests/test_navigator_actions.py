@@ -15,10 +15,16 @@ import pytest
 from aqa_core.compiled import ByCss, ByRole, Target
 from aqa_core.coverage_plan import CoveragePlan
 from aqa_core.schema import Contract
-from aqa_runner import settling
+from aqa_runner import reasons, settling
 from aqa_runner.bound_secrets import BoundSecret
 from aqa_runner.browser_session import BrowserSession
-from aqa_runner.locator_generation import GeneratedUse, Seen, TargetUses, seen_element
+from aqa_runner.locator_generation import (
+    BindingRefusedError,
+    GeneratedUse,
+    Seen,
+    TargetUses,
+    seen_element,
+)
 from aqa_runner.navigator import (
     Click,
     Fill,
@@ -474,6 +480,32 @@ def test_a_click_on_a_copy_its_meaning_cant_bind_is_refused_by_name_and_dispatch
     assert app.paths() == ["/page/article"]
     assert app.record is not None
     assert read_steps(app.record) == []
+
+
+def test_an_unlisted_copy_refused_for_a_check_names_no_action(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(PAGES, "article", ARTICLE)
+
+    async def scenario(attempt: Attempt) -> list[str]:
+        uses = attempt.uses("a favorite button no check reads")
+        assert attempt.observation is not None
+        seen = await seen_element(
+            attempt.session, attempt.observation, favorite_buttons(attempt)[0]
+        )
+        page, redactor = attempt.session.page, attempt.session.redactor
+        # As the check tools (P14) will put the meaning to a check.
+        with pytest.raises(BindingRefusedError) as checked:
+            await uses.add(page, seen, "assertion")
+        with pytest.raises(BindingRefusedError) as sighted:
+            await uses.see_for_negative_check(page, seen)
+        return [reasons.reason(error.value, redactor) for error in (checked, sighted)]
+
+    unlisted = (
+        "this element is repeated on the page, and no subject contract in the "
+        "project config covers this use, so no copy can be bound"
+    )
+    assert on_app(app, tmp_path, scenario, page="/page/article") == [unlisted] * 2
 
 
 def test_a_click_under_a_planned_checks_meaning_inherits_its_contract(
