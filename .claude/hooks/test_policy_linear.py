@@ -308,6 +308,28 @@ class LinearCommandTests(unittest.TestCase):
                 self.assertEqual(self.decision(command), expected)
 
 
+_FIXTURE_ENV = {
+    key: os.environ[key]
+    for key in (
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "SYSTEMROOT",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "COVERAGE_PROCESS_START",
+        "COVERAGE_FILE",
+        "COV_CORE_SOURCE",
+        "COV_CORE_CONFIG",
+        "COV_CORE_DATAFILE",
+        "COV_CORE_BRANCH",
+    )
+    if key in os.environ
+}
+_FIXTURE_ENV["PYTHONDONTWRITEBYTECODE"] = "1"
+
+
 _CONTRACT_CHECK = r"""import sys, unittest
 import policy_rules as RULES
 
@@ -323,6 +345,24 @@ class ContractTests(unittest.TestCase):
                                (".github/workflows/a.yml\r\n", False),
                                ("tests/x\ny.py", False), ("tests/a/b.py", True)):
             self.assertEqual(r.WORKFLOW.search(path) or r.TEST_FILE.search(path), expected)
+        for under, samples in ((r"[^/]+\.ya?ml", (("x.yml", True), ("x.yaml\n", True), ("x.yml\r\n", False), ("x.txt", False), ("", False))),
+                               (r".+", (("x", True), ("x.bak", True), ("x\n", True), ("x\n\n", False), ("x\ny", False), ("", True))),
+                               (r".*\.(?:py|[cm]?[jt]sx?)", (("x.py", True), ("x.py\n", True), ("x.py\r\n", False), ("x.txt", False)))):
+            for dirs in (("a", "a/b"), ("a/b", "a")):
+                for tail, wanted in samples:
+                    self.assertEqual(r.path_pattern(r.NameShapes(dirs=dirs, under=under)).search("a/b/" + tail), wanted, (dirs, under, tail))
+        self.assertTrue(r.path_pattern(r.NameShapes(dirs=("a", "b"))).search("b/x/a/"))
+        for shape in ("", "a?", "a//b", "a.*", "a.b", "a+", "a{2}", "a[bc]", "a(?:/b)?", "a(?:/b|)", "a|a/b", "^a", r"a\/b"):
+            with self.assertRaises(ValueError):
+                r.path_pattern(r.NameShapes(dirs=(shape,)))
+        for shape in ("", r"a(?:/b)?{name}\.py", r"z._gate\.toml", r"a.*\.py", r"a[bc]\.py", r"a|b\.py", r"{name}{name}\.py", r"a/{name}{name}\.py", r"^a\.py", r"a\/b\.py"):
+            for folded in (True, False):
+                with self.assertRaises(ValueError):
+                    r.PathCheck(r.NameShapes(files=(shape,)), folded=folded)
+        self.assertTrue(r.path_pattern(r.NameShapes(files=(r"q/{name}\.py",))).search("prefix/q/a.py"))
+        for folded in (True, False):
+            with self.assertRaises(ValueError):
+                r.PathCheck(r.NameShapes(), folded=folded)
         for under in (r".*\n", r".*", r"[^/]+.*", r".+\n", r"[^/]+\.json"):
             try:
                 r.path_pattern(r.NameShapes(dirs=("test",), under=under))
@@ -337,17 +377,24 @@ class ContractTests(unittest.TestCase):
         for width in (764, 765, 766):
             for letter in ("x", "ﬃ", "ΐ"):
                 padding = letter * (width // len(letter.casefold())) + "x" * (width % len(letter.casefold()))
+                self.assertEqual(len(padding.casefold()), width)
+                self.assertEqual(len(padding), width // len(letter.casefold()) + width % len(letter.casefold()))
                 for prefix in ("test_", "$Dtest_", "$1test_", "$Dtest_test_", "-otest_", "+test_"):
                     self.assertEqual(r.TEST_PATH_IN_SHELL.search(prefix + padding + ".py"), width <= 765)
                 self.assertEqual(r.GATE_FILE_IN_SHELL.search("tsconfig" + padding + ".json"), width <= 765)
         for width in (254, 255, 256):
             for letter in ("x", "ﬃ", "ΐ"):
                 padding = letter * (width // len(letter.casefold())) + "x" * (width % len(letter.casefold()))
-                self.assertEqual(r.TEST_PATH_IN_SHELL.search("test_a.py" + padding + ".bak"), width == 256 or letter == "ΐ")
+                self.assertEqual(len(padding.casefold()), width)
+                self.assertEqual(len(padding), width // len(letter.casefold()) + width % len(letter.casefold()))
+                for name, prefix, end in (("TEST_PATH_IN_SHELL", "test_a", ".py"), ("TEST_PATH_IN_SHELL", "$Dtest_a", ".py"), ("TEST_PATH_IN_SHELL", "$1test_a", ".py"), ("TEST_PATH_IN_SHELL", "-otest_a", ".py"), ("TEST_PATH_IN_SHELL", "+-otest_a", ".py"),
+                                          ("GATE_FILE_IN_SHELL", "tsconfig", ".json"), ("GATE_FILE_IN_SHELL", "$Dtsconfig", ".json"), ("GATE_FILE_IN_SHELL", "-otsconfig", ".json")):
+                    self.assertEqual(getattr(r, name).search(prefix + end + padding + ".bak"), width == 256 or letter == "ΐ", (name, prefix, width, letter))
         for name, yes, no in (("TEST_FILE", "teﬆ_a.py", "test_a.py.BAK"),
                              ("TEST_FILE_AS_TYPED", "test_a.py.bak\n", "Test_a.py"),
                              ("GATE_WHOLE_FILE", "tsconf\u0131g.json", "tsconfig.json.bak"),
                              ("PROTECTED", ".claude/hooks/x.bak", ".claude/hooks/"),
+                             ("GATE_WHOLE_FILE", ".g\u0131thub/scripts/x", "tsconfİg.json"),
                              ("TEST_PATH_IN_SHELL", "rm /test", "xtest_a.py"),
                              ("GATE_FILE_IN_SHELL", "xtsconfig.json", "test_a.py")):
             self.assertTrue(getattr(r, name).search(yes), (name, yes))
@@ -371,6 +418,9 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(match[1], expected)
         self.assertEqual(len(list(r.ASSERTION.finditer("\n\n assert x\nself.assertTrue(x)\n"))), 2)
         self.assertEqual(len(list(r.TEST_DEF.finditer("\n async def test_a():\n it(x)"))), 2)
+        for whitespace in ("\r\n", "\f", "\v", "\x85", "\u2028"):
+            self.assertEqual(len(list(r.ASSERTION.finditer("\n" + whitespace + "assert x"))), 1)
+            self.assertEqual(len(list(r.TEST_DEF.finditer("\n" + whitespace + "def test_a():"))), 1)
         for text in ("\n assert True\n", "assert x == x", "--disable-x-sandbox", "postgres://u:fake@localhost"):
             self.assertTrue(r.SCAN_PREFILTER.search(text), text)
         self.assertFalse(r.SCAN_PREFILTER.search("\n" * 30 + "ordinary"))
@@ -395,6 +445,8 @@ class ContractTests(unittest.TestCase):
             ("BROWSER_LAUNCH", "chromium"), ("TEXT_BODY", "git commit"),
             ("GENERATED", "@generated"), ("SCAN_PREFILTER", "# noqa"),
         )
+        direct = {name for name, value in vars(r).items() if isinstance(value, (type(r._WORD), r.AnyCase, r.PathCheck))}
+        self.assertEqual({name for name, _ in cases}, direct)
         for name, positive in cases:
             self.assertTrue(getattr(r, name).search(positive), name)
             negative = " " if name == "_WORD" else "ordinary"
@@ -422,10 +474,11 @@ class ContractTests(unittest.TestCase):
 unittest.main(argv=[sys.argv[0], sys.argv[1]])
 """
 
-_RULE_MEASURE = """import json, sys, time
+_RULE_MEASURE = r"""import json, sys, time
 import policy_rules as r
 name, text = json.loads(sys.stdin.read())
-pattern = (r.SECRET_SLOTS[0][1] if name == 'variable' else
+pattern = (r.path_pattern(r.NameShapes(dirs=('a','a/b'), under=r'[^/]+\.ya?ml')) if name == 'directory_prefix' else
+           r.SECRET_SLOTS[0][1] if name == 'variable' else
            r.CONTENT_RULES[-2].pattern if name == 'sandbox' else
            r.CONTENT_RULES[13].pattern if name == 'tautology' else getattr(r, name))
 start = time.perf_counter()
@@ -437,22 +490,13 @@ print(json.dumps([result, time.perf_counter() - start]))
 
 class LinearPatternTests(unittest.TestCase):
     def child(self, args: list[str], payload: str) -> subprocess.CompletedProcess[str]:
-        env = {
-            k: v
-            for k, v in os.environ.items()
-            if not k.startswith(
-                ("GIT_", "AWS_", "ANTHROPIC_", "OPENAI_", "OTEL_", "LANGSMITH_")
-            )
-            and k != "AQA_POLICY_GUARD"
-        }
-        env["PYTHONDONTWRITEBYTECODE"] = "1"
         return subprocess.run(
             [sys.executable, *args],
             input=payload,
             text=True,
             capture_output=True,
             cwd=HOOKS,
-            env=env,
+            env=_FIXTURE_ENV,
             timeout=5,
             check=False,
         )
@@ -487,6 +531,7 @@ class LinearPatternTests(unittest.TestCase):
             ("GATE_SECTION_FILE", "x/", "pyproject.toml", True),
             ("PACKAGE_MANIFEST", "x/", "package.json", True),
             ("WORKFLOW", ".github/workflows/", "a.yml", True),
+            ("directory_prefix", "a/b/", "x.yml", True),
             ("PROTECTED_IN_SHELL", "$D", ".claude/hooks", True),
             ("GATE_FILE_IN_SHELL", "tsconfig", ".json", True),
         )
@@ -536,15 +581,16 @@ class LinearPatternTests(unittest.TestCase):
         self.contract("inventory")
 
     def test_mixed_long_commands_and_real_write_scan_decisions(self) -> None:
-        mixed = "git commit <<EOF\n'x' \"y\" <<A \\\n" * 100_000
-        self.assertEqual(LinearCommandTests().decision(mixed), "allow")
-        self.assertEqual(
-            LinearCommandTests().decision(mixed + "rm tests/test_a.py"), "ask"
-        )
         script = """import json, os, pathlib, subprocess, sys, tempfile
 root = pathlib.Path.cwd()
-env = {k:v for k,v in os.environ.items() if not k.startswith(('GIT_', 'AWS_', 'ANTHROPIC_', 'OPENAI_', 'OTEL_', 'LANGSMITH_')) and k != 'AQA_POLICY_GUARD'}
+env = dict(os.environ)
 env['PYTHONDONTWRITEBYTECODE'] = '1'
+mixed = "git commit <<EOF\\n'x' \\"y\\" <<A \\\\\\n" * 100_000
+for command, wanted in ((mixed, 'allow'), (mixed + 'rm tests/test_a.py', 'ask')):
+ payload = {'hook_event_name':'PreToolUse','tool_name':'Bash','tool_input':{'command':command},'cwd':str(root)}
+ child = subprocess.run([sys.executable, str(root/'policy_guard.py')], input=json.dumps(payload), text=True, capture_output=True, timeout=5, env=env)
+ decision = 'deny' if child.returncode == 2 else json.loads(child.stdout)['hookSpecificOutput']['permissionDecision'] if child.stdout.strip() else 'allow'
+ assert decision == wanted, (wanted, decision, child.stderr)
 with tempfile.TemporaryDirectory() as d:
  p = pathlib.Path(d)
  (p / 'AGENTS.md').write_text('disposable fixture')
