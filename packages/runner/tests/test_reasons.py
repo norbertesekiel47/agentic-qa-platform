@@ -4,9 +4,13 @@ binds a test secret, every reason the runner owns comes from a closed
 vocabulary that names no origin, host or port; outside one, each keeps the
 message it had before. Every expected value is a literal."""
 
+from typing import Literal
+
 import pytest
+from aqa_core.schema import Contract
 from aqa_runner import network, probes
-from aqa_runner.browser_session import UnsupportedVisualFrameError
+from aqa_runner.binding import Refused
+from aqa_runner.browser_session import RefError, UnsupportedVisualFrameError
 from aqa_runner.document_origins import (
     DocumentChangedError,
     PolicyEvent,
@@ -19,6 +23,8 @@ from aqa_runner.egress import (
     InfrastructureEvent,
     Refusal,
 )
+from aqa_runner.locator_generation import BindingRefusedError, LocatorError
+from aqa_runner.locators import Use
 from aqa_runner.reasons import Raised, UnansweredError, reason
 from aqa_runner.redaction import NO_SECRETS, Redactor
 from aqa_runner.run_record import RefusedWriteError
@@ -278,3 +284,151 @@ def test_outside_a_withheld_run_every_reason_is_presented_as_before(
     error: Raised, expected: str
 ) -> None:
     assert reason(error, NO_SECRETS) == expected
+
+
+COUNT = Contract(region="div.banner", part="span.counter", leaf=True)
+SUBJECT = "this check's subject"
+
+
+@pytest.mark.parametrize(
+    ("refused", "contract", "use", "expected"),
+    [
+        (
+            "region_absent",
+            COUNT,
+            "assertion",
+            f"{SUBJECT} binds inside div.banner, and nothing on this page matches it",
+        ),
+        (
+            "region_ambiguous",
+            COUNT,
+            "action",
+            (
+                f"{SUBJECT} binds inside div.banner, and more than one element on "
+                "this page matches it"
+            ),
+        ),
+        (
+            "outside_region",
+            COUNT,
+            "action",
+            f"{SUBJECT} binds only inside div.banner, and this element is outside it",
+        ),
+        (
+            "part_absent",
+            COUNT,
+            "negative_check",
+            (
+                f"{SUBJECT} is the element matching span.counter inside div.banner, "
+                "and that region has none"
+            ),
+        ),
+        (
+            "part_ambiguous",
+            COUNT,
+            "assertion",
+            (
+                f"{SUBJECT} is the one element matching span.counter inside "
+                "div.banner, and that region has several"
+            ),
+        ),
+        (
+            "not_the_part",
+            COUNT,
+            "assertion",
+            (
+                f"{SUBJECT} is the one element matching span.counter inside "
+                "div.banner, and this element is another one"
+            ),
+        ),
+        (
+            "not_leaf",
+            COUNT,
+            "assertion",
+            (
+                f"{SUBJECT} is one value: bind the element that holds it, not one "
+                "that contains it"
+            ),
+        ),
+        (
+            "unlisted_copies",
+            None,
+            "assertion",
+            (
+                "this element is repeated on the page, and no subject contract in the "
+                "project config covers this use, so no copy can be bound"
+            ),
+        ),
+        (
+            "unlisted_copies",
+            None,
+            "action",
+            (
+                "this element is repeated on the page, and no subject contract in the "
+                "project config covers this use, so no copy can be bound; act under "
+                "the target_meaning of a planned check whose contract covers it"
+            ),
+        ),
+        (
+            "too_many",
+            None,
+            "action",
+            "the page repeats this element too often to tell its copies apart",
+        ),
+    ],
+)
+def test_a_binding_refusal_is_fixed_text_naming_its_contract(
+    refused: Literal[
+        "region_absent",
+        "region_ambiguous",
+        "outside_region",
+        "part_absent",
+        "part_ambiguous",
+        "not_the_part",
+        "not_leaf",
+        "unlisted_copies",
+        "too_many",
+    ],
+    contract: Contract | None,
+    use: Use,
+    expected: str,
+) -> None:
+    error = BindingRefusedError(
+        "the favorites count, which the page may name", Refused(refused), contract, use
+    )
+
+    assert (reason(error, BOUND), reason(error, NO_SECRETS)) == (expected, expected)
+    assert str(error) == f"the favorites count, which the page may name: {refused}"
+
+
+# What a generator's LocatorError can carry: the meaning the model wrote,
+# and the element's tag, which the page chose.
+CUSTOM_TAG = LocatorError(
+    "the article's save button: no locator of the grammar finds the "
+    "x-fake-tag-for-53 element alone for an action"
+)
+
+
+def test_a_stale_ref_keeps_its_words_and_a_locator_error_its_own_only_unbound() -> None:
+    stale = RefError(
+        "'e1' is from an older snapshot: a ref acts only on the snapshot that gave "
+        "it, so take a new snapshot"
+    )
+
+    assert [
+        reason(stale, BOUND),
+        reason(stale, NO_SECRETS),
+        reason(CUSTOM_TAG, BOUND),
+        reason(CUSTOM_TAG, NO_SECRETS),
+    ] == [
+        str(stale),
+        str(stale),
+        (
+            "no locator could be generated for this element (withheld: the run has "
+            "a test secret)"
+        ),
+        (
+            "the article's save button: no locator of the grammar finds the "
+            "x-fake-tag-for-53 element alone for an action"
+        ),
+    ]

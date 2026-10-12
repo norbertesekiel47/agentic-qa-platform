@@ -1,5 +1,5 @@
-"""The text a failed step's or an unevaluated assertion's result carries for
-what raised (ADR-0026's #53 P9+P10 amendment), built on
+"""The text a failed step's, an unevaluated assertion's or a navigator tool's
+result carries for what raised (ADR-0026's #53 P9+P10 amendment), built on
 `redaction.error_text`.
 
 An owned error is one whose message the runner or the session writes; any
@@ -10,24 +10,27 @@ predicate replay and explore share, so no caller chooses it.
 
 In a withheld run an owned reason comes from a closed vocabulary that names no
 origin, host, port, URL or path: a policy refusal names only its kind, and a
-`fill_secret` refusal only the secret and the check that refused it. One
+`fill_secret` refusal only the secret and the check that refused it, and a
+`LocatorError`, which can name a tag the page chose, nothing of its own. One
 exception is trusted config: a `field` refusal keeps its description of the
-field the secret's binding names (`secret_fields.describe_field`), which the
-project config writes and the page never does. Outside a withheld run every
-owned reason keeps its own message, origins included."""
+field the secret's binding names (`secret_fields.describe_field`), and a
+refused binding names its subject contract, which the project config writes
+and the page never does. Outside a withheld run every owned reason keeps its
+own message, origins included."""
 
 from typing import Literal
 
 from playwright.async_api import Error
 
 from aqa_runner import network, probes
-from aqa_runner.browser_session import UnsupportedVisualFrameError
+from aqa_runner.browser_session import RefError, UnsupportedVisualFrameError
 from aqa_runner.document_origins import (
     REFUSED_BY_KIND,
     DocumentChangedError,
     PolicyEventError,
 )
 from aqa_runner.egress import EgressRefusedError, EgressUpstreamError
+from aqa_runner.locator_generation import BindingRefusedError, LocatorError
 from aqa_runner.redaction import Redacted, Redactor, error_text
 from aqa_runner.run_record import RefusedWriteError
 from aqa_runner.secret_fields import SecretNotFilledError, SecretRefusedError
@@ -55,6 +58,8 @@ type Raised = (
     | network.WindowsOverflowError
     | UnsupportedVisualFrameError
     | RefusedWriteError
+    | RefError
+    | LocatorError
 )
 
 # Owned errors whose reason is always this fixed text: a probe's message can
@@ -86,6 +91,31 @@ _WITHHELD_CHECKS: dict[
 
 _ORIGIN_WITHHELD = "(withheld: the run has a test secret)"
 
+# A refused binding's reason, by its verdict (ADR-0025's #53 P13 amendment).
+_BINDINGS = {
+    "region_absent": "this check's subject binds inside {region}, and nothing on "
+    "this page matches it",
+    "region_ambiguous": "this check's subject binds inside {region}, and more than "
+    "one element on this page matches it",
+    "outside_region": "this check's subject binds only inside {region}, and this "
+    "element is outside it",
+    "part_absent": "this check's subject is the element matching {part} inside "
+    "{region}, and that region has none",
+    "part_ambiguous": "this check's subject is the one element matching {part} "
+    "inside {region}, and that region has several",
+    "not_the_part": "this check's subject is the one element matching {part} "
+    "inside {region}, and this element is another one",
+    "not_leaf": "this check's subject is one value: bind the element that holds "
+    "it, not one that contains it",
+    "unlisted_copies": "this element is repeated on the page, and no subject "
+    "contract in the project config covers this use, so no copy can be bound",
+    "too_many": "the page repeats this element too often to tell its copies apart",
+}
+# Kept short: with it, the reason fits `REASON_CHARS`.
+_ACTION_ON_COPIES = (
+    "; act under the target_meaning of a planned check whose contract covers it"
+)
+
 
 def reason(error: Raised, redactor: Redactor) -> Redacted:
     """`error` as a result's reason: its owned message, or else
@@ -94,9 +124,12 @@ def reason(error: Raised, redactor: Redactor) -> Redacted:
     owned message comes from the closed vocabulary, and Playwright's keeps
     only its class and call."""
     withheld = not redactor.empty
-    return error_text(
-        error, redactor, ours=_owned(error, withheld=withheld), withheld=withheld
+    ours = (
+        _refused_binding(error)
+        if isinstance(error, BindingRefusedError)
+        else _owned(error, withheld=withheld)
     )
+    return error_text(error, redactor, ours=ours, withheld=withheld)
 
 
 def _owned(error: Raised, *, withheld: bool) -> str | None:
@@ -105,6 +138,8 @@ def _owned(error: Raised, *, withheld: bool) -> str | None:
     for kind, text in _FIXED:
         if isinstance(error, kind):
             return text
+    if withheld and isinstance(error, LocatorError):
+        return f"no locator could be generated for this element {_ORIGIN_WITHHELD}"
     if withheld and isinstance(error, PolicyEventError):
         refused = REFUSED_BY_KIND[error.event.kind]
         return f"{refused} on an origin the run doesn't allow {_ORIGIN_WITHHELD}"
@@ -118,7 +153,20 @@ def _owned(error: Raised, *, withheld: bool) -> str | None:
         | SecretRefusedError
         | SecretNotFilledError
         | network.WindowsOverflowError
-        | RefusedWriteError,
+        | RefusedWriteError
+        | RefError
+        | LocatorError,
     ):
         return str(error)
     return None
+
+
+def _refused_binding(error: BindingRefusedError) -> str:
+    """A refused binding's fixed text, naming its contract's region and part
+    (config), whether or not the run withholds."""
+    text = _BINDINGS[error.reason]
+    if error.contract is not None:
+        text = text.format(region=error.contract.region, part=error.contract.part)
+    if error.reason == "unlisted_copies" and error.use == "action":
+        text += _ACTION_ON_COPIES
+    return text
