@@ -184,6 +184,13 @@ class RunRecord:
             for seq, side_effect in sorted(self._pending().items())
         )
 
+    def shares_journals(self, other: RunRecord) -> bool:
+        """Whether `other` holds the journals' state this record holds in
+        memory, its unresolved intents included: one made from the same
+        record (`redacting`, `part`, any `dataclasses.replace`) does, and
+        one made directly doesn't, even at this path with this run's ID."""
+        return other._journals is self._journals
+
     def write(
         self, name: str, document: object, *, check: LineCheck | None = None
     ) -> Path:
