@@ -776,3 +776,24 @@ def test_a_region_change_after_every_locators_zero_result_is_drift_not_absence(
     # Every-locator mode first, then normal mode: one region held each.
     expected = Absent(0) if not change else Unresolved(("no region", "no region"))
     assert in_session(scenario) == [(expected, 1, True), (expected, 1, True)]
+
+
+def test_every_locator_must_find_one_and_the_same_element() -> None:
+    gone = target({"css": "#keep"}, {"css": "#gone"})
+
+    async def scenario(session: BrowserSession) -> list[object]:
+        await put(session, BUTTONS)
+        return [
+            await session.resolve(SAVE, "assertion", every=True),
+            await plain(await session.resolve(KEEP, "assertion", every=True)),
+            await session.resolve(gone, "assertion", every=True),
+            # By default the session resolves first-match, as it always has.
+            await plain(await session.resolve(SAVE, "assertion")),
+        ]
+
+    assert in_session(scenario) == [
+        Unresolved(("not unanimous", "not unanimous")),
+        ("resolved", 0, "keep"),
+        Unresolved(("not unanimous", "no match")),
+        ("resolved", 0, "keep"),
+    ]

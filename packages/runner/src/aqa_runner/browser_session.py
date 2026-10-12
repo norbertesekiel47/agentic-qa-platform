@@ -39,9 +39,11 @@ from aqa_runner.locators import (
     UNOCCLUDED,
     Absent,
     Resolved,
+    Shown,
     Unresolved,
     Use,
     rendered_text,
+    resolve_every,
 )
 from aqa_runner.locators import resolve as resolve_target
 from aqa_runner.page_scripts import CONTAINS, FILL, TRANSFORMED
@@ -505,27 +507,39 @@ class BrowserSession:
 
     @overload
     async def resolve(
-        self, target: Target, use: Literal["action", "assertion"]
+        self, target: Target, use: Literal["action", "assertion"], *, every: bool = ...
     ) -> Resolved | Unresolved: ...
 
     @overload
     async def resolve(
-        self, target: Target, use: Literal["negative_check"]
+        self,
+        target: Target,
+        use: Literal["negative_check"],
+        *,
+        every: Literal[False] = ...,
     ) -> Resolved | Absent | Unresolved: ...
 
-    async def resolve(self, target: Target, use: Use) -> Resolved | Absent | Unresolved:
+    @overload
+    async def resolve(
+        self, target: Target, use: Literal["negative_check"], *, every: bool
+    ) -> Resolved | Shown | Absent | Unresolved: ...
+
+    async def resolve(
+        self, target: Target, use: Use, *, every: bool = False
+    ) -> Resolved | Shown | Absent | Unresolved:
         """`target`'s element for `use`, as `aqa_runner.locators.resolve`
-        finds it on the page: an observation, so the page is checked before
-        and after. If any frame navigated or was removed meanwhile, what the
-        lookup saw may be another document's, even when the page is back on
-        an allowed origin: it is discarded, a resolved element let go, and
-        `DocumentChangedError` raised, as `snapshot` does. The caller owns a
-        resolved element's handle."""
+        (or `resolve_every`, when `every`) finds it: an observation, so the
+        page is checked before and after. If any frame navigated or was
+        removed meanwhile, what the lookup saw may be another document's, even
+        when the page is back on an allowed origin: it is discarded, a
+        resolved element let go, and `DocumentChangedError` raised, as
+        `snapshot` does. The caller owns a resolved element's handle."""
+        look = resolve_every if every else resolve_target
         async with self._turn:
             changes = self._frame_changes
             await self._require_allowed_page()
             try:
-                found = await resolve_target(self.page, target, use)
+                found = await look(self.page, target, use)
             except Error as error:
                 # A navigation inside a held region breaks its release.
                 if self._frame_changes == changes:
