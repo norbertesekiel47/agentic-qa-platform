@@ -22,6 +22,7 @@ from aqa_core.project import contracts_fingerprint, load_spec
 from aqa_core.spec import Spec
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.executor import RunResult, RunSetup, replay
+from aqa_runner.locator_generation import register_identity_engine
 from aqa_runner.run_record import RunRecord
 from aqa_runner.settling import Window
 from playwright.async_api import async_playwright
@@ -631,6 +632,7 @@ def run(
 
     async def scenario() -> RunResult:
         async with async_playwright() as playwright, EgressProxy(run_gate) as proxy:
+            await register_identity_engine(playwright)
             # No executor test may hang the suite.
             async with asyncio.timeout(60):
                 return await replay(
