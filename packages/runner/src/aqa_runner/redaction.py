@@ -73,6 +73,22 @@ class Redactor:
         still spell a value (its secret's name, say)."""
         return bool(self._matches(text))
 
+    def spells(self, value: object) -> bool:
+        """Whether any string in `value`, a JSON value, its keys aside, holds
+        a spelling this scan finds, as written or JSON-escaped, as a journal
+        line writes it: replay's preflight and the navigator's tools refuse
+        or drop by this one rule."""
+        return any(
+            self.finds(text) or self.finds(json.dumps(text)) for text in _strings(value)
+        )
+
+    @property
+    def markers_spell_a_value(self) -> bool:
+        """Whether a marker this scan writes, `[SECRET:<name>]`, spells a
+        bound value (a value that is a secret's name, say), which no scan
+        can then take out of what it marked."""
+        return any(self.finds(marker) for marker, _ in self._paths)
+
     def redact(self, text: str, *, limit: int | None = None) -> Redacted:
         """Replace matches in any case, then apply the optional character limit."""
         matches = self._matches(text)
@@ -94,6 +110,17 @@ class Redactor:
             for start, end in _endpoints(paths, transitions, len(text)).items():
                 matches.setdefault(start, (end, marker))
         return matches
+
+
+def _strings(value: object) -> list[str]:
+    """Every string in `value`, a JSON value, its keys aside."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return _strings(list(value.values()))
+    if isinstance(value, list):
+        return [text for item in value for text in _strings(item)]
+    return []
 
 
 def _transitions(groups: _Groups, text: str) -> dict[int, list[int]]:

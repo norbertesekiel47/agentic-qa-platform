@@ -8,7 +8,6 @@ Browser observations use the session methods, which check every document
 they touch (ADR-0026). Probe reads use the same egress gate as the browser."""
 
 import asyncio
-import json
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
@@ -172,12 +171,12 @@ class _Replay:
 
 
 @dataclass(frozen=True)
-class _Dispatch:
+class Dispatch:
     """A step about to be dispatched: what its intent line records, how long
     its action may take, and the locator that found its target."""
 
     seq: int
-    action: dict[str, object]
+    action: Mapping[str, object]
     side_effect: bool
     wait: float
     target: str | None = None
@@ -313,10 +312,10 @@ async def replay(
             session,
             run,
             steps,
-            await _dispatched(
+            await dispatched(
                 session,
-                run,
-                _Dispatch(
+                setup.record,
+                Dispatch(
                     0, {"action": "navigate", "url": path}, False, NAVIGATION_SECONDS
                 ),
                 lambda: session.navigate(first),
@@ -437,42 +436,29 @@ def _spelling_bound_values(
     the browser to find a target with, holding a spelling of a value
     `redactor` binds, as written or JSON-escaped, as the journal writes it:
     the start path, each step's action as its intent records it, and each
-    target's name and every string of its locators, scopes included. A
-    place is named by its position, never by its text (SECURITY §5: keeping
-    values out of `steps.jsonl` is the caller's preflight)."""
-    places = [("preconditions.start_url", [spec.frontmatter.preconditions.start_url])]
+    target's name, every string of its locators, scopes included, and its
+    subject contract's region and part (`Redactor.spells`). A place is named
+    by its position, never by its text (SECURITY §5: keeping values out of
+    `steps.jsonl` is the caller's preflight)."""
+    places: list[tuple[str, object]] = [
+        ("preconditions.start_url", spec.frontmatter.preconditions.start_url)
+    ]
     places.extend(
-        (f"steps[{index}] (seq {step.seq})", _strings(_action(step)))
+        (f"steps[{index}] (seq {step.seq})", _action(step))
         for index, step in enumerate(steps)
     )
     places.extend(
         (
             f"targets[{index}]",
-            [
-                name,
-                *_strings([found.model_dump(mode="json") for found in target.locators]),
-            ],
+            [name, target.model_dump(mode="json", exclude={"semantic"})],
         )
         for index, (name, target) in enumerate(targets.items())
     )
     return [
         f"{place}: a bound value's spelling is in it, so the replay doesn't start"
-        for place, texts in places
-        if any(
-            redactor.finds(text) or redactor.finds(json.dumps(text)) for text in texts
-        )
+        for place, value in places
+        if redactor.spells(value)
     ]
-
-
-def _strings(value: object) -> list[str]:
-    """Every string in `value`, a JSON value, its keys aside."""
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, dict):
-        return _strings(list(value.values()))
-    if isinstance(value, list):
-        return [text for item in value for text in _strings(item)]
-    return []
 
 
 def _action(step: Targeted | Untargeted) -> dict[str, object]:
@@ -771,10 +757,10 @@ async def _run(
         return (
             None
             if interrupted()
-            else await _dispatched(
+            else await dispatched(
                 session,
-                run,
-                _Dispatch(step.seq, action, step.side_effect, wait),
+                setup.record,
+                Dispatch(step.seq, action, step.side_effect, wait),
                 lambda: _untargeted(session, step, setup.start),
             )
         )
@@ -791,10 +777,10 @@ async def _run(
         return StepResult(step.seq, "drifted", misses=found.misses)
     if interrupted():
         return None
-    return await _dispatched(
+    return await dispatched(
         session,
-        run,
-        _Dispatch(
+        setup.record,
+        Dispatch(
             step.seq, action, step.side_effect, budget, step.target, found.locator_index
         ),
         lambda: _targeted(session, step, found.element, run.secrets),
@@ -880,24 +866,35 @@ async def _resolve(
     return last
 
 
-async def _dispatched(
+async def dispatched(
     session: BrowserSession,
-    run: _Replay,
-    dispatch: _Dispatch,
+    record: RunRecord,
+    dispatch: Dispatch,
     act: Callable[[], Awaitable[Window]],
 ) -> StepResult:
-    """Record `dispatch`'s intent in `run`'s record, then dispatch its step
-    with `act`, giving it up to `MARGIN_SECONDS` past its wait, settle it,
-    and record its completion with the locator that found its target.
+    """Record `dispatch`'s intent in `record`, then dispatch its step with
+    `act`, giving it up to `MARGIN_SECONDS` past its wait, settle it, and
+    record its completion with the locator that found its target. Replay's
+    steps and the navigator's actions (`aqa_runner.navigator_tools`) go
+    through here, each with inputs its caller admitted first: replay's
+    `_admitted`, the tools' argument scan.
 
-    Each line is checked as the exact text written, its own fields and time
+    `record` must scan with `session`'s redactor, the run's, or this raises
+    `ValueError` before any line: its reasons withhold by that scan. Each
+    line is checked as the exact text written, its own fields and time
     included: one that spells a bound value isn't written (the record's
     `RefusedWriteError`), and the step fails with that refusal. A refused
     intent dispatches nothing; after a refused completion, the intent stays
-    unresolved, as a dispatch's that failed (DATA_MODEL §7)."""
-    record = run.setup.record
+    unresolved, as a dispatch's that failed (DATA_MODEL §7). A line the
+    record can't write raises, as does a cancellation: either can leave an
+    intent on disk unresolved."""
+    redactor = session.redactor
+    if record.redactor is not redactor:
+        raise ValueError(
+            "a dispatch's record must be scanned by its session's redactor"
+        )
     seq, index = dispatch.seq, dispatch.locator_index
-    clean = require_clean(run.evaluation.redactor, STEPS)
+    clean = require_clean(redactor, STEPS)
     try:
         record.step_intent(
             seq,
@@ -907,7 +904,7 @@ async def _dispatched(
             check=clean,
         )
     except RefusedWriteError as error:
-        return StepResult(seq, "failed", error=run.evaluation.reason(error))
+        return StepResult(seq, "failed", error=reasons.reason(error, redactor))
     seconds = dispatch.wait + MARGIN_SECONDS
     limit = asyncio.timeout(seconds)
     try:
@@ -924,21 +921,19 @@ async def _dispatched(
         # intent; its intent stays unresolved too, as a dispatch's that
         # failed (DATA_MODEL §7), so a side-effect fill_secret refused makes
         # the run non-resumable.
-        return StepResult(seq, "failed", error=run.evaluation.reason(error))
+        return StepResult(seq, "failed", error=reasons.reason(error, redactor))
     except TimeoutError:
         if not limit.expired():
             raise  # not the action's own limit
         return StepResult(
             seq,
             "failed",
-            error=run.evaluation.redactor.redact(
-                f"the action didn't finish within {seconds:g} s"
-            ),
+            error=redactor.redact(f"the action didn't finish within {seconds:g} s"),
         )
     try:
         record.step_completed(seq, locator_used=index, settled=settled, check=clean)
     except RefusedWriteError as error:
-        return StepResult(seq, "failed", error=run.evaluation.reason(error))
+        return StepResult(seq, "failed", error=reasons.reason(error, redactor))
     return StepResult(seq, "completed", window, index, settled)
 
 

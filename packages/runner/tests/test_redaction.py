@@ -360,3 +360,31 @@ def test_short_producer_remnants_can_redact_unrelated_text() -> None:
     assert redactor.redact("f") == MARKER
     assert redactor.redact("leaf") == f"lea{MARKER}"
     assert redactor.redact("") == ""
+
+
+def test_spells_finds_a_bound_value_in_any_string_raw_or_json_escaped_and_never_in_a_key() -> (
+    None
+):
+    # A backslash and an n: a line feed is written as both by JSON.
+    redactor = Redactor([secret("fake\\nvalue")])
+    assert [
+        redactor.spells("a fake\\nvalue"),
+        redactor.spells("a fake\nvalue"),
+        redactor.spells(["ok", {"locator": {"scope": {"css": "fake\nvalue"}}}]),
+        redactor.spells({"fake\\nvalue": "ok"}),
+        redactor.spells(["ok", 7, None, True]),
+        NO_SECRETS.spells("fake\\nvalue"),
+    ] == [True, True, True, False, False, False]
+
+
+def test_markers_spell_a_value_when_a_value_is_a_piece_of_any_marker() -> None:
+    assert [
+        Redactor([secret("FAKE_NAME", "FAKE_NAME")]).markers_spell_a_value,
+        Redactor(
+            [secret("OTHER_FAKE", "FAKE"), secret(FAKE_VALUE, "OTHER_FAKE")]
+        ).markers_spell_a_value,
+        Redactor([secret("secret", "FAKE")]).markers_spell_a_value,
+        Redactor([secret("password", "TEST_PASSWORD")]).markers_spell_a_value,
+        Redactor([secret("fake-api-token-for-49", "FAKE_TOKEN")]).markers_spell_a_value,
+        NO_SECRETS.markers_spell_a_value,
+    ] == [True, True, True, True, False, False]

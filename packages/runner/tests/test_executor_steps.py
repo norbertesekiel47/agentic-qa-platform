@@ -17,13 +17,16 @@ from aqa_core.compiled import Target
 from aqa_core.config import ProjectConfig
 from aqa_core.project import SpecError
 from aqa_runner import executor
-from aqa_runner.browser_session import BrowserSession
+from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.document_origins import DocumentChangedError, PolicyEvent
 from aqa_runner.egress_proxy import EgressBlocks, EgressProxy, RefusedHost
 from aqa_runner.locators import Unresolved, Use
-from playwright.async_api import ElementHandle
+from aqa_runner.redaction import Redactor
+from aqa_runner.run_record import RunRecord
+from aqa_runner.settling import Window
+from playwright.async_api import ElementHandle, async_playwright
 
-from packages.runner.tests.egress_fixtures import unused_port
+from packages.runner.tests.egress_fixtures import egress_proxy, unused_port
 from packages.runner.tests.executor_fixtures import (
     FORM_TARGETS,
     App,
@@ -737,3 +740,45 @@ def test_a_target_is_looked_for_every_tenth_of_a_second(
     assert result.steps[1].outcome == "drifted"
     # About ten looks in the second, not a spin.
     assert 5 <= len(looks) <= 12
+
+
+def test_a_dispatch_refuses_a_record_its_sessions_redactor_doesnt_scan(
+    app: App, tmp_path: Path
+) -> None:
+    acted: list[str] = []
+
+    async def scenario() -> executor.StepResult:
+        record = RunRecord.create(tmp_path)
+        app.record = record.path
+        async with (
+            async_playwright() as playwright,
+            egress_proxy(app.origin) as egress,
+            open_browser_session(
+                playwright.chromium, egress=egress, redactor=Redactor(())
+            ) as session,
+        ):
+
+            def act() -> Awaitable[Window]:
+                acted.append("act")
+                return session.navigate(f"{app.origin}/page/form")
+
+            step = executor.Dispatch(
+                1, {"action": "navigate", "url": "/page/form"}, True, 30
+            )
+            # An empty scan too, but not the session's own.
+            with pytest.raises(
+                ValueError,
+                match=r"^a dispatch's record must be scanned by its session's redactor$",
+            ):
+                await executor.dispatched(
+                    session, record.redacting(Redactor(())), step, act
+                )
+            assert (acted, read_steps(record.path)) == ([], [])
+            return await executor.dispatched(
+                session, record.redacting(session.redactor), step, act
+            )
+
+    done = asyncio.run(scenario())
+
+    assert (done.seq, done.outcome, done.settled) == (1, "completed", "idle")
+    assert acted == ["act"]
