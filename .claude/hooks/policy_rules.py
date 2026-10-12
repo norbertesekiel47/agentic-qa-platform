@@ -85,12 +85,39 @@ class PathCheck:
     """Match each file shape only at its final segments; inspect each tail once."""
 
     def __init__(self, shapes: NameShapes, *, folded: bool = True) -> None:
+        if not (shapes.files or shapes.dirs):
+            raise ValueError("empty name shapes")
         if shapes.dirs and shapes.under not in {
             r".+",
             r".*\.(?:py|[cm]?[jt]sx?)",
             r"[^/]+\.ya?ml",
         }:
             raise ValueError("unsupported directory under grammar")
+        segment = r"(?:[A-Za-z0-9_-]|\\\.)+(?:[A-Za-z0-9_-]\?)?"
+        if any(
+            re.fullmatch(rf"{segment}(?:/{segment})*", shape) is None
+            for shape in shapes.dirs
+        ):
+            raise ValueError("unsupported directory shape grammar")
+        atoms = r"[A-Za-z0-9_-]\??|\\\.\??|\{name\}|" + "|".join(
+            re.escape(token)
+            for token in (
+                r"[cm]?",
+                r"[jt]",
+                r"(?:\.local)?",
+                r"(?:test|spec)",
+                r"(?:ini|toml)",
+                r"(?:config|workspace)",
+            )
+        )
+        file_segment = rf"(?:{atoms})+"
+        for shape in shapes.files:
+            if shape != r"{name}tsconfig{name}\.json" and (
+                re.fullmatch(rf"{file_segment}(?:/{file_segment})*(?:\\b)?", shape)
+                is None
+                or any(part.count("{name}") > 1 for part in shape.split("/"))
+            ):
+                raise ValueError("unsupported file shape grammar")
         self.shapes, self.folded = shapes, folded
         flags = re.IGNORECASE if folded else 0
         self.files = []
@@ -104,11 +131,9 @@ class PathCheck:
             self.files.append(
                 (shape.count("/"), re.compile(rf"(?:{body})[^/]*$", flags))
             )
-        self.dirs = (
-            re.compile(rf"(?=(?:^|/)((?:{'|'.join(shapes.dirs)})/))", flags)
-            if shapes.dirs
-            else None
-        )
+        self.dirs = [
+            re.compile(rf"(?=(?:^|/)((?:{shape})/))", flags) for shape in shapes.dirs
+        ]
         self.tail = re.compile(rf"(?:{shapes.under})\Z", flags)
 
     def search(self, raw: str) -> bool:
@@ -118,15 +143,15 @@ class PathCheck:
             for count, pattern in self.files:
                 if len(starts) > count and pattern.match(text, starts[-count - 1]):
                     return True
-        if self.dirs is None:
+        if not self.dirs:
             return False
-        tails = [m.end(1) for m in self.dirs.finditer(text)]
+        tails = [m.end(1) for pattern in self.dirs for m in pattern.finditer(text)]
         # Python's $ also permits one terminal LF, without trimming CR or internal LF.
         endpoints = [len(text)] + ([len(text) - 1] if text.endswith("\n") else [])
         delimiter = "/" if self.shapes.under == r"[^/]+\.ya?ml" else "\n"
         for end in endpoints:
             begin = text.rfind(delimiter, 0, end) + 1
-            tail = next((p for p in tails if begin <= p <= end), None)
+            tail = min((p for p in tails if begin <= p <= end), default=None)
             if tail is not None and self.tail.fullmatch(text[tail:end]):
                 return True
         return False
