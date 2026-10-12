@@ -14,7 +14,7 @@ from urllib.parse import quote_plus
 import pytest
 from aqa_core.compiled import CompiledScript
 from aqa_core.config import ProjectConfig
-from aqa_core.project import SpecError
+from aqa_core.project import SpecError, contracts_fingerprint
 from aqa_runner import executor
 from aqa_runner.bound_secrets import MissingSecretError, SecretLoggedError
 from aqa_runner.browser_session import BrowserSession
@@ -285,6 +285,69 @@ def test_a_missing_value_stops_the_replay_before_the_browser_opens(
             "AQA_SECRET_TEST_PASSWORD is not set: set it to the value of test secret "
             f"TEST_PASSWORD, which {spec.path} references at preconditions.account.password"
         ),
+    )
+    assert opened == []
+    assert app.paths() == []
+
+
+@pytest.mark.parametrize(
+    "contract",
+    [
+        {"region": "div.fake-region-for-53", "part": "p"},
+        {"region": "div.banner", "part": "p.fake-region-for-53"},
+    ],
+    ids=["region", "part"],
+)
+def test_a_subject_contract_spelling_a_bound_value_stops_replay_before_the_browser_opens(
+    app: App,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    contract: dict[str, str],
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "fake-region-for-53")
+    opened: list[object] = []
+
+    def no_browser(*args: object, **options: object) -> None:
+        opened.append((args, options))
+        raise AssertionError("the browser was opened")
+
+    monkeypatch.setattr(executor, "open_browser_session", no_browser)
+    spec = secret_spec(tmp_path, start_url="/page/form")
+    config = ProjectConfig.model_validate(
+        {"subjects": [{"spec": "replay", "expect": 0, **contract}]}
+    )
+    data = compiled(
+        [],
+        targets={
+            "status": {
+                "semantic": "the status",
+                "locators": [{"css": "p"}],
+                "contract": contract,
+            }
+        },
+        assertions=[
+            {
+                "id": "a1",
+                "expect_index": 0,
+                "check": "text_in_target",
+                "target": "status",
+                "text": "saved",
+            }
+        ],
+    ).model_dump(mode="json")
+    data["compiled_by"]["subject_contracts"] = contracts_fingerprint(config, "replay")
+
+    with pytest.raises(SpecError) as refused:
+        run(
+            app,
+            tmp_path,
+            CompiledScript.model_validate_json(json.dumps(data)),
+            config=config,
+            spec=spec,
+        )
+
+    assert refused.value.problems == (
+        "targets[0]: a bound value's spelling is in it, so the replay doesn't start",
     )
     assert opened == []
     assert app.paths() == []
