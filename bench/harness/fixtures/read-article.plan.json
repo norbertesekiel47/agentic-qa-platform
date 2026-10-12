@@ -1,0 +1,89 @@
+{
+  "expectations": [
+    {
+      "expect_index": 0,
+      "subject": "the article page",
+      "claim": "shows the title \"Testing without flakes\"",
+      "checks": [
+        {
+          "check": "text_in_target",
+          "target_meaning": "the article banner's title heading",
+          "text": "Testing without flakes"
+        }
+      ]
+    },
+    {
+      "expect_index": 1,
+      "subject": "the article's author",
+      "claim": "is shown as anna",
+      "checks": [
+        {
+          "check": "text_in_target",
+          "target_meaning": "the article banner's author link",
+          "text": "anna"
+        }
+      ]
+    },
+    {
+      "expect_index": 2,
+      "subject": "the article's publication date",
+      "claim": "is shown as January 4, 2026",
+      "checks": [
+        {
+          "check": "text_in_target",
+          "target_meaning": "the article banner's publication date",
+          "text": "January 4, 2026"
+        }
+      ]
+    },
+    {
+      "expect_index": 3,
+      "subject": "the article body",
+      "claim": "includes \"Most flaky tests are really flaky data.\"",
+      "checks": [
+        {
+          "check": "text_in_target",
+          "target_meaning": "the rendered article body",
+          "text": "Most flaky tests are really flaky data."
+        }
+      ]
+    },
+    {
+      "expect_index": 4,
+      "subject": "the article's tags",
+      "claim": "include \"testing\"",
+      "checks": [
+        {
+          "check": "text_in_target",
+          "target_meaning": "the article's tag list",
+          "text": "testing"
+        }
+      ]
+    },
+    {
+      "expect_index": 5,
+      "subject": "reader's comment",
+      "claim": "\"Deterministic data helped us most.\" is shown under the article",
+      "checks": [
+        {
+          "check": "text_in_target",
+          "target_meaning": "the article's comment list",
+          "text": "Deterministic data helped us most."
+        }
+      ]
+    },
+    {
+      "expect_index": 6,
+      "subject": "the signed-out comment prompt",
+      "claim": "invites the visitor to sign in or sign up to add comments",
+      "checks": [
+        {
+          "check": "text_in_target",
+          "target_meaning": "the signed-out comment prompt",
+          "text": "Sign in or sign up to add comments on this article"
+        }
+      ]
+    }
+  ],
+  "requires": []
+}
