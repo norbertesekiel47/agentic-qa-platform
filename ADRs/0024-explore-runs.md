@@ -572,3 +572,36 @@ The navigator's check tools (#53) evaluate one planned check at a time on the at
   - *Chosen: 2.* The navigator evaluates one check at a time, long after any first look, so the precondition must travel with the check. Replay's assertions go through the same function, one by one, and stop at the first look that raises, as before.
   - *What changes for replay:* a page that answers for the first assertion and stops before the second used to let the second pass when it read only recorded traffic or a probe; now the second is `not_evaluated` with its reason, every later one names it, and the run is `errored`. After a page that never answered, the first assertion carries the reason and the later ones name it, where each used to repeat it. Each assertion costs one more read of the page's visible text.
 - **No dependency, paid resource or model call.** Tests: `packages/runner/tests/test_evaluate.py`, and `test_executor_runs.py`'s two tests of a page that stops answering.
+
+## Amendment (2026-10-12): explore's final outcome and non-resumable runs (#53 P12)
+
+### Context and options
+
+An explore run that opened its egress proxy can end with several causes at once: a block, a side effect whose outcome is unknown, a failed reset, an unreachable host, a record that took no more lines, a provider that gave no response, a run that gave up. `aqa_runner.explore_result.final_outcome` picks one exit, and `present` makes the run's document (ADR-0026's #53 P12 amendment). Three choices were open:
+
+- **Where unresolved intents come from.** (1) A list the explore graph passes; (2) each phase's part of the run record, through `unresolved()`. *Chosen: 2*, so no second copy can be partial or stale.
+- **How a part is known to be the run's.** (1) Its path, run ID and redactor; (2) those and the pending-intent state it holds. *Chosen: 2.* A record made directly at a part's path, with its run ID and redactor, holds none of the part's intents, so with (1) it passes in the part's place and a non-resumable run exits 0.
+- **When `attempt-1` is made.** (1) When the attempt starts; (2) with the run record, as preflight. *Chosen: 2*, so every stop after the proxy opens has a part to finalize with.
+
+### Decision
+
+- **One ordered table.** `EXIT_CODES` lists the outcomes most decisive first: `egress_blocked` 6, `non_resumable` 4, `no_sandbox` 10, `reset_unsafe` 14, `unreachable` 13, `record_error` 15, `no_response` 11, `gave_up` 3, `compiled` 0. The first that holds decides. Blocks, unresolved intents, uncertain traffic and infrastructure events are facts the run left. `no_sandbox`, `reset_unsafe`, `record_error`, `no_response` and `gave_up` are stops the graph made (`Stop`), with fixed or `reasons.reason` text, kept in the order they were made.
+- **Non-resumable runs.** An unresolved `side_effect: true` intent in either part is exit 4 and is listed in `non_resumable` whatever the exit. A read-only one is terminal but never 4: its cause decides, else 3. A run that published nothing never exits 0; one that published an unconfirmed script exits 0.
+- **Only the final snapshot decides 6 and 13**: the blocks and infrastructure events read once after the last `end_phase()`. The confirmation result's own never decide.
+- **Reasons use the executor's outcome words**: each stop's reason; each planned check that never passed, such as `a2: never bound`, `a3: binding_unresolved (no match, outside region)` or `a4: not_evaluated: step 4 stopped the run`; and each confirmation step, assertion and invariant that didn't, such as `confirmation step 3: drifted (not the part)` or `confirmation invariant http_5xx: violated`.
+- **Provenance.** `ExploreEnd` refuses a phase whose record isn't the run record's part of that name, made from it (`RunRecord.shares_journals`) and scanning with its redactor, and a confirmation result of another run.
+- **The #53 P5 amendment's sharing rule, exactly.** Records made from one record (`redacting`, `part`, any `dataclasses.replace`) share its pending-intent state, kept by path as spelled. A record made directly, even at the same path with the same run ID, starts a state of its own and sees none of those intents.
+
+### What P15 and P16 must hold
+
+- **The redactor before any browser.** The run's redactor, built once from every test secret the spec references, filled or not, is the construction authority: the run record is made redacting with it and checked to hold that object; it is passed to `open_browser_session`; and a session, when one was yielded, is checked to hold it, as `capture_evidence` and `evaluate` check theirs.
+- **`attempt-1` is record preflight.** It is made right after the run record, before planning, any model call or spend, and before the egress proxy opens its first phase. If it can't be made, the run exits 15 with a fixed diagnostic and no raw OS error, nothing planned, and never reaches finalization.
+- **An early stop finalizes with the record's scan.** A failed reset before the attempt (14) or a failed launch (10) has no session. The run still ends its phase, takes the final snapshot and builds `ExploreEnd` from the run record and `attempt-1`, so a run that binds a value is withheld.
+- Explore writes `present`'s document as `explore.json`, and its `egress` as `egress.json`, each checked as written. Replay gets the run's `confirmation` part, and explore keeps the result replay returned.
+
+### Consequences and limits
+
+- A run that stops early leaves an empty `attempt-1/`, which is not forced (#53 P5).
+- `ExploreEnd` can't tell whether the run record is the run's: a record made directly at the run's path, with parts copied from it by `dataclasses.replace`, passes. Explore finalizes with the record it made at preflight.
+- API.md §7's rows say when each code is reached; its precedence sentence, and exit 15 for a record that failed after the proxy opened, join it when the CLI exits by this table (#53 P17).
+- No new dependency, paid resource or model call. Tests: `packages/runner/tests/test_explore_result.py`.

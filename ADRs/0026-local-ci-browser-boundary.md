@@ -771,3 +771,27 @@ Option 1 (the maintainer, 2026-10-09).
 - Not claimed: page-written text in a scanned snapshot, a value split across fragments, and what counts, totals and outcomes can encode.
 - The contract refusals' texts and `BindingRefusedError` join `reasons` with the navigator's check tools (#53 P13 and P14), which hold the contracts they name.
 - No dependency, paid resource or model call. Tests: `packages/runner/tests/test_reasons.py`; `test_executor_secrets.py`'s policy refusal in a withheld replay, refused `fill_secret`, attempt part's `egress.json`, refused intent and refused completion; `test_executor_runs.py`'s stale script and bound-value preflight tests; and `test_result_redaction.py`'s cut test, now on a long `field` refusal (approved by the maintainer).
+
+## Amendment (2026-10-12): the presented result (#53 P12)
+
+### Context and options
+
+The #53 P9+P10 amendment left explore's protected output to its presenter: what a replay returns in `RunResult` (`steps[*].window`, `policy_events`, `infrastructure_events`, `egress_blocks`) and what the run's own causes say. `aqa_runner.explore_result.present(end)` makes `explore.json`, whose `egress` member is the top-level `egress.json`. Two choices were open:
+
+- **What the document copies.** (1) An allow-list, field by field; (2) serialize the results and redact them; (3) a choice per sink. *Chosen: 1.* (2) presents any field a result gains later, and no scan finds a value a page split across refused hosts and ports. (3) spreads one decision over every sink.
+- **Where the scan comes from.** (1) A redactor the caller passes; (2) the run's record, each phase's part checked as made from it. *Chosen: 2* (the coordinator, 2026-10-12, after the plan's review): with (1), a caller can pass an empty scan and un-withhold a run that binds a value.
+
+### Decision
+
+- **The allow-list.** `run_id`, `outcome`, `exit_code`, `withheld`, `published`, `reasons`, `non_resumable` (`[{part, seq}]`), `phases` (`[{part, plain_uncertain, tunnel_uncertain, policy_events}]`, counts only), `egress`, `infrastructure_events`, and `confirmation`: its outcome and error code, each step's seq, outcome, locator index, settling, misses and reason, each assertion's ID, outcome, misses, `stopped_at` and reason, and each invariant's name, outcome and total. Never presented: a settle window, a policy event, the confirmation's own infrastructure events and egress blocks, what an invariant saw, and any field a result type gains later. Nothing is copied by reflection (`asdict`, `vars`, `model_dump`).
+- **One predicate.** `withheld` is `not end.record.redactor.empty`. When it holds, `egress` is `{error_code, refused_count, overflowed, hosts_and_ports_withheld: true}` and `infrastructure_events` is `{count, events: null}`. Otherwise `egress` names each refused host and port, as replay's `egress.json` does, and each event keeps its host, port and cause. `egress` is null without a block; an overflow alone is a block.
+- **Three rescans** with the record's redactor: each stop's reason, each copied step or assertion error, and each assembled reason whole, so a value spanning a join is found. A `Redacted` mark doesn't say which run's scan made it.
+- **Provenance.** `ExploreEnd` refuses (`ValueError`, fixed text naming the part) a phase whose record isn't the run record's part of that name by path, run ID, redactor object and journal state (`RunRecord.shares_journals`), and a confirmation result of another run. Replay's own redactor is never compared: replay makes it, and no result carries it.
+- **The sinks.** Explore writes `present(end)` as `explore.json` and its `egress`, when not null, as `egress.json`, through `record.write(name, document, check=require_clean(record.redactor, name))`. The CLI's line reads from that document (#53 P15 to P17; ADR-0024's #53 P12 amendment says what they must hold).
+
+### Consequences and limits
+
+- Explore's documents only. Tool errors and turn records are `aqa_runner.reasons`' (#53 P13, P15), `confirmation/egress.json` is replay's own, and evidence is `aqa_runner.evidence`'s.
+- A copied reason keeps what replay or the graph gave it: in a run that binds a value, the closed vocabulary or fixed text; in one that binds none, `error_text`'s form, which can keep a Playwright message's first line up to 200 characters.
+- Not claimed, as the #53 P9+P10 amendment says: page-written text in a scanned snapshot, a value split across fragments, and what counts, totals and outcomes can encode (`refused_count`, a phase's policy events, an invariant's total).
+- No dependency, paid resource or model call. Tests: `packages/runner/tests/test_explore_result.py`, including a real replay whose malformed status line keeps only h11's error class, bound and unbound.
