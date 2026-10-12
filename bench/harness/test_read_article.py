@@ -12,6 +12,7 @@ import tempfile
 import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import StringIO
 from itertools import count
@@ -154,7 +155,8 @@ def trapped(test: unittest.TestCase, owners: list[Any]) -> list[str]:
 def result(
     *, js: int = 0, console: int = 0, index: int = 0, **checks: AssertionOutcome
 ) -> RunResult:
-    """A replay's result: both steps settled, each check as given or passed."""
+    """A replay's result: both steps settled, each check as given or passed,
+    on its first locator unless unresolved."""
     steps = tuple(
         StepResult(
             n, "completed", locator_index=None if n == 0 else index, settled="idle"
@@ -168,8 +170,10 @@ def result(
         )
         for i in INVARIANTS
     )
+    outcomes = [checks.get(f"a{n}", "pass") for n in range(1, 8)]
     done = tuple(
-        AssertionResult(f"a{n}", checks.get(f"a{n}", "pass")) for n in range(1, 8)
+        AssertionResult(f"a{n}", o, locator_index=None if o == U else 0)
+        for n, o in enumerate(outcomes, 1)
     )
     return RunResult(
         "r",
@@ -632,6 +636,26 @@ class ProofTests(unittest.TestCase):
                 found = (report["exit"], *self.verdict(report))
                 self.assertEqual(found, (generic, 1, ["report.exit"] * generic, failed))
 
+    def test_proof_requires_each_check_on_its_first_locator(self) -> None:
+        def second(run: RunResult, n: int) -> RunResult:
+            """`run`, with check `a<n>` resolved by its second locator."""
+            done = list(run.assertions)
+            done[n - 1] = replace(done[n - 1], locator_index=1)
+            return replace(run, assertions=tuple(done))
+
+        rows: list[tuple[dict[str, list[RunResult]], list[str]]] = [
+            ({"": [second(result(), 1)] * 3}, ["clean"]),
+            ({"4o6x": [second(result(a3=F), 3)]}, BUGS[:1]),
+        ]
+        for answers, failed in rows:
+            with self.subTest(failed=failed):
+                report = self.pilot(answers)
+                found = (report["exit"], *self.verdict(report))
+                self.assertEqual(found, (0, 1, [], failed))
+        path = "pairs.3.attempts.0.assertions.2.locator_index"
+        dropped = edited(self.pilot(), path, DROP)
+        self.assertEqual(self.verdict(dropped), (1, [], BUGS[:1]))
+
     def test_proof_refuses_a_report_that_disagrees_with_the_source(self) -> None:
         report = self.pilot()
         self.assertEqual(self.verdict(report), (0, [], []))
@@ -678,7 +702,7 @@ class ProofTests(unittest.TestCase):
             ("exit", 3, ["report.exit"], []),
             ("repeat", 2, ["report.repeat"], []),
             ("diagnostic", True, ["report.diagnostic"], []),
-            ("assertion_provenance", "complete", ["report.assertion_provenance"], []),
+            ("assertion_provenance", "pending", ["report.extra"], []),
             ("note", FAKE, ["report.extra"], []),
         ]
         for path, value, problems, failed in edits:

@@ -64,7 +64,8 @@ class _Report(StrictModel, extra="ignore"):
 
 def _attempt(pilot: PilotInput, want: Want, run: _Run) -> ObservedAttempt:
     """The attempt that proves `want`, with `run`'s ID and counts: healthy and
-    eligible, each step settled on its first locator, failing exactly `want`."""
+    eligible, each step settled and each check evaluated on its first locator,
+    failing exactly `want`."""
     script, (failed, violated) = pilot.script, want
     settings = pilot.spec.frontmatter.invariants
     off = set(settings.disable) if settings.inherit else set(INVARIANTS)
@@ -74,7 +75,9 @@ def _attempt(pilot: PilotInput, want: Want, run: _Run) -> ObservedAttempt:
         Stepped(n, "completed", "idle", None if n == 0 else 0, (), False) for n in seqs
     )
     checks = tuple(
-        Checked(a.id, "failed" if a.expect_index in failed else "pass", (), None, False)
+        Checked(
+            a.id, "failed" if a.expect_index in failed else "pass", (), None, False, 0
+        )
         for a in script.assertions
     )
     invariants = tuple(
