@@ -306,7 +306,7 @@ def _reasons(end: ExploreEnd, replayed: RunResult | None) -> Iterator[Redacted]:
         if result is None:
             yield scan(f"{check}: never bound")
         elif result.outcome != "pass":
-            yield scan(f"{check}: {_assertion_words(result)}")
+            yield scan(f"{check}: {assertion_words(result)}")
     if replayed is not None:
         yield from map(scan, _confirmation_words(replayed))
 
@@ -317,13 +317,13 @@ def _confirmation_words(replayed: RunResult) -> Iterator[str]:
             yield f"confirmation step {step.seq}: {_step_words(step)}"
     for assertion in replayed.assertions:
         if assertion.outcome != "pass":
-            yield f"confirmation {assertion.id}: {_assertion_words(assertion)}"
+            yield f"confirmation {assertion.id}: {assertion_words(assertion)}"
     for invariant in replayed.invariants:
         if invariant.outcome == "violated":
             yield f"confirmation invariant {invariant.name}: violated"
 
 
-def _assertion_words(result: AssertionResult) -> str:
+def assertion_words(result: AssertionResult) -> str:
     if result.outcome == "binding_unresolved":
         return f"binding_unresolved ({', '.join(result.misses)})"
     if result.outcome == "not_evaluated" and result.error is not None:

@@ -7,7 +7,6 @@ scanned snapshot, as the navigator's tools generate."""
 import asyncio
 import re
 from collections.abc import Awaitable, Callable
-from typing import Any
 
 import pytest
 from aqa_core.compiled import (
@@ -30,8 +29,7 @@ from aqa_runner.locator_generation import (
     seen_element,
 )
 from aqa_runner.redaction import Redactor
-from playwright.async_api import Locator as PlaywrightLocator
-from playwright.async_api import Page, async_playwright
+from playwright.async_api import async_playwright
 from pydantic import SecretStr
 
 from packages.runner.tests.document_fixtures import ref_for
@@ -53,33 +51,6 @@ MEANING = "the element the test acts on"
 
 def spelled(locator: Locator) -> bool:
     return REDACTOR.spells(locator.model_dump(mode="json"))
-
-
-@pytest.fixture
-def handed(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Every selector, text and name pattern Playwright's page and locators
-    are handed from now on."""
-    texts: list[str] = []
-
-    def recording(method: Callable[..., Any]) -> Callable[..., Any]:
-        def recorded(self: object, *args: object, **options: object) -> Any:
-            name = options.get("name")
-            texts.extend(arg for arg in args if isinstance(arg, str))
-            texts.extend([name.pattern] if isinstance(name, re.Pattern) else [])
-            return method(self, *args, **options)
-
-        return recorded
-
-    for kind in (Page, PlaywrightLocator):
-        for method in (
-            "get_by_role",
-            "get_by_label",
-            "get_by_placeholder",
-            "get_by_test_id",
-            "locator",
-        ):
-            monkeypatch.setattr(kind, method, recording(getattr(kind, method)))
-    return texts
 
 
 def generated[T](scenario: Callable[[BrowserSession], Awaitable[T]]) -> T:
