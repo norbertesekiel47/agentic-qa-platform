@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, TypedDict, Unpack
 
 import pytest
+from aqa_core.config import ProjectConfig
 from aqa_core.coverage_plan import CoveragePlan
 from aqa_core.project import SecretDestination
 from aqa_core.schema import Contract
@@ -29,7 +30,7 @@ from playwright.async_api import async_playwright
 from pydantic import SecretStr
 
 from packages.runner.tests.egress_fixtures import gate
-from packages.runner.tests.executor_fixtures import App, read_steps
+from packages.runner.tests.executor_fixtures import App, a_spec, read_steps
 
 # The meanings the form page's elements are acted on under.
 SAVE = "the form's save button"
@@ -69,7 +70,8 @@ class Run(TypedDict, total=False):
     """How an attempt's run is set up, past its start origin: the page it
     starts on (the form by default), its egress gate (one allowing only the
     start origin by default), the secrets it binds, its plan and contracts,
-    and its `resolve_seconds`."""
+    its `resolve_seconds`, and its project config (an empty one by
+    default)."""
 
     page: str
     egress: EgressGate
@@ -77,6 +79,7 @@ class Run(TypedDict, total=False):
     plan: CoveragePlan
     contracts: Mapping[str, Contract | None]
     budget: float
+    config: ProjectConfig
 
 
 def explored[T](
@@ -88,13 +91,17 @@ def explored[T](
     **run: Unpack[Run],
 ) -> T:
     """`scenario`'s result for the attempt of a run whose start origin is
-    `start`, set up as `run` says: the session registers the identity engine
-    first and scans with the run's redactor, its record's attempt part scans
-    with the same, and, once the attempt is made, the page is opened and
-    observed once. `app`, the executor's fixture app, notes the part's
-    journal as each request arrives."""
+    `start`, set up as `run` says, for a spec that starts on its page: the
+    session registers the identity engine first and scans with the run's
+    redactor, its record's attempt part scans with the same, and, once the
+    attempt is made, the page is opened and observed once. `app`, the
+    executor's fixture app, notes the part's journal as each request
+    arrives."""
     secrets = run.get("secrets", ())
     budget = run.get("budget", 5)
+    page = run.get("page", "/page/form")
+    config = run.get("config", ProjectConfig())
+    run_gate = run.get("egress") or gate(allowed=(start,))
     redactor = Redactor(secrets)
     record = RunRecord.create(tmp_path).redacting(redactor).part("attempt-1")
     if app is not None:
@@ -104,7 +111,7 @@ def explored[T](
         async with async_playwright() as playwright:
             await register_identity_engine(playwright)
             async with (
-                EgressProxy(run.get("egress") or gate(allowed=(start,))) as proxy,
+                EgressProxy(run_gate) as proxy,
                 open_browser_session(
                     playwright.chromium, egress=proxy, redactor=redactor
                 ) as session,
@@ -122,8 +129,11 @@ def explored[T](
                     run.get("contracts", {}),
                     {secret.name: secret for secret in secrets},
                     budget,
+                    a_spec(tmp_path, config, start_url=page),
+                    config,
+                    run_gate,
                 )
-                await session.navigate(f"{start}{run.get('page', '/page/form')}")
+                await session.navigate(f"{start}{page}")
                 await attempt.observe()
                 return await scenario(attempt)
 

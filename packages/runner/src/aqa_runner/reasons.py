@@ -11,12 +11,13 @@ predicate replay and explore share, so no caller chooses it.
 In a withheld run an owned reason comes from a closed vocabulary that names no
 origin, host, port, URL or path: a policy refusal names only its kind, and a
 `fill_secret` refusal only the secret and the check that refused it, and a
-`LocatorError`, which can name a tag the page chose, nothing of its own. One
-exception is trusted config: a `field` refusal keeps its description of the
-field the secret's binding names (`secret_fields.describe_field`), and a
-refused binding names its subject contract, which the project config writes
-and the page never does. Outside a withheld run every owned reason keeps its
-own message, origins included."""
+`LocatorError`, which can name a tag the page chose, nothing of its own,
+unless it is a negative check's (`NegativeCheckError`): fixed words after the
+frozen plan's target meaning. One exception is trusted config: a `field`
+refusal keeps its description of the field the secret's binding names
+(`secret_fields.describe_field`), and a refused binding names its subject
+contract, which the project config writes and the page never does. Outside a
+withheld run every owned reason keeps its own message, origins included."""
 
 from typing import Literal
 
@@ -30,7 +31,11 @@ from aqa_runner.document_origins import (
     PolicyEventError,
 )
 from aqa_runner.egress import EgressRefusedError, EgressUpstreamError
-from aqa_runner.locator_generation import BindingRefusedError, LocatorError
+from aqa_runner.locator_generation import (
+    BindingRefusedError,
+    LocatorError,
+    NegativeCheckError,
+)
 from aqa_runner.redaction import Redacted, Redactor, error_text
 from aqa_runner.run_record import RefusedWriteError
 from aqa_runner.secret_fields import SecretNotFilledError, SecretRefusedError
@@ -141,7 +146,11 @@ def _owned(error: Raised, *, withheld: bool) -> str | None:
     for kind, text in _FIXED:
         if isinstance(error, kind):
             return text
-    if withheld and isinstance(error, LocatorError):
+    if (
+        withheld
+        and isinstance(error, LocatorError)
+        and not isinstance(error, NegativeCheckError)
+    ):
         return f"no locator could be generated for this element {_ORIGIN_WITHHELD}"
     if withheld and isinstance(error, PolicyEventError):
         refused = REFUSED_BY_KIND[error.event.kind]
