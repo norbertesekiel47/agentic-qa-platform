@@ -161,6 +161,9 @@ def test_one_fallback_finding_a_visible_element_fails_a_negative_use() -> None:
     escaping = contracted({"css": ":scope + div.container.page span.counter"})
     outside = Unresolved(("outside region",))
     assert looks(HIDDEN, escaping) == (outside, outside)
+    # A visible part with a child under a leaf contract is a binding miss.
+    not_leaf = REGIONS.replace(">(3)<", "><b>(3)</b><")
+    assert looks(not_leaf, BOTH) == (Unresolved(("not a leaf",) * 2),) * 2
 
 
 def test_a_visible_match_hidden_after_its_count_still_fails_under_every_locator(
@@ -381,8 +384,8 @@ class _Spied:
 
 
 def spied(monkeypatch: pytest.MonkeyPatch, case: str) -> _Spied:
-    """Spy on handles with `case`'s failure planted: the second found
-    handle's release fails or blocks, or the first identity read blocks."""
+    """Spy on handles with `case`'s failure planted: the second found handle's
+    release fails or blocks, or the first identity read blocks (its drop failing)."""
     spy = _Spied()
     element_handles = PlaywrightLocator.element_handles
     dispose = JSHandle.dispose
@@ -407,9 +410,11 @@ def spied(monkeypatch: pytest.MonkeyPatch, case: str) -> _Spied:
     async def querying(self: ElementHandle, selector: str) -> list[ElementHandle]:
         verb = selector.removeprefix("aqa-binding=").partition(":")[0]
         spy.reads.append(verb)
-        if verb == "is" and case == "cancelled identity read":
+        if verb == "is" and case.startswith("cancelled identity read"):
             spy.blocked.set()
             await asyncio.sleep(3600)
+        if verb == "drop" and case.endswith("failed drop"):
+            raise Error("fake drop failure")
         return await query_selector_all(self, selector)
 
     monkeypatch.setattr(PlaywrightLocator, "element_handles", finding)
@@ -419,7 +424,14 @@ def spied(monkeypatch: pytest.MonkeyPatch, case: str) -> _Spied:
 
 
 @pytest.mark.parametrize(
-    "case", ["clean", "fails", "cancelled release", "cancelled identity read"]
+    "case",
+    [
+        "clean",
+        "fails",
+        "cancelled release",
+        "cancelled identity read",
+        "cancelled identity read, failed drop",
+    ],
 )
 def test_every_locator_releases_each_handle_it_found_on_every_exit(
     monkeypatch: pytest.MonkeyPatch, case: str
@@ -434,14 +446,16 @@ def test_every_locator_releases_each_handle_it_found_on_every_exit(
         if case.startswith("cancelled"):
             await spy.blocked.wait()
             look.cancel()
-        [outcome] = await asyncio.gather(look, return_exceptions=True)
+        # Awaited, not gathered: gather rebuilds a cancellation without its cause.
+        try:
+            found = await look
+        except (Error, asyncio.CancelledError) as error:
+            failure = (type(error), str(error), repr(error.__cause__))
+            return failure, look.cancelled(), len(spy.found), sorted(spy.released)
         # What the look released, before the caller lets go of what it kept.
         released = sorted(spy.released)
-        if isinstance(outcome, BaseException):
-            failure = (type(outcome), str(outcome))
-            return failure, look.cancelled(), len(spy.found), released
-        assert outcome == Resolved(0, spy.found[0])
-        return await plain(outcome), look.cancelled(), len(spy.found), released
+        assert found == Resolved(0, spy.found[0])
+        return await plain(found), look.cancelled(), len(spy.found), released
 
     outcome = on(BUTTONS, scenario)
     if case == "clean":
@@ -450,11 +464,12 @@ def test_every_locator_releases_each_handle_it_found_on_every_exit(
         assert spy.reads == ["hold", "is", "drop", "hold", "is", "drop"]
         return
     # Nothing after the failure is looked for, and both handles found are
-    # released once each.
+    # released once each; a cancellation stays raised, a failed drop its cause.
     if case == "fails":
-        assert outcome == ((Error, "fake dispose failure"), False, 2, [0, 1])
+        assert outcome == ((Error, "fake dispose failure", "None"), False, 2, [0, 1])
     else:
-        assert outcome == ((asyncio.CancelledError, ""), True, 2, [0, 1])
+        cause = repr(Error("fake drop failure")) if "drop" in case else "None"
+        assert outcome == ((asyncio.CancelledError, "", cause), True, 2, [0, 1])
     assert spy.reads == ["hold", "is", "drop"]
 
 
