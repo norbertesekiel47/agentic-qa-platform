@@ -1,32 +1,51 @@
-"""The navigator's action tools (ADR-0024's #53 P13 amendment): one
+"""The navigator's tools (ADR-0024's #53 P13 and P14 amendments): one
 attempt's seven actions through its browser session, each dispatched as
-replay dispatches a step (`executor.dispatched`). A call refused before its
-intent is a tool error the attempt survives; a step dispatched without its
-completion on disk ends the attempt. Every text a tool returns is
-fixed words and `aqa_runner.reasons`' reasons, scanned again."""
+replay dispatches a step (`executor.dispatched`), and its three check tools,
+which bind each planned check to its target, evaluate it as the confirmation
+will, and compile the path. A call refused before its intent is a tool error
+the attempt survives; a step dispatched without its completion on disk ends
+the attempt, and no tool does any work after it. Every text a tool returns
+is fixed words, plan text and `aqa_runner.reasons`' reasons, scanned
+again."""
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 
-from aqa_core.compiled import Locator, Target
-from aqa_core.compiler import PathStep
-from aqa_core.coverage_plan import CoveragePlan, planned_checks
+from aqa_core.compiled import CompiledScript, Locator, Target
+from aqa_core.compiler import (
+    CompileError,
+    ExploredPath,
+    PathStep,
+    Provenance,
+    assertion_for,
+    compile_script,
+)
+from aqa_core.config import ProjectConfig
+from aqa_core.coverage_plan import CoveragePlan, PlannedCheck, planned_checks
 from aqa_core.project import path_on_origin
 from aqa_core.schema import Contract
+from aqa_core.spec import Spec
 from playwright.async_api import Error
 
 from aqa_runner import evaluation, executor, reasons
 from aqa_runner.bound_secrets import BoundSecret
 from aqa_runner.browser_session import BrowserSession, RefError, one_key
 from aqa_runner.document_origins import DocumentChangedError, PolicyEventError
+from aqa_runner.egress import EgressGate
+from aqa_runner.evaluation import AssertionResult, Evaluation, evaluate_each
+from aqa_runner.explore_result import assertion_words
 from aqa_runner.locator_generation import LocatorError, TargetUses, seen_element
 from aqa_runner.navigator import (
     TOOLS,
+    AssertCheck,
+    Call,
     Click,
     Fill,
     FillSecret,
+    Finish,
     Navigate,
+    NoteForAbsence,
     Press,
     Reload,
     Select,
@@ -61,6 +80,9 @@ _REFUSED = (
     Error,
 )
 
+# The checks exploring can't bind until #53 P20.
+_PROBES = frozenset({"probe_equals", "probe_equals_baseline"})
+
 
 @dataclass(frozen=True)
 class ActionResult:
@@ -71,15 +93,54 @@ class ActionResult:
     text: Redacted
 
 
+@dataclass(frozen=True)
+class Finished:
+    """What `finish` did: the unconfirmed script, when every bound check
+    passes on the page now and the path compiled, else None; and the text
+    the model reads of it."""
+
+    script: CompiledScript | None
+    text: Redacted
+
+
+@dataclass(frozen=True)
+class _Bound:
+    """A planned check's binding: the target it reads, or None for a check
+    that reads no element, and its last evaluation in the attempt."""
+
+    target: Target | None
+    result: AssertionResult
+
+
+def _misfit(call: AssertCheck, check: PlannedCheck) -> str | None:
+    """Why `call` can't bind `check` as written."""
+    named = call.check_id
+    if check.check in _PROBES:
+        return f"{named} is a {check.check} check, which exploring can't bind yet"
+    if check.check == "not_visible" and call.ref is not None:
+        return (
+            f"{named} is a not_visible check: note its element with "
+            "note_for_absence while it shows, then call assert_check with no ref "
+            "once it is gone"
+        )
+    if check.target_meaning is None and call.ref is not None:
+        return f"{named} reads no element: call it with no ref"
+    if check.check != "not_visible" and check.target_meaning and call.ref is None:
+        return f"{named} reads an element: call it with the ref of the element it reads"
+    return None
+
+
 @dataclass
 class Attempt:
     """One attempt of an explore run: its session, its record part, the
     run's start origin and frozen plan, each planned meaning's contract
     (`contracts_by_meaning`), the secrets it binds and its `budget`, the
-    run's `resolve_seconds`. It keeps its completed actions by step number, as
-    compiling takes them (`ExploredPath`), and its last observation. A run
-    whose admission couldn't keep its secrets is `ValueError`, before any
-    use of the browser."""
+    run's `resolve_seconds`, and the spec, project config and egress gate
+    its checks are evaluated and compiled with. It keeps its completed
+    actions by step number, as compiling takes them (`ExploredPath`), its
+    last observation, and each planned check's binding: the target it reads
+    and its last evaluation. A run whose admission couldn't keep its secrets
+    is `ValueError`, before any use of the browser."""
 
     session: BrowserSession
     record: RunRecord
@@ -88,9 +149,13 @@ class Attempt:
     contracts: Mapping[str, Contract | None]
     secrets: Mapping[str, BoundSecret]
     budget: float
+    spec: Spec
+    config: ProjectConfig
+    gate: EgressGate
     steps: dict[int, PathStep] = field(init=False, default_factory=dict)
     observation: Redacted | None = field(init=False, default=None)
     _uses: dict[str, TargetUses] = field(init=False, default_factory=dict)
+    _bound: dict[str, _Bound] = field(init=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         redactor = self.session.redactor
@@ -122,6 +187,15 @@ class Attempt:
         """Whether a step was dispatched with no completion on disk."""
         return bool(self.record.unresolved())
 
+    @property
+    def checks(self) -> dict[str, AssertionResult | None]:
+        """Each planned check by ID, with its last evaluation in the attempt,
+        or None while it was never bound (`ExploreEnd.checks`)."""
+        return {
+            check_id: self._bound[check_id].result if check_id in self._bound else None
+            for check_id in planned_checks(self.plan)
+        }
+
     def uses(self, meaning: str) -> TargetUses:
         """The targets `meaning` gets across its uses, under its subject
         contract, none spelling a bound value."""
@@ -139,16 +213,12 @@ class Attempt:
 
     async def act(self, call: Action) -> ActionResult:
         """Run `call`: nothing once the attempt has ended; then its arguments
-        checked (`_unfit`), and everything else before its intent
-        (`_prepared`); then its intent, action, settling and completion. A
-        record that can't write its line raises, as does a cancellation."""
+        checked (`_unrunnable`, `_unfit`), and everything else before its
+        intent (`_prepared`); then its intent, action, settling and
+        completion. A record that can't write its line raises, as does a
+        cancellation."""
         tool = _TOOL[type(call)]
-        if pending := self.record.unresolved():
-            return self._refused(
-                f"{tool} did not run: this attempt has ended, since step "
-                f"{pending[0].seq} was dispatched and its completion isn't on disk"
-            )
-        if problem := self._unfit(tool, call):
+        if problem := self._unrunnable(tool, call) or self._unfit(call):
             return self._refused(problem)
         try:
             target, action = await self._prepared(call)
@@ -188,6 +258,83 @@ class Attempt:
             )
         return self._refused(f"{tool} did not run: {step.error}")
 
+    async def check(self, call: AssertCheck) -> Redacted:
+        """`assert_check`: bind the planned check to the element `call.ref`
+        names, through its meaning's targets (`uses`), or to none, then
+        evaluate it once on the page now. A binding is kept whatever its
+        outcome; a refusal binds nothing and changes no earlier binding."""
+        if problem := self._unrunnable("assert_check", call):
+            return self._said(problem)
+        _, check = planned_checks(self.plan)[call.check_id]
+        if problem := _misfit(call, check):
+            return self._said(f"assert_check did not run: {problem}")
+        try:
+            target = await self._target(call, check)
+        except _REFUSED as error:
+            reason = reasons.reason(error, self.session.redactor)
+            return self._said(f"assert_check did not run: {reason}")
+        (result,) = await self._kept({call.check_id: target})
+        return self._said(
+            f"{call.check_id} is bound, and on this page it is {assertion_words(result)}"
+        )
+
+    async def note(self, call: NoteForAbsence) -> Redacted:
+        """`note_for_absence`: generate, from the element `call.ref` names
+        while it shows, the locators a later `assert_check` of the
+        not_visible check starts from, under the check's subject contract."""
+        if problem := self._unrunnable("note_for_absence", call):
+            return self._said(problem)
+        _, check = planned_checks(self.plan)[call.check_id]
+        meaning = check.target_meaning
+        if check.check != "not_visible" or meaning is None:
+            return self._said(
+                f"note_for_absence did not run: {call.check_id} is a {check.check} "
+                "check, and it notes only a not_visible check's element"
+            )
+        try:
+            seen = await seen_element(self.session, self.observation or "", call.ref)
+            async with self.session.observing_page() as page:
+                await self.uses(meaning).see_for_negative_check(page, seen)
+        except _REFUSED as error:
+            reason = reasons.reason(error, self.session.redactor)
+            return self._said(f"note_for_absence did not run: {reason}")
+        return self._said(
+            f"{call.check_id}'s element is noted where it shows: call assert_check "
+            f"for {call.check_id} with no ref once it is gone"
+        )
+
+    async def finish(self, call: Finish, by: Provenance) -> Finished:
+        """`finish`: evaluate every bound check on the page now, keeping each
+        result, then compile the steps `call` keeps and the bound checks
+        (`compile_script`). Every check that doesn't pass and every compile
+        problem are one tool error the attempt survives."""
+        if problem := self._unrunnable("finish", call):
+            return Finished(None, self._said(problem))
+        bound = {check_id: each.target for check_id, each in self._bound.items()}
+        failing = [
+            f"{result.id} is {assertion_words(result)}"
+            for result in await self._kept(bound)
+            if result.outcome != "pass"
+        ]
+        problems = [f"on this page {'; '.join(failing)}"] if failing else []
+        try:
+            script = compile_script(
+                self.spec,
+                self.config,
+                self.plan,
+                ExploredPath(self.steps, call.steps, bound),
+                by,
+            )
+        except CompileError as error:
+            problems.extend(error.problems)
+        if problems:
+            text = "; ".join(problems)
+            return Finished(None, self._said(f"finish compiled nothing: {text}"))
+        return Finished(
+            script,
+            self._said("finish compiled the path, and every check passes on this page"),
+        )
+
     async def observe(self) -> Redacted:
         """The page's snapshot, kept as the observation: taken again while
         the page changes under it, at most `LOOKS` times, all within one
@@ -224,14 +371,29 @@ class Attempt:
     def _refused(self, text: str) -> ActionResult:
         return ActionResult(None, self._said(text))
 
-    def _unfit(self, tool: str, call: Action) -> str | None:
-        """Why `call` can't run as written, never quoting a bound value."""
+    def _unrunnable(self, tool: str, call: Call) -> str | None:
+        """Why `call` can't run at all, never quoting a bound value: the
+        attempt has ended, an argument spells a bound value, or it names a
+        check the plan doesn't have."""
+        if pending := self.record.unresolved():
+            return (
+                f"{tool} did not run: this attempt has ended, since step "
+                f"{pending[0].seq} was dispatched and its completion isn't on disk"
+            )
         for name, value in call.model_dump(mode="json").items():
             if self.session.redactor.spells(value):
                 hint = "; fill a secret with fill_secret" if name == "text" else ""
                 return (
                     f"{tool} did not run: its {name} holds a test secret's value{hint}"
                 )
+        if isinstance(call, AssertCheck | NoteForAbsence) and (
+            call.check_id not in planned_checks(self.plan)
+        ):
+            return f"{tool} did not run: the plan has no check {call.check_id}"
+        return None
+
+    def _unfit(self, call: Action) -> str | None:
+        """Why the action `call` can't run as written."""
         if isinstance(call, Press) and not one_key(call.key):
             return (
                 "press did not run: it takes one key, with only modifiers held "
@@ -280,6 +442,60 @@ class Attempt:
         secret = self.secrets[call.name]
         await session.secret_refusal(element, secret)
         return target, lambda: session.fill_secret(element, secret)
+
+    async def _target(self, call: AssertCheck, check: PlannedCheck) -> Target | None:
+        """The target `check` reads: none for a check that reads no element;
+        a not_visible check's, where its element was noted; else the one the
+        element `call.ref` names gets."""
+        if check.target_meaning is None:
+            return None
+        uses = self.uses(check.target_meaning)
+        if call.ref is None:
+            async with self.session.observing_page() as page:
+                index = await uses.add_negative_check(page)
+        else:
+            seen = await seen_element(self.session, self.observation or "", call.ref)
+            async with self.session.observing_page() as page:
+                index = await uses.add(page, seen, "assertion")
+        return uses.targets[index]
+
+    async def _kept(
+        self, bindings: Mapping[str, Target | None]
+    ) -> tuple[AssertionResult, ...]:
+        """Evaluate each binding's check once on the page now, in plan order,
+        with every locator of its target, as the confirmation does
+        (`evaluate_each`), and keep the binding with its result."""
+        plan = planned_checks(self.plan)
+        ordered = [check_id for check_id in plan if check_id in bindings]
+        targets = {
+            check_id: target
+            for check_id in ordered
+            if (target := bindings[check_id]) is not None
+        }
+        assertions = [
+            assertion_for(
+                check_id,
+                *plan[check_id],
+                target=check_id if check_id in targets else None,
+            )
+            for check_id in ordered
+        ]
+        results = await evaluate_each(
+            self.session,
+            assertions,
+            Evaluation(
+                targets,
+                self.spec,
+                self.start,
+                self.gate,
+                self.budget,
+                self.session.redactor,
+                every_locator=True,
+            ),
+        )
+        for result in results:
+            self._bound[result.id] = _Bound(bindings[result.id], result)
+        return results
 
 
 def _fields(call: Action) -> dict[str, str]:

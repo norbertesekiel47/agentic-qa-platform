@@ -202,6 +202,12 @@ class LocatorError(LookupError):
     """No locator of the grammar finds the element, alone, for the use."""
 
 
+class NegativeCheckError(LocatorError):
+    """A negative check that can't be judged, or whose element still shows:
+    fixed words after the plan's meaning, never page text, so a run that
+    binds a secret keeps them (ADR-0026's #53 P14 amendment)."""
+
+
 class BindingRefusedError(LocatorError):
     """The element a use offered isn't its subject (ADR-0025's #53 P7b-II
     amendment): `reason` is the verdict's fixed reason, never page text, and
@@ -735,14 +741,16 @@ class TargetUses:
         visible in it."""
         with self._named():
             if not self._seen:
-                raise LocatorError("it wasn't seen before its negative check")
+                raise NegativeCheckError("it wasn't seen before its negative check")
             kept = await _first_absent(page, self._seen, self.contract)
             joins = bool(self._targets) and await self._holds(
                 "negative_check", lambda locator: _absent(page, locator, self.contract)
             )
             if not joins:
                 if not kept:
-                    raise LocatorError("no scope it was seen under is on the page")
+                    raise NegativeCheckError(
+                        "no scope it was seen under is on the page"
+                    )
                 self._start(kept)
         return len(self._targets) - 1
 
@@ -773,11 +781,17 @@ class TargetUses:
 
     @contextmanager
     def _named(self) -> Iterator[None]:
-        """A `LocatorError` raised in the block names the meaning."""
+        """A `LocatorError` raised in the block names the meaning, and keeps
+        its kind when it is a negative check's."""
         try:
             yield
         except LocatorError as error:
-            raise LocatorError(f"{self.meaning}: {error}") from error
+            kind = (
+                NegativeCheckError
+                if isinstance(error, NegativeCheckError)
+                else LocatorError
+            )
+            raise kind(f"{self.meaning}: {error}") from error
 
     def _allows(self, locator: Locator, use: Use) -> bool:
         """Whether the grammar lets `locator` find the target for `use`: an
@@ -813,8 +827,8 @@ type _Look = Literal["absent", "shown", "no scope", "broken"]
 
 async def _look(page: Page, locator: Locator, contract: Contract | None) -> _Look:
     """What `locator`, alone, finds on the page now, as a negative check
-    counts. Raises `LocatorError` when its contract's region isn't the
-    region selector's one match: that proves nothing absent."""
+    counts. Raises `NegativeCheckError` when its contract's region isn't
+    the region selector's one match: that proves nothing absent."""
 
     async def look() -> _Look:
         found = await resolve(page, _alone(locator, contract), "negative_check")
@@ -824,7 +838,7 @@ async def _look(page: Page, locator: Locator, contract: Contract | None) -> _Loo
             await found.element.dispose()
             return "shown"
         if found.misses == ("no region",):
-            raise LocatorError("its region is not on the page exactly once")
+            raise NegativeCheckError("its region is not on the page exactly once")
         return "no scope" if found.misses == ("no scope",) else "shown"
 
     return await _unless_the_page_breaks(page, look(), "broken")
@@ -839,20 +853,23 @@ async def _first_absent(
 ) -> tuple[Locator, ...]:
     """Of each kind, the first locator seen whose scope is on the page with
     nothing visible in it. Every locator seen is looked at, the broader ones
-    too: one that finds something visible in its scope raises `LocatorError`,
-    as the element is still shown, and so does a look the page breaks."""
+    too: one that finds something visible in its scope raises
+    `NegativeCheckError`, as the element is still shown, and so does a look
+    the page breaks."""
     kept: list[Locator] = []
     for found in seen:
         first: Locator | None = None
         for locator in found:
             look = await _look(page, locator, contract)
             if look == "shown":
-                raise LocatorError(
+                raise NegativeCheckError(
                     "it is still shown: a locator it was seen by finds "
                     "something visible in its scope"
                 )
             if look == "broken":
-                raise LocatorError("the page broke the look at its negative check")
+                raise NegativeCheckError(
+                    "the page broke the look at its negative check"
+                )
             if look == "absent" and first is None:
                 first = locator
         if first is not None:
