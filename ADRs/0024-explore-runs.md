@@ -572,6 +572,7 @@ The navigator's check tools (#53) evaluate one planned check at a time on the at
   - *Chosen: 2.* The navigator evaluates one check at a time, long after any first look, so the precondition must travel with the check. Replay's assertions go through the same function, one by one, and stop at the first look that raises, as before.
   - *What changes for replay:* a page that answers for the first assertion and stops before the second used to let the second pass when it read only recorded traffic or a probe; now the second is `not_evaluated` with its reason, every later one names it, and the run is `errored`. After a page that never answered, the first assertion carries the reason and the later ones name it, where each used to repeat it. Each assertion costs one more read of the page's visible text.
 - **No dependency, paid resource or model call.** Tests: `packages/runner/tests/test_evaluate.py`, and `test_executor_runs.py`'s two tests of a page that stops answering.
+- **Moved (2026-10-12, #53 P11).** The seam, `Evaluation` and `AssertionResult` are in `aqa_runner.evaluation` now, unchanged; the executor imports them.
 
 ## Amendment (2026-10-12): explore's final outcome and non-resumable runs (#53 P12)
 
