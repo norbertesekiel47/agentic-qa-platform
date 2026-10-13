@@ -1,4 +1,4 @@
-"""`aqa_runner.executor.evaluate`, one assertion on a browser session as it
+"""`aqa_runner.evaluation.evaluate`, one assertion on a browser session as it
 stands (ADR-0024's #53 P9+P10 amendment): each outcome DATA_MODEL §7 names,
 and nothing evaluated on a page that is off the run's allowed origins or
 has stopped answering, whatever the check reads. The browser tests launch
@@ -16,7 +16,7 @@ from aqa_runner import probes
 from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.document_origins import PolicyEvent
 from aqa_runner.egress_proxy import EgressProxy
-from aqa_runner.executor import AssertionResult, Evaluation, evaluate
+from aqa_runner.evaluation import AssertionResult, Evaluation, evaluate
 from aqa_runner.redaction import NO_SECRETS, Redactor
 from playwright.async_api import async_playwright
 

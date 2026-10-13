@@ -8,7 +8,8 @@ from typing import Any
 from aqa_core.compiled import CompiledScript
 from aqa_core.spec import Invariants
 from aqa_runner.egress_proxy import EgressBlocks
-from aqa_runner.executor import AssertionResult, RunResult, StepResult
+from aqa_runner.evaluation import AssertionResult
+from aqa_runner.executor import RunResult, StepResult
 from aqa_runner.invariants import INVARIANTS, InvariantResult
 from manifest import DRIFT, VIOLATED, Expected
 from pilot_replay import AttemptHealth, FailedAttempt, ObservedAttempt

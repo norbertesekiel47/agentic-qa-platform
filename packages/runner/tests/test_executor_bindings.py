@@ -13,8 +13,8 @@ from aqa_core.compiled import Target
 from aqa_core.config import ProjectConfig
 from aqa_runner import text_search
 from aqa_runner.browser_session import BrowserSession
-from aqa_runner.executor import AssertionOutcome
-from aqa_runner.executor import AssertionResult as R
+from aqa_runner.evaluation import AssertionOutcome
+from aqa_runner.evaluation import AssertionResult as R
 from aqa_runner.locators import Absent, Resolved, Unresolved, Use
 from playwright.async_api import Error
 

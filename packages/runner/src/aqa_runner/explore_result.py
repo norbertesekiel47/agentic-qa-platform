@@ -32,7 +32,8 @@ from typing import Final, Literal
 
 from aqa_runner.egress import InfrastructureEvent
 from aqa_runner.egress_proxy import EgressBlocks, PhaseTraffic
-from aqa_runner.executor import AssertionResult, RunResult, StepResult
+from aqa_runner.evaluation import AssertionResult
+from aqa_runner.executor import RunResult, StepResult
 from aqa_runner.redaction import Redacted, Redactor
 from aqa_runner.run_record import PARTS, PendingIntent, RunRecord
 

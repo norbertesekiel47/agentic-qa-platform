@@ -31,7 +31,8 @@ from aqa_core.coverage_plan import CoveragePlan, misfits, plan_hash, planned_che
 from aqa_core.schema import Contract
 from aqa_core.spec import canonical_hash
 from aqa_runner.egress_proxy import EgressBlocks
-from aqa_runner.executor import AssertionOutcome, AssertionResult, RunResult, StepResult
+from aqa_runner.evaluation import AssertionOutcome, AssertionResult
+from aqa_runner.executor import RunResult, StepResult
 from aqa_runner.invariants import INVARIANTS, InvariantResult
 from pilot_inputs import PilotInput, load_pilots, validate_pilot
 from pilot_rebinding import apply_rebinding
