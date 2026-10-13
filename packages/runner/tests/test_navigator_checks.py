@@ -107,7 +107,9 @@ CHECK_PAGES = {
     # Two statuses; a button changes only the second.
     "ready": """<p id="first">Ready</p><p id="second">Ready</p>
         <button onclick="document.querySelector('#second').textContent = 'Gone'">
-        Change</button>""",
+        Change</button>
+        <button onclick="document.querySelector('#first').textContent = 'Gone'">
+        Change the first</button>""",
     "article": ARTICLE,
     "article-hiding": ARTICLE
     + REMOVES.format("div.banner app-favorite-button > button", "Hide it"),
@@ -411,14 +413,16 @@ def test_note_for_absence_binds_the_agents_element_where_it_was_seen(
 
     async def scenario(attempt: Attempt) -> list[object]:
         link = ref(attempt, "link", "Sign in")
+        unknown = await attempt.note(NoteForAbsence(check_id="a9", ref=link))
         wrong = await attempt.note(NoteForAbsence(check_id="a2", ref=link))
         note = await noted_link(attempt)
         await clicked(attempt, "Sign in now")
         gone = await attempt.check(AssertCheck(check_id="a1", ref=None))
-        await attempt.check(AssertCheck(check_id="a2", ref=None))
+        own = ref(attempt, "link", "Sign in")
+        await attempt.check(AssertCheck(check_id="a2", ref=own))
         finished = await attempt.finish(Finish(steps=(1,)), BY)
         targets = attempt.uses(LINK).targets
-        return [wrong, note, gone, attempt.checks, targets, finished.text]
+        return [unknown, wrong, note, gone, attempt.checks, targets, finished.text]
 
     # The page's own Sign in link still shows: only the header's is gone.
     assert on_app(
@@ -428,17 +432,25 @@ def test_note_for_absence_binds_the_agents_element_where_it_was_seen(
         page="/page/both-links",
         plan=plan(
             {"check": "not_visible", "target_meaning": LINK},
-            {"check": "url_matches", "pattern": "/page/both-links$"},
+            {
+                "check": "text_in_target",
+                "target_meaning": "the page's own Sign in link",
+                "text": "Sign in",
+            },
         ),
     ) == [
+        "note_for_absence did not run: the plan has no check a9",
         (
-            "note_for_absence did not run: a2 is a url_matches check, and it notes "
-            "only a not_visible check's element"
+            "note_for_absence did not run: a2 is a text_in_target check, and it "
+            "notes only a not_visible check's element"
         ),
         NOTED,
         "a1 is bound, and on this page it is pass",
-        # Absence resolves no element, so no locator's index is kept.
-        {"a1": AssertionResult("a1", "pass"), "a2": AssertionResult("a2", "pass")},
+        {
+            # Absence resolves no element, so no locator's index is kept.
+            "a1": AssertionResult("a1", "pass"),
+            "a2": AssertionResult("a2", "pass", locator_index=0),
+        },
         (HEADER_LINK,),
         COMPILED,
     ]
@@ -810,7 +822,11 @@ def test_finish_judges_every_bound_check_not_only_the_first(
         refused = told(await attempt.finish(Finish(steps=(1,)), BY))
         checks = attempt.checks
         both = told(await attempt.finish(Finish(steps=(1, 7)), BY))
-        return [bound_now, refused, checks, both]
+        await attempt.act(
+            Click(ref=ref(attempt, "button", "Change the first"), meaning="the first")
+        )
+        each = told(await attempt.finish(Finish(steps=(1, 2)), BY))
+        return [bound_now, refused, checks, both, each]
 
     assert on_app(
         app,
@@ -842,6 +858,8 @@ def test_finish_judges_every_bound_check_not_only_the_first(
                 "step 7, which the attempt never took"
             ),
         ),
+        # Every check that fails, in plan order.
+        (None, "finish compiled nothing: on this page a1 is failed; a2 is failed"),
     ]
 
 
