@@ -1,10 +1,12 @@
 """Fixtures for the model router's tests: a local stand-in for HTTP APIs, a clean
 slate for the tracing switches the tests flip (SECURITY §10), and VCR cassettes
-for the Anthropic adapter (TESTING §4)."""
+for the Anthropic adapter (TESTING §4). Also, for the tests of the bound-value
+drop, a record of what Playwright is handed."""
 
 import hashlib
 import json
 import os
+import re
 import shutil
 import socketserver
 import threading
@@ -22,6 +24,8 @@ from aqa_core.model_roles import RoutedModel, resolve_roles
 from aqa_core.price_map import vendored
 from aqa_core.project import load_config
 from langsmith.utils import get_env_var
+from playwright.async_api import Locator as PlaywrightLocator
+from playwright.async_api import Page
 from vcr import VCR
 from vcr.errors import CannotOverwriteExistingCassetteException
 
@@ -101,6 +105,33 @@ def serve() -> Iterator[Callable[..., Endpoint]]:
     for server in servers:
         server.shutdown()
         server.server_close()
+
+
+@pytest.fixture
+def handed(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Every selector, text and name pattern Playwright's page and locators
+    are handed from now on."""
+    texts: list[str] = []
+
+    def recording(method: Callable[..., Any]) -> Callable[..., Any]:
+        def recorded(self: object, *args: object, **options: object) -> Any:
+            name = options.get("name")
+            texts.extend(arg for arg in args if isinstance(arg, str))
+            texts.extend([name.pattern] if isinstance(name, re.Pattern) else [])
+            return method(self, *args, **options)
+
+        return recorded
+
+    for kind in (Page, PlaywrightLocator):
+        for method in (
+            "get_by_role",
+            "get_by_label",
+            "get_by_placeholder",
+            "get_by_test_id",
+            "locator",
+        ):
+            monkeypatch.setattr(kind, method, recording(getattr(kind, method)))
+    return texts
 
 
 def clear_env_cache() -> None:
