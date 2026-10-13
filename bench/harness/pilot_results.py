@@ -5,8 +5,8 @@ from typing import NamedTuple
 
 from aqa_core.compiled import CompiledScript
 from aqa_core.spec import InvariantName, Invariants
+from aqa_runner.evaluation import AssertionOutcome
 from aqa_runner.executor import (
-    AssertionOutcome,
     ErrorCode,
     RunOutcome,
     RunResult,

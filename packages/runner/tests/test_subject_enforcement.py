@@ -25,7 +25,8 @@ from aqa_runner.binding import Refused, binding_verdict
 from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.document_origins import DocumentChangedError
 from aqa_runner.egress_proxy import EgressProxy
-from aqa_runner.executor import AssertionResult, RunResult, RunSetup, replay
+from aqa_runner.evaluation import AssertionResult
+from aqa_runner.executor import RunResult, RunSetup, replay
 from aqa_runner.locator_generation import (
     BindingRefusedError,
     LocatorError,

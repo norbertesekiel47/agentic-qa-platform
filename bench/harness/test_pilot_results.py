@@ -12,7 +12,8 @@ from aqa_core.spec import InvariantName, Invariants
 from aqa_runner.document_origins import PolicyEvent
 from aqa_runner.egress import InfrastructureEvent
 from aqa_runner.egress_proxy import EgressBlocks, RefusedHost
-from aqa_runner.executor import AssertionResult, RunResult, StepResult
+from aqa_runner.evaluation import AssertionResult
+from aqa_runner.executor import RunResult, StepResult
 from aqa_runner.invariants import InvariantResult
 from aqa_runner.settling import PageRequest, Window
 from manifest import Expected

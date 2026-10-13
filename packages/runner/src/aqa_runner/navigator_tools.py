@@ -16,7 +16,7 @@ from aqa_core.project import path_on_origin
 from aqa_core.schema import Contract
 from playwright.async_api import Error
 
-from aqa_runner import executor, reasons
+from aqa_runner import evaluation, executor, reasons
 from aqa_runner.bound_secrets import BoundSecret
 from aqa_runner.browser_session import BrowserSession, RefError, one_key
 from aqa_runner.document_origins import DocumentChangedError, PolicyEventError
@@ -202,7 +202,7 @@ class Attempt:
                         return await self._observed()
                     except DocumentChangedError:
                         changed = True
-                    await asyncio.sleep(executor.LOOK_SECONDS)
+                    await asyncio.sleep(evaluation.LOOK_SECONDS)
                 return await self._observed()
         except TimeoutError:
             if not limit.expired():
