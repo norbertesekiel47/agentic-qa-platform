@@ -147,10 +147,10 @@ def test_every_locator_is_checked_at_every_use_of_a_target(
     clicked = script([SAVE[0], {"css": "button.primary"}], text, steps=(CLICK,))
 
     assert outcomes(app, tmp_path, clicked, page) == [
-        # The click dispatched; the check's look then found two buttons.
         (a1("binding_unresolved", NOT_UNANIMOUS), "failed"),
         (a1("pass", locator_index=0), "passed"),
     ]
+    assert [path for path, _ in app.bodies] == ["/write/save"] * 2
 
 
 def test_the_action_is_dispatched_once_under_every_locator(

@@ -199,7 +199,7 @@ async def _held(
             return await url_matches(pattern, await bounded(session.url(), budget))
         case NotVisible(target=name):
             return await bounded(_absent(session, evaluation, name), budget)
-        case VisibleUnoccluded(target=name):
+        case VisibleUnoccluded():
             return await bounded(_visual(session, evaluation, check), budget)
         case NetworkNone() | NetworkSeen():
             return await session.network_held(check)
