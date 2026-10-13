@@ -30,7 +30,7 @@ from aqa_runner import network, probes, reasons
 from aqa_runner.browser_session import BrowserSession, UnsupportedVisualFrameError
 from aqa_runner.document_origins import DocumentChangedError, PolicyEventError
 from aqa_runner.egress import EgressGate, EgressRefusedError, EgressUpstreamError
-from aqa_runner.locators import Absent, Miss, Resolved, Unresolved, Use
+from aqa_runner.locators import Absent, Miss, Resolved, Shown, Unresolved, Use
 from aqa_runner.reasons import Raised, UnansweredError
 from aqa_runner.redaction import Redacted, Redactor
 from aqa_runner.text_search import SearchTimeoutError, text_matches, url_matches
@@ -59,8 +59,9 @@ class Evaluation:
     """What evaluating an assertion needs (`evaluate`): the script's targets;
     the spec and the run's start origin its probes are read from, through
     the run's egress gate; the run's `resolve_seconds`; the scan of every
-    value the run binds; and the probe baselines, captured into
-    `baseline_values` as the run goes. Captured baselines stay in memory;
+    value the run binds; the probe baselines, captured into
+    `baseline_values` as the run goes; and whether every locator of a
+    target must resolve at each use. Captured baselines stay in memory;
     they never enter a result or the run record."""
 
     targets: Mapping[str, Target]
@@ -71,6 +72,7 @@ class Evaluation:
     redactor: Redactor
     baseline_definitions: Mapping[str, ProbeBaseline] = field(default_factory=dict)
     baseline_values: dict[str, probes.JsonValue] = field(default_factory=dict)
+    every_locator: bool = False
 
     @property
     def withheld(self) -> bool:
@@ -192,17 +194,13 @@ async def _held(
     `MARGIN_SECONDS` past them."""
     match check:
         case TextVisible() | TextInTarget():
-            return await _text_held(session, check, evaluation.targets, budget)
+            return await _text_held(session, check, evaluation)
         case UrlMatches(pattern=pattern):
             return await url_matches(pattern, await bounded(session.url(), budget))
         case NotVisible(target=name):
-            return await bounded(
-                _absent(session, evaluation.targets[name], budget), budget
-            )
+            return await bounded(_absent(session, evaluation, name), budget)
         case VisibleUnoccluded(target=name):
-            return await bounded(
-                _visual(session, evaluation.targets[name], check, budget), budget
-            )
+            return await bounded(_visual(session, evaluation, check), budget)
         case NetworkNone() | NetworkSeen():
             return await session.network_held(check)
         case ProbeEquals() | ProbeEqualsBaseline():
@@ -219,15 +217,13 @@ async def _held(
 
 
 async def _text_held(
-    session: BrowserSession,
-    check: TextVisible | TextInTarget,
-    targets: Mapping[str, Target],
-    budget: float,
+    session: BrowserSession, check: TextVisible | TextInTarget, evaluation: Evaluation
 ) -> bool | _Located | Unresolved:
+    budget = evaluation.budget
     if isinstance(check, TextVisible):
         seen = await bounded(looked(session.visible_text, budget), budget)
         return await text_matches(check, seen)
-    found = await bounded(_target_text(session, targets[check.target], budget), budget)
+    found = await bounded(_target_text(session, evaluation, check.target), budget)
     if isinstance(found, Unresolved):
         return found
     text, index = found
@@ -239,9 +235,12 @@ async def _text_held(
 
 
 async def _visual(
-    session: BrowserSession, target: Target, check: VisibleUnoccluded, budget: float
+    session: BrowserSession, evaluation: Evaluation, check: VisibleUnoccluded
 ) -> _Located | Unresolved:
-    found = _answered(await look_for(session, target, "assertion", budget), budget)
+    found = _answered(
+        await look_for(session, evaluation, check.target, "assertion"),
+        evaluation.budget,
+    )
     if not isinstance(found, Resolved):
         return found
     try:
@@ -299,11 +298,14 @@ async def looked[T](look: Callable[[], Awaitable[T]], budget: float) -> T:
 
 
 async def _target_text(
-    session: BrowserSession, target: Target, budget: float
+    session: BrowserSession, evaluation: Evaluation, name: str
 ) -> tuple[str, int] | Unresolved:
-    """`target`'s rendered text and the index of the locator that found it,
-    or why it wasn't found within `budget`."""
-    found = _answered(await look_for(session, target, "assertion", budget), budget)
+    """The rendered text of the target called `name` and the index of the
+    locator that found it, or why it wasn't found within the evaluation's
+    budget."""
+    found = _answered(
+        await look_for(session, evaluation, name, "assertion"), evaluation.budget
+    )
     if not isinstance(found, Resolved):
         return found
     try:
@@ -312,7 +314,7 @@ async def _target_text(
         await found.element.dispose()
 
 
-def _answered[R: Resolved | Absent | Unresolved](found: R, budget: float) -> R:
+def _answered[R: Resolved | Shown | Absent | Unresolved](found: R, budget: float) -> R:
     """`found`, unless no look at the page finished within `budget`: that
     is a page that didn't answer, not drift (every target has a locator, so
     a finished look leaves a miss)."""
@@ -322,14 +324,17 @@ def _answered[R: Resolved | Absent | Unresolved](found: R, budget: float) -> R:
 
 
 async def _absent(
-    session: BrowserSession, target: Target, budget: float
+    session: BrowserSession, evaluation: Evaluation, name: str
 ) -> bool | _Located | Unresolved:
-    """Whether `target` is absent: looked at once, so a target that is there
-    fails at once (ADR-0024's #46 amendment), and only drift is waited out,
-    within `budget`."""
-    found = _answered(await look_for(session, target, "negative_check", budget), budget)
+    """Whether the target called `name` is absent: looked at once, so a
+    target that is there fails at once (ADR-0024's #46 amendment), and only
+    drift is waited out, within the evaluation's budget."""
+    found = _answered(
+        await look_for(session, evaluation, name, "negative_check"), evaluation.budget
+    )
     if isinstance(found, Resolved):
         await found.element.dispose()
+    if isinstance(found, Resolved | Shown):
         return _Located("failed", found.locator_index)
     return found if isinstance(found, Unresolved) else True
 
@@ -337,32 +342,34 @@ async def _absent(
 @overload
 async def look_for(
     session: BrowserSession,
-    target: Target,
+    evaluation: Evaluation,
+    name: str,
     use: Literal["action", "assertion"],
-    budget: float,
 ) -> Resolved | Unresolved: ...
 
 
 @overload
 async def look_for(
     session: BrowserSession,
-    target: Target,
+    evaluation: Evaluation,
+    name: str,
     use: Literal["negative_check"],
-    budget: float,
-) -> Resolved | Absent | Unresolved: ...
+) -> Resolved | Shown | Absent | Unresolved: ...
 
 
 async def look_for(
-    session: BrowserSession, target: Target, use: Use, budget: float
-) -> Resolved | Absent | Unresolved:
-    """`target`'s element for `use`, looked for every `LOOK_SECONDS` while
-    no locator gives the match the use needs, until `budget` seconds have
-    passed: then the last look's misses, or none when no look finished.
+    session: BrowserSession, evaluation: Evaluation, name: str, use: Use
+) -> Resolved | Shown | Absent | Unresolved:
+    """The element for `use` of the target called `name`, from all its
+    locators when `evaluation.every_locator`, looked for every
+    `LOOK_SECONDS` while it doesn't resolve, until the evaluation's budget
+    has passed: then the last look's misses, or none when no look finished.
 
     Each look is cut off when the budget runs out, so a look that waits for
     good, as `is_enabled` can on an element moved into another document
     (ADR-0025's #52 amendment), can't hold the run. A look the page changed
     under (`DocumentChangedError`) is made again."""
+    target, budget = evaluation.targets[name], evaluation.budget
     loop = asyncio.get_running_loop()
     deadline = loop.time() + budget
     last = Unresolved(())
@@ -370,7 +377,11 @@ async def look_for(
         limit = asyncio.timeout_at(deadline)
         try:
             async with limit:
-                found = await session.resolve(target, use)
+                found = await (
+                    session.resolve(target, use, every=True)
+                    if evaluation.every_locator
+                    else session.resolve(target, use)
+                )
         except TimeoutError:
             if not limit.expired():
                 raise  # not the budget's own limit
