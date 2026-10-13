@@ -165,9 +165,12 @@ async def replay(
     chromium: BrowserType,
     proxy: EgressProxy,
     gate: EgressGate,
+    every_locator: bool = False,
 ) -> RunResult:
     """Run `script` once for `setup`, through `proxy`, the run's egress
     proxy, whose gate is `gate`, recording each step in the setup's record.
+    With `every_locator`, every target resolves from all its locators at
+    each use (`aqa_runner.locators.resolve_every`), as a confirmation does.
     The session uses `script.browser`, never the project's or the spec's
     settings (ADR-0025). It needs the proxy's phase open, as the browser's
     launch does, and ends it once its browser has closed: only then does it
@@ -209,6 +212,7 @@ async def replay(
             setup.config.budgets.resolve_seconds,
             redactor,
             script.probe_baselines,
+            every_locator=every_locator,
         ),
     )
     record = setup.record
@@ -478,9 +482,7 @@ async def _run(
             )
         )
     try:
-        found = await look_for(
-            session, run.evaluation.targets[step.target], "action", budget
-        )
+        found = await look_for(session, run.evaluation, step.target, "action")
     except (Error, PolicyEventError) as error:
         # A look the session refused (a page off the allowed origins), or
         # Playwright's general error type (a crashed page): nothing was
