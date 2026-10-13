@@ -104,7 +104,8 @@ _BINDINGS = {
     "part_ambiguous": "this check's subject is the one element matching {part} "
     "inside {region}, and that region has several",
     "not_the_part": "this check's subject is the one element matching {part} "
-    "inside {region}, and this element is another one",
+    "inside {region}, and this element is another one (describe_parts lists an "
+    "element's parts)",
     "not_leaf": "this check's subject is one value: bind the element that holds "
     "it, not one that contains it",
     "unlisted_copies": "this element is repeated on the page, and no subject "

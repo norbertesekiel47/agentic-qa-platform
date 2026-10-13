@@ -338,7 +338,8 @@ SUBJECT = "this check's subject"
             "assertion",
             (
                 f"{SUBJECT} is the one element matching span.counter inside "
-                "div.banner, and this element is another one"
+                "div.banner, and this element is another one (describe_parts lists "
+                "an element's parts)"
             ),
         ),
         (
