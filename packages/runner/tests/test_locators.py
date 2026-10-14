@@ -16,6 +16,7 @@ from aqa_core.compiled import PLAYWRIGHT_PSEUDO_CLASSES, ByCss, Target
 from aqa_core.schema import AriaRole
 from aqa_core.text import has_pattern, has_text
 from aqa_runner.browser_session import open_browser_session
+from aqa_runner.locator_generation import register_identity_engine
 from aqa_runner.locators import (
     Absent,
     Resolved,
@@ -83,13 +84,14 @@ def on_page[T](scenario: Callable[[Page], Awaitable[T]], html: str = PAGE) -> T:
     """`scenario`'s result on a fixture page, in a fresh browser session."""
 
     async def run() -> T:
-        async with (
-            async_playwright() as playwright,
-            egress_proxy() as egress,
-            open_browser_session(playwright.chromium, egress=egress) as session,
-        ):
-            await session.page.set_content(html)
-            return await scenario(session.page)
+        async with async_playwright() as playwright:
+            await register_identity_engine(playwright)
+            async with (
+                egress_proxy() as egress,
+                open_browser_session(playwright.chromium, egress=egress) as session,
+            ):
+                await session.page.set_content(html)
+                return await scenario(session.page)
 
     return asyncio.run(run())
 

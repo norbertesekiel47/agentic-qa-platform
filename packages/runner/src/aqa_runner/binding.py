@@ -99,6 +99,8 @@ SCRIPT = """(() => {
         if (verb === "drop") { held.delete(token); return []; }
         if (verb === "is") return held.get(token) === root ? [root] : [];
         if (verb === "regions") return matches(document, token);
+        if (verb === "shown") return visible(root) ? [root] : [];
+        if (verb === "document") return [document];
         const r = held.get(token);
         if (!valid(r, region, root)) return [];
         if (verb === "in") return contains(r, root) ? [root] : [];
@@ -110,6 +112,17 @@ SCRIPT = """(() => {
     };
     return { query: (root, body) => queryAll(root, body)[0] || null, queryAll };
 })()"""
+
+# A chain's last part keeping the elements that show, by the engine's own
+# check: Playwright's visible filter, like its has and has-not, skips a form
+# whose control is named nodeType.
+SHOWN = f"{ENGINE}=shown:"
+
+# A chain's first part: the page's document node. Inside a has or has-not
+# filter, a query that starts here reads the whole document, the root element
+# included, as a query from the page does; one that doesn't starts from the
+# filtered element and sees only what is under it.
+DOCUMENT = f"{ENGINE}=document:"
 
 
 async def register_binding_engine(playwright: Playwright) -> None:

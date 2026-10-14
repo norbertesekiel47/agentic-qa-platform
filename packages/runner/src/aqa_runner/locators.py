@@ -23,7 +23,14 @@ from aqa_core.schema import Contract
 from playwright.async_api import ElementHandle, Error, JSHandle, Page
 from playwright.async_api import Locator as PlaywrightLocator
 
-from aqa_runner.binding import BindingMiss, HeldRegion, held_region, same_element
+from aqa_runner.binding import (
+    DOCUMENT,
+    SHOWN,
+    BindingMiss,
+    HeldRegion,
+    held_region,
+    same_element,
+)
 
 # What the target is for: an element a step acts on, an element an
 # assertion checks, or an element a negative check (not_visible) expects
@@ -257,7 +264,7 @@ async def _match(
         # the accessibility tree (aria-hidden), and only visible matches
         # count, so a hidden element with the target's name can't stand in
         # for the visible one a fallback finds.
-        query = query.filter(visible=True)
+        query = query.locator(SHOWN)
     # Counted first, so a broad locator costs one call, not one per match.
     count = await query.count()
     if count != 1:
@@ -300,8 +307,10 @@ async def resolve(
 
     - An action needs the first unique match that is actionable.
     - An assertion needs the first unique match; being attached is enough.
-    - A negative check counts visible matches only, so it resolves to the
-      first unique visible match. Only when no locator finds one, none finds
+    - A negative check counts visible matches only, judged by the binding
+      engine's own check (the engines must be registered,
+      `register_identity_engine`), so it resolves to the first unique
+      visible match. Only when no locator finds one, none finds
       several, and at least one finds no visible match in its scope is the
       element absent; otherwise it is drift. An unscoped locator's scope is
       the page. Outside a held region, absence takes each scoped locator's
@@ -443,29 +452,32 @@ async def _seen(page: Page, locator: Locator, held: HeldRegion | None) -> bool |
 def _stood(
     page: Page, locator: Locator, held: HeldRegion | None
 ) -> tuple[PlaywrightLocator | None, PlaywrightLocator]:
-    """A query that matches one element exactly while each of `locator`'s
-    scopes matches one element (inside a held region, one in the region,
-    while it is still the region), and `locator`'s visible matches read
-    from that element. None for an unscoped locator on the page."""
+    """A query that matches the page's root element exactly while each of
+    `locator`'s scopes matches one element (inside a held region, one in the
+    region, while it is still the region), and `locator`'s visible matches
+    under its last scope. None for an unscoped locator on the page. Each
+    filter is on the root element: Playwright's has and has-not skip a form
+    whose control is named nodeType, and a scope or region may be one. Each
+    filter's query starts at the document, so it reads the page as `_scoped`
+    does, the root element included. Written from `:scope`, it reads the
+    same inside a filter on the root."""
     scopes: list[Locator] = []
     level = locator.scope
     while level is not None:
         scopes.insert(0, level)
         level = level.scope
+    if held is None and not scopes:
+        return None, _query(page, locator, hidden=True).locator(SHOWN)
+    stood = page.locator("css=:scope")
+    path = page.locator(DOCUMENT)
     if held is not None:
-        stood = held.root.locator(held.inside)
-    elif scopes:
-        # The outermost scope is unique when its first match is its last.
-        outer = _query(page, scopes.pop(0), hidden=False)
-        stood = outer.first.and_(outer.last)
-    else:
-        return None, _query(page, locator, hidden=True).filter(visible=True)
-    path: Page | PlaywrightLocator = page
+        path = path.locator(held.root).locator(held.inside)
+        stood = stood.filter(has=path)
     for scope in scopes:
         path = _query(path, scope, hidden=False)
         inside = path if held is None else path.locator(held.inside)
         stood = stood.filter(has=inside).filter(has_not=path.nth(1))
-    return stood, _query(path, locator, hidden=True).filter(visible=True)
+    return stood, _query(path, locator, hidden=True).locator(SHOWN)
 
 
 async def _unstood(page: Page, locator: Locator, held: HeldRegion | None) -> Miss:
@@ -478,7 +490,7 @@ async def _unstood(page: Page, locator: Locator, held: HeldRegion | None) -> Mis
     query = await _scoped(root, locator, held, hidden=True)
     if isinstance(query, str):
         return query
-    visible = query.filter(visible=True)
+    visible = query.locator(SHOWN)
     if held is not None and await visible.count() and not await held.bound(visible):
         return await held.miss(visible)
     return "no scope"
@@ -567,9 +579,9 @@ async def _proven(page: Page, target: Target, misses: list[Miss]) -> list[Miss]:
     """Each of `target`'s locators' no match or no scope as one more read
     proves it now, the read `resolve_every` decides a zero by: no match while
     each scope is one element with nothing visible in it, no scope while the
-    scopes don't stand, and otherwise page changed. The no-scope proof must
-    find the page's root element, so a read that can't see it proves
-    nothing. An unscoped locator's count already read the whole page."""
+    scopes don't stand, and otherwise page changed. Each proof finds the
+    page's root element, so a read that can't see it proves nothing. An
+    unscoped locator's count already read the whole page."""
     proven: list[Miss] = []
     for locator, miss in zip(target.locators, misses, strict=True):
         stood, visible = _stood(page, locator, None)

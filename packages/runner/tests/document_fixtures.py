@@ -21,6 +21,7 @@ import pytest
 from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.egress import Connection, EgressGate
 from aqa_runner.egress_proxy import EgressProxy
+from aqa_runner.locator_generation import register_identity_engine
 from aqa_runner.redaction import NO_SECRETS, Redactor
 from playwright.async_api import Frame, Page, async_playwright
 
@@ -339,14 +340,15 @@ async def browsing(
 ) -> AsyncIterator[BrowserSession]:
     """A session of the run `run_gate` describes, through `egress` when a
     test reads the gate's records."""
-    async with (
-        async_playwright() as playwright,
-        EgressProxy(egress or run_gate(sites)) as proxy,
-        open_browser_session(
-            playwright.chromium, egress=proxy, redactor=redactor
-        ) as session,
-    ):
-        yield session
+    async with async_playwright() as playwright:
+        await register_identity_engine(playwright)
+        async with (
+            EgressProxy(egress or run_gate(sites)) as proxy,
+            open_browser_session(
+                playwright.chromium, egress=proxy, redactor=redactor
+            ) as session,
+        ):
+            yield session
 
 
 async def until(condition: Callable[[], bool]) -> None:
