@@ -19,13 +19,25 @@ from aqa_runner import explore_turns, model_router, navigator
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.chat_client import Reply
 from aqa_runner.egress import EgressGate
-from aqa_runner.explore_turns import Turning, take_turns
+from aqa_runner.explore_turns import (
+    Turning,
+    UnsentRequestError,
+    take_turns,
+    unspelled,
+)
 from aqa_runner.locator_generation import TargetUses
+from aqa_runner.model_router import ModelCallError
 from aqa_runner.navigator import Click
 from aqa_runner.navigator_tools import ActionResult, Attempt
 from aqa_runner.reasons import UnansweredError
-from aqa_runner.redaction import Redacted
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from aqa_runner.redaction import Redacted, Redactor
+from aqa_runner.run_record import LineCheck, RefusedWriteError, require_clean
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
 from langchain_core.tracers.langchain import wait_for_all_tracers
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -39,6 +51,7 @@ from packages.runner.tests.explore_graph_fixtures import (
     PLAN,
     REFUSED,
     SAVE,
+    USAGE,
     Scripted,
     answer,
     calling,
@@ -59,6 +72,11 @@ from packages.runner.tests.navigator_fixtures import (
 )
 from packages.runner.tests.navigator_fixtures import ref as ref_seen
 from packages.runner.tests.secret_fixtures import FAKE_VALUE, copies_found
+
+# A project whose navigator falls back to Opus after a refusal.
+FALLBACK = ProjectConfig.model_validate(
+    {"roles": {"navigator": {"fallback": "claude-opus-5-5"}}}
+)
 
 # What an action interrupted while it was prepared says, after its tool.
 INTERRUPTED = (
@@ -357,12 +375,9 @@ def test_no_response_keeps_its_turn_record(app: App, tmp_path: Path) -> None:
 def test_a_fallback_with_no_response_keeps_the_refusals_cost_line(
     app: App, tmp_path: Path
 ) -> None:
-    config = ProjectConfig.model_validate(
-        {"roles": {"navigator": {"fallback": "claude-opus-5-5"}}}
-    )
     client = Scripted(REFUSED, NO_RESPONSE)
 
-    context = turned(app, tmp_path, client, config=config)
+    context = turned(app, tmp_path, client, config=FALLBACK)
 
     assert stops(context) == [
         ("no_response", "the model gave no response (APIConnectionError)")
@@ -492,7 +507,8 @@ def test_a_block_during_a_turns_action_ends_the_turns_with_no_further_call(
     egress = blocked_while_generating(app, monkeypatch)
     client = Scripted(CLICK, CLICK)
 
-    context = turned(app, tmp_path, client, egress=egress)
+    # Its last turn: the interruption, not the turn budget, ends the turns.
+    context = turned(app, tmp_path, client, egress=egress, turns=1)
 
     assert context.stops == []
     assert len(client.requests) == 1
@@ -630,11 +646,19 @@ def test_each_reply_runs_at_most_its_first_tool_call(app: App, tmp_path: Path) -
         "note_for_absence",
         lambda m: {"check_id": "a1", "ref": ref(m, "paragraph", "Not saved")},
     )
+    cut_off = Reply(
+        message=AIMessage(content="cut off", tool_calls=[]),
+        usage=USAGE,
+        refused=False,
+        complete=False,
+        parsed=None,
+    )
     client = Scripted(
         both,
         answer(AIMessage(content="looking around")),
         calling("teleport", {}),
         note,
+        cut_off,
         REFUSED,
     )
 
@@ -643,7 +667,7 @@ def test_each_reply_runs_at_most_its_first_tool_call(app: App, tmp_path: Path) -
     assert [results(request) for request in client.requests[1:]] == [
         (
             "step 1 ran, and the page settled\n"
-            "1 more tool calls in the reply didn't run: a turn runs one"
+            "only the first of the reply's 2 tool calls ran: a turn runs one"
         ),
         "the reply called no tool, so nothing ran",
         "the reply called a tool the navigator doesn't have, so nothing ran",
@@ -651,7 +675,9 @@ def test_each_reply_runs_at_most_its_first_tool_call(app: App, tmp_path: Path) -
             "note_for_absence did not run: a1 is a text_in_target check, and it "
             "notes only a not_visible check's element"
         ),
+        "the reply's outcome was invalid, so nothing ran",
     ]
+    assert turn_record(record_of(context), 5)["outcome"] == "invalid"
     assert "<log>\nstep 1: fill " in client.requests[4][2].text
     assert (
         'step 1: fill {"meaning": "the shop\'s name field", "text": "Ada"}\n</log>'
@@ -799,3 +825,113 @@ def test_the_turns_export_no_trace_with_langsmith_tracing_set(
 
     assert stops(context) == [("gave_up", "the model refused its turn")]
     assert exported_to_langsmith(1 if guarded else 5) is not guarded
+
+
+@pytest.mark.parametrize(
+    "leaked",
+    [
+        SystemMessage(content=f"instructions {FAKE_VALUE}"),
+        HumanMessage(content=[{"type": "text", "text": FAKE_VALUE}]),
+        HumanMessage(content=[{"type": "document", "source": FAKE_VALUE}]),
+        AIMessage(
+            content="",
+            tool_calls=[{"name": "fill", "args": {"text": FAKE_VALUE}, "id": "c1"}],
+        ),
+    ],
+    ids=["system", "text block", "document block", "tool call"],
+)
+def test_a_request_spelling_a_bound_value_in_any_part_is_refused(
+    leaked: BaseMessage,
+) -> None:
+    check = unspelled(Redactor([bound("http://127.0.0.1", FAKE_VALUE)]))
+    clean = [
+        SystemMessage(content="instructions"),
+        HumanMessage(content="[SECRET:TEST_PASSWORD]"),
+    ]
+
+    check(clean)
+    with pytest.raises(UnsentRequestError) as refused:
+        check([leaked, *clean])
+
+    assert str(refused.value) == (
+        "a request still spelled a bound value after its scans, so it wasn't sent"
+    )
+
+
+def test_a_block_during_the_call_runs_none_of_the_reply(
+    app: App, tmp_path: Path
+) -> None:
+    egress = gate(allowed=(app.origin,))
+
+    def blocked(messages: Sequence[BaseMessage]) -> Reply:
+        egress.record_refusal("analytics.example.test", 80, "host", "fake refusal")
+        return calling(
+            "assert_check",
+            {"check_id": "a1", "ref": ref(messages, "paragraph", "Not saved")},
+        )
+
+    client = Scripted(blocked)
+
+    context = turned(app, tmp_path, client, egress=egress)
+
+    assert context.attempt.checks == {"a1": None}
+    assert context.stops == []
+    assert turn_record(record_of(context), 1)["outcome"] == "ok"
+
+
+def refusing_turn_records(redactor: Redactor, place: str) -> LineCheck:
+    """`require_clean`, refusing every turn record too, as it does a
+    document left spelling a bound value."""
+    clean = require_clean(redactor, place)
+
+    def check(text: str) -> None:
+        if place.startswith("turns/"):
+            raise RefusedWriteError(f"{place}: refused by the test")
+        clean(text)
+
+    return check
+
+
+@pytest.mark.parametrize("cause", ["taken", "refused"])
+def test_a_turn_record_the_record_cannot_take_stops_the_turns_before_the_call_runs(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cause: str
+) -> None:
+    def kept_already(messages: Sequence[BaseMessage]) -> Reply:
+        [record] = (tmp_path / ".aqa" / "runs").iterdir()
+        (record / "turns").mkdir()
+        (record / "turns" / "1.json").write_text("{}")
+        return FILL(messages)
+
+    if cause == "refused":
+        monkeypatch.setattr(explore_turns, "require_clean", refusing_turn_records)
+    client = Scripted(kept_already if cause == "taken" else FILL)
+
+    context = turned(app, tmp_path, client)
+
+    assert stops(context) == [
+        ("record_error", "the run record took no more lines, so the attempt stopped")
+    ]
+    assert len(client.requests) == 1
+    assert app.paths() == ["/page/shop"]
+
+
+def test_a_fallback_that_fails_for_another_reason_raises(
+    app: App, tmp_path: Path
+) -> None:
+    client = Scripted(REFUSED, ValueError("a fake client bug"))
+
+    with pytest.raises(ModelCallError) as failed:
+        turned(app, tmp_path, client, config=FALLBACK)
+
+    assert isinstance(failed.value.__cause__, ValueError)
+
+
+def test_no_fallback_runs_past_the_spend_left(app: App, tmp_path: Path) -> None:
+    client = Scripted(FILL, REFUSED, CLICK)
+
+    # $0.002 is left for the second turn, whose refusal costs $0.003.
+    context = turned(app, tmp_path, client, config=FALLBACK, usd="0.005")
+
+    assert stops(context) == [("gave_up", "the model refused its turn")]
+    assert len(client.requests) == 2
+    assert client.models == ["claude-sonnet-5-5 at effort None"]
