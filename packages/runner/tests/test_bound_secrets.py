@@ -291,8 +291,9 @@ def test_a_value_with_four_bytes_in_every_supported_encoding_is_usable(
         "\N{ZERO WIDTH SPACE}" * 2 + "abc\N{SOFT HYPHEN}",
         "\N{ZERO WIDTH JOINER} \N{ZERO WIDTH JOINER}" * 2,
         chr(0xE001) * 4 + "ab",
+        "abc \N{ZERO WIDTH JOINER}",
     ],
-    ids=["one-shown", "three-shown", "none-shown", "private-use"],
+    ids=["one-shown", "three-shown", "none-shown", "private-use", "space-before-gap"],
 )
 def test_a_value_showing_under_four_bytes_is_refused_before_the_browser(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
