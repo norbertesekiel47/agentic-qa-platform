@@ -64,7 +64,7 @@ type Action = Navigate | Reload | Click | Fill | FillSecret | Select | Press
 LOOKS = 4
 
 # Each action's tool name, as the model calls it.
-_TOOL = {model: name for name, (model, _) in TOOLS.items()}
+TOOL_NAMES = {model: name for name, (model, _) in TOOLS.items()}
 
 # The fields an action's intent and `PathStep.fields` name otherwise.
 _FIELDS = {"path": "url", "text": "value", "name": "secret"}
@@ -226,7 +226,7 @@ class Attempt:
         intent (`_prepared`); nothing either once the run is `interrupted`
         by then; then its intent, action, settling and completion. A record
         that can't write its line raises, as does a cancellation."""
-        tool = _TOOL[type(call)]
+        tool = TOOL_NAMES[type(call)]
         if problem := self._unrunnable(tool, call) or self._unfit(call):
             return self._refused(problem)
         try:
@@ -513,6 +513,6 @@ class Attempt:
 def _fields(call: Action) -> dict[str, str]:
     """`call` as its intent records it: its action and its own field."""
     own = call.model_dump(exclude={"ref", "meaning"})
-    return {"action": _TOOL[type(call)]} | {
+    return {"action": TOOL_NAMES[type(call)]} | {
         _FIELDS.get(name, name): value for name, value in own.items()
     }

@@ -30,7 +30,6 @@ from aqa_runner.executor import StepResult
 from aqa_runner.explore_result import Stop
 from aqa_runner.model_router import ModelCallError, ModelRouter, Routed, Spend
 from aqa_runner.navigator import (
-    TOOLS,
     AssertCheck,
     Decision,
     Finish,
@@ -42,7 +41,7 @@ from aqa_runner.navigator import (
     navigator_request,
     navigator_tools,
 )
-from aqa_runner.navigator_tools import Action, Attempt
+from aqa_runner.navigator_tools import TOOL_NAMES, Action, Attempt
 from aqa_runner.reasons import UnansweredError
 from aqa_runner.redaction import Redacted, Redactor
 from aqa_runner.run_record import (
@@ -52,9 +51,6 @@ from aqa_runner.run_record import (
     UnrecordedCostError,
     require_clean,
 )
-
-# Each action's tool name, as the log writes it.
-_TOOL: Final = {model: name for name, (model, _) in TOOLS.items()}
 
 # Why a turn's call didn't run: its response cost more than was left.
 _OVER: Final = "the spend budget ran out on this turn, so its call didn't run"
@@ -189,13 +185,7 @@ async def _turn(state: Turns, runtime: Runtime[Turning]) -> Turns:
     if taken is None or isinstance(taken, Stop):
         if taken is not None:
             context.stops.append(taken)
-        return Turns(
-            turn=state["turn"],
-            log=state["log"],
-            notes=state["notes"],
-            results=state["results"],
-            done=True,
-        )
+        return state | {"done": True}
     return taken
 
 
@@ -358,7 +348,7 @@ def _line(call: Action, step: StepResult | None) -> tuple[str, ...]:
     if step is None or step.outcome != "completed":
         return ()
     said = json.dumps(call.model_dump(mode="json", exclude={"ref"}), sort_keys=True)
-    return (f"step {step.seq}: {_TOOL[type(call)]} {said}",)
+    return (f"step {step.seq}: {TOOL_NAMES[type(call)]} {said}",)
 
 
 def _by(context: Turning) -> Provenance:
