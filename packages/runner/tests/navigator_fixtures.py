@@ -70,8 +70,10 @@ class Run(TypedDict, total=False):
     """How an attempt's run is set up, past its start origin: the page it
     starts on (the form by default), its egress gate (one allowing only the
     start origin by default), the secrets it binds, its plan and contracts,
-    its `resolve_seconds`, and its project config (an empty one by
-    default)."""
+    its `resolve_seconds`, its project config (an empty one by default),
+    and whether its egress blocks and infrastructure events interrupt the
+    attempt, as explore's do (#53 P15a), or never do (the default, as for
+    the tools on their own)."""
 
     page: str
     egress: EgressGate
@@ -80,6 +82,7 @@ class Run(TypedDict, total=False):
     contracts: Mapping[str, Contract | None]
     budget: float
     config: ProjectConfig
+    interruptible: bool
 
 
 def explored[T](
@@ -102,6 +105,7 @@ def explored[T](
     page = run.get("page", "/page/form")
     config = run.get("config", ProjectConfig())
     run_gate = run.get("egress") or gate(allowed=(start,))
+    expected = config.egress.expected_blocked
     redactor = Redactor(secrets)
     record = RunRecord.create(tmp_path).redacting(redactor).part("attempt-1")
     if app is not None:
@@ -132,6 +136,13 @@ def explored[T](
                     a_spec(tmp_path, config, start_url=page),
                     config,
                     run_gate,
+                    lambda: (
+                        run.get("interruptible", False)
+                        and (
+                            bool(run_gate.infrastructure_events)
+                            or proxy.egress_blocks(expected).blocked
+                        )
+                    ),
                 )
                 await session.navigate(f"{start}{page}")
                 await attempt.observe()
