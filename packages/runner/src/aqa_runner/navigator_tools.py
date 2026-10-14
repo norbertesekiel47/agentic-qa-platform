@@ -69,6 +69,13 @@ _TOOL = {model: name for name, (model, _) in TOOLS.items()}
 # The fields an action's intent and `PathStep.fields` name otherwise.
 _FIELDS = {"path": "url", "text": "value", "name": "secret"}
 
+# What an action says when the run was interrupted while it was prepared,
+# naming neither host nor port.
+INTERRUPTED = (
+    "the run stopped: the page reached a host the run doesn't allow, or an "
+    "allowed host couldn't be reached"
+)
+
 # What a call refused before its intent raises, Playwright's general error
 # type included (a page that broke a look).
 _REFUSED = (
@@ -135,8 +142,9 @@ class Attempt:
     """One attempt of an explore run: its session, its record part, the
     run's start origin and frozen plan, each planned meaning's contract
     (`contracts_by_meaning`), the secrets it binds and its `budget`, the
-    run's `resolve_seconds`, and the spec, project config and egress gate
-    its checks are evaluated and compiled with. It keeps its completed
+    run's `resolve_seconds`, the spec, project config and egress gate its
+    checks are evaluated and compiled with, and `interrupted`, whether the
+    run has an egress block or an infrastructure event. It keeps its completed
     actions by step number, as compiling takes them (`ExploredPath`), its
     last observation, and each planned check's binding: the target it reads
     and its last evaluation. A run whose admission couldn't keep its secrets
@@ -152,6 +160,7 @@ class Attempt:
     spec: Spec
     config: ProjectConfig
     gate: EgressGate
+    interrupted: Callable[[], bool]
     steps: dict[int, PathStep] = field(init=False, default_factory=dict)
     observation: Redacted | None = field(init=False, default=None)
     _uses: dict[str, TargetUses] = field(init=False, default_factory=dict)
@@ -214,9 +223,9 @@ class Attempt:
     async def act(self, call: Action) -> ActionResult:
         """Run `call`: nothing once the attempt has ended; then its arguments
         checked (`_unrunnable`, `_unfit`), and everything else before its
-        intent (`_prepared`); then its intent, action, settling and
-        completion. A record that can't write its line raises, as does a
-        cancellation."""
+        intent (`_prepared`); nothing either once the run is `interrupted`
+        by then; then its intent, action, settling and completion. A record
+        that can't write its line raises, as does a cancellation."""
         tool = _TOOL[type(call)]
         if problem := self._unrunnable(tool, call) or self._unfit(call):
             return self._refused(problem)
@@ -225,6 +234,9 @@ class Attempt:
         except _REFUSED as error:
             reason = reasons.reason(error, self.session.redactor)
             return self._refused(f"{tool} did not run: {reason}")
+        if self.interrupted():
+            # A block or an event while it was prepared: no intent.
+            return self._refused(f"{tool} did not run: {INTERRUPTED}")
         seq = max(self.steps, default=0) + 1
         fields = _fields(call)
         wait = (
