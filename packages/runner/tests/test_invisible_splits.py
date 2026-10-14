@@ -162,6 +162,42 @@ def test_a_value_holding_one_is_found_with_or_without_it() -> None:
     ] == [MARKER] * 8
 
 
+def test_a_final_sigma_beside_a_left_out_gap_is_found_in_every_spelling() -> None:
+    # Without its private-use character, the value's lowercase ends in a
+    # final sigma, which percent-encoding and JSON write apart from the
+    # other small sigma.
+    redactor = scan(
+        f"FAKE-\N{GREEK CAPITAL LETTER OMICRON}{PUA}\N{GREEK CAPITAL LETTER SIGMA}"
+    )
+    shown = "fake-\N{GREEK SMALL LETTER OMICRON}\N{GREEK SMALL LETTER FINAL SIGMA}"
+    spellings = [shown, quote(shown, safe=""), json.dumps(shown)[1:-1]]
+    turn = Turn(
+        log=(),
+        notes=quote(shown, safe=""),
+        results=(json.dumps(shown)[1:-1],),
+        snapshot=redactor.redact(""),
+    )
+
+    sent = navigator_request(Prefix(spec="{}", plan="{}"), turn, redactor=redactor)
+
+    assert [redactor.redact(f"<{spelled}>") for spelled in spellings] == [
+        f"<{MARKER}>"
+    ] * 3
+    assert sent[2].content == (
+        "<log>\n\n</log>\n\n"
+        f"<notes>\n{MARKER}\n</notes>\n\n"
+        f"<results>\n{MARKER}\n</results>\n\n"
+        "<snapshot>\n\n</snapshot>"
+    )
+    with pytest.raises(
+        RefusedWriteError,
+        match=exactly(
+            "steps.jsonl: a bound value's spelling is in it, so it isn't written"
+        ),
+    ):
+        require_clean(redactor, "steps.jsonl")(json.dumps({"text": shown}))
+
+
 TWO_BOMS = f"fake{BOM}secret{BOM}49"
 
 
