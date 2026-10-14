@@ -150,7 +150,10 @@ def _transitions(groups: _Groups, text: str) -> dict[int, list[int]]:
 
 class _Scan:
     """One text's edges, and the suffixes computed from them, shared by
-    every path of every secret."""
+    every path of every secret. `suffixes` is keyed by the ids of a token
+    and of the suffix after it: a Redactor keeps one object per distinct
+    token, and `suffixes` keeps every suffix it computed alive for the scan,
+    so no id is reused within it."""
 
     def __init__(
         self, transitions: _Transitions, gaps: dict[int, list[int]], length: int
@@ -163,7 +166,7 @@ class _Scan:
         for start, ends in self.gaps.items():
             for end in ends:
                 self.into.setdefault(end, []).append(start)
-        self.done: dict[tuple[int, int], dict[int, int]] = {}
+        self.suffixes: dict[tuple[int, int], dict[int, int]] = {}
 
 
 def _suffix(
@@ -246,9 +249,9 @@ def _endpoints(paths: tuple[tuple[_Token, ...], ...], scan: _Scan) -> dict[int, 
             # Paths share tails (base64's partial and padding, a value's
             # forms), each computed once per scan.
             key = (id(token), id(following))
-            if key not in scan.done:
-                scan.done[key] = _suffix(token, following, scan)
-            following = scan.done[key]
+            if key not in scan.suffixes:
+                scan.suffixes[key] = _suffix(token, following, scan)
+            following = scan.suffixes[key]
             if not following:
                 break
         for start, end in (following or {}).items():

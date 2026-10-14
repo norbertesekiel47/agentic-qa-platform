@@ -108,8 +108,9 @@ def bound_secrets(spec: Spec, start: str) -> dict[str, BoundSecret]:
     bytes after JavaScript whitespace trimming in UTF-8 or Latin-1 (when
     encodable) are refused too: the scan needs four-character base64 cores
     at every byte alignment. So are values with fewer than four bytes
-    besides their gaps (`GAP`): the scan finds a value without them, so it
-    would replace text that short.
+    besides their gaps (`GAP`): the scan finds a value with its gaps left
+    out, so it would replace text that short, or shorter where it collapses
+    a whitespace run (ADR-0026's #53 ZW amendment).
 
     Nor are secrets bound where Playwright would log the messages that carry
     a value (`SecretLoggedError`): `DEBUGP` makes its Python client print
