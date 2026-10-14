@@ -107,7 +107,7 @@ def app() -> Iterator[fx.App]:
         yield served
 
 
-async def kept(found: Resolved | Shown | Absent | Unresolved) -> object:
+async def literal(found: Resolved | Shown | Absent | Unresolved) -> object:
     """A resolution as a literal, a resolved element as its locator index.
     Its handle is let go unread: Playwright 1.63's get_attribute never
     answers on a form whose control is named nodeType."""
@@ -121,7 +121,7 @@ async def looked_at_once(page: Page, looked_at: Target) -> tuple[object, bool]:
     """Normal `resolve`'s negative answer, and whether the page is as it was
     before the look."""
     before = await page.content()
-    found = await kept(await resolve(page, looked_at, "negative_check"))
+    found = await literal(await resolve(page, looked_at, "negative_check"))
     return found, await page.content() == before
 
 
@@ -385,11 +385,11 @@ async def looked(
     with pytest.MonkeyPatch.context() as patch:
         fired = around(patch, row.needle, row.change)
         if every:
-            found = await kept(
+            found = await literal(
                 await resolve_every(page, row.looked_at, "negative_check")
             )
         else:
-            found = await kept(await resolve(page, row.looked_at, "negative_check"))
+            found = await literal(await resolve(page, row.looked_at, "negative_check"))
     return found, fired, await page.content() == before
 
 
