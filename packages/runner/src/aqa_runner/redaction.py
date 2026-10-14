@@ -32,6 +32,9 @@ class Redacted(str):
 type _Groups = tuple[tuple[int, re.Pattern[str]], ...]
 type _Transitions = dict[_Groups, dict[int, list[int]]]
 type _Multiplicity = Literal["", "?", "*", "+"]
+# A path's tail: its first token and the number of the tail after it (None
+# at the path's end), so paths that share a tail share its number.
+type _Tail = tuple["_Token", int | None]
 
 
 @dataclass(frozen=True)
@@ -50,20 +53,22 @@ class Redactor:
         self._secrets = tuple(
             sorted(secrets, key=lambda secret: -len(secret.value.get_secret_value()))
         )
-        # One object per distinct token, so a scan reuses what paths share.
-        tokens: dict[_Token, _Token] = {}
+        tails: dict[_Tail, int] = {}
+        reads: list[int] = []
         self._paths = tuple(
             (
                 f"[SECRET:{secret.name}]",
                 tuple(
-                    tuple(tokens.setdefault(token, token) for token in path)
+                    _numbered(path, tails, reads)
                     for path in _paths(secret.value.get_secret_value())
                 ),
             )
             for secret in self._secrets
         )
-        self._groups = frozenset(token.groups for token in tokens)
-        self._gapped = any(token.gapped for token in tokens)
+        self._tails = tuple(tails)
+        self._reads = tuple(reads)
+        self._groups = frozenset(token.groups for token, _ in self._tails)
+        self._gapped = any(token.gapped for token, _ in self._tails)
 
     @property
     def empty(self) -> bool:
@@ -118,6 +123,8 @@ class Redactor:
             {groups: _transitions(groups, text) for groups in self._groups},
             _gaps(text) if self._gapped else {},
             len(text),
+            self._tails,
+            self._reads,
         )
         matches: dict[int, tuple[int, str]] = {}
         for marker, paths in self._paths:
@@ -148,15 +155,38 @@ def _transitions(groups: _Groups, text: str) -> dict[int, list[int]]:
     return edges
 
 
+def _numbered(
+    path: tuple[_Token, ...], tails: dict[_Tail, int], reads: list[int]
+) -> tuple[int, ...]:
+    """`path` as its tails' numbers, longest first, numbering each new tail.
+    `reads` counts the reads of each tail's table in a scan: one by the tail
+    a token longer, and one by each path that is the whole tail."""
+    numbers: list[int] = []
+    rest: int | None = None
+    for token in reversed(path):
+        if (token, rest) not in tails:
+            tails[token, rest] = len(tails)
+            reads.append(0)
+            if rest is not None:
+                reads[rest] += 1
+        rest = tails[token, rest]
+        numbers.append(rest)
+    reads[numbers[-1]] += 1
+    return tuple(reversed(numbers))
+
+
 class _Scan:
-    """One text's edges, and the suffixes computed from them, shared by
-    every path of every secret. `suffixes` is keyed by the ids of a token
-    and of the suffix after it: a Redactor keeps one object per distinct
-    token, and `suffixes` keeps every suffix it computed alive for the scan,
-    so no id is reused within it."""
+    """One text's edges, and the tables computed from them: from each
+    offset, the furthest end of a tail. A tail's table is computed once and
+    dropped after its last read, so a scan holds only tables still to read."""
 
     def __init__(
-        self, transitions: _Transitions, gaps: dict[int, list[int]], length: int
+        self,
+        transitions: _Transitions,
+        gaps: dict[int, list[int]],
+        length: int,
+        tails: tuple[_Tail, ...],
+        reads: tuple[int, ...],
     ) -> None:
         self.transitions = transitions
         self.length = length
@@ -166,7 +196,33 @@ class _Scan:
         for start, ends in self.gaps.items():
             for end in ends:
                 self.into.setdefault(end, []).append(start)
-        self.suffixes: dict[tuple[int, int], dict[int, int]] = {}
+        self.tails = tails
+        self.unread = list(reads)
+        self.tables: dict[int, dict[int, int]] = {}
+
+    def table(self, path: tuple[int, ...]) -> dict[int, int]:
+        """The table of `path`, given as its tails' numbers, longest first:
+        each tail's from the next one's, from the longest still held."""
+        held = next(
+            (i for i, tail in enumerate(path) if tail in self.tables), len(path)
+        )
+        following = self.tables[path[held]] if held < len(path) else None
+        for tail in reversed(path[:held]):
+            token, rest = self.tails[tail]
+            # Nothing matches before a tail that matches nowhere.
+            if following is None or following:
+                following = _suffix(token, following, self)
+            self.tables[tail] = following
+            self._read(rest)
+        table = self.tables[path[0]]
+        self._read(path[0])
+        return table
+
+    def _read(self, tail: int | None) -> None:
+        if tail is not None:
+            self.unread[tail] -= 1
+            if not self.unread[tail]:
+                del self.tables[tail]
 
 
 def _suffix(
@@ -241,20 +297,10 @@ def _repeated(
     return current
 
 
-def _endpoints(paths: tuple[tuple[_Token, ...], ...], scan: _Scan) -> dict[int, int]:
+def _endpoints(paths: tuple[tuple[int, ...], ...], scan: _Scan) -> dict[int, int]:
     best: dict[int, int] = {}
     for path in paths:
-        following = None
-        for token in reversed(path):
-            # Paths share tails (base64's partial and padding, a value's
-            # forms), each computed once per scan.
-            key = (id(token), id(following))
-            if key not in scan.suffixes:
-                scan.suffixes[key] = _suffix(token, following, scan)
-            following = scan.suffixes[key]
-            if not following:
-                break
-        for start, end in (following or {}).items():
+        for start, end in scan.table(path).items():
             if end > start:
                 best[start] = max(best.get(start, -1), end)
     return best
@@ -404,7 +450,10 @@ def _paths(value: str) -> tuple[tuple[_Token, ...], ...]:
     paths: list[tuple[_Token, ...]] = []
     # Lowercasing or casefolding can lengthen a value (İ, ß): then each
     # character of the result is a unit of its own, which a gap can split.
-    for case in (value, value.lower(), value.casefold()):
+    # A gap left out can change a final sigma's lowercase (a private-use
+    # character just before a final Σ), so the gap-free value's lowercase
+    # is a path too.
+    for case in (value, value.lower(), value.casefold(), GAP.sub("", value).lower()):
         # A page can leave out the value's own gaps, U+FEFF (JavaScript
         # whitespace) included.
         for shown in (case, GAP.sub("", case)):
