@@ -8,11 +8,11 @@ import json
 import re
 from base64 import b64encode, urlsafe_b64encode
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import product
 from typing import Literal, Self
 
-from aqa_runner.bound_secrets import VALUE_WHITESPACE, BoundSecret
+from aqa_runner.bound_secrets import GAP, VALUE_WHITESPACE, BoundSecret
 
 _SCANNED = object()
 
@@ -38,6 +38,9 @@ type _Multiplicity = Literal["", "?", "*", "+"]
 class _Token:
     groups: _Groups
     multiplicity: _Multiplicity = ""
+    # Whether gaps (`GAP`) may come before each of its units: a page can
+    # split a value with them (#195).
+    gapped: bool = False
 
 
 class Redactor:
@@ -60,6 +63,7 @@ class Redactor:
             for secret in self._secrets
         )
         self._groups = frozenset(token.groups for token in tokens)
+        self._gapped = any(token.gapped for token in tokens)
 
     @property
     def empty(self) -> bool:
@@ -111,7 +115,9 @@ class Redactor:
     def _matches(self, text: str) -> dict[int, tuple[int, str]]:
         """Each match's start, with its end and its marker."""
         scan = _Scan(
-            {groups: _transitions(groups, text) for groups in self._groups}, len(text)
+            {groups: _transitions(groups, text) for groups in self._groups},
+            _gaps(text) if self._gapped else {},
+            len(text),
         )
         matches: dict[int, tuple[int, str]] = {}
         for marker, paths in self._paths:
@@ -146,9 +152,17 @@ class _Scan:
     """One text's edges, and the suffixes computed from them, shared by
     every path of every secret."""
 
-    def __init__(self, transitions: _Transitions, length: int) -> None:
+    def __init__(
+        self, transitions: _Transitions, gaps: dict[int, list[int]], length: int
+    ) -> None:
         self.transitions = transitions
         self.length = length
+        self.gaps = gaps
+        # For each offset a gap ends at, where those gaps start.
+        self.into: dict[int, list[int]] = {}
+        for start, ends in self.gaps.items():
+            for end in ends:
+                self.into.setdefault(end, []).append(start)
         self.done: dict[tuple[int, int], dict[int, int]] = {}
 
 
@@ -158,6 +172,7 @@ def _suffix(
     """From each offset, the furthest end of `token` and then `following`
     (the rest of its path; None at its end)."""
     edges = scan.transitions[token.groups]
+    gaps = scan.gaps if token.gapped else {}
     current: dict[int, int] = {}
     if token.multiplicity in ("?", "*"):
         current = (
@@ -166,8 +181,10 @@ def _suffix(
             else following.copy()
         )
     if token.multiplicity in ("*", "+"):
-        return _repeated(edges, following, current)
+        return _repeated(edges, gaps, following, current)
     through = _once(edges, following)
+    if gaps:
+        _carry(through, scan.into)
     if not current:
         return through
     for start, best in through.items():
@@ -188,19 +205,35 @@ def _once(
     return through
 
 
+def _carry(through: dict[int, int], into: dict[int, list[int]]) -> None:
+    """`through` from the start of each run of gaps before an offset it holds."""
+    waiting = list(through)
+    while waiting:
+        end = waiting.pop()
+        for start in into.get(end, ()):
+            if through[end] > through.get(start, -1):
+                through[start] = through[end]
+                waiting.append(start)
+
+
 def _repeated(
     edges: dict[int, list[int]],
+    gaps: dict[int, list[int]],
     following: dict[int, int] | None,
     current: dict[int, int],
 ) -> dict[int, int]:
-    """`current` after one or more units: backward, so a repeat reads ends
-    already final."""
-    for start in sorted(edges, reverse=True):
+    """`current` after one or more units, each after gaps: backward, so a
+    repeat or a gap reads ends already final."""
+    through: dict[int, int] = {}
+    for start in sorted(edges.keys() | gaps.keys(), reverse=True):
         best = -1
-        for end in edges[start]:
+        for end in gaps.get(start, ()):
+            best = max(best, through.get(end, -1))
+        for end in edges.get(start, ()):
             matched = end if following is None else following.get(end, -1)
             best = max(best, matched, current.get(end, -1))
         if best >= 0:
+            through[start] = best
             current[start] = max(current.get(start, -1), best)
     return current
 
@@ -272,36 +305,107 @@ _PARTIAL = _Token((_compile(1, "[a-z0-9+/_-]"), _compile(3, "%[0-9a-f]{2}")), "?
 _PADDING = _token(("=", "%3d"), "*")
 
 
+def _utf8(mark: str) -> str:
+    """One character's UTF-8 bytes, each written `mark` and two hex digits."""
+    byte = mark + "[89ab][0-9a-f]"
+    return "|".join(
+        (
+            mark + "[cd][0-9a-f]" + byte,
+            mark + "e[0-9a-f]" + byte * 2,
+            mark + "f[0-4]" + byte * 3,
+        )
+    )
+
+
+def _from_bytes(escaped: str) -> str:
+    return bytes(
+        int(pair, 16) for pair in re.findall("[0-9a-f]{2}", escaped, re.IGNORECASE)
+    ).decode("utf-8", "replace")
+
+
+def _from_units(escaped: str) -> str:
+    units = re.split(r"\\u", escaped, flags=re.IGNORECASE)[1:]
+    joined = "".join(chr(int(unit, 16)) for unit in units)
+    return joined.encode("utf-16-le", "surrogatepass").decode("utf-16-le", "replace")
+
+
+# A gap escaped, in each spelling the scan finds a value's own characters in
+# or Python's repr writes (a `RefError`'s quoted ref, `error_text`'s
+# escapes): UTF-8 bytes percent-encoded or as `\x`, JSON's `\u` and its
+# surrogate pairs, repr's `\x`, `\u` and `\U`. Each is decoded and kept
+# only when it is one character of `GAP`, so the private-use areas' 137,468
+# code points cost no table.
+_ESCAPED = tuple(
+    (re.compile(f"(?=({pattern}))", re.IGNORECASE), decode)
+    for pattern, decode in (
+        (_utf8("%"), _from_bytes),
+        (_utf8(r"\\x"), _from_bytes),
+        (
+            r"\\x[0-9a-f]{2}",
+            lambda escaped: bytes.fromhex(escaped[2:]).decode("latin-1"),
+        ),
+        (r"\\ud[89ab][0-9a-f]{2}\\ud[c-f][0-9a-f]{2}|\\u[0-9a-f]{4}", _from_units),
+        (r"\\U00(?:0[0-9a-f]|10)[0-9a-f]{4}", _from_units),
+    )
+)
+
+
+def _gaps(text: str) -> dict[int, list[int]]:
+    """Where a gap starts in `text`, as written or escaped, and where it ends."""
+    edges: dict[int, list[int]] = {}
+    for found in GAP.finditer(text):
+        edges.setdefault(found.start(), []).append(found.end())
+    for pattern, decode in _ESCAPED:
+        for found in pattern.finditer(text):
+            if GAP.fullmatch(decode(found[1])):
+                edges.setdefault(found.start(), []).append(found.end(1))
+    return edges
+
+
 def _needle(value: str) -> tuple[_Token, ...]:
     parts = []
     for found in re.finditer(f"[{re.escape(VALUE_WHITESPACE)}]+|.", value, re.DOTALL):
         text = found[0]
         if text[0] in VALUE_WHITESPACE:
-            # Producers trim ends and collapse interior whitespace runs.
-            parts.append(
-                _Token(
-                    _SPACE.groups,
-                    "*" if found.start() == 0 or found.end() == len(value) else "+",
-                )
+            # Producers trim ends and collapse interior whitespace runs, and a
+            # page can leave out a run of the value's own gaps (U+FEFF), each
+            # run on its own.
+            optional = (
+                found.start() == 0 or found.end() == len(value) or not GAP.sub("", text)
             )
+            parts.append(_Token(_SPACE.groups, "*" if optional else "+"))
         else:
-            parts.append(
-                _token(_character_forms(text), "?" if text in "\u200b\u00ad" else "")
-            )
+            # A value's own gap can be left out.
+            parts.append(_token(_character_forms(text), "?" if GAP.match(text) else ""))
     return tuple(parts)
+
+
+def _chains(tokens: tuple[_Token, ...]) -> list[tuple[_Token, ...]]:
+    """Paths for `tokens`, each unit after the first allowed a gap before
+    it. A match starts with a unit, never a gap, so an optional first token
+    is either required or left out."""
+    if not tokens:
+        return []
+    first, *rest = tokens
+    chain = (first, *(replace(token, gapped=True) for token in rest))
+    if first.multiplicity in ("", "+") or not rest:
+        return [chain]
+    required = replace(first, multiplicity="" if first.multiplicity == "?" else "+")
+    return [(required, *chain[1:]), *_chains(tuple(rest))]
 
 
 def _paths(value: str) -> tuple[tuple[_Token, ...], ...]:
     encodings = {value.encode()}
     if all(ord(char) < 256 for char in value):
         encodings.add(value.encode("latin-1"))
-    producer_value = value.replace("\u200b", "").replace("\u00ad", "")
-    paths = [
-        _needle(value),
-        _needle(value.lower()),
-        _needle(producer_value),
-        _needle(producer_value.lower()),
-    ]
+    paths: list[tuple[_Token, ...]] = []
+    # Lowercasing or casefolding can lengthen a value (İ, ß): then each
+    # character of the result is a unit of its own, which a gap can split.
+    for case in (value, value.lower(), value.casefold()):
+        # A page can leave out the value's own gaps, U+FEFF (JavaScript
+        # whitespace) included.
+        for shown in (case, GAP.sub("", case)):
+            paths.extend(_chains(_needle(shown)))
     for raw in encodings:
         for alignment in range(3):
             # Only characters whose six bits lie wholly inside the value.
@@ -311,7 +415,7 @@ def _paths(value: str) -> tuple[tuple[_Token, ...], ...]:
                 if len(core) >= 4:
                     before = (_PARTIAL,) if alignment else ()
                     after = (_PARTIAL,) if (alignment + len(raw)) * 8 % 6 else ()
-                    paths.append(before + _needle(core) + after + (_PADDING,))
+                    paths.extend(_chains(before + _needle(core) + after + (_PADDING,)))
     return tuple(dict.fromkeys(paths))
 
 
