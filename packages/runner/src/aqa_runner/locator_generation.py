@@ -821,7 +821,7 @@ class TargetUses:
 
 # What a locator, alone, finds at a negative check: its scope with nothing
 # visible in it, something visible there (one match or several), no scope,
-# or nothing known, because the page broke the look.
+# or nothing known, because the page broke the look or changed under it.
 type _Look = Literal["absent", "shown", "no scope", "broken"]
 
 
@@ -839,6 +839,8 @@ async def _look(page: Page, locator: Locator, contract: Contract | None) -> _Loo
             return "shown"
         if found.misses == ("no region",):
             raise NegativeCheckError("its region is not on the page exactly once")
+        if found.misses == ("page changed",):
+            return "broken"
         return "no scope" if found.misses == ("no scope",) else "shown"
 
     return await _unless_the_page_breaks(page, look(), "broken")

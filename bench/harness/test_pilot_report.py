@@ -14,6 +14,7 @@ from aqa_runner.invariants import INVARIANTS, InvariantResult
 from manifest import DRIFT, VIOLATED, Expected
 from pilot_replay import AttemptHealth, FailedAttempt, ObservedAttempt
 from pilot_report import (
+    Entry,
     Pair,
     Report,
     admits_patch,
@@ -316,6 +317,33 @@ class PilotReportTests(unittest.TestCase):
             (shown["status"], "assertion_provenance" in doc), ("accepted", False)
         )
         self.assertEqual(found, [("a0", None, "pass", None), ("a1", "send", "pass", 1)])
+
+    def test_a_check_the_page_changed_under_is_binding_only_and_kept_in_its_receipt(
+        self,
+    ) -> None:
+        nav = StepResult(0, "completed", settled="idle")
+        steps = (nav, replace(nav, seq=1, locator_index=0))
+        changed = AssertionResult("a1", "binding_unresolved", ("page changed",))
+        checks = (AssertionResult("a0", "pass"), changed)
+        held = tuple(InvariantResult(name, "held", (), 0) for name in INVARIANTS)
+        egress = EgressBlocks((), False)
+        failed = RunResult("r2", "failed", steps, checks, (), (), held, egress, None)
+        attempt = seen(observe(SCRIPT, failed, invariants=SETTINGS))
+        kind = classify(attempt, SETTINGS)
+        entry = Entry("scored", attempt, kind)
+        saved = json.loads(json.dumps(receipt(None, "pilot", entry, SCRIPT)))
+        found = [
+            (a["id"], a["outcome"], a["misses"], a["locator_index"])
+            for a in saved["assertions"]
+        ]
+        self.assertEqual(kind, "binding_only")
+        self.assertEqual(
+            found,
+            [
+                ("a0", "pass", [], None),
+                ("a1", "binding_unresolved", ["page changed"], None),
+            ],
+        )
 
     def test_an_error_in_any_leg_makes_its_pair_fatal(self) -> None:
         broken = (NAV, CLICK._replace(error=True))
