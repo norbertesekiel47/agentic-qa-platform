@@ -429,6 +429,12 @@ FORM_PART = contracted(
     inside("form.f", "div.inner"),
     contract=Contract(region="div.banner", part="form.f", leaf=False),
 )
+# The banner's form, under a contract whose part is something else.
+FORM_NOT_THE_PART = contracted(
+    inside("form.f", "div.inner"),
+    contract=Contract(region="div.banner", part="p.part", leaf=False),
+)
+NOT_THE_PART_PAIR = (Unresolved(("not the part",)),) * 2
 FORM_REGION_PAGE = (
     '<form class="banner">' + NT + '<span class="counter"{}>(3)</span></form>'
 )
@@ -475,6 +481,12 @@ FORMS = {
     ),
     "contracted, part a plain form, shown": Row(
         BANNER.format(""), FORM_PART, SHOWN_PAIR
+    ),
+    "contracted, a nodeType form that isn't the part, shown": Row(
+        BANNER.format(NT), FORM_NOT_THE_PART, NOT_THE_PART_PAIR
+    ),
+    "contracted, a plain form that isn't the part, shown": Row(
+        BANNER.format(""), FORM_NOT_THE_PART, NOT_THE_PART_PAIR
     ),
     "contracted, region a nodeType form, part shown": Row(
         FORM_REGION_PAGE.format(""), FORM_REGION, SHOWN_PAIR
