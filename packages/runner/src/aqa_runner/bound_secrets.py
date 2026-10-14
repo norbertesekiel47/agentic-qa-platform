@@ -107,7 +107,9 @@ def bound_secrets(spec: Spec, start: str) -> dict[str, BoundSecret]:
     `MissingSecretError`. Whitespace-only values and values shorter than four
     bytes after JavaScript whitespace trimming in UTF-8 or Latin-1 (when
     encodable) are refused too: the scan needs four-character base64 cores
-    at every byte alignment.
+    at every byte alignment. So are values with fewer than four bytes
+    besides their gaps (`GAP`): the scan finds a value without them, so it
+    would replace text that short.
 
     Nor are secrets bound where Playwright would log the messages that carry
     a value (`SecretLoggedError`): `DEBUGP` makes its Python client print
@@ -153,12 +155,22 @@ def _value_problem(value: str) -> str | None:
     trimmed = value.strip(VALUE_WHITESPACE)
     if not trimmed:
         return "is only whitespace; set it to a nonblank test secret"
-    encodings = [trimmed.encode()]
-    if all(ord(char) < 256 for char in trimmed):
-        encodings.append(trimmed.encode("latin-1"))
-    if any(len(encoded) < 4 for encoded in encodings):
+    if _short(trimmed):
         return "must have at least 4 bytes after trimming in UTF-8 and, when encodable, Latin-1"
+    if _short(GAP.sub("", trimmed).strip(VALUE_WHITESPACE)):
+        return (
+            "must have at least 4 bytes without Unicode's default-ignorable and "
+            "private-use characters in UTF-8 and, when encodable, Latin-1, since "
+            "a page can leave them out"
+        )
     return None
+
+
+def _short(text: str) -> bool:
+    encodings = [text.encode()]
+    if all(ord(char) < 256 for char in text):
+        encodings.append(text.encode("latin-1"))
+    return any(len(encoded) < 4 for encoded in encodings)
 
 
 def _protocol_logging(environ: Mapping[str, str]) -> str | None:
