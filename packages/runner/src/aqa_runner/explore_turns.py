@@ -5,7 +5,8 @@ router and the run's spend ride in its context, never in state.
 Each turn takes the page's one observation, builds one fresh request
 (`navigator.navigator_request`) and runs at most the reply's first tool
 call. Each priced response is on disk in `costs.jsonl` before the next call,
-and each request sent leaves `turns/<n>.json`, whatever came back."""
+and each request sent leaves `turns/<n>.json`, whatever came back, unless
+its cost line isn't on disk or the call is cancelled."""
 
 import json
 from collections.abc import Callable, Sequence
@@ -76,10 +77,16 @@ class UnsentRequestError(Exception):
 def unspelled(redactor: Redactor) -> Callable[[Sequence[BaseMessage]], None]:
     """The check a model request of the run passes before it is sent:
     `UnsentRequestError` when any of its messages still spells a value
-    `redactor` binds, such as one a join at a marker's edge completes."""
+    `redactor` binds, such as one a join at a marker's edge completes:
+    in its text, or anywhere in it as JSON, content blocks and tool calls
+    included."""
 
     def check(messages: Sequence[BaseMessage]) -> None:
-        if any(redactor.finds(message.text) for message in messages):
+        if any(
+            redactor.finds(message.text)
+            or redactor.finds(json.dumps(message.model_dump(mode="json")))
+            for message in messages
+        ):
             raise UnsentRequestError
 
     return check
@@ -149,11 +156,10 @@ class Turning:
 
 @dataclass(frozen=True)
 class _Reply:
-    """What a request sent got: the reply, if one came; how many responses
-    it priced; and the stop it makes, if any."""
+    """What a request sent got: the reply, if one came, and the stop it
+    makes, if any."""
 
     routed: Routed | None
-    priced: int
     stop: Stop | None
 
 
@@ -182,11 +188,11 @@ def _next(state: Turns) -> str:
 async def _turn(state: Turns, runtime: Runtime[Turning]) -> Turns:
     context = runtime.context
     taken = await _taken(context, state)
-    if taken is None or isinstance(taken, Stop):
-        if taken is not None:
-            context.stops.append(taken)
-        return state | {"done": True}
-    return taken
+    if isinstance(taken, Stop):
+        context.stops.append(taken)
+    elif taken is not None:
+        return taken
+    return state | {"done": True}
 
 
 async def _taken(context: Turning, state: Turns) -> Turns | Stop | None:
@@ -200,12 +206,13 @@ async def _taken(context: Turning, state: Turns) -> Turns | Stop | None:
     if attempt.interrupted():
         # Its observation's included: no call is made.
         return None
+    priced = len(context.spending.calls)
     reply = await _called(context, messages)
     if isinstance(reply, Stop):
         return reply
     number = state["turn"] + 1
     try:
-        chosen = _kept(context, number, messages, reply)
+        chosen = _kept(context, number, messages, reply, priced)
         if reply.stop is not None or chosen is None or attempt.interrupted():
             return reply.stop
         results, logged = await _ran(context, chosen)
@@ -218,7 +225,7 @@ async def _taken(context: Turning, state: Turns) -> Turns | Stop | None:
         log=(*state["log"], *logged),
         notes=chosen.notes,
         results=results,
-        done=bool(context.stops or context.script) or attempt.interrupted(),
+        done=context.script is not None or attempt.ended or attempt.interrupted(),
     )
 
 
@@ -265,40 +272,38 @@ async def _called(context: Turning, messages: list[BaseMessage]) -> _Reply | Sto
         return Stop("gave_up", context.said(UNSENT))
     except UnrecordedCostError:
         return Stop("record_error", context.said(UNRECORDED))
-    except ModelCallError as error:
-        if not isinstance(error.__cause__, ProviderError):
+    except (ModelCallError, ProviderError) as error:
+        failed = error.__cause__ if isinstance(error, ModelCallError) else error
+        if not isinstance(failed, ProviderError):
             raise
-        return _Reply(None, len(error.records), _silent(context, error.__cause__))
-    except ProviderError as error:
-        return _Reply(None, 0, _silent(context, error))
+        # The error's class, never the provider's message.
+        why = f"the model gave no response ({type(failed).__name__})"
+        return _Reply(None, Stop("no_response", context.said(why)))
     if routed.outcome == "refusal":
         stop: Stop | None = Stop("gave_up", context.said("the model refused its turn"))
     else:
         over = context.spending.left < 0
         stop = Stop("gave_up", context.said(_OVER)) if over else None
-    return _Reply(routed, len(routed.calls), stop)
-
-
-def _silent(context: Turning, error: ProviderError) -> Stop:
-    """The stop a call with no response makes: fixed words and the error's
-    class, never the provider's message."""
-    why = f"the model gave no response ({type(error).__name__})"
-    return Stop("no_response", context.said(why))
+    return _Reply(routed, stop)
 
 
 def _kept(
-    context: Turning, number: int, messages: list[BaseMessage], reply: _Reply
+    context: Turning,
+    number: int,
+    messages: list[BaseMessage],
+    reply: _Reply,
+    priced: int,
 ) -> Decision | None:
     """Write `turns/<number>.json`: the turn as sent, the reply's first
-    tool call and notes, and the lines of its cost records in `costs.jsonl`;
-    then the reply's decision, if a reply came."""
+    tool call and notes, and the lines of the cost records it added to
+    `costs.jsonl`, past the `priced` before it; then the reply's decision,
+    if a reply came."""
     redactor = context.redactor
     routed = reply.routed
     chosen = None if routed is None else decision(routed)
     calls = [] if routed is None else routed.message.tool_calls
     first = None if not calls else {"name": calls[0]["name"], "args": calls[0]["args"]}
     name = f"turns/{number}.json"
-    lines = len(context.spending.calls)
     context.spending.record.write(
         name,
         {
@@ -308,7 +313,7 @@ def _kept(
             "call": None if first is None else redactor.redact(json.dumps(first)),
             "unrun": 0 if chosen is None else chosen.unrun,
             "notes": "" if chosen is None else redactor.redact(chosen.notes),
-            "costs": list(range(lines - reply.priced + 1, lines + 1)),
+            "costs": list(range(priced + 1, len(context.spending.calls) + 1)),
         },
         check=require_clean(redactor, name),
     )
@@ -338,7 +343,10 @@ async def _ran(
         text, logged = acted.text, _line(call, acted.step)
         if attempt.ended:
             context.stops.append(Stop("gave_up", acted.text))
-    unrun = f"{chosen.unrun} more tool calls in the reply didn't run: a turn runs one"
+    unrun = (
+        f"only the first of the reply's {chosen.unrun + 1} tool calls ran: "
+        "a turn runs one"
+    )
     return ((text, unrun) if chosen.unrun else (text,)), logged
 
 
