@@ -151,6 +151,10 @@ One pass through a run from step 1, in a fresh browser and after the spec's rese
 What a navigator tool returns when it refused a call before writing its step intent: nothing was dispatched, and the attempt goes on. A failure after the intent ends the attempt instead.
 _Avoid_: failed step
 
+**Navigator turn**:
+One request to the navigator model during an attempt, and the one tool call of its reply that runs. The request is built fresh from the attempt's log, the model's last notes, what its last call did and one observation of the page, never from an earlier request.
+_Avoid_: step, which is an action the run dispatched
+
 ### Healing and verdicts
 
 **Drift**:
