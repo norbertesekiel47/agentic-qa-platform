@@ -185,14 +185,44 @@ def test_a_match_takes_the_values_own_ends_and_no_gap_beside_them(
     assert scan(value).redact(text) == redacted
 
 
-def test_a_final_sigma_beside_a_left_out_gap_is_found_in_every_spelling() -> None:
-    # Without its private-use character, the value's lowercase ends in a
-    # final sigma, which percent-encoding and JSON write apart from the
-    # other small sigma.
-    redactor = scan(
-        f"FAKE-\N{GREEK CAPITAL LETTER OMICRON}{PUA}\N{GREEK CAPITAL LETTER SIGMA}"
-    )
-    shown = "fake-\N{GREEK SMALL LETTER OMICRON}\N{GREEK SMALL LETTER FINAL SIGMA}"
+OMICRON, SIGMA, ALPHA = (
+    "\N{GREEK CAPITAL LETTER OMICRON}",
+    "\N{GREEK CAPITAL LETTER SIGMA}",
+    "\N{GREEK CAPITAL LETTER ALPHA}",
+)
+SMALL_OMICRON, FINAL_SIGMA, SMALL_ALPHA = (
+    "\N{GREEK SMALL LETTER OMICRON}",
+    "\N{GREEK SMALL LETTER FINAL SIGMA}",
+    "\N{GREEK SMALL LETTER ALPHA}",
+)
+
+
+# A sigma's lowercase is final (and percent-encoding and JSON write it apart
+# from the other small sigma) when no letter follows it, past characters
+# that don't count, which private-use characters and Hangul fillers do.
+@pytest.mark.parametrize(
+    ("value", "shown"),
+    [
+        (f"FAKE-{OMICRON}{PUA}{SIGMA}", f"fake-{SMALL_OMICRON}{FINAL_SIGMA}"),
+        (
+            f"FAKE-{OMICRON}{SIGMA}{ALPHA}",
+            f"fake-{SMALL_OMICRON}{FINAL_SIGMA}{PUA}{SMALL_ALPHA}",
+        ),
+        (
+            f"FAKE-{OMICRON}{SIGMA}{ALPHA}",
+            f"fake-{SMALL_OMICRON}{FINAL_SIGMA}\N{HANGUL FILLER}{SMALL_ALPHA}",
+        ),
+        (
+            f"FAKE-{OMICRON}{PUA}{SIGMA}{PLANE15}{ALPHA}",
+            f"fake-{SMALL_OMICRON}{FINAL_SIGMA}{PLANE15}{SMALL_ALPHA}",
+        ),
+    ],
+    ids=["own-gap-out", "private-use-in", "hangul-filler-in", "one-own-gap-out"],
+)
+def test_a_final_sigma_a_gap_makes_is_found_in_every_spelling(
+    value: str, shown: str
+) -> None:
+    redactor = scan(value)
     spellings = [shown, quote(shown, safe=""), json.dumps(shown)[1:-1]]
     turn = Turn(
         log=(),

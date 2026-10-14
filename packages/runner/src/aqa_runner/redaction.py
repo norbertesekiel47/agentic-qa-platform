@@ -329,9 +329,23 @@ def _percent(text: str) -> str:
     return "".join(f"%{byte:02x}" for byte in text.encode())
 
 
+# A sigma's lowercase is final or not by what follows it (Unicode's
+# Final_Sigma), which a page's gaps and text change, so each spells all three.
+_SIGMAS = frozenset(
+    (
+        "\N{GREEK CAPITAL LETTER SIGMA}",
+        "\N{GREEK SMALL LETTER SIGMA}",
+        "\N{GREEK SMALL LETTER FINAL SIGMA}",
+    )
+)
+
+
 def _character_forms(char: str) -> set[str]:
     forms: set[str] = set()
-    for case in (char, char.upper(), char.lower(), char.casefold()):
+    cases = {char, char.upper(), char.lower(), char.casefold()}
+    if cases & _SIGMAS:
+        cases |= _SIGMAS
+    for case in cases:
         forms.update((case, _percent(case), json.dumps(case)[1:-1]))
         if len(case) > 1:
             forms.update(
@@ -450,10 +464,7 @@ def _paths(value: str) -> tuple[tuple[_Token, ...], ...]:
     paths: list[tuple[_Token, ...]] = []
     # Lowercasing or casefolding can lengthen a value (İ, ß): then each
     # character of the result is a unit of its own, which a gap can split.
-    # A gap left out can change a final sigma's lowercase (a private-use
-    # character just before a final Σ), so the gap-free value's lowercase
-    # is a path too.
-    for case in (value, value.lower(), value.casefold(), GAP.sub("", value).lower()):
+    for case in (value, value.lower(), value.casefold()):
         # A page can leave out the value's own gaps, U+FEFF (JavaScript
         # whitespace) included.
         for shown in (case, GAP.sub("", case)):
