@@ -282,3 +282,44 @@ def test_a_value_with_four_bytes_in_every_supported_encoding_is_usable(
     monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", value)
     held = bound_secrets(secret_spec(tmp_path), START)["TEST_PASSWORD"]
     assert held.value.get_secret_value() == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "\N{ZERO WIDTH JOINER}" * 4 + "a",
+        "\N{ZERO WIDTH SPACE}" * 2 + "abc\N{SOFT HYPHEN}",
+        "\N{ZERO WIDTH JOINER} \N{ZERO WIDTH JOINER}" * 2,
+        chr(0xE001) * 4 + "ab",
+    ],
+    ids=["one-shown", "three-shown", "none-shown", "private-use"],
+)
+def test_a_value_showing_under_four_bytes_is_refused_before_the_browser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    # Deliberately unusable fake values: under 4 bytes besides their gaps,
+    # Unicode's default-ignorable and private-use characters (#53 ZW).
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", value)
+
+    with pytest.raises(MissingSecretError) as raised:
+        bound_secrets(secret_spec(tmp_path), START)
+
+    assert raised.value.exit_code == 12
+    assert raised.value.problems == (
+        (
+            "AQA_SECRET_TEST_PASSWORD must have at least 4 bytes without "
+            "Unicode's default-ignorable and private-use characters in UTF-8 "
+            "and, when encodable, Latin-1, since a page can leave them out"
+        ),
+    )
+
+
+def test_a_value_showing_four_bytes_is_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    value = "\N{ZERO WIDTH JOINER}ab\N{ZERO WIDTH JOINER}cd"
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", value)
+
+    held = bound_secrets(secret_spec(tmp_path), START)["TEST_PASSWORD"]
+
+    assert held.value.get_secret_value() == value
