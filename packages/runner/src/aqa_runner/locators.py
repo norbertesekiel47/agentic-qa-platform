@@ -33,9 +33,18 @@ type Use = Literal["action", "assertion", "negative_check"]
 # Why one locator didn't give the match its use needs: the page's misses,
 # then a contracted target's region misses (`aqa_runner.binding`). Under
 # `resolve_every`, a locator that found an element the target's other
-# locators don't all find is not unanimous.
+# locators don't all find is not unanimous. A negative check's zero or
+# missing scope that no read could prove, the page having changed under the
+# look, is page changed.
 type Miss = (
-    Literal["no scope", "no match", "ambiguous", "not actionable", "not unanimous"]
+    Literal[
+        "no scope",
+        "no match",
+        "ambiguous",
+        "not actionable",
+        "not unanimous",
+        "page changed",
+    ]
     | BindingMiss
 )
 
@@ -295,7 +304,10 @@ async def resolve(
       first unique visible match. Only when no locator finds one, none finds
       several, and at least one finds no visible match in its scope is the
       element absent; otherwise it is drift. An unscoped locator's scope is
-      the page.
+      the page. Outside a held region, absence takes each scoped locator's
+      no match or no scope only once one more read, as `resolve_every`
+      reads a zero, proves it; a page that changed under the look is page
+      changed, which is drift.
 
     A target with a contract (ADR-0025's #53 P7b-II amendment) holds its
     region's one element for the call, and each locator looks inside the
@@ -544,8 +556,30 @@ async def _resolve(
         and "no match" in misses
         and set(misses) <= {"no scope", "no match"}
     ):
-        return await _absence(held, misses)
+        if held is None:
+            misses = await _proven(page, target, misses)
+        if "page changed" not in misses:
+            return await _absence(held, misses)
     return Unresolved(tuple(misses))
+
+
+async def _proven(page: Page, target: Target, misses: list[Miss]) -> list[Miss]:
+    """Each of `target`'s locators' no match or no scope as one more read
+    proves it now, the read `resolve_every` decides a zero by: no match while
+    each scope is one element with nothing visible in it, no scope while the
+    scopes don't stand, and otherwise page changed. The no-scope proof must
+    find the page's root element, so a read that can't see it proves
+    nothing. An unscoped locator's count already read the whole page."""
+    proven: list[Miss] = []
+    for locator, miss in zip(target.locators, misses, strict=True):
+        stood, visible = _stood(page, locator, None)
+        if stood is None:
+            proven.append(miss)
+            continue
+        fallen = page.locator("css=:root").filter(has_not=stood)
+        proof = stood.filter(has_not=visible) if miss == "no match" else fallen
+        proven.append(miss if await proof.count() else "page changed")
+    return proven
 
 
 async def _absence(held: HeldRegion | None, misses: list[Miss]) -> Absent | Unresolved:
