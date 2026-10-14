@@ -162,6 +162,29 @@ def test_a_value_holding_one_is_found_with_or_without_it() -> None:
     ] == [MARKER] * 8
 
 
+WJ = "\N{WORD JOINER}"
+
+
+@pytest.mark.parametrize(
+    ("value", "text", "redacted"),
+    [
+        (f"{BOM}{VALUE}{BOM}", f"x{ZWJ}{VALUE}{ZWJ}y", f"x{ZWJ}{MARKER}{ZWJ}y"),
+        (f" {VALUE}", f"x  {VALUE} y", f"x{MARKER} y"),
+        (f"{VALUE}{ZWJ}{WJ}", f"<{VALUE}{WJ}>", f"<{MARKER}>"),
+        (
+            f"fake{ZWJ}{ZWJ}secret",
+            f"<fake{ZWJ}secret> <fakesecret> <fake%E2%80%8D%e2%80%8dsecret>",
+            f"<{MARKER}> <{MARKER}> <{MARKER}>",
+        ),
+    ],
+    ids=["whitespace-ends", "leading-run", "own-gaps-at-the-end", "own-gaps"],
+)
+def test_a_match_takes_the_values_own_ends_and_no_gap_beside_them(
+    value: str, text: str, redacted: str
+) -> None:
+    assert scan(value).redact(text) == redacted
+
+
 def test_a_final_sigma_beside_a_left_out_gap_is_found_in_every_spelling() -> None:
     # Without its private-use character, the value's lowercase ends in a
     # final sigma, which percent-encoding and JSON write apart from the
