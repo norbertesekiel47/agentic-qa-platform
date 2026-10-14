@@ -858,6 +858,20 @@ def test_a_request_spelling_a_bound_value_in_any_part_is_refused(
     )
 
 
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [("fake\\u2019", "the fake\u2019s cart"), ("Human", "a page")],
+    ids=["an escape of other text", "a message's own fields"],
+)
+def test_a_request_spelling_no_bound_value_is_sent(value: str, text: str) -> None:
+    check = unspelled(Redactor([bound("http://127.0.0.1", value)]))
+
+    assert (
+        check([SystemMessage(content="instructions"), HumanMessage(content=text)])
+        is None
+    )
+
+
 def test_a_block_during_the_call_runs_none_of_the_reply(
     app: App, tmp_path: Path
 ) -> None:
