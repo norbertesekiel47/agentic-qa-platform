@@ -459,8 +459,9 @@ def _stood(
     filter is on the root element: Playwright's has and has-not skip a form
     whose control is named nodeType, and a scope or region may be one. Each
     filter's query starts at the document, so it reads the page as `_scoped`
-    does, the root element included. Written from `:scope`, it reads the
-    same inside a filter on the root."""
+    does, the root element included. The query is written from `:scope`,
+    which is the root element at the page and the filtered element inside a
+    filter, so `_proven` can read it inside a filter on the root."""
     scopes: list[Locator] = []
     level = locator.scope
     while level is not None:
