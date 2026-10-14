@@ -18,7 +18,7 @@ from typing import Final, TypedDict
 from aqa_core.compiled import CompiledScript
 from aqa_core.compiler import Provenance
 from aqa_core.model_costs import CostRecord
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
@@ -77,17 +77,16 @@ class UnsentRequestError(Exception):
 def unspelled(redactor: Redactor) -> Callable[[Sequence[BaseMessage]], None]:
     """The check a model request of the run passes before it is sent:
     `UnsentRequestError` when any of its messages still spells a value
-    `redactor` binds, such as one a join at a marker's edge completes:
-    in its text, or anywhere in it as JSON, content blocks and tool calls
-    included."""
+    `redactor` binds, such as one a join at a marker's edge completes: in
+    its text, or in its content and tool calls as JSON, non-ASCII as
+    written, so no other text's escape counts as a spelling."""
 
     def check(messages: Sequence[BaseMessage]) -> None:
-        if any(
-            redactor.finds(message.text)
-            or redactor.finds(json.dumps(message.model_dump(mode="json")))
-            for message in messages
-        ):
-            raise UnsentRequestError
+        for message in messages:
+            calls = message.tool_calls if isinstance(message, AIMessage) else []
+            sent = json.dumps([message.content, calls], ensure_ascii=False)
+            if redactor.finds(message.text) or redactor.finds(sent):
+                raise UnsentRequestError
 
     return check
 
