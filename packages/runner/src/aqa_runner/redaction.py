@@ -47,13 +47,19 @@ class Redactor:
         self._secrets = tuple(
             sorted(secrets, key=lambda secret: -len(secret.value.get_secret_value()))
         )
+        # One object per distinct token, so a scan reuses what paths share.
+        tokens: dict[_Token, _Token] = {}
         self._paths = tuple(
-            (f"[SECRET:{secret.name}]", _paths(secret.value.get_secret_value()))
+            (
+                f"[SECRET:{secret.name}]",
+                tuple(
+                    tuple(tokens.setdefault(token, token) for token in path)
+                    for path in _paths(secret.value.get_secret_value())
+                ),
+            )
             for secret in self._secrets
         )
-        self._groups = frozenset(
-            token.groups for _, paths in self._paths for path in paths for token in path
-        )
+        self._groups = frozenset(token.groups for token in tokens)
 
     @property
     def empty(self) -> bool:
@@ -104,10 +110,12 @@ class Redactor:
 
     def _matches(self, text: str) -> dict[int, tuple[int, str]]:
         """Each match's start, with its end and its marker."""
-        transitions = {groups: _transitions(groups, text) for groups in self._groups}
+        scan = _Scan(
+            {groups: _transitions(groups, text) for groups in self._groups}, len(text)
+        )
         matches: dict[int, tuple[int, str]] = {}
         for marker, paths in self._paths:
-            for start, end in _endpoints(paths, transitions, len(text)).items():
+            for start, end in _endpoints(paths, scan).items():
                 matches.setdefault(start, (end, marker))
         return matches
 
@@ -134,41 +142,80 @@ def _transitions(groups: _Groups, text: str) -> dict[int, list[int]]:
     return edges
 
 
+class _Scan:
+    """One text's edges, and the suffixes computed from them, shared by
+    every path of every secret."""
+
+    def __init__(self, transitions: _Transitions, length: int) -> None:
+        self.transitions = transitions
+        self.length = length
+        self.done: dict[tuple[int, int], dict[int, int]] = {}
+
+
 def _suffix(
-    token: _Token,
-    edges: dict[int, list[int]],
-    following: dict[int, int] | None,
-    length: int,
+    token: _Token, following: dict[int, int] | None, scan: _Scan
 ) -> dict[int, int]:
+    """From each offset, the furthest end of `token` and then `following`
+    (the rest of its path; None at its end)."""
+    edges = scan.transitions[token.groups]
     current: dict[int, int] = {}
     if token.multiplicity in ("?", "*"):
         current = (
-            dict(enumerate(range(length + 1)))
+            dict(enumerate(range(scan.length + 1)))
             if following is None
             else following.copy()
         )
-    repeated = token.multiplicity in ("*", "+")
-    starts: Iterable[int] = range(length, -1, -1) if repeated else edges
-    for start in starts:
-        for end in edges.get(start, ()):
-            matched = end if following is None else following.get(end, -1)
-            if repeated:
-                matched = max(matched, current.get(end, -1))
-            if matched >= 0:
-                current[start] = max(current.get(start, -1), matched)
+    if token.multiplicity in ("*", "+"):
+        return _repeated(edges, following, current)
+    through = _once(edges, following)
+    if not current:
+        return through
+    for start, best in through.items():
+        current[start] = max(current.get(start, -1), best)
     return current
 
 
-def _endpoints(
-    paths: tuple[tuple[_Token, ...], ...],
-    transitions: _Transitions,
-    length: int,
+def _once(
+    edges: dict[int, list[int]], following: dict[int, int] | None
 ) -> dict[int, int]:
+    """From each offset, the furthest end through one unit, then `following`."""
+    through: dict[int, int] = {}
+    for start, ends in edges.items():
+        for end in ends:
+            matched = end if following is None else following.get(end, -1)
+            if matched > through.get(start, -1):
+                through[start] = matched
+    return through
+
+
+def _repeated(
+    edges: dict[int, list[int]],
+    following: dict[int, int] | None,
+    current: dict[int, int],
+) -> dict[int, int]:
+    """`current` after one or more units: backward, so a repeat reads ends
+    already final."""
+    for start in sorted(edges, reverse=True):
+        best = -1
+        for end in edges[start]:
+            matched = end if following is None else following.get(end, -1)
+            best = max(best, matched, current.get(end, -1))
+        if best >= 0:
+            current[start] = max(current.get(start, -1), best)
+    return current
+
+
+def _endpoints(paths: tuple[tuple[_Token, ...], ...], scan: _Scan) -> dict[int, int]:
     best: dict[int, int] = {}
     for path in paths:
         following = None
         for token in reversed(path):
-            following = _suffix(token, transitions[token.groups], following, length)
+            # Paths share tails (base64's partial and padding, a value's
+            # forms), each computed once per scan.
+            key = (id(token), id(following))
+            if key not in scan.done:
+                scan.done[key] = _suffix(token, following, scan)
+            following = scan.done[key]
             if not following:
                 break
         for start, end in (following or {}).items():
