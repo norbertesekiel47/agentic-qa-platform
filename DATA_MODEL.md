@@ -334,6 +334,7 @@ Free-form notes for humans. The agent never reads the body; anything that affect
   - *As parsed:* the hash covers the YAML's values, not normalized ones, so `HTTPS://Pay.test` and `https://pay.test` hash differently. A field the model gains later never changes an existing hash.
 - **`confirmed`** is `true` when the confirmation replay passed. It is `false` when a path with side-effect steps was written without one because the spec has no reset hook (ADR-0024).
 - **Location:** `<spec root>/.compiled/<spec id>.json`. The spec root is the directory holding `config.yaml` (§9), and spec IDs are unique per project (§6).
+- **Publishing** (`aqa_runner.publication`, ADR-0024's #53 P16a amendment). Explore writes the file only under the spec's publication lock, `<spec root>/.aqa/locks/<spec id>.lock`, which is never removed, and only while the spec, the project's subject contracts and the file itself are as the run found them. The text is the script's JSON without null fields, indented by two spaces, with a final newline. A temporary file beside it, `.<spec id>.<random>.tmp`, holds the whole text, forced to disk, before a `link` (no file was there) or a `rename` installs it; one stays only when removing it failed. A link at `.compiled`, the file, `.aqa`, `.aqa/locks` or the lock file is refused.
 
 ### Reading a compiled script (schema version 1)
 A compiled script is read as strictly as a spec (§6): an unknown field is an error, and no value changes type, so `true` is not `1` and `"1"` is not a number (`aqa_core.compiled`).
