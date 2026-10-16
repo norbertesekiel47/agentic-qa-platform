@@ -379,10 +379,12 @@ def _refusing_off_this_machine(
 @contextmanager
 def _kept_off_the_network(name: str, *, recording_now: bool) -> Iterator[None]:
     """While a cassette is in use, vcr's resets leave the httpx transports
-    patched, and while one replays, every connection off this machine is
-    refused, so a request that gets past it fails before its first packet,
-    whoever sent it (raw http.client ignores proxy variables). A recording
-    reaches the API."""
+    patched, and while one replays, every connection this process opens
+    through `socket.socket` to an address off loopback is refused, so a request
+    that gets past the cassette fails at its connect, whatever in this process
+    sent it (raw http.client ignores proxy variables). A forward proxy on
+    loopback still carries a request on, and a host name is looked up before
+    its connect. A recording reaches the API."""
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(vcr.patch, "force_reset", _force_reset_but_httpx)
         if not recording_now:
