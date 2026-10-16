@@ -201,10 +201,15 @@ async def replay(
         replayed = await _replayed(
             script, setup, gate, every_locator, chromium=chromium, proxy=proxy
         )
-    finally:
-        # Ending the phase joins every connection the browser opened, so no
-        # proxy task can record a block or an event after the verdict.
-        await proxy.end_phase()
+    except BaseException:
+        # The failure to report: a phase the caller left unopened, or that
+        # another task is ending, never replaces it.
+        with suppress(RuntimeError):
+            await proxy.end_phase()
+        raise
+    # Ending the phase joins every connection the browser opened, so no
+    # proxy task can record a block or an event after the verdict.
+    await proxy.end_phase()
     return _run_result(replayed, proxy, gate)
 
 

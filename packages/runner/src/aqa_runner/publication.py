@@ -14,7 +14,7 @@ Installing is one `link` (the run found no file) or `rename` (it found
 one) of a temporary file beside the target holding the whole text, forced
 to disk. A failure before it leaves the file as it was. After it, the file
 holds the script whatever fails next, so a failure there, forcing the
-directory, removing the temporary or releasing the lock, says so. Nothing
+directories, removing the temporary or releasing the lock, says so. Nothing
 is rolled back or retried.
 
 Links are refused by path where checked, at the run's start and inside the
@@ -135,7 +135,6 @@ async def publish(
     check(text)
     lock = await _locked(at, deadline)
     try:
-        _due(deadline)
         _replace(at, script, text, deadline)
     except BaseException:
         _quietly(partial(os.close, lock))
@@ -211,6 +210,7 @@ def _replace(
         parse_compiled(text, config, source=at.target)
     except SpecError:
         raise PublishError("the script doesn't load as written") from None
+    # Again, as a link may have appeared while the lock was awaited.
     _unlinked(at)
     try:
         found = _found(at.target)
@@ -237,19 +237,19 @@ def _install(at: Publication, data: bytes, deadline: float) -> None:
             os.link(temporary, at.target)
         else:
             temporary.replace(at.target)
-    except FileExistsError:
+    except BaseException as error:
         _quietly(temporary.unlink)
-        raise PublishError(_CHANGED) from None
-    except OSError:
-        _quietly(temporary.unlink)
-        raise PublishWriteError(installed=False) from None
-    except PublishError:
-        _quietly(temporary.unlink)
+        if isinstance(error, FileExistsError):
+            raise PublishError(_CHANGED) from None
+        if isinstance(error, OSError):
+            raise PublishWriteError(installed=False) from None
         raise
     try:
         if at.found is None:
             temporary.unlink()
+        # The root too, which holds `.compiled`'s own entry.
         _sync(directory)
+        _sync(at.root)
     except OSError:
         raise PublishWriteError(installed=True) from None
 
@@ -291,7 +291,14 @@ def _found(target: Path) -> Found | None:
         handle = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
         return None
-    with os.fdopen(handle, "rb") as file:
+    try:
+        file = os.fdopen(handle, "rb")
+    except BaseException:
+        # `fdopen` leaves the descriptor open when it refuses, as for a
+        # directory.
+        os.close(handle)
+        raise
+    with file:
         stat = os.fstat(file.fileno())
         digest = hashlib.file_digest(file, "sha256").hexdigest()
     return Found(digest, stat.st_ino, stat.st_size, stat.st_mtime_ns)

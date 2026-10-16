@@ -208,3 +208,31 @@ def test_a_script_refused_before_the_launch_ends_its_phase(
     )
     assert left.traffic == PhaseTraffic(0, 0)
     assert app.paths() == []
+
+
+def test_a_refusal_before_the_launch_is_kept_when_there_is_no_phase_to_end(
+    app: App, tmp_path: Path
+) -> None:
+    config = ProjectConfig()
+    spec = a_spec(tmp_path, config, start_url="/page/shop")
+    run_gate = gate(allowed=(app.origin,))
+    chromium = no_launch(AssertionError("a refused script launched Chromium"))
+
+    async def scenario() -> None:
+        async with EgressProxy(run_gate) as proxy:
+            # A caller that broke replay's precondition: no phase is open.
+            await proxy.end_phase()
+            await replay(
+                shop(SAVE),
+                RunSetup(spec, config, app.origin, RunRecord.create(tmp_path)),
+                chromium=chromium,
+                proxy=proxy,
+                gate=run_gate,
+            )
+
+    with pytest.raises(SpecError) as refused:
+        asyncio.run(scenario())
+
+    assert refused.value.problems == (
+        "compiled from another version of the spec: explore it again",
+    )
