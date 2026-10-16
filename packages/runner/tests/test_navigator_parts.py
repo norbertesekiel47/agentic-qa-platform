@@ -462,6 +462,62 @@ def test_every_handle_a_failed_read_makes_is_let_go(
     assert in_session(scenario) == expected
 
 
+BROKEN_FACTS = {
+    "depth-0": "f.depth = 0",
+    "depth-5": "f.depth = 5",
+    "depth-a-string": "f.depth = '1'",
+    "tag-of-257": "f.tag = 'x'.repeat(257)",
+    "tag-with-a-line-break": "f.tag = 'span\\n- p1.9 span.counter'",
+    "tag-a-number": "f.tag = 5",
+    "257-classes": "f.classes = Array(257).fill('a')",
+    "class-of-257": "f.classes = ['a'.repeat(257)]",
+    "text-a-number": "f.text = 5",
+}
+
+
+@pytest.mark.parametrize("broken", list(BROKEN_FACTS))
+def test_a_page_that_breaks_a_bound_of_its_parts_facts_is_refused(
+    broken: str, handles: Handles
+) -> None:
+    async def scenario(session: BrowserSession) -> tuple[str, int]:
+        await put(session, BANNER)
+        (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+        await session.page.evaluate(f"""() => {{
+            const push = Array.prototype.push;
+            Array.prototype.push = function (...items) {{
+                const f = items[0];
+                if (f !== null && typeof f === 'object' && 'depth' in f) {{ {BROKEN_FACTS[broken]}; }}
+                return push.apply(this, items);
+            }};
+        }}""")
+        return await refusal(Parts().describe(session, button), session), handles.held
+
+    assert in_session(scenario) == (LIED, 0)
+
+
+def test_a_page_that_evades_the_reading_bound_on_parts_is_refused(
+    handles: Handles,
+) -> None:
+    async def scenario(session: BrowserSession) -> tuple[str, int, int]:
+        await put(session, "<button>" + "<span>s</span>" * 12 + "</button>")
+        (button,) = button_refs(await session.snapshot(), "s" * 12)
+        # Thirteen at once, past the twelve the reading stops at.
+        await session.page.evaluate("""() => {
+            const push = Array.prototype.push;
+            Array.prototype.push = function (...items) {
+                const f = items[0];
+                if (this.length === 11 && (f instanceof Element || (f && 'depth' in f))) {
+                    push.apply(this, items);
+                }
+                return push.apply(this, items);
+            };
+        }""")
+        refused = await refusal(Parts().describe(session, button), session)
+        return refused, len(handles.made), handles.held
+
+    assert in_session(scenario) == (LIED, 2, 0)
+
+
 def test_a_successful_read_holds_its_element_and_parts_until_they_are_let_go(
     handles: Handles,
 ) -> None:
@@ -530,7 +586,7 @@ def test_parts_are_void_after_a_navigation(navigation: str, handles: Handles) ->
 
 
 def test_parts_serve_only_the_turn_after_their_describe(handles: Handles) -> None:
-    async def scenario(session: BrowserSession) -> tuple[str, str, str, int]:
+    async def scenario(session: BrowserSession) -> tuple[str, str, str, str, int]:
         await put(session, BANNER)
         (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
         parts = Parts()
@@ -538,16 +594,84 @@ def test_parts_serve_only_the_turn_after_their_describe(handles: Handles) -> Non
         same_turn = await refusal(parts.seen(session, "p1.2"), session)
         await parts.turned()
         never_given = await refusal(parts.seen(session, "p9.1"), session)
+        long = await refusal(parts.seen(session, "x" * 60), session)
         await parts.turned()
         later = await refusal(parts.seen(session, "p1.2"), session)
-        return same_turn, never_given, later, handles.held
+        return same_turn, never_given, long, later, handles.held
 
     assert in_session(scenario) == (
         EARLIER,
         "'p9.1' isn't a part describe_parts gave",
+        f"'{'x' * 40}' isn't a part describe_parts gave",
         EARLIER,
         0,
     )
+
+
+def test_a_second_describe_lets_the_first_go_and_serves_only_after_its_turn(
+    handles: Handles,
+) -> None:
+    async def scenario(
+        session: BrowserSession,
+    ) -> tuple[int, str, str, int, Target | str]:
+        await put(session, BANNER)
+        (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+        parts = Parts()
+        await parts.describe(session, button)
+        await parts.turned()
+        await parts.describe(session, button)
+        held = handles.held
+        first = await refusal(parts.seen(session, "p1.2"), session)
+        second = await refusal(parts.seen(session, "p2.2"), session)
+        await parts.turned()
+        count = await bound_to(session, count_uses(), await parts.seen(session, "p2.2"))
+        await parts.void()
+        return held, first, second, handles.held, count
+
+    assert in_session(scenario) == (
+        3,
+        EARLIER,
+        EARLIER.replace("p1.2", "p2.2"),
+        0,
+        COUNTER,
+    )
+
+
+def test_an_element_with_no_element_inside_it_has_no_parts(handles: Handles) -> None:
+    async def scenario(session: BrowserSession) -> tuple[str, str, int, str]:
+        await put(session, "<button>Save <b>now</b></button><button>Close</button>")
+        snapshot = await session.snapshot()
+        parts = Parts()
+        described = await parts.describe(session, button_refs(snapshot, "Close")[0])
+        await parts.turned()
+        refused = await refusal(parts.seen(session, "p1.1"), session)
+        return described.text, described.parts, handles.held, refused
+
+    assert in_session(scenario) == (
+        "e3 has no element inside it",
+        "",
+        0,
+        (
+            "p1.1 is from an earlier describe_parts, and parts serve only the call after "
+            "it: describe the element again"
+        ),
+    )
+
+
+def test_a_part_moved_with_its_element_into_another_document_is_refused() -> None:
+    async def scenario(session: BrowserSession) -> str:
+        await put(session, BANNER + '<iframe srcdoc="<p>elsewhere</p>"></iframe>')
+        (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+        parts = Parts()
+        await parts.describe(session, button)
+        await parts.turned()
+        await session.page.evaluate(
+            "() => document.querySelector('iframe').contentDocument.body.append("
+            "document.querySelector('button'))"
+        )
+        return await refusal(parts.seen(session, "p1.2"), session)
+
+    assert in_session(scenario) == LEFT
 
 
 def test_a_document_change_while_describe_parts_locates_its_element_discards_the_list(
