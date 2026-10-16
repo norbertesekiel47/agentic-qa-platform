@@ -173,9 +173,11 @@ async def replay(
     each use (`aqa_runner.locators.resolve_every`), as a confirmation does.
     The session uses `script.browser`, never the project's or the spec's
     settings (ADR-0025). It needs the proxy's phase open, as the browser's
-    launch does, and ends it once its browser has closed: only then does it
-    read the run's egress blocks and infrastructure events, so the proxy is
-    between phases when it returns.
+    launch does, and ends it however it leaves, once its browser has
+    closed: a refusal before the launch, a failed launch, a journal that
+    takes no more lines and a cancellation included, so the proxy keeps the
+    phase's traffic (`EgressProxy.ended_traffic`). Only then does it read
+    the run's egress blocks and infrastructure events.
 
     Before accepting steps or binding secrets, the script must be compiled
     from the spec as it is (its `spec_hash`) and agree with the project's
@@ -195,6 +197,43 @@ async def replay(
     After every step it keeps, it saves the step's evidence in the record,
     which scans what it writes with the session's redactor
     (`aqa_runner.evidence`)."""
+    try:
+        ran = await _ran(
+            script, setup, gate, every_locator, chromium=chromium, proxy=proxy
+        )
+    finally:
+        # Ending the phase joins every connection the browser opened, so no
+        # proxy task can record a block or an event after the verdict.
+        await proxy.end_phase()
+    return _judged(ran, proxy, gate)
+
+
+@dataclass(frozen=True)
+class _Ran:
+    """What a replay's browser left: its record and redactor, the hosts
+    the project config expects blocked, and every step, assertion,
+    invariant and kept policy event."""
+
+    record: RunRecord
+    redactor: Redactor
+    expected: tuple[str, ...]
+    steps: tuple[StepResult, ...]
+    assertions: tuple[AssertionResult, ...]
+    invariants: tuple[InvariantResult, ...]
+    policy_events: tuple[PolicyEvent, ...]
+
+
+async def _ran(
+    script: CompiledScript,
+    setup: RunSetup,
+    gate: EgressGate,
+    every_locator: bool,
+    *,
+    chromium: BrowserType,
+    proxy: EgressProxy,
+) -> _Ran:
+    """Admit `script` for `setup`, then run it in a browser session that
+    has closed when this returns or raises."""
     runnable, checks, bound, redactor = _admitted(script, setup)
     setup = replace(setup, record=setup.record.redacting(redactor))
     run = _Replay(
@@ -268,34 +307,39 @@ async def replay(
         if run.evaluation.withheld:
             invariants = tuple(replace(result, seen=()) for result in invariants)
         policy_events = tuple(session.policy_events.kept)
-    # Ending the phase joins every connection the browser opened, so no
-    # proxy task can record a block or an event after the verdict.
-    await proxy.end_phase()
-    blocks = proxy.egress_blocks(expected)
+    return _Ran(
+        record, redactor, expected, tuple(steps), assertions, invariants, policy_events
+    )
+
+
+def _judged(ran: _Ran, proxy: EgressProxy, gate: EgressGate) -> RunResult:
+    """The replay's result from what its browser left and, its phase
+    ended, the run's egress blocks and infrastructure events."""
+    blocks = proxy.egress_blocks(ran.expected)
     errored = (
         blocks.blocked
         or bool(gate.infrastructure_events)
-        or any(step.outcome == "failed" for step in steps)
-        or any(assertion.error is not None for assertion in assertions)
+        or any(step.outcome == "failed" for step in ran.steps)
+        or any(assertion.error is not None for assertion in ran.assertions)
     )
     passed = (
-        all(step.outcome == "completed" for step in steps)
-        and all(assertion.outcome == "pass" for assertion in assertions)
-        and all(invariant.outcome != "violated" for invariant in invariants)
+        all(step.outcome == "completed" for step in ran.steps)
+        and all(assertion.outcome == "pass" for assertion in ran.assertions)
+        and all(invariant.outcome != "violated" for invariant in ran.invariants)
     )
     # A saved file, so its own predicate: whatever a caller may one day let
     # the returned result keep, a bound run's record names no host or port.
-    secret_bound = not redactor.empty
+    secret_bound = not ran.redactor.empty
     if blocks.blocked:
-        _write_egress_record(record, blocks, withheld=secret_bound)
+        _write_egress_record(ran.record, blocks, withheld=secret_bound)
     return RunResult(
-        record.run_id,
+        ran.record.run_id,
         "errored" if errored else "passed" if passed else "failed",
-        tuple(steps),
-        assertions,
-        tuple(_scanned(event, redactor) for event in gate.infrastructure_events),
-        policy_events,
-        invariants,
+        ran.steps,
+        ran.assertions,
+        tuple(_scanned(event, ran.redactor) for event in gate.infrastructure_events),
+        ran.policy_events,
+        ran.invariants,
         blocks,
         "egress_blocked" if blocks.blocked else None,
     )

@@ -213,6 +213,8 @@ class EgressProxy:
         # Its listener owns every browser connection, so ending the phase or
         # closing the proxy ends them all: none may forward a request after.
         self._phase: _Phase | None = None
+        # The traffic of the phase that ended last, until another opens.
+        self._ended: PhaseTraffic | None = None
 
     async def __aenter__(self) -> Self:
         await self._open_phase()
@@ -240,6 +242,7 @@ class EgressProxy:
     async def _open_phase(self) -> None:
         if self._phase is not None:
             raise RuntimeError("the egress proxy has a phase open or ending")
+        self._ended = None
         phase = _Phase()
         listener = LoopbackServer(
             partial(self._serve, phase), on_retired=partial(self._retired, phase)
@@ -259,6 +262,15 @@ class EgressProxy:
         await self._end(phase, None, None, None)
         return PhaseTraffic(phase.plain_uncertain, phase.tunnel_uncertain)
 
+    def ended_traffic(self) -> PhaseTraffic:
+        """What the last phase opened left uncertain, once it has ended,
+        whoever ended it and however: its caller may have been cancelled or
+        have raised since. While that phase is open or ending, or when its
+        opening failed, there is none to give, and this raises."""
+        if self._phase is not None or self._ended is None:
+            raise RuntimeError("the egress proxy's last phase hasn't ended")
+        return self._ended
+
     async def _end(
         self,
         phase: _Phase,
@@ -273,6 +285,10 @@ class EgressProxy:
         finally:
             # Another task's end may already have let a new phase open.
             if self._phase is phase:
+                # Every connection is joined, so its counts are final.
+                self._ended = PhaseTraffic(
+                    phase.plain_uncertain, phase.tunnel_uncertain
+                )
                 self._phase = None
 
     @property

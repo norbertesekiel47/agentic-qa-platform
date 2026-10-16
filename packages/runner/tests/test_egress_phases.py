@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 import pytest
 from aqa_runner.egress import InfrastructureEvent
 from aqa_runner.egress_proxy import EgressProxy, PhaseTraffic
+from aqa_runner.loopback_server import LoopbackServer
 
 from packages.runner.tests.document_fixtures import until
 from packages.runner.tests.egress_fixtures import (
@@ -849,3 +850,92 @@ def test_a_phase_opened_while_the_proxy_exits_outlives_that_exit(watch: Watch) -
     first, second = asyncio.run(scenario())
 
     assert second != first
+
+
+def test_ended_traffic_gives_the_last_phases_counts_once_it_ended() -> None:
+    async def scenario() -> tuple[PhaseTraffic, PhaseTraffic, PhaseTraffic]:
+        async with raw_upstream() as silent:
+            unanswered = f"http://127.0.0.1:{silent.port}"
+            egress = gate(allowed=(unanswered,), private=(unanswered,))
+            async with EgressProxy(egress) as proxy:
+                _, writer = await proxy_client(proxy)
+                writer.write(get(f"{unanswered}/"))
+                await until(lambda: b"\r\n\r\n" in silent.received)
+                ended = await proxy.end_phase()
+                kept = proxy.ended_traffic()
+                writer.close()
+                await proxy.begin_phase()
+                await proxy.end_phase()
+                return ended, kept, proxy.ended_traffic()
+
+    ended, kept, last = asyncio.run(scenario())
+
+    assert ended == PhaseTraffic(1, 0)
+    assert kept == PhaseTraffic(1, 0)
+    assert last == PhaseTraffic(0, 0)
+
+
+def test_ended_traffic_while_a_phase_is_open_or_ending_raises(watch: Watch) -> None:
+    async def scenario() -> PhaseTraffic:
+        async with raw_upstream() as silent:
+            start = f"http://127.0.0.1:{silent.port}"
+            async with EgressProxy(gate(allowed=(start,))) as proxy:
+                await proxy.end_phase()
+                await proxy.begin_phase()
+                with pytest.raises(RuntimeError, match="last phase hasn't ended"):
+                    proxy.ended_traffic()
+                watch.watch(proxy)
+                release = watch.close = asyncio.Event()
+                _, writer = await proxy_client(proxy)
+                writer.write(get(f"{start}/"))
+                await until(lambda: b"\r\n\r\n" in silent.received)
+                ending = asyncio.create_task(proxy.end_phase())
+                await asyncio.wait_for(watch.closing.wait(), 5)
+                with pytest.raises(RuntimeError, match="last phase hasn't ended"):
+                    proxy.ended_traffic()
+                release.set()
+                await ending
+                writer.close()
+                return proxy.ended_traffic()
+
+    assert asyncio.run(scenario()) == PhaseTraffic(1, 0)
+
+
+def test_ended_traffic_after_a_failed_opening_never_gives_the_previous_phases_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def no_descriptors(_server: object) -> None:
+        raise OSError(errno.EMFILE, "Too many open files")
+
+    async def scenario() -> PhaseTraffic:
+        async with raw_upstream() as silent:
+            unanswered = f"http://127.0.0.1:{silent.port}"
+            egress = gate(allowed=(unanswered,), private=(unanswered,))
+            async with EgressProxy(egress) as proxy:
+                _, writer = await proxy_client(proxy)
+                writer.write(get(f"{unanswered}/"))
+                await until(lambda: b"\r\n\r\n" in silent.received)
+                previous = await proxy.end_phase()
+                writer.close()
+                with monkeypatch.context() as patch:
+                    patch.setattr(LoopbackServer, "__aenter__", no_descriptors)
+                    with pytest.raises(OSError, match="Too many open files"):
+                        await proxy.begin_phase()
+                with pytest.raises(RuntimeError, match="last phase hasn't ended"):
+                    proxy.ended_traffic()
+                return previous
+
+    assert asyncio.run(scenario()) == PhaseTraffic(1, 0)
+
+
+def test_ended_traffic_before_any_phase_ended_raises() -> None:
+    proxy = EgressProxy(gate(allowed=("http://127.0.0.1:9",)))
+    with pytest.raises(RuntimeError, match="last phase hasn't ended"):
+        proxy.ended_traffic()
+
+    async def scenario() -> None:
+        async with proxy:
+            with pytest.raises(RuntimeError, match="last phase hasn't ended"):
+                proxy.ended_traffic()
+
+    asyncio.run(scenario())
