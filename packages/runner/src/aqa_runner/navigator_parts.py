@@ -34,6 +34,7 @@ from aqa_runner.browser_session import RENDERED_TEXT, BrowserSession, RefError
 from aqa_runner.document_origins import DocumentChangedError
 from aqa_runner.locator_generation import Seen, stable
 from aqa_runner.redaction import Redacted, Redactor
+from aqa_runner.snapshot_refs import LINE, key_parts
 
 # What one description holds at most: its parts, how deep they sit under
 # the described element, and how much of each one's text it shows.
@@ -85,9 +86,14 @@ _READING: TypeAdapter[tuple[list[_Fact], tuple[str, str]]] = TypeAdapter(
 
 _LIED = "the page described the element's parts as no element is"
 # A part's text, in place, when the described element's own text holds a
-# bound value: the snapshot joins that value and marks it, while the parts
+# bound value, or the snapshot the model last read marks one on its line or
+# under it: the snapshot joins that value and marks it, while the parts
 # could show it in pieces no scan joins.
 _WITHHELD = "(text withheld: the described element's text holds a test secret)"
+# How the run's scan begins the marker it writes for a bound value
+# (`Redactor.redact`). Page text that imitates it withholds texts too, which
+# reveals nothing.
+_MARKER = "[SECRET:"
 _UNREAD = (
     "the element's parts couldn't be read: it left the page, or the page's "
     "scripts broke the reading"
@@ -138,8 +144,11 @@ class Parts:
         if last is not None:
             await _let_go([last.ancestor, *last.parts.values()])
 
-    async def describe(self, session: BrowserSession, ref: str) -> Described:
-        """List the parts of the element `ref` names, in place of any earlier
+    async def describe(
+        self, session: BrowserSession, snapshot: str, ref: str
+    ) -> Described:
+        """List the parts of the element `ref` names in `snapshot`, the text
+        of the snapshot the model last read, in place of any earlier
         description's. A change of the page's documents while it reads them
         discards the list (`DocumentChangedError`). Every handle it makes is
         the description's once it returns one, and let go on any other exit."""
@@ -157,7 +166,7 @@ class Parts:
             if not elements:
                 return Described(said(f"{ref} has no element inside it"), said(""))
             g = self.described
-            withheld = any(map(session.redactor.finds, own))
+            withheld = _marked(snapshot, ref) or any(map(session.redactor.finds, own))
             lines = [f"{ref}'s parts, for your next call only:"]
             for k, fact in enumerate(facts, 1):
                 indent = "  " * (fact["depth"] - 1)
@@ -266,6 +275,25 @@ async def _let_go(handles: list[JSHandle]) -> None:
             if isinstance(earlier, Exception | None):
                 raise
             raise earlier from error
+
+
+def _marked(snapshot: str, ref: str) -> bool:
+    """Whether `snapshot` marks a bound value on `ref`'s line or on a line
+    under it (indented deeper, as `snapshot_refs.prune_frames` finds a
+    subtree), or shows no line of `ref`'s, so can't say it doesn't."""
+    indent: int | None = None
+    for found in LINE.finditer(snapshot):
+        depth = len(found[0]) - len(found[0].lstrip(" "))
+        if indent is None:
+            own = key_parts(found)[2]
+            if own is None or own[1] != ref:
+                continue
+            indent = depth
+        elif depth <= indent:
+            return False
+        if _MARKER in found[0]:
+            return True
+    return indent is None
 
 
 def _scanned(text: str, redactor: Redactor, limit: int | None = None) -> Redacted:
