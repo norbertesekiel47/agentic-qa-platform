@@ -3,10 +3,11 @@ the elements inside a ref's element that the snapshot gives no ref of their
 own, each under a part's ref `p<g>.<k>` with its tag, its stable classes and
 its text, every string the page chose scanned so that no bound value reaches
 the model, and every text withheld while the described element's own text
-holds one or the snapshot the model last read marks one on the element's
-line or under it. A part serves only the turn after its description, and binds
-only while it is still inside its element, as `Seen(handle)` through its
-check's `TargetUses`. Real Chromium."""
+holds one, the snapshot the model last read marks one on the element's line
+or under it, or an element outside it `aria-owns` one inside it. A part
+serves only the turn after its description, and binds only while it is
+still inside its element, as `Seen(handle)` through its check's
+`TargetUses`. Real Chromium."""
 
 import asyncio
 import re
@@ -1165,6 +1166,169 @@ def test_a_parts_text_is_withheld_when_the_snapshot_given_has_no_line_of_its_ele
     assert in_session(scenario) == (
         f"{PARTS_OF_E1}- p1.1 i.ion-heart {WITHHELD}\n- p1.2 span.counter {WITHHELD}"
     )
+
+
+SPLIT = '<p>Key: <span id="a">fake-</span> and <span id="b">secret-49</span></p>'
+ONE_OWNED = '<p>Key: <span id="k" class="k">secret-49</span></p>'
+SPLIT_SHOWN = '- p1.1 span "fake-"\n- p1.2 span "secret-49"'
+SPLIT_WITHHELD = f"- p1.1 span {WITHHELD}\n- p1.2 span {WITHHELD}"
+OWNED_ONE_OUT: tuple[str, str, list[str]] = (
+    (
+        "- generic [active] [ref=e1]:\n"
+        "  - note [ref=e2]: [SECRET:TEST_PASSWORD]\n"
+        '  - paragraph [ref=e3]: "Key:"'
+    ),
+    f"e3's parts, for your next call only:\n- p1.1 span.k {WITHHELD}",
+    [],
+)
+
+
+@pytest.mark.parametrize(
+    ("page", "expected"),
+    [
+        (
+            '<div role="note" aria-owns="a b"></div>' + SPLIT,
+            (
+                (
+                    "- generic [active] [ref=e1]:\n"
+                    "  - note: [SECRET:TEST_PASSWORD]\n"
+                    '  - paragraph [ref=e2]: "Key: and"'
+                ),
+                f"e2's parts, for your next call only:\n{SPLIT_WITHHELD}",
+                [],
+            ),
+        ),
+        ('<div role="note" aria-owns="k">fake-</div>' + ONE_OWNED, OWNED_ONE_OUT),
+        (
+            '<div role="note" aria-owns="nowhere k elsewhere">fake-</div>' + ONE_OWNED,
+            OWNED_ONE_OUT,
+        ),
+        (
+            ONE_OWNED + '<div role="note" aria-owns="k">fake-</div>',
+            (
+                (
+                    "- generic [active] [ref=e1]:\n"
+                    '  - paragraph [ref=e2]: "Key: secret-49"\n'
+                    "  - note [ref=e3]: fake-"
+                ),
+                f"e2's parts, for your next call only:\n- p1.1 span.k {WITHHELD}",
+                [],
+            ),
+        ),
+        (
+            '<div><template shadowrootmode="open"><div><template shadowrootmode="open">'
+            '<div role="note" aria-owns="a b"></div></template></div></template></div>'
+            + SPLIT,
+            (
+                (
+                    "- generic [active] [ref=e1]:\n"
+                    "  - generic:\n"
+                    "    - generic:\n"
+                    "      - note: [SECRET:TEST_PASSWORD]\n"
+                    '  - paragraph [ref=e2]: "Key: and"'
+                ),
+                f"e2's parts, for your next call only:\n{SPLIT_WITHHELD}",
+                [],
+            ),
+        ),
+        (
+            (
+                "<iframe srcdoc=\"<div role='note' aria-owns='a b'></div>"
+                "<p>Key: <span id='a'>fake-</span> and <span id='b'>secret-49</span>"
+                '</p>"></iframe>'
+            ),
+            (
+                (
+                    "- iframe [ref=e1]:\n"
+                    "  - generic [ref=e2]:\n"
+                    "    - note: [SECRET:TEST_PASSWORD]\n"
+                    '    - paragraph [ref=e3]: "Key: and"'
+                ),
+                f"e3's parts, for your next call only:\n{SPLIT_WITHHELD}",
+                [],
+            ),
+        ),
+        (
+            '<div role="note"></div>' + SPLIT,
+            (
+                (
+                    "- generic [active] [ref=e1]:\n"
+                    "  - note\n"
+                    '  - paragraph [ref=e2]: "Key: fake- and secret-49"'
+                ),
+                f"e2's parts, for your next call only:\n{SPLIT_SHOWN}",
+                list(PIECES),
+            ),
+        ),
+        (
+            (
+                '<p><span aria-owns="b"></span>Key: <span>fake-</span> and '
+                '<span id="b">secret-49</span></p>'
+            ),
+            (
+                (
+                    "- paragraph [ref=e1]:\n"
+                    "  - generic: secret-49\n"
+                    '  - text: "Key: fake- and"'
+                ),
+                f'{PARTS_OF_E1}- p1.1 span\n- p1.2 span "fake-"\n- p1.3 span "secret-49"',
+                list(PIECES),
+            ),
+        ),
+        (
+            f'<div role="note" aria-owns="b">{SPLIT}</div>',
+            (
+                '- note [ref=e1]:\n  - paragraph [ref=e2]: "Key: fake- and secret-49"',
+                f"e2's parts, for your next call only:\n{SPLIT_SHOWN}",
+                list(PIECES),
+            ),
+        ),
+        (
+            '<div role="note" aria-owns="p"></div>'
+            + SPLIT.replace("<p>", '<p id="p">'),
+            (
+                (
+                    "- generic [active] [ref=e1]:\n"
+                    "  - note:\n"
+                    '    - paragraph [ref=e2]: "Key: fake- and secret-49"'
+                ),
+                f"e2's parts, for your next call only:\n{SPLIT_SHOWN}",
+                list(PIECES),
+            ),
+        ),
+    ],
+    ids=[
+        "owns-out-two-owned",
+        "owns-out-one-owned",
+        "owns-out-one-of-its-ids-between-two-resolving-nowhere",
+        "an-owner-after-it",
+        "an-owner-in-a-shadow-root-in-another",
+        "owns-out-in-a-frame",
+        "no-owner",
+        "an-owner-inside-it",
+        "its-ancestor-owns-one-inside-it",
+        "an-owner-of-the-element-itself",
+    ],
+)
+def test_a_parts_text_is_withheld_while_an_element_outside_its_element_owns_one_inside_it(
+    page: str, expected: tuple[str, str, list[str]]
+) -> None:
+    redactor = bound(TEST_PASSWORD=VALUE)
+
+    async def scenario(session: BrowserSession) -> tuple[str, str]:
+        await put(session, page)
+        snapshot = await session.snapshot()
+        described = await Parts().describe(
+            session, snapshot, first(snapshot, "paragraph")
+        )
+        return snapshot, described.parts
+
+    snapshot, parts = in_session(scenario, redactor)
+    request = as_sent(parts, redactor)
+
+    shown = [piece for piece in PIECES if piece in request]
+
+    assert (snapshot, parts, shown) == expected
 
 
 @pytest.mark.parametrize(
