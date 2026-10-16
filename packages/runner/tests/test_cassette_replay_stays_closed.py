@@ -1,7 +1,7 @@
-"""A replaying cassette lets nothing reach the network (conftest.py's `cassette`),
-even while another thread sends through http.client: vcrpy's http.client stub
-holds `force_reset()` open around that send, which once put the real httpx2
-transport back for the whole process (LAB_NOTES, 2026-10-16)."""
+"""While a cassette replays (conftest.py's `cassette`), no connection leaves this
+machine, even while another thread sends through http.client: vcrpy's
+http.client stub holds `force_reset()` open around that send, which once put the
+real httpx2 transport back for the whole process (LAB_NOTES, 2026-10-16)."""
 
 import asyncio
 import http.client
