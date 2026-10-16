@@ -45,12 +45,15 @@ TEXT_CHARS = 40
 # A part's ref, in the one ref argument the check tools take.
 PART_REF = re.compile(r"p([1-9][0-9]{0,8})\.([1-9][0-9]?)")
 
-# The element's descendants and their facts, and its own text as it renders
-# and as the page wrote it, read in one evaluation so all are of one moment.
+# The element's descendants and their facts, its own text as it renders and
+# as the page wrote it, and whether an element outside it, not its ancestor,
+# `aria-owns` one inside it, read in one evaluation so all are of one moment.
+# The owners are sought in the document and its open shadow roots, and their
+# ids split and resolved, as the snapshot finds them.
 # A descendant that isn't HTML, whose text `text_of` won't read, shows none.
 _DESCENDANTS = f"""(root) => {{
     const rendered = {RENDERED_TEXT};
-    const elements = [], facts = [];
+    const elements = [], facts = [], doc = root.ownerDocument;
     const walk = (node, depth) => {{
         for (const child of node.children) {{
             if (elements.length === {PARTS}) return;
@@ -61,8 +64,16 @@ _DESCENDANTS = f"""(root) => {{
             if (depth < {DEPTH}) walk(child, depth + 1);
         }}
     }};
+    const inside = (id) => {{
+        const owned = doc.getElementById(id);
+        return owned !== root && root.contains(owned);
+    }};
+    const ownsOut = (scope) => [...scope.querySelectorAll("*")].some((each) =>
+        (each.shadowRoot !== null && ownsOut(each.shadowRoot))
+        || (each.hasAttribute("aria-owns") && !root.contains(each) && !each.contains(root)
+            && each.getAttribute("aria-owns").split(/\\s+/).some(inside)));
     walk(root, 1);
-    return [elements, [facts, [root.innerText ?? "", root.textContent]]];
+    return [elements, [facts, [root.innerText ?? "", root.textContent], ownsOut(doc)]];
 }}"""
 
 _Text = Annotated[str, StringConstraints(strict=True)]
@@ -80,15 +91,20 @@ class _Fact(TypedDict):
     text: _Text
 
 
-_READING: TypeAdapter[tuple[list[_Fact], tuple[str, str]]] = TypeAdapter(
-    tuple[Annotated[list[_Fact], Field(max_length=PARTS)], tuple[_Text, _Text]]
+_READING: TypeAdapter[tuple[list[_Fact], tuple[str, str], bool]] = TypeAdapter(
+    tuple[
+        Annotated[list[_Fact], Field(max_length=PARTS)],
+        tuple[_Text, _Text],
+        Annotated[bool, Field(strict=True)],
+    ]
 )
 
 _LIED = "the page described the element's parts as no element is"
 # A part's text, in place, when the described element's own text holds a
-# bound value, or the snapshot the model last read marks one on its line or
-# under it: the snapshot joins that value and marks it, while the parts
-# could show it in pieces no scan joins.
+# bound value, the snapshot the model last read marks one on its line or
+# under it, or an element outside it, not its ancestor, owns one inside it:
+# the snapshot joins that value and marks it, there or on the owner's line,
+# while the parts could show it in pieces no scan joins.
 _WITHHELD = "(text withheld: the described element's text holds a test secret)"
 # How the run's scan begins the marker it writes for a bound value
 # (`Redactor.redact`). Page text that imitates it withholds texts too, which
@@ -158,7 +174,7 @@ class Parts:
         ancestor = await session.locate(ref)
         held: list[JSHandle] = [ancestor]
         try:
-            elements, facts, own = await _listed(session, ancestor)
+            elements, facts, own, owned_out = await _listed(session, ancestor)
             held += elements
             if session.document_changes != changes:
                 raise DocumentChangedError
@@ -166,7 +182,11 @@ class Parts:
             if not elements:
                 return Described(said(f"{ref} has no element inside it"), said(""))
             g = self.described
-            withheld = _marked(snapshot, ref) or any(map(session.redactor.finds, own))
+            withheld = (
+                owned_out
+                or _marked(snapshot, ref)
+                or any(map(session.redactor.finds, own))
+            )
             lines = [f"{ref}'s parts, for your next call only:"]
             for k, fact in enumerate(facts, 1):
                 indent = "  " * (fact["depth"] - 1)
@@ -217,12 +237,12 @@ class Parts:
 
 async def _listed(
     session: BrowserSession, ancestor: ElementHandle
-) -> tuple[list[ElementHandle], list[_Fact], tuple[str, str]]:
-    """The element's parts, their facts and its own text (`_DESCENDANTS`),
-    read as an observation is: the facts first, bounded, then one handle per
-    fact, so the page can't choose how many handles are made. The temporary
-    goes before the parts are returned, and the parts go unless they are,
-    whatever raises."""
+) -> tuple[list[ElementHandle], list[_Fact], tuple[str, str], bool]:
+    """The element's parts, their facts, its own text and whether an element
+    outside it owns one inside it (`_DESCENDANTS`), read as an observation
+    is: the facts first, bounded, then one handle per fact, so the page can't
+    choose how many handles are made. The temporary goes before the parts
+    are returned, and the parts go unless they are, whatever raises."""
     temporary: list[JSHandle] = []
     listed: list[JSHandle] = []
     returned = False
@@ -230,7 +250,7 @@ async def _listed(
         try:
             async with session.observing_page():
                 temporary.append(pair := await ancestor.evaluate_handle(_DESCENDANTS))
-                facts, own = _READING.validate_python(
+                facts, own, owned_out = _READING.validate_python(
                     await pair.evaluate("(p) => p[1]")
                 )
                 for k in range(len(facts)):
@@ -255,7 +275,7 @@ async def _listed(
     finally:
         if not returned:
             await _let_go(listed)
-    return elements, facts, own
+    return elements, facts, own, owned_out
 
 
 async def _let_go(handles: list[JSHandle]) -> None:
