@@ -2,7 +2,8 @@
 the elements inside a ref's element that the snapshot gives no ref of their
 own, each under a part's ref `p<g>.<k>` with its tag, its stable classes and
 its text, every string the page chose scanned so that no bound value reaches
-the model. A part serves only the turn after its description, and binds
+the model, and every text withheld while the described element's own text
+holds one. A part serves only the turn after its description, and binds
 only while it is still inside its element, as `Seen(handle)` through its
 check's `TargetUses`. Real Chromium."""
 
@@ -706,6 +707,7 @@ def test_a_document_change_while_describe_parts_locates_its_element_discards_the
 
 UTF8 = '<meta charset="utf-8">'
 VALUE = "fake-secret-49"
+WITHHELD = "(text withheld: the described element's text holds a test secret)"
 # A bound value holding a private-use character, which a page can write with
 # others around it or leave out (#53 ZW).
 HELD_PUA = "fake-se\ue000cret-58"
@@ -766,9 +768,9 @@ def test_a_value_holding_a_gap_written_with_other_gaps_reaches_the_description_a
 
     assert parts == (
         "e1's parts, for your next call only:\n"
-        '- p1.1 span.note "your [SECRET:TEST_HELD] code"\n'
-        '- p1.2 span.bare "[SECRET:TEST_HELD]"\n'
-        '- p1.3 x-[SECRET:TEST_HELD].tagged "t"'
+        f"- p1.1 span.note {WITHHELD}\n"
+        f"- p1.2 span.bare {WITHHELD}\n"
+        f"- p1.3 x-[SECRET:TEST_HELD].tagged {WITHHELD}"
     )
     assert (
         copies_found(HELD_PUA, texts=texts)
@@ -779,7 +781,7 @@ def test_a_value_holding_a_gap_written_with_other_gaps_reaches_the_description_a
 
 
 @pytest.mark.parametrize("gap", ["\ufeff", "\u200d"], ids=["U+FEFF", "U+200D"])
-def test_a_value_holding_a_character_that_shows_nothing_reaches_the_description_as_its_marker(
+def test_a_value_holding_a_character_that_shows_nothing_withholds_every_parts_text(
     gap: str,
 ) -> None:
     held = f"fake-se{gap}cret-49"
@@ -796,13 +798,13 @@ def test_a_value_holding_a_character_that_shows_nothing_reaches_the_description_
 
     assert parts == (
         "e1's parts, for your next call only:\n"
-        '- p1.1 span.note "your [SECRET:TEST_PASSWORD] code"\n'
-        '- p1.2 span.bare "[SECRET:TEST_PASSWORD]"'
+        f"- p1.1 span.note {WITHHELD}\n"
+        f"- p1.2 span.bare {WITHHELD}"
     )
     assert copies_found(visible(held), texts=[parts, visible(parts)]) == []
 
 
-def test_every_page_chosen_string_of_a_part_reaches_the_description_as_its_marker() -> (
+def test_every_page_chosen_name_of_a_part_reaches_the_description_as_its_marker() -> (
     None
 ):
     redactor = bound(TEST_PASSWORD=VALUE)
@@ -828,13 +830,13 @@ def test_every_page_chosen_string_of_a_part_reaches_the_description_as_its_marke
 
     assert parts == (
         "e1's parts, for your next call only:\n"
-        '- p1.1 span.note.[SECRET:TEST_PASSWORD] "your [SECRET:TEST_PASSWORD] code and a l"\n'
-        '- p1.2 span.split "[SECRET:TEST_PASSWORD]"\n'
-        '- p1.3 span.joined "[SECRET:TEST_PASSWORD]"\n'
-        '- p1.4 x-[SECRET:TEST_PASSWORD].tagged "t"\n'
-        '- p1.5 span.nobreak "[SECRET:TEST_PASSWORD] and [SECRET:TEST_"\n'
-        '- p1.6 span.glyph "[SECRET:TEST_PASSWORD]"\n'
-        '- p1.7 span.padded "(1)"'
+        f"- p1.1 span.note.[SECRET:TEST_PASSWORD] {WITHHELD}\n"
+        f"- p1.2 span.split {WITHHELD}\n"
+        f"- p1.3 span.joined {WITHHELD}\n"
+        f"- p1.4 x-[SECRET:TEST_PASSWORD].tagged {WITHHELD}\n"
+        f"- p1.5 span.nobreak {WITHHELD}\n"
+        f"- p1.6 span.glyph {WITHHELD}\n"
+        f"- p1.7 span.padded {WITHHELD}"
     )
     assert copies_found(VALUE, texts=texts) == []
     assert [redactor.finds(text) for text in texts] == [False, False, False, False]
@@ -861,6 +863,136 @@ def test_a_parts_text_is_cut_only_after_what_shows_nothing_is_taken_out() -> Non
         '- p1.3 span.selector "(1)"\n'
         '- p1.4 span.private "(1)"\n'
         '- p1.5 span.spaces "(1)"'
+    )
+
+
+PIECES = ("fake-", "secret-49")
+PARTS_OF_E1 = "e1's parts, for your next call only:\n"
+
+
+@pytest.mark.parametrize(
+    ("page", "expected", "counter", "sent"),
+    [
+        (
+            "<button>Save <span>fake-</span><span class='counter'>secret-49</span></button>",
+            f"{PARTS_OF_E1}- p1.1 span {WITHHELD}\n- p1.2 span.counter {WITHHELD}",
+            "p1.2",
+            [],
+        ),
+        (
+            (
+                "<button><div><span>fake-</span><span class='counter'>secret-49</span>"
+                "</div></button>"
+            ),
+            (
+                f"{PARTS_OF_E1}- p1.1 div {WITHHELD}\n"
+                f"  - p1.2 span {WITHHELD}\n"
+                f"  - p1.3 span.counter {WITHHELD}"
+            ),
+            "p1.3",
+            [],
+        ),
+        (
+            "<button><span>fake-</span><br><span class='counter'>secret-49</span></button>",
+            (
+                f"{PARTS_OF_E1}- p1.1 span {WITHHELD}\n- p1.2 br {WITHHELD}\n"
+                f"- p1.3 span.counter {WITHHELD}"
+            ),
+            "p1.3",
+            [],
+        ),
+        (
+            (
+                "<button><span>fake-</span><span style='visibility: hidden'>x</span>"
+                "<span class='counter'>secret-49</span></button>"
+            ),
+            (
+                f"{PARTS_OF_E1}- p1.1 span {WITHHELD}\n- p1.2 span {WITHHELD}\n"
+                f"- p1.3 span.counter {WITHHELD}"
+            ),
+            "p1.3",
+            [],
+        ),
+        (
+            (
+                "<button style='display: contents'><span>fake-</span>"
+                "<span class='counter'>secret-49</span></button>"
+            ),
+            f"{PARTS_OF_E1}- p1.1 span {WITHHELD}\n- p1.2 span.counter {WITHHELD}",
+            "p1.2",
+            [],
+        ),
+        (
+            (
+                "<button>Save <span>fake-</span><span class='counter'>code</span></button>"
+                f"<p>Your code is {VALUE}</p>"
+            ),
+            (
+                "e2's parts, for your next call only:\n"
+                '- p1.1 span "fake-"\n- p1.2 span.counter "code"'
+            ),
+            "p1.2",
+            ["fake-"],
+        ),
+    ],
+    ids=[
+        "siblings",
+        "nested",
+        "a-line-break",
+        "a-hidden-piece",
+        "no-box",
+        "the-value-elsewhere",
+    ],
+)
+def test_a_parts_text_is_withheld_while_the_described_elements_text_holds_a_bound_value(
+    page: str, expected: str, counter: str, sent: list[str]
+) -> None:
+    redactor = bound(TEST_PASSWORD=VALUE)
+
+    async def scenario(session: BrowserSession) -> tuple[str, Target | str]:
+        await put(session, f'<div class="banner">{page}</div>')
+        parts = Parts()
+        described = await parts.describe(
+            session, first(await session.snapshot(), "button")
+        )
+        await parts.turned()
+        target = await bound_to(
+            session, count_uses(), await parts.seen(session, counter)
+        )
+        return described.parts, target
+
+    parts, target = in_session(scenario, redactor)
+    request = as_sent(parts, redactor)
+
+    assert (parts, [piece for piece in PIECES if piece in request], target) == (
+        expected,
+        sent,
+        COUNTER,
+    )
+
+
+def test_a_part_the_page_lists_from_outside_its_element_shows_its_text_scanned() -> (
+    None
+):
+    redactor = bound(TEST_PASSWORD=VALUE)
+    page = (
+        f'<button>Save</button><p class="note">your {VALUE} code and a long tail of '
+        "words past forty characters</p>"
+    )
+
+    async def scenario(session: BrowserSession) -> str:
+        await put(session, page)
+        button = first(await session.snapshot(), "button")
+        await session.page.evaluate("""() => {
+            Object.defineProperty(Element.prototype, 'children', {get() {
+                return this.localName === 'button' ? [document.querySelector('p.note')] : [];
+            }});
+        }""")
+        return (await Parts().describe(session, button)).parts
+
+    assert in_session(scenario, redactor) == (
+        "e2's parts, for your next call only:\n"
+        '- p1.1 p.note "your [SECRET:TEST_PASSWORD] code and a l"'
     )
 
 

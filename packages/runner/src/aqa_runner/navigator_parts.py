@@ -44,9 +44,9 @@ TEXT_CHARS = 40
 # A part's ref, in the one ref argument the check tools take.
 PART_REF = re.compile(r"p([1-9][0-9]{0,8})\.([1-9][0-9]?)")
 
-# The element's descendants and their facts, read in one evaluation so both
-# are of one moment. An element that isn't HTML, whose text `text_of` won't
-# read, shows none.
+# The element's descendants and their facts, and its own text as it renders
+# and as the page wrote it, read in one evaluation so all are of one moment.
+# A descendant that isn't HTML, whose text `text_of` won't read, shows none.
 _DESCENDANTS = f"""(root) => {{
     const rendered = {RENDERED_TEXT};
     const elements = [], facts = [];
@@ -61,9 +61,10 @@ _DESCENDANTS = f"""(root) => {{
         }}
     }};
     walk(root, 1);
-    return [elements, facts];
+    return [elements, [facts, [root.innerText ?? "", root.textContent]]];
 }}"""
 
+_Text = Annotated[str, StringConstraints(strict=True)]
 _Token = Annotated[str, StringConstraints(strict=True, max_length=256)]
 # A tag shows unquoted, and its scan folds whitespace into single spaces, so
 # one holding whitespace could read as more parts on its line. Only a lying
@@ -75,14 +76,18 @@ class _Fact(TypedDict):
     tag: _Tag
     classes: Annotated[list[_Token], Field(max_length=256)]
     depth: Annotated[StrictInt, Field(ge=1, le=DEPTH)]
-    text: Annotated[str, StringConstraints(strict=True)]
+    text: _Text
 
 
-_FACTS: TypeAdapter[list[_Fact]] = TypeAdapter(
-    Annotated[list[_Fact], Field(max_length=PARTS)]
+_READING: TypeAdapter[tuple[list[_Fact], tuple[str, str]]] = TypeAdapter(
+    tuple[Annotated[list[_Fact], Field(max_length=PARTS)], tuple[_Text, _Text]]
 )
 
 _LIED = "the page described the element's parts as no element is"
+# A part's text, in place, when the described element's own text holds a
+# bound value: the snapshot joins that value and marks it, while the parts
+# could show it in pieces no scan joins.
+_WITHHELD = "(text withheld: the described element's text holds a test secret)"
 _UNREAD = (
     "the element's parts couldn't be read: it left the page, or the page's "
     "scripts broke the reading"
@@ -144,7 +149,7 @@ class Parts:
         ancestor = await session.locate(ref)
         held: list[JSHandle] = [ancestor]
         try:
-            elements, facts = await _listed(session, ancestor)
+            elements, facts, own = await _listed(session, ancestor)
             held += elements
             if session.document_changes != changes:
                 raise DocumentChangedError
@@ -152,10 +157,12 @@ class Parts:
             if not elements:
                 return Described(said(f"{ref} has no element inside it"), said(""))
             g = self.described
+            withheld = any(map(session.redactor.finds, own))
             lines = [f"{ref}'s parts, for your next call only:"]
             for k, fact in enumerate(facts, 1):
                 indent = "  " * (fact["depth"] - 1)
-                lines.append(f"{indent}- p{g}.{k} {_shown(fact, session.redactor)}")
+                shown = _shown(fact, session.redactor, withheld=withheld)
+                lines.append(f"{indent}- p{g}.{k} {shown}")
             self._last = _Description(
                 ancestor, {f"p{g}.{k}": e for k, e in enumerate(elements, 1)}, changes
             )
@@ -199,11 +206,12 @@ class Parts:
 
 async def _listed(
     session: BrowserSession, ancestor: ElementHandle
-) -> tuple[list[ElementHandle], list[_Fact]]:
-    """The element's parts and their facts, read as an observation is: the
-    facts first, bounded, then one handle per fact, so the page can't choose
-    how many handles are made. The temporary goes before the parts are
-    returned, and the parts go unless they are, whatever raises."""
+) -> tuple[list[ElementHandle], list[_Fact], tuple[str, str]]:
+    """The element's parts, their facts and its own text (`_DESCENDANTS`),
+    read as an observation is: the facts first, bounded, then one handle per
+    fact, so the page can't choose how many handles are made. The temporary
+    goes before the parts are returned, and the parts go unless they are,
+    whatever raises."""
     temporary: list[JSHandle] = []
     listed: list[JSHandle] = []
     returned = False
@@ -211,7 +219,9 @@ async def _listed(
         try:
             async with session.observing_page():
                 temporary.append(pair := await ancestor.evaluate_handle(_DESCENDANTS))
-                facts = _FACTS.validate_python(await pair.evaluate("(p) => p[1]"))
+                facts, own = _READING.validate_python(
+                    await pair.evaluate("(p) => p[1]")
+                )
                 for k in range(len(facts)):
                     # Kept as each is made, so a failure part way lets go of
                     # those made before it.
@@ -234,7 +244,7 @@ async def _listed(
     finally:
         if not returned:
             await _let_go(listed)
-    return elements, facts
+    return elements, facts, own
 
 
 async def _let_go(handles: list[JSHandle]) -> None:
@@ -267,14 +277,16 @@ def _scanned(text: str, redactor: Redactor, limit: int | None = None) -> Redacte
     return redactor.redact(shown, limit=limit)
 
 
-def _shown(fact: _Fact, redactor: Redactor) -> str:
+def _shown(fact: _Fact, redactor: Redactor, *, withheld: bool) -> str:
     """A part as the model reads it: its tag and stable classes, then its
-    text, each scanned (`_scanned`) before the line joins them, and the text
-    cut only after its scans, so a cut never leaves part of a value the
-    whole text would show."""
-    named = fact["tag"] + "".join(
-        f".{name}" for name in fact["classes"] if stable(name)
+    text, or `_WITHHELD` when `withheld`, each scanned (`_scanned`) before
+    the line joins them, and the text cut only after its scans, so a cut
+    never leaves part of a value the whole text would show."""
+    named = _scanned(
+        fact["tag"] + "".join(f".{name}" for name in fact["classes"] if stable(name)),
+        redactor,
     )
+    if withheld:
+        return f"{named} {_WITHHELD}"
     text = _scanned(fact["text"], redactor, TEXT_CHARS)
-    quoted = f" {json.dumps(text, ensure_ascii=False)}" if text else ""
-    return _scanned(named, redactor) + quoted
+    return named + (f" {json.dumps(text, ensure_ascii=False)}" if text else "")
