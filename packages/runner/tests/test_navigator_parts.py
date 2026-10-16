@@ -3,7 +3,8 @@ the elements inside a ref's element that the snapshot gives no ref of their
 own, each under a part's ref `p<g>.<k>` with its tag, its stable classes and
 its text, every string the page chose scanned so that no bound value reaches
 the model, and every text withheld while the described element's own text
-holds one. A part serves only the turn after its description, and binds
+holds one or the snapshot the model last read marks one on the element's
+line or under it. A part serves only the turn after its description, and binds
 only while it is still inside its element, as `Seen(handle)` through its
 check's `TargetUses`. Real Chromium."""
 
@@ -166,7 +167,7 @@ def test_the_banner_buttons_parts_list_the_count_and_it_binds() -> None:
         snapshot = await session.snapshot()
         banner, _ = button_refs(snapshot, "Unfavorite Article (1)")
         parts = Parts()
-        described = await parts.describe(session, banner)
+        described = await parts.describe(session, snapshot, banner)
         await parts.turned()
         target = await bound_to(
             session, count_uses(), await parts.seen(session, "p1.2")
@@ -188,11 +189,11 @@ def test_describe_parts_refuses_a_stale_ref_or_a_parts_ref() -> None:
     async def scenario(session: BrowserSession) -> tuple[str, str]:
         await put(session, BANNER)
         await session.snapshot()
-        await session.snapshot()
+        snapshot = await session.snapshot()
         parts = Parts()
         return (
-            await refusal(parts.describe(session, "e1"), session),
-            await refusal(parts.describe(session, "p1.2"), session),
+            await refusal(parts.describe(session, snapshot, "e1"), session),
+            await refusal(parts.describe(session, snapshot, "p1.2"), session),
         )
 
     assert in_session(scenario) == (
@@ -229,9 +230,10 @@ LEFT = "p1.2 has left the element describe_parts listed it under: describe that 
 def test_a_part_replaced_between_turns_is_refused(change: str) -> None:
     async def scenario(session: BrowserSession) -> str:
         await put(session, BANNER)
-        (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+        snapshot = await session.snapshot()
+        (button,) = button_refs(snapshot, "Unfavorite Article (1)")
         parts = Parts()
-        await parts.describe(session, button)
+        await parts.describe(session, snapshot, button)
         await parts.turned()
         await session.page.evaluate(change)
         return await refusal(parts.seen(session, "p1.2"), session)
@@ -266,7 +268,8 @@ def test_a_page_that_lies_about_its_children_cannot_bind_a_part_outside_its_elem
 ) -> None:
     async def scenario(session: BrowserSession) -> tuple[str, str]:
         await put(session, BANNER + BANNER.replace("banner", "article-actions"))
-        banner, _ = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+        snapshot = await session.snapshot()
+        banner, _ = button_refs(snapshot, "Unfavorite Article (1)")
         await session.page.evaluate(f"""() => {{
             const real = Object.getOwnPropertyDescriptor(Element.prototype, 'children').get;
             Object.defineProperty(Element.prototype, 'children', {{get() {{
@@ -275,7 +278,7 @@ def test_a_page_that_lies_about_its_children_cannot_bind_a_part_outside_its_elem
             }}}});
         }}""")
         parts = Parts()
-        described = await parts.describe(session, banner)
+        described = await parts.describe(session, snapshot, banner)
         await parts.turned()
         return described.parts, await refusal(parts.seen(session, "p1.1"), session)
 
@@ -327,9 +330,10 @@ def test_a_cancellation_while_parts_are_let_go_still_disposes_every_handle(
 ) -> None:
     async def scenario(session: BrowserSession) -> tuple[int, str, int]:
         await put(session, BANNER)
-        (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+        snapshot = await session.snapshot()
+        (button,) = button_refs(snapshot, "Unfavorite Article (1)")
         parts = Parts()
-        await parts.describe(session, button)
+        await parts.describe(session, snapshot, button)
         await parts.turned()
         before = handles.held
         cancel_after_disposing(monkeypatch, lambda _: True)
@@ -343,11 +347,12 @@ def test_a_cancellation_while_the_reading_lets_its_temporary_go_disposes_the_par
 ) -> None:
     async def scenario(session: BrowserSession) -> tuple[str, int, int, int]:
         await put(session, BANNER)
-        (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+        snapshot = await session.snapshot()
+        (button,) = button_refs(snapshot, "Unfavorite Article (1)")
         parts = Parts()
         # The reading's temporary is the first handle made after the element.
         cancel_after_disposing(monkeypatch, lambda handle: handle is handles.made[1])
-        raised = await cancelled(parts.describe(session, button))
+        raised = await cancelled(parts.describe(session, snapshot, button))
         gone = len(handles.gone)
         await parts.void()
         return raised, len(handles.made), handles.held, len(handles.gone) - gone
@@ -371,9 +376,10 @@ def test_a_dispose_failure_under_a_cancellation_leaves_the_cancellation_raised(
 
     async def scenario(session: BrowserSession) -> tuple[str, str, int]:
         await put(session, BANNER)
-        (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+        snapshot = await session.snapshot()
+        (button,) = button_refs(snapshot, "Unfavorite Article (1)")
         parts = Parts()
-        await parts.describe(session, button)
+        await parts.describe(session, snapshot, button)
         failing.append(True)
 
         async def turns() -> None:
@@ -455,9 +461,10 @@ def test_every_handle_a_failed_read_makes_is_let_go(
 ) -> None:
     async def scenario(session: BrowserSession) -> tuple[str, int, int]:
         await put(session, BANNER)
-        (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+        snapshot = await session.snapshot()
+        (button,) = button_refs(snapshot, "Unfavorite Article (1)")
         await session.page.evaluate(FAILED_READS[failing])
-        refused = await refusal(Parts().describe(session, button), session)
+        refused = await refusal(Parts().describe(session, snapshot, button), session)
         return refused, len(handles.made), handles.held
 
     assert in_session(scenario) == expected
@@ -485,7 +492,8 @@ def test_a_page_that_breaks_a_bound_of_its_parts_facts_is_refused(
 ) -> None:
     async def scenario(session: BrowserSession) -> tuple[str, int]:
         await put(session, BANNER)
-        (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+        snapshot = await session.snapshot()
+        (button,) = button_refs(snapshot, "Unfavorite Article (1)")
         await session.page.evaluate(f"""() => {{
             const push = Array.prototype.push;
             Array.prototype.push = function (...items) {{
@@ -494,7 +502,9 @@ def test_a_page_that_breaks_a_bound_of_its_parts_facts_is_refused(
                 return push.apply(this, items);
             }};
         }}""")
-        return await refusal(Parts().describe(session, button), session), handles.held
+        return await refusal(
+            Parts().describe(session, snapshot, button), session
+        ), handles.held
 
     assert in_session(scenario) == (LIED, 0)
 
@@ -504,7 +514,8 @@ def test_a_page_that_evades_the_reading_bound_on_parts_is_refused(
 ) -> None:
     async def scenario(session: BrowserSession) -> tuple[str, int, int]:
         await put(session, "<button>" + "<span>s</span>" * 12 + "</button>")
-        (button,) = button_refs(await session.snapshot(), "s" * 12)
+        snapshot = await session.snapshot()
+        (button,) = button_refs(snapshot, "s" * 12)
         # Thirteen at once, past the twelve the reading stops at.
         await session.page.evaluate("""() => {
             const push = Array.prototype.push;
@@ -516,7 +527,7 @@ def test_a_page_that_evades_the_reading_bound_on_parts_is_refused(
                 return push.apply(this, items);
             };
         }""")
-        refused = await refusal(Parts().describe(session, button), session)
+        refused = await refusal(Parts().describe(session, snapshot, button), session)
         return refused, len(handles.made), handles.held
 
     assert in_session(scenario) == (LIED, 2, 0)
@@ -527,9 +538,10 @@ def test_a_successful_read_holds_its_element_and_parts_until_they_are_let_go(
 ) -> None:
     async def scenario(session: BrowserSession) -> tuple[str, int, int, int]:
         await put(session, BANNER)
-        (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+        snapshot = await session.snapshot()
+        (button,) = button_refs(snapshot, "Unfavorite Article (1)")
         parts = Parts()
-        described = await parts.describe(session, button)
+        described = await parts.describe(session, snapshot, button)
         held = handles.held
         await parts.void()
         return described.parts, len(handles.made), held, handles.held
@@ -542,7 +554,8 @@ def test_a_page_that_pads_its_element_list_makes_no_more_handles_than_facts(
 ) -> None:
     async def scenario(session: BrowserSession) -> tuple[str, int]:
         await put(session, BANNER)
-        (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+        snapshot = await session.snapshot()
+        (button,) = button_refs(snapshot, "Unfavorite Article (1)")
         await session.page.evaluate("""() => {
             const push = Array.prototype.push;
             Array.prototype.push = function (...items) {
@@ -551,7 +564,7 @@ def test_a_page_that_pads_its_element_list_makes_no_more_handles_than_facts(
                 return this.length;
             };
         }""")
-        described = await Parts().describe(session, button)
+        described = await Parts().describe(session, snapshot, button)
         return described.parts, len(handles.made)
 
     assert in_session(scenario) == (BANNER_PARTS, 4)
@@ -578,9 +591,10 @@ EARLIER = (
 def test_parts_are_void_after_a_navigation(navigation: str, handles: Handles) -> None:
     async def scenario(session: BrowserSession) -> tuple[str, int]:
         await put(session, BANNER)
-        (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+        snapshot = await session.snapshot()
+        (button,) = button_refs(snapshot, "Unfavorite Article (1)")
         parts = Parts()
-        await parts.describe(session, button)
+        await parts.describe(session, snapshot, button)
         await parts.turned()
         async with session.page.expect_event("framenavigated"):
             await session.page.evaluate(navigation)
@@ -592,9 +606,10 @@ def test_parts_are_void_after_a_navigation(navigation: str, handles: Handles) ->
 def test_parts_serve_only_the_turn_after_their_describe(handles: Handles) -> None:
     async def scenario(session: BrowserSession) -> tuple[str, str, str, str, int]:
         await put(session, BANNER)
-        (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+        snapshot = await session.snapshot()
+        (button,) = button_refs(snapshot, "Unfavorite Article (1)")
         parts = Parts()
-        await parts.describe(session, button)
+        await parts.describe(session, snapshot, button)
         same_turn = await refusal(parts.seen(session, "p1.2"), session)
         await parts.turned()
         never_given = await refusal(parts.seen(session, "p9.1"), session)
@@ -619,11 +634,12 @@ def test_a_second_describe_lets_the_first_go_and_serves_only_after_its_turn(
         session: BrowserSession,
     ) -> tuple[int, str, str, int, Target | str]:
         await put(session, BANNER)
-        (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+        snapshot = await session.snapshot()
+        (button,) = button_refs(snapshot, "Unfavorite Article (1)")
         parts = Parts()
-        await parts.describe(session, button)
+        await parts.describe(session, snapshot, button)
         await parts.turned()
-        await parts.describe(session, button)
+        await parts.describe(session, snapshot, button)
         held = handles.held
         first = await refusal(parts.seen(session, "p1.2"), session)
         second = await refusal(parts.seen(session, "p2.2"), session)
@@ -646,7 +662,9 @@ def test_an_element_with_no_element_inside_it_has_no_parts(handles: Handles) -> 
         await put(session, "<button>Save <b>now</b></button><button>Close</button>")
         snapshot = await session.snapshot()
         parts = Parts()
-        described = await parts.describe(session, button_refs(snapshot, "Close")[0])
+        described = await parts.describe(
+            session, snapshot, button_refs(snapshot, "Close")[0]
+        )
         await parts.turned()
         refused = await refusal(parts.seen(session, "p1.1"), session)
         return described.text, described.parts, handles.held, refused
@@ -665,9 +683,10 @@ def test_an_element_with_no_element_inside_it_has_no_parts(handles: Handles) -> 
 def test_a_part_moved_with_its_element_into_another_document_is_refused() -> None:
     async def scenario(session: BrowserSession) -> str:
         await put(session, BANNER + '<iframe srcdoc="<p>elsewhere</p>"></iframe>')
-        (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+        snapshot = await session.snapshot()
+        (button,) = button_refs(snapshot, "Unfavorite Article (1)")
         parts = Parts()
-        await parts.describe(session, button)
+        await parts.describe(session, snapshot, button)
         await parts.turned()
         await session.page.evaluate(
             "() => document.querySelector('iframe').contentDocument.body.append("
@@ -693,8 +712,11 @@ def test_a_document_change_while_describe_parts_locates_its_element_discards_the
 
     async def scenario(session: BrowserSession) -> tuple[str, int]:
         await put(session, BANNER)
-        (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
-        return await refusal(Parts().describe(session, button), session), handles.held
+        snapshot = await session.snapshot()
+        (button,) = button_refs(snapshot, "Unfavorite Article (1)")
+        return await refusal(
+            Parts().describe(session, snapshot, button), session
+        ), handles.held
 
     assert in_session(scenario) == (
         (
@@ -734,7 +756,8 @@ async def described_parts(
     session: BrowserSession, html: str, role: str = "button"
 ) -> str:
     await put(session, html)
-    described = await Parts().describe(session, first(await session.snapshot(), role))
+    snapshot = await session.snapshot()
+    described = await Parts().describe(session, snapshot, first(snapshot, role))
     return described.parts
 
 
@@ -956,9 +979,8 @@ def test_a_parts_text_is_withheld_while_the_described_elements_text_holds_a_boun
     async def scenario(session: BrowserSession) -> tuple[str, Target | str]:
         await put(session, f'<div class="banner">{page}</div>')
         parts = Parts()
-        described = await parts.describe(
-            session, first(await session.snapshot(), "button")
-        )
+        snapshot = await session.snapshot()
+        described = await parts.describe(session, snapshot, first(snapshot, "button"))
         await parts.turned()
         target = await bound_to(
             session, count_uses(), await parts.seen(session, counter)
@@ -972,6 +994,117 @@ def test_a_parts_text_is_withheld_while_the_described_elements_text_holds_a_boun
         expected,
         sent,
         COUNTER,
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "page", "role", "expected"),
+    [
+        (
+            "tok_fake49secretvalue",
+            (
+                "<style>.key::before{content:'tok_'}</style>"
+                "<button class='copy'><span class='key'>fake49secretvalue</span>"
+                "<span class='hint'> Copy</span></button>"
+            ),
+            "button",
+            (
+                '- button "[SECRET:TEST_PASSWORD] Copy" [ref=e1]',
+                f"{PARTS_OF_E1}- p1.1 span.key {WITHHELD}\n- p1.2 span.hint {WITHHELD}",
+            ),
+        ),
+        (
+            VALUE,
+            (
+                "<style>.k::before{content:attr(data-prefix)}</style>"
+                "<button><span class='k' data-prefix='fake-'>secret-49</span></button>"
+            ),
+            "button",
+            (
+                '- button "[SECRET:TEST_PASSWORD]" [ref=e1]',
+                f"{PARTS_OF_E1}- p1.1 span.k {WITHHELD}",
+            ),
+        ),
+        (
+            VALUE,
+            (
+                "<style>.key::before{content:'fake-'}</style>"
+                "<ul><li>Key: <span class='key'>secret-49</span></li>"
+                "<li><span class='counter'>(1)</span></li></ul>"
+            ),
+            "list",
+            (
+                (
+                    "- list [ref=e1]:\n"
+                    '  - listitem [ref=e2]: "Key: [SECRET:TEST_PASSWORD]"\n'
+                    "  - listitem [ref=e3]: (1)"
+                ),
+                (
+                    f"{PARTS_OF_E1}- p1.1 li {WITHHELD}\n  - p1.2 span.key {WITHHELD}\n"
+                    f"- p1.3 li {WITHHELD}\n  - p1.4 span.counter {WITHHELD}"
+                ),
+            ),
+        ),
+        (
+            VALUE,
+            (
+                "<style>.counter::before{content:'fake-'}</style>"
+                "<button>Save <span class='counter'>code</span></button>"
+            ),
+            "button",
+            (
+                '- button "Save fake-code" [ref=e1]',
+                f'{PARTS_OF_E1}- p1.1 span.counter "code"',
+            ),
+        ),
+        (
+            VALUE,
+            (
+                "<style>.key::before{content:'fake-'}</style>"
+                "<button>Save <span class='counter'>(1)</span></button>"
+                "<p>Key: <span class='key'>secret-49</span></p>"
+            ),
+            "button",
+            (
+                (
+                    "- generic [active] [ref=e1]:\n"
+                    '  - button "Save (1)" [ref=e2]\n'
+                    '  - paragraph [ref=e3]: "Key: [SECRET:TEST_PASSWORD]"'
+                ),
+                'e2\'s parts, for your next call only:\n- p1.1 span.counter "(1)"',
+            ),
+        ),
+    ],
+    ids=[
+        "css-before",
+        "css-attr",
+        "a-marked-line-under-it",
+        "unmarked",
+        "marked-after-it",
+    ],
+)
+def test_a_parts_text_is_withheld_while_the_snapshot_marks_a_bound_value_on_or_under_its_element(
+    value: str, page: str, role: str, expected: tuple[str, str]
+) -> None:
+    async def scenario(session: BrowserSession) -> tuple[str, str]:
+        await put(session, page)
+        snapshot = await session.snapshot()
+        described = await Parts().describe(session, snapshot, first(snapshot, role))
+        return snapshot, described.parts
+
+    assert in_session(scenario, bound(TEST_PASSWORD=value)) == expected
+
+
+def test_a_parts_text_is_withheld_when_the_snapshot_given_has_no_line_of_its_element() -> (
+    None
+):
+    async def scenario(session: BrowserSession) -> str:
+        await put(session, BANNER)
+        (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+        return (await Parts().describe(session, "", button)).parts
+
+    assert in_session(scenario) == (
+        f"{PARTS_OF_E1}- p1.1 i.ion-heart {WITHHELD}\n- p1.2 span.counter {WITHHELD}"
     )
 
 
@@ -1013,13 +1146,14 @@ def test_a_part_the_page_lists_from_outside_its_element_shows_its_text_scanned(
 
     async def scenario(session: BrowserSession) -> str:
         await put(session, page)
-        button = first(await session.snapshot(), "button")
+        snapshot = await session.snapshot()
+        button = first(snapshot, "button")
         await session.page.evaluate("""() => {
             Object.defineProperty(Element.prototype, 'children', {get() {
                 return this.localName === 'button' ? [document.querySelector('p.note')] : [];
             }});
         }""")
-        return (await Parts().describe(session, button)).parts
+        return (await Parts().describe(session, snapshot, button)).parts
 
     parts = in_session(scenario, redactor)
     texts = [parts, as_sent(parts, redactor)]
@@ -1100,9 +1234,10 @@ NOT_THE_PART = (
 def test_a_part_of_the_article_actions_copy_is_refused_naming_the_region() -> None:
     async def scenario(session: BrowserSession) -> tuple[str, Target | str]:
         await show(session, "article-favorited")
-        _, lower = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+        snapshot = await session.snapshot()
+        _, lower = button_refs(snapshot, "Unfavorite Article (1)")
         parts = Parts()
-        described = await parts.describe(session, lower)
+        described = await parts.describe(session, snapshot, lower)
         await parts.turned()
         return described.parts, await bound_to(
             session, count_uses(), await parts.seen(session, "p1.2")
@@ -1137,9 +1272,8 @@ def test_a_decoy_descendant_showing_the_expected_value_is_never_chosen_for_it() 
     ) -> tuple[str, Target | str, Target | str]:
         await put(session, page)
         parts = Parts()
-        described = await parts.describe(
-            session, first(await session.snapshot(), "button")
-        )
+        snapshot = await session.snapshot()
+        described = await parts.describe(session, snapshot, first(snapshot, "button"))
         await parts.turned()
         decoy = await bound_to(session, count_uses(), await parts.seen(session, "p1.1"))
         counter = await bound_to(
@@ -1170,9 +1304,10 @@ async def after_change(
     """Whether p1.2 still names the banner's count once the page has made
     `change`, and what it binds."""
     await put(session, BANNER)
-    (button,) = button_refs(await session.snapshot(), "Unfavorite Article (1)")
+    snapshot = await session.snapshot()
+    (button,) = button_refs(snapshot, "Unfavorite Article (1)")
     parts = Parts()
-    await parts.describe(session, button)
+    await parts.describe(session, snapshot, button)
     await parts.turned()
     await session.page.evaluate(change)
     seen = await parts.seen(session, "p1.2")
@@ -1220,9 +1355,10 @@ def test_a_noted_part_binds_its_negative_check_once_it_is_gone() -> None:
             session,
             '<nav class="bar"><button>Save <span class="badge">unsaved</span></button></nav>',
         )
-        (button,) = button_refs(await session.snapshot(), "Save unsaved")
+        snapshot = await session.snapshot()
+        (button,) = button_refs(snapshot, "Save unsaved")
         parts = Parts()
-        described = await parts.describe(session, button)
+        described = await parts.describe(session, snapshot, button)
         await parts.turned()
         uses = TargetUses("the unsaved badge on the save button", checks_text=False)
         seen = await parts.seen(session, "p1.1")
@@ -1262,7 +1398,8 @@ def test_a_part_with_no_distinguishing_locator_is_refused_never_positional(
     async def scenario(session: BrowserSession) -> Target | str:
         await put(session, f'<p>Status: <span class="state">saved</span></p>{other}')
         parts = Parts()
-        await parts.describe(session, first(await session.snapshot(), "paragraph"))
+        snapshot = await session.snapshot()
+        await parts.describe(session, snapshot, first(snapshot, "paragraph"))
         await parts.turned()
         uses = TargetUses("the save status", checks_text=True)
         return await bound_to(session, uses, await parts.seen(session, "p1.1"))
