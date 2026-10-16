@@ -1296,6 +1296,30 @@ OWNED_ONE_OUT: tuple[str, str, list[str]] = (
                 list(PIECES),
             ),
         ),
+        (
+            '<div><template shadowrootmode="closed"><div role="note" aria-owns="a b">'
+            "</div></template></div>" + SPLIT,
+            (
+                '- paragraph [ref=e1]: "Key: fake- and secret-49"',
+                f"{PARTS_OF_E1}{SPLIT_SHOWN}",
+                list(PIECES),
+            ),
+        ),
+        (
+            "<iframe srcdoc=\"<div role='note' aria-owns='a b'></div>\"></iframe>"
+            + SPLIT,
+            (
+                (
+                    "- generic [active] [ref=e1]:\n"
+                    "  - iframe [ref=e2]:\n"
+                    "    - generic:\n"
+                    "      - note\n"
+                    '  - paragraph [ref=e3]: "Key: fake- and secret-49"'
+                ),
+                f"e3's parts, for your next call only:\n{SPLIT_SHOWN}",
+                list(PIECES),
+            ),
+        ),
     ],
     ids=[
         "owns-out-two-owned",
@@ -1308,6 +1332,8 @@ OWNED_ONE_OUT: tuple[str, str, list[str]] = (
         "an-owner-inside-it",
         "its-ancestor-owns-one-inside-it",
         "an-owner-of-the-element-itself",
+        "an-owner-in-a-closed-shadow-root",
+        "a-frames-owner-naming-its-parents-ids",
     ],
 )
 def test_a_parts_text_is_withheld_while_an_element_outside_its_element_owns_one_inside_it(
