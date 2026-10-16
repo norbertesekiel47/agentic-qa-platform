@@ -108,7 +108,7 @@ def publication(root: Path, spec: Spec) -> Publication:
     the file or its lock, is a spec error: a repository can commit one
     pointing anywhere. A file that can't be read raises its `OSError`."""
     at = Publication(root, spec.path, spec.frontmatter.id, None)
-    if (link := _link(at)) is not None:
+    if (link := _first_link(at)) is not None:
         raise SpecError([f"{link}: a link, and explore writes only in {root}"])
     return replace(at, found=_found(at.target))
 
@@ -297,14 +297,14 @@ def _found(target: Path) -> Found | None:
     return Found(digest, stat.st_ino, stat.st_size, stat.st_mtime_ns)
 
 
-def _link(at: Publication) -> Path | None:
+def _first_link(at: Publication) -> Path | None:
     compiled, locks = at.target.parent, at.lock.parent
     places = (compiled, at.target, locks.parent, locks, at.lock)
     return next((place for place in places if place.is_symlink()), None)
 
 
 def _unlinked(at: Publication) -> None:
-    if _link(at) is not None:
+    if _first_link(at) is not None:
         raise PublishError(
             "a directory or file explore publishes through became a link"
         )
