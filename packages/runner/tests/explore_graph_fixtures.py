@@ -184,8 +184,8 @@ def turned(
     usd: str = "1",
     **run: Unpack[Run],
 ) -> Turning:
-    """The turns of an attempt on the shop page, for `PLAN`, unless `run`
-    says otherwise, once taken."""
+    """The turns, once taken, of an attempt on the shop page for `PLAN`,
+    unless `run` says otherwise."""
     run.setdefault("page", "/page/shop")
     run.setdefault("plan", PLAN)
     return on_app(app, tmp_path, taking(client, turns=turns, usd=usd), **run)
