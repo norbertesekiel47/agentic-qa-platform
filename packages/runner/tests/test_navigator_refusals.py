@@ -301,8 +301,11 @@ def test_a_tool_on_a_page_off_the_allowed_origins_returns_a_policy_error(
     tools += ["fill_secret"] if secret_bound else []
     assert texts == [f"{tool} did not run: {refusal}" for tool in tools]
     assert lines == []
-    # Navigating is the way back.
-    assert back.text == "step 1 ran, and the page settled"
+    # The page's egress block stopped the run, so navigating doesn't run either.
+    assert back.text == (
+        "navigate did not run: the run stopped: the page reached a host the run "
+        "doesn't allow, or an allowed host couldn't be reached"
+    )
 
 
 def test_a_page_that_changes_while_the_target_is_generated_is_a_tool_error(

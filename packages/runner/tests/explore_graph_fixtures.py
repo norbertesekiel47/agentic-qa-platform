@@ -184,11 +184,10 @@ def turned(
     usd: str = "1",
     **run: Unpack[Run],
 ) -> Turning:
-    """The turns of an attempt on the shop page, for `PLAN`, interrupted as
-    explore's are, unless `run` says otherwise, once taken."""
+    """The turns of an attempt on the shop page, for `PLAN`, unless `run`
+    says otherwise, once taken."""
     run.setdefault("page", "/page/shop")
     run.setdefault("plan", PLAN)
-    run.setdefault("interruptible", True)
     return on_app(app, tmp_path, taking(client, turns=turns, usd=usd), **run)
 
 

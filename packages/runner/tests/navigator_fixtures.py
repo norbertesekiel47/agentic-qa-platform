@@ -70,10 +70,8 @@ class Run(TypedDict, total=False):
     """How an attempt's run is set up, past its start origin: the page it
     starts on (the form by default), its egress gate (one allowing only the
     start origin by default), the secrets it binds, its plan and contracts,
-    its `resolve_seconds`, its project config (an empty one by default),
-    and whether its egress blocks and infrastructure events interrupt the
-    attempt, as explore's do (#53 P15a), or never do (the default, as for
-    the tools on their own)."""
+    its `resolve_seconds`, and its project config (an empty one by
+    default)."""
 
     page: str
     egress: EgressGate
@@ -82,7 +80,6 @@ class Run(TypedDict, total=False):
     contracts: Mapping[str, Contract | None]
     budget: float
     config: ProjectConfig
-    interruptible: bool
 
 
 def explored[T](
@@ -96,8 +93,9 @@ def explored[T](
     """`scenario`'s result for the attempt of a run whose start origin is
     `start`, set up as `run` says, for a spec that starts on its page: the
     session registers the identity engine first and scans with the run's
-    redactor, its record's attempt part scans with the same, and, once the
-    attempt is made, the page is opened and observed once. `app`, the
+    redactor, its record's attempt part scans with the same, its egress
+    blocks and infrastructure events interrupt it, as replay's do, and, once
+    the attempt is made, the page is opened and observed once. `app`, the
     executor's fixture app, notes the part's journal as each request
     arrives."""
     secrets = run.get("secrets", ())
@@ -137,11 +135,8 @@ def explored[T](
                     config,
                     run_gate,
                     lambda: (
-                        run.get("interruptible", False)
-                        and (
-                            bool(run_gate.infrastructure_events)
-                            or proxy.egress_blocks(expected).blocked
-                        )
+                        bool(run_gate.infrastructure_events)
+                        or proxy.egress_blocks(expected).blocked
                     ),
                 )
                 await session.navigate(f"{start}{page}")
