@@ -98,6 +98,8 @@ SCRIPT = """(() => {
         if (verb === "hold") { held.set(token, root); return []; }
         if (verb === "drop") { held.delete(token); return []; }
         if (verb === "is") return held.get(token) === root ? [root] : [];
+        if (verb === "within") { const a = held.get(token); return a && a !== root &&
+            isConnected(a) && ownerDocument(a) === document && contains(a, root) ? [root] : []; }
         if (verb === "regions") return matches(document, token);
         if (verb === "shown") return visible(root) ? [root] : [];
         if (verb === "document") return [document];
@@ -162,6 +164,19 @@ async def same_element(first: ElementHandle, other: ElementHandle) -> bool:
         return await _passes(other, f"is:{token}")
     finally:
         await _forget(first, token, sys.exception())
+
+
+async def within(ancestor: ElementHandle, element: ElementHandle) -> bool:
+    """Whether `element` is still inside `ancestor`, and `ancestor` still on
+    the page, in `element`'s document: the engine holds `ancestor` and
+    answers `within:` for `element`, in the utility world, through natives
+    it captured. The hold is dropped on every exit."""
+    token = secrets.token_hex(16)
+    try:
+        await _query(ancestor, f"hold:{token}")
+        return await _passes(element, f"within:{token}")
+    finally:
+        await _forget(ancestor, token, sys.exception())
 
 
 async def _forget(

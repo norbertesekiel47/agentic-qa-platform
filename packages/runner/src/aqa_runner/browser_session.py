@@ -193,6 +193,12 @@ class BrowserSession:
         """The scan for all secrets bound to this run."""
         return self._redactor
 
+    @property
+    def document_changes(self) -> int:
+        """How many times any of the page's frames has navigated or been
+        removed: a part described before the count moved is void."""
+        return self._frame_changes
+
     @asynccontextmanager
     async def observing_page(self) -> AsyncIterator[Page]:
         """Observe the allowed page under the session lock. A frame change

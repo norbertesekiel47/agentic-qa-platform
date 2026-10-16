@@ -14,7 +14,7 @@ from aqa_runner.binding import (
     held_region,
 )
 from aqa_runner.browser_session import BrowserSession, open_browser_session
-from aqa_runner.locator_generation import _stable
+from aqa_runner.locator_generation import stable
 from playwright.async_api import ElementHandle, Error, async_playwright
 
 from packages.runner.tests.egress_fixtures import egress_proxy
@@ -261,7 +261,7 @@ def test_copy_class_filter_agrees_with_generator_grammar(token: str) -> None:
             session,
             f'<main><div class="row"><x-item><span>1</span></x-item></div><div class="row {token}"><x-item><span>2</span></x-item></div></main>',
         )
-        expected = Refused("unlisted_copies") if _stable(token) else Bind()
+        expected = Refused("unlisted_copies") if stable(token) else Bind()
         assert await verdict(session, "main > div:first-child span", None) == expected
 
     in_session(scenario)
