@@ -975,14 +975,41 @@ def test_a_parts_text_is_withheld_while_the_described_elements_text_holds_a_boun
     )
 
 
-def test_a_part_the_page_lists_from_outside_its_element_shows_its_text_scanned() -> (
-    None
-):
-    redactor = bound(TEST_PASSWORD=VALUE)
-    page = (
-        f'<button>Save</button><p class="note">your {VALUE} code and a long tail of '
-        "words past forty characters</p>"
-    )
+@pytest.mark.parametrize(
+    ("name", "value", "written", "shown"),
+    [
+        (
+            "TEST_PASSWORD",
+            VALUE,
+            f"{VALUE} code and a long tail of words past forty characters",
+            "[SECRET:TEST_PASSWORD] code and a l",
+        ),
+        (
+            "TEST_HELD",
+            HELD_PUA,
+            "fake-se\ue000\ue001cret-58 code",
+            "[SECRET:TEST_HELD] code",
+        ),
+        (
+            "TEST_PASSWORD",
+            "fake-se\ufeffcret-49",
+            "fake-se\ufeffcret-49 code",
+            "[SECRET:TEST_PASSWORD] code",
+        ),
+        (
+            "TEST_PASSWORD",
+            "fake-se\u200dcret-49",
+            "fake-se\u200dcret-49 code",
+            "[SECRET:TEST_PASSWORD] code",
+        ),
+    ],
+    ids=["cut-after-its-scans", "a-gap-written-with-another", "U+FEFF", "U+200D"],
+)
+def test_a_part_the_page_lists_from_outside_its_element_shows_its_text_scanned(
+    name: str, value: str, written: str, shown: str
+) -> None:
+    redactor = bound(**{name: value})
+    page = f'{UTF8}<button>Save</button><p class="note">your {referenced(written)}</p>'
 
     async def scenario(session: BrowserSession) -> str:
         await put(session, page)
@@ -994,10 +1021,14 @@ def test_a_part_the_page_lists_from_outside_its_element_shows_its_text_scanned()
         }""")
         return (await Parts().describe(session, button)).parts
 
-    assert in_session(scenario, redactor) == (
-        "e2's parts, for your next call only:\n"
-        '- p1.1 p.note "your [SECRET:TEST_PASSWORD] code and a l"'
-    )
+    parts = in_session(scenario, redactor)
+    texts = [parts, as_sent(parts, redactor)]
+    texts += [visible(text) for text in texts]
+
+    assert (
+        parts,
+        copies_found(value, texts=texts) + copies_found(visible(value), texts=texts),
+    ) == (f'e2\'s parts, for your next call only:\n- p1.1 p.note "your {shown}"', [])
 
 
 def test_describe_parts_lists_four_levels_and_not_the_fifth() -> None:
