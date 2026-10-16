@@ -103,8 +103,8 @@ _LIED = "the page described the element's parts as no element is"
 # A part's text, in place, when the described element's own text holds a
 # bound value, the snapshot the model last read marks one on its line or
 # under it, or an element outside it, not its ancestor, owns one inside it:
-# the snapshot joins that value and marks it, there or on the owner's line,
-# while the parts could show it in pieces no scan joins.
+# the snapshot joins and marks that value, there or on the owner's line, or
+# the owner drops it, while the parts could show it in pieces no scan joins.
 _WITHHELD = "(text withheld: the described element's text holds a test secret)"
 # How the run's scan begins the marker it writes for a bound value
 # (`Redactor.redact`). Page text that imitates it withholds texts too, which
