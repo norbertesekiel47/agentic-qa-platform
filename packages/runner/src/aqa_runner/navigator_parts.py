@@ -65,9 +65,10 @@ _DESCENDANTS = f"""(root) => {{
 }}"""
 
 _Token = Annotated[str, StringConstraints(strict=True, max_length=256)]
-# A tag shows unquoted, so one holding whitespace or a control character,
-# which only a lying or malformed page writes, could write a line of its own.
-_Tag = Annotated[_Token, StringConstraints(pattern=r"^[^\s\x00-\x1f\x7f]+$")]
+# A tag shows unquoted, and its scan folds whitespace into single spaces, so
+# one holding whitespace could read as more parts on its line. Only a lying
+# or malformed page writes whitespace or a control character in a tag.
+_Tag = Annotated[_Token, StringConstraints(pattern=r"^[^\s\x00-\x1f\x7f-\x9f]+$")]
 
 
 class _Fact(TypedDict):
