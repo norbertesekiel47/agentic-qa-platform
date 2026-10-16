@@ -316,14 +316,17 @@ def test_publication_gives_up_when_another_writer_holds_the_lock_past_its_bound(
     at = project(tmp_path)
     holder = holding(at)
     monkeypatch.setattr(publication_module, "LOCK_SECONDS", 0.2)
+    before = open_descriptors()
 
     try:
         with pytest.raises(PublishError) as refused:
             published(at, script_for(at))
+        held = open_descriptors()
     finally:
         os.close(holder)
 
     assert str(refused.value) == "another aqa process held this spec's publication lock"
+    assert held == before
     assert not at.target.exists()
 
 
@@ -548,6 +551,14 @@ class Faults:
 
         self.patch.setattr(os, "fsync", fsync)
 
+    def root_unforced(self, root: Path) -> None:
+        def fsync(handle: int) -> None:
+            if os.fstat(handle).st_ino == root.stat().st_ino:
+                raise failing(errno.EIO)
+            self.fsync(handle)
+
+        self.patch.setattr(os, "fsync", fsync)
+
     def rename(self) -> None:
         def replace(*_paths: Any, **_options: Any) -> None:
             raise failing(errno.EIO)
@@ -637,6 +648,21 @@ def test_a_fault_after_installing_says_the_script_was_published(
     assert str(failed.value) == INSTALLED
     assert at.target.read_text(encoding="utf-8") == published_text(script)
     assert len(temporaries(tmp_path)) == kept
+
+
+def test_a_spec_root_that_cannot_be_forced_after_installing_says_the_script_was_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    at = project(tmp_path)
+    script = script_for(at)
+    Faults(monkeypatch).root_unforced(tmp_path)
+
+    with pytest.raises(PublishWriteError) as failed:
+        published(at, script)
+
+    assert failed.value.installed is True
+    assert str(failed.value) == INSTALLED
+    assert at.target.read_text(encoding="utf-8") == published_text(script)
 
 
 def refusing_open(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
@@ -833,3 +859,72 @@ def test_a_lock_release_that_fails_while_a_write_error_propagates_keeps_it(
         published_text(script) if installed else OLD
     )
     assert len(closes) == 1
+
+
+def test_publishing_forces_the_compiled_directory_and_the_spec_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    at = project(tmp_path)
+    real = os.fsync
+    forced: list[int] = []
+
+    def fsync(handle: int) -> None:
+        if on_directory(handle):
+            forced.append(os.fstat(handle).st_ino)
+        real(handle)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+
+    published(at, script_for(at))
+
+    # `.compiled` was made by this publication, so its own entry in the
+    # spec root is forced too.
+    assert forced == [at.target.parent.stat().st_ino, tmp_path.stat().st_ino]
+
+
+def test_a_compiled_path_that_is_a_directory_raises_at_the_start_and_holds_nothing(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".compiled" / "replay.json").mkdir(parents=True)
+    before = open_descriptors()
+
+    with pytest.raises(IsADirectoryError):
+        project(tmp_path)
+
+    assert open_descriptors() == before
+
+
+def test_a_link_that_appears_while_waiting_for_the_lock_publishes_nothing(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    at = project(root)
+    holder = holding(at)
+
+    async def scenario() -> None:
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.1, a_link, root, ".compiled")
+        loop.call_later(0.2, os.close, holder)
+        await publish(at, script_for(at), check=unchecked, deadline=loop.time() + 60)
+
+    with pytest.raises(PublishError) as refused:
+        asyncio.run(scenario())
+
+    assert str(refused.value) == (
+        "a directory or file explore publishes through became a link"
+    )
+    assert list((tmp_path / "outside-project" / ".compiled").iterdir()) == []
+
+
+def test_a_script_with_no_utf8_form_publishes_nothing(tmp_path: Path) -> None:
+    at = project(tmp_path)
+    script = script_for(at)
+    unpaired = script.compiled_by.model_copy(update={"price_map": "a\ud800b"})
+
+    with pytest.raises(PublishError) as refused:
+        published(at, script.model_copy(update={"compiled_by": unpaired}))
+
+    assert str(refused.value) == "the script doesn't load as written"
+    assert refused.value.__cause__ is None
+    assert not at.target.exists()
