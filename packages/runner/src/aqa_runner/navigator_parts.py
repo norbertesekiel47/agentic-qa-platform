@@ -197,13 +197,15 @@ class Parts:
                     "the call after it: describe the element again"
                 )
             raise PartError(f"{ref[:40]!r} isn't a part describe_parts gave")
-        if session.document_changes != last.changes:
-            await self.void()
-            raise PartError(
-                f"{ref} is void: the page changed documents since describe_parts "
-                "listed it, so describe the element again"
-            )
         async with session.observing_page():
+            # Under the session's lock, so no navigation lands between this
+            # count and the read of where the part is.
+            if session.document_changes != last.changes:
+                await self.void()
+                raise PartError(
+                    f"{ref} is void: the page changed documents since describe_parts "
+                    "listed it, so describe the element again"
+                )
             inside = await within(last.ancestor, element)
         if not inside:
             raise PartError(

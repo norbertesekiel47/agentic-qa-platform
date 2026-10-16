@@ -603,6 +603,40 @@ def test_parts_are_void_after_a_navigation(navigation: str, handles: Handles) ->
     assert in_session(scenario) == (VOID, 0)
 
 
+def test_a_part_whose_use_waited_out_a_navigation_for_the_page_is_void(
+    handles: Handles,
+) -> None:
+    async def scenario(session: BrowserSession) -> tuple[str, str, int]:
+        await put(session, BANNER)
+        snapshot = await session.snapshot()
+        (button,) = button_refs(snapshot, "Unfavorite Article (1)")
+        parts = Parts()
+        await parts.describe(session, snapshot, button)
+        await parts.turned()
+        waiting: list[asyncio.Task[str]] = []
+
+        async def navigates_while_observing() -> None:
+            async with session.observing_page() as page:
+                # Runs until it waits for the page this observation holds.
+                use = refusal(parts.seen(session, "p1.2"), session)
+                waiting.append(asyncio.create_task(use))
+                await asyncio.sleep(0)
+                async with page.expect_event("framenavigated"):
+                    await page.evaluate("() => history.pushState({}, '', '/elsewhere')")
+
+        observed = await refusal(navigates_while_observing(), session)
+        return observed, await waiting[0], handles.held
+
+    assert in_session(scenario) == (
+        (
+            "the page changed while the session looked at it, so what it saw was "
+            "discarded: take a new snapshot, or look the target up again"
+        ),
+        VOID,
+        0,
+    )
+
+
 def test_parts_serve_only_the_turn_after_their_describe(handles: Handles) -> None:
     async def scenario(session: BrowserSession) -> tuple[str, str, str, str, int]:
         await put(session, BANNER)
@@ -1029,20 +1063,43 @@ def test_a_parts_text_is_withheld_while_the_described_elements_text_holds_a_boun
             VALUE,
             (
                 "<style>.key::before{content:'fake-'}</style>"
-                "<ul><li>Key: <span class='key'>secret-49</span></li>"
+                "<ul><li><p>Key: <span class='key'>secret-49</span></p></li>"
                 "<li><span class='counter'>(1)</span></li></ul>"
             ),
             "list",
             (
                 (
                     "- list [ref=e1]:\n"
-                    '  - listitem [ref=e2]: "Key: [SECRET:TEST_PASSWORD]"\n'
-                    "  - listitem [ref=e3]: (1)"
+                    "  - listitem [ref=e2]:\n"
+                    '    - paragraph [ref=e3]: "Key: [SECRET:TEST_PASSWORD]"\n'
+                    "  - listitem [ref=e4]: (1)"
                 ),
                 (
-                    f"{PARTS_OF_E1}- p1.1 li {WITHHELD}\n  - p1.2 span.key {WITHHELD}\n"
-                    f"- p1.3 li {WITHHELD}\n  - p1.4 span.counter {WITHHELD}"
+                    f"{PARTS_OF_E1}- p1.1 li {WITHHELD}\n  - p1.2 p {WITHHELD}\n"
+                    f"    - p1.3 span.key {WITHHELD}\n- p1.4 li {WITHHELD}\n"
+                    f"  - p1.5 span.counter {WITHHELD}"
                 ),
+            ),
+        ),
+        (
+            VALUE,
+            (
+                "<style>.key::before{content:'fake-'}</style>"
+                "<p>Key: <span class='key'>secret-49</span></p>"
+            ),
+            "paragraph",
+            (
+                '- paragraph [ref=e1]: "Key: [SECRET:TEST_PASSWORD]"',
+                f"{PARTS_OF_E1}- p1.1 span.key {WITHHELD}",
+            ),
+        ),
+        (
+            VALUE,
+            "<button>Save <span class='counter'>[SECRET:NOTE]</span></button>",
+            "button",
+            (
+                '- button "Save [SECRET:NOTE]" [ref=e1]',
+                f"{PARTS_OF_E1}- p1.1 span.counter {WITHHELD}",
             ),
         ),
         (
@@ -1078,7 +1135,9 @@ def test_a_parts_text_is_withheld_while_the_described_elements_text_holds_a_boun
     ids=[
         "css-before",
         "css-attr",
-        "a-marked-line-under-it",
+        "a-marked-line-two-levels-under-it",
+        "a-marked-text-on-its-line",
+        "page-text-imitating-a-marker",
         "unmarked",
         "marked-after-it",
     ],
