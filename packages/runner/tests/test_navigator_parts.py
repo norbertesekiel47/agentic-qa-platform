@@ -218,8 +218,12 @@ LEFT = "p1.2 has left the element describe_parts listed it under: describe that 
             "Node.prototype.contains = () => true; Object.defineProperty(Node.prototype, "
             "'isConnected', {get: () => true}); document.querySelector('span.counter').remove()"
         ),
+        (
+            "const button = document.querySelector('button'); "
+            "button.replaceWith(button.cloneNode(true))"
+        ),
     ],
-    ids=["replaced", "moved-out", "lying-contains-and-isConnected"],
+    ids=["replaced", "moved-out", "lying-contains-and-isConnected", "element-replaced"],
 )
 def test_a_part_replaced_between_turns_is_refused(change: str) -> None:
     async def scenario(session: BrowserSession) -> str:
@@ -234,27 +238,48 @@ def test_a_part_replaced_between_turns_is_refused(change: str) -> None:
     assert in_session(scenario) == LEFT
 
 
-def test_a_page_that_lies_about_its_children_cannot_bind_a_part_outside_its_element() -> (
-    None
-):
+LIES = {
+    "the-copys-count": "document.querySelector('div.article-actions span.counter')",
+    "the-element-itself": "this",
+}
+
+
+@pytest.mark.parametrize(
+    ("listed", "expected"),
+    [
+        ("the-copys-count", '- p1.1 span.counter "(1)"'),
+        (
+            "the-element-itself",
+            (
+                '- p1.1 button "Unfavorite Article (1)"\n'
+                '  - p1.2 button "Unfavorite Article (1)"\n'
+                '    - p1.3 button "Unfavorite Article (1)"\n'
+                '      - p1.4 button "Unfavorite Article (1)"'
+            ),
+        ),
+    ],
+    ids=list(LIES),
+)
+def test_a_page_that_lies_about_its_children_cannot_bind_a_part_outside_its_element(
+    listed: str, expected: str
+) -> None:
     async def scenario(session: BrowserSession) -> tuple[str, str]:
         await put(session, BANNER + BANNER.replace("banner", "article-actions"))
         banner, _ = button_refs(await session.snapshot(), "Unfavorite Article (1)")
-        await session.page.evaluate("""() => {
-            const lower = document.querySelector('div.article-actions span.counter');
+        await session.page.evaluate(f"""() => {{
             const real = Object.getOwnPropertyDescriptor(Element.prototype, 'children').get;
-            Object.defineProperty(Element.prototype, 'children', {get() {
+            Object.defineProperty(Element.prototype, 'children', {{get() {{
                 return this.localName === 'button' && this.closest('div.banner')
-                    ? [lower] : real.call(this);
-            }});
-        }""")
+                    ? [{LIES[listed]}] : real.call(this);
+            }}}});
+        }}""")
         parts = Parts()
         described = await parts.describe(session, banner)
         await parts.turned()
         return described.parts, await refusal(parts.seen(session, "p1.1"), session)
 
     assert in_session(scenario) == (
-        'e2\'s parts, for your next call only:\n- p1.1 span.counter "(1)"',
+        f"e2's parts, for your next call only:\n{expected}",
         (
             "p1.1 has left the element describe_parts listed it under: describe that "
             "element again"

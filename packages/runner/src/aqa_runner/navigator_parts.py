@@ -2,8 +2,9 @@
 their own, such as the count inside a button's name, described under an
 element that has one so a check can bind them.
 
-`describe_parts` lists up to `PARTS` element descendants of a ref's element,
-in document order and at most `DEPTH` deep, each under a ref `p<g>.<k>` (the
+`Parts.describe`, the body of the navigator's `describe_parts` tool (#53
+P19b), lists up to `PARTS` element descendants of a ref's element, in
+document order and at most `DEPTH` deep, each under a ref `p<g>.<k>` (the
 attempt's g-th description) with its tag, its stable classes and its
 rendered text. The page chooses each of those, so each is scanned as the
 page wrote it, then stripped of its gaps (`bound_secrets.GAP`) and
@@ -20,7 +21,7 @@ its check's `TargetUses`, whose subject contract decides."""
 import json
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, TypedDict
 
 from aqa_core.text import normalize
@@ -110,9 +111,9 @@ class Parts:
     """The attempt's last description, held, and whether its parts serve
     this turn's call: described in one turn, they serve the next."""
 
-    described: int = 0
-    _last: _Description | None = None
-    _serving: bool = False
+    described: int = field(default=0, init=False)
+    _last: _Description | None = field(default=None, init=False)
+    _serving: bool = field(default=False, init=False)
 
     async def turned(self) -> None:
         """A turn ended: parts it described serve the next turn's call, and
@@ -132,11 +133,12 @@ class Parts:
         """List the parts of the element `ref` names, in place of any earlier
         description's. A change of the page's documents while it reads them
         discards the list (`DocumentChangedError`). Every handle it makes is
-        the description's once it returns, and let go on any other exit."""
+        the description's once it returns one, and let go on any other exit."""
         await self.void()
         self.described += 1
         changes = session.document_changes
-        held: list[JSHandle] = [ancestor := await session.locate(ref)]
+        ancestor = await session.locate(ref)
+        held: list[JSHandle] = [ancestor]
         try:
             elements, facts = await _listed(session, ancestor)
             held += elements
