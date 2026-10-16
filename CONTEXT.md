@@ -79,6 +79,10 @@ _Avoid_: selector
 A short-lived handle to one element in one accessibility snapshot, such as `e12`, that the agent's tools act on. A browser session never gives the same ref twice, and refuses a ref from an older snapshot. Compiling turns each ref on the explored path into a target.
 _Avoid_: using "ref" for a locator or a target
 
+**Part**:
+An element inside an element ref's element that the snapshot gives no ref of its own, such as the count inside a favorite button's name. Describing the ref's element lists up to twelve, each under a ref such as `p1.2` that serves only the agent's next call; a check binds a part as it binds the element of an element ref, through its subject contract.
+_Avoid_: "part" alone for a contract's part selector or a run record's part (its phase directory)
+
 **Binding**:
 The link between a target's meaning and the locators that currently find it. A binding either resolves or doesn't; heals repair bindings, never meanings.
 
