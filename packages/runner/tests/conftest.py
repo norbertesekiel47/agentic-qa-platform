@@ -4,15 +4,17 @@ for the Anthropic adapter (TESTING §4). Also, for the tests of the bound-value
 drop, a record of what Playwright is handed."""
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
 import shutil
+import socket
 import socketserver
 import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -20,6 +22,7 @@ from urllib.parse import urlsplit
 
 import langsmith
 import pytest
+import vcr.patch
 from aqa_core.model_roles import RoutedModel, resolve_roles
 from aqa_core.price_map import vendored
 from aqa_core.project import load_config
@@ -315,6 +318,82 @@ def _vcr(directory: Path, *, recording_now: bool) -> VCR:
     return vcr
 
 
+def _httpx_transport(patcher: Any) -> bool:
+    """Whether one of vcr's patches is an httpx or httpx2 transport's."""
+    target = patcher.getter()
+    return isinstance(target, type) and target.__module__.split(".")[0] in {
+        "httpx",
+        "httpx2",
+    }
+
+
+@contextmanager
+def _force_reset_but_httpx() -> Iterator[None]:
+    """vcr's `force_reset`, which leaves the httpx transports patched. vcr's
+    http.client stub sends for real inside `force_reset()`, and the original puts
+    every transport back to the real one for the whole process, so an httpx2
+    call made meanwhile in another thread (the adapter's, while LangSmith's
+    thread sends to its stand-in) got past a replaying cassette. vcr's httpx
+    stubs send through the real method they keep, and never need the reset.
+    This reads vcr's internals, which uv.lock pins at 8.3.0 (LAB_NOTES,
+    2026-10-16)."""
+    with ExitStack() as stack:
+        for patcher in vcr.patch.reset_patchers():
+            if not _httpx_transport(patcher):
+                stack.enter_context(patcher)
+        yield
+
+
+def _off_this_machine(connection: socket.socket, address: Any) -> bool:
+    """Whether a connection would leave this machine: an internet address
+    outside loopback, or a host name other than localhost, which isn't resolved
+    here."""
+    if connection.family not in {socket.AF_INET, socket.AF_INET6}:
+        return False
+    host = address[0]
+    if host == "localhost":
+        return False
+    try:
+        return not ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return True
+
+
+def _refusing_off_this_machine(
+    name: str, connect: Callable[[socket.socket, Any], Any]
+) -> Callable[[socket.socket, Any], Any]:
+    """`connect`, refusing every connection that would leave this machine."""
+
+    def connect_on_this_machine(connection: socket.socket, address: Any) -> Any:
+        if _off_this_machine(connection, address):
+            raise ConnectionRefusedError(
+                f"cassettes/{name}.yaml is replaying, so the connection to "
+                f"{address[0]} port {address[1]} is refused: a request got past "
+                "the cassette, and a replay never reaches the network"
+            )
+        return connect(connection, address)
+
+    return connect_on_this_machine
+
+
+@contextmanager
+def _kept_off_the_network(name: str, *, recording_now: bool) -> Iterator[None]:
+    """While a cassette is in use, vcr's resets leave the httpx transports
+    patched, and while one replays, every connection off this machine is
+    refused, so a request that gets past it fails before its first packet,
+    whoever sent it (raw http.client ignores proxy variables). A recording
+    reaches the API."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(vcr.patch, "force_reset", _force_reset_but_httpx)
+        if not recording_now:
+            for method in ("connect", "connect_ex"):
+                real = getattr(socket.socket, method)
+                patch.setattr(
+                    socket.socket, method, _refusing_off_this_machine(name, real)
+                )
+        yield
+
+
 @pytest.fixture
 def cassette(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: pytest.FixtureRequest
@@ -351,9 +430,12 @@ def cassette(
                 monkeypatch.delenv(variable, raising=False)
         recording = Recording()
         try:
-            with _vcr(directory, recording_now=recording_now).use_cassette(
-                f"{name}.yaml"
-            ) as played:
+            with (
+                _kept_off_the_network(name, recording_now=recording_now),
+                _vcr(directory, recording_now=recording_now).use_cassette(
+                    f"{name}.yaml"
+                ) as played,
+            ):
                 yield recording
         except Exception as error:
             if (refused := _refused_request(error)) is not None:
