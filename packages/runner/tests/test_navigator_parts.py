@@ -916,10 +916,14 @@ PARTS_OF_E1 = "e1's parts, for your next call only:\n"
         (
             (
                 "<button style='display: contents'><span>fake-</span>"
+                "<span style='visibility: hidden'>x</span>"
                 "<span class='counter'>secret-49</span></button>"
             ),
-            f"{PARTS_OF_E1}- p1.1 span {WITHHELD}\n- p1.2 span.counter {WITHHELD}",
-            "p1.2",
+            (
+                f"{PARTS_OF_E1}- p1.1 span {WITHHELD}\n- p1.2 span {WITHHELD}\n"
+                f"- p1.3 span.counter {WITHHELD}"
+            ),
+            "p1.3",
             [],
         ),
         (
