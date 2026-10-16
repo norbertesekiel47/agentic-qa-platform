@@ -123,7 +123,6 @@ def test_an_egress_block_during_an_actions_preparation_stops_it_before_its_inten
         page="/page/shop",
         plan=PLAN,
         egress=egress,
-        interruptible=True,
     )
 
     assert clicked.text == f"click {INTERRUPTED}"
@@ -493,7 +492,6 @@ def test_a_block_during_the_turns_observation_makes_no_call(
         page="/page/shop",
         plan=PLAN,
         egress=egress,
-        interruptible=True,
     )
 
     assert context.stops == []
@@ -539,7 +537,7 @@ def test_a_page_that_cannot_be_looked_at_is_said_in_the_next_request(
         await take_turns(context)
         return context
 
-    on_app(app, tmp_path, scenario, page="/page/shop", plan=PLAN, interruptible=True)
+    on_app(app, tmp_path, scenario, page="/page/shop", plan=PLAN)
 
     assert "<results>\nthe page couldn't be looked at: the page didn't answer " in (
         client.requests[0][2].text
@@ -575,7 +573,6 @@ def test_a_secret_the_page_shows_reaches_the_navigator_as_its_marker(
         page="/signin",
         egress=run_gate(sites),
         secrets=[bound(sites.app, FAKE_VALUE)],
-        interruptible=True,
     )
 
     assert results(client.requests[1]) == "step 1 ran, and the page settled"
@@ -598,7 +595,6 @@ def test_fill_secret_after_leaving_a_framed_page_is_refused_before_its_intent(
         page="/framed",
         egress=run_gate(sites),
         secrets=[bound(sites.app, FAKE_VALUE)],
-        interruptible=True,
     )
 
     # Playwright still lists the old page's frames, and the frame walks fail
@@ -754,9 +750,7 @@ def test_cancellation_during_a_turn_keeps_every_priced_response_on_disk(
             await take_turns(context)
 
     with pytest.raises(TimeoutError):
-        on_app(
-            app, tmp_path, scenario, page="/page/shop", plan=PLAN, interruptible=True
-        )
+        on_app(app, tmp_path, scenario, page="/page/shop", plan=PLAN)
 
     [record] = (tmp_path / ".aqa" / "runs").iterdir()
     assert len((record / "costs.jsonl").read_text().splitlines()) == 1
