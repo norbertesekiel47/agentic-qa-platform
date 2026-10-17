@@ -87,7 +87,9 @@ class Prefix:
     plan: str
 
 
-def _account_problems(spec: Spec, redactor: Redactor) -> list[str]:
+def account_problems(spec: Spec, redactor: Redactor) -> list[str]:
+    """A line naming each account field the navigator may not read: a
+    password written out, or an email holding a bound value."""
     account = spec.frontmatter.preconditions.account
     if account is None:
         return []
@@ -149,8 +151,15 @@ def navigator_prefix(
     (`subject_contracts`): each check that reads an element of a listed
     expectation states its contract. A password written out, or an email
     holding a bound value, is a SpecError naming the field, never its value."""
-    if problems := _account_problems(spec, redactor):
+    if problems := account_problems(spec, redactor):
         raise SpecError(problems)
+    return Prefix(spec=_json(spec_view(spec)), plan=_json(_plan_view(plan, contracts)))
+
+
+def spec_view(spec: Spec) -> dict[str, Any]:
+    """The spec as the navigator may read it (D6): its frontmatter as
+    validated, without `tags` or the reset hook, its start path and probes
+    cut at the query, and never the start origin."""
     shown = spec.frontmatter.model_dump(
         mode="json", exclude_unset=True, exclude=_LEFT_OUT
     )
@@ -161,7 +170,7 @@ def navigator_prefix(
             name: _QUERY.sub("", endpoint)
             for name, endpoint in preconditions["probes"].items()
         }
-    return Prefix(spec=_json(shown), plan=_json(_plan_view(plan, contracts)))
+    return shown
 
 
 @dataclass(frozen=True)

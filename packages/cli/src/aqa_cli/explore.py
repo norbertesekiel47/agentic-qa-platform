@@ -16,17 +16,16 @@ from pathlib import Path
 from typing import Annotated, Final, Literal, NoReturn
 
 import typer
-from aqa_core.coverage_plan import CoveragePlan, plan_hash, uncovered
+from aqa_core.coverage_plan import CoveragePlan, plan_hash
 from aqa_core.model_costs import CostRecord
 from aqa_core.project import SpecError, load_project, start_origin
 from aqa_core.spec import Spec
 from aqa_runner.anthropic_client import (
     KEY_VARIABLE,
-    MAX_OUTPUT_TOKENS,
     AnthropicClient,
     ProviderError,
 )
-from aqa_runner.coverage_plan import Planned, make_plan
+from aqa_runner.coverage_plan import judge, make_plan
 from aqa_runner.model_router import ModelCallError, ModelRouter
 from aqa_runner.run_record import RunRecord
 
@@ -165,32 +164,6 @@ def _write_interrupted(
             typer.echo(_UNWRITTEN, err=True)
 
 
-def _cut_off(planned: Planned) -> bool:
-    """Whether the answer stopped at the output bound (the adapter leaves
-    such an answer unparsed, and the router records it `invalid`)."""
-    return planned.routed.message.response_metadata.get("stop_reason") == "max_tokens"
-
-
-def _judge(
-    planned: Planned, spec: Spec
-) -> CoveragePlan | tuple[Failure, str, tuple[str, ...]]:
-    """The plan, if the call gave one that covers the spec; otherwise how
-    the run fails, why, and the reasons."""
-    if planned.plan is None:
-        if planned.routed.outcome == "refusal":
-            why = "the model refused to write the plan"
-        elif _cut_off(planned):
-            why = f"the model's plan was cut off at the {MAX_OUTPUT_TOKENS}-token bound"
-        else:
-            why = "the model's plan didn't parse as a coverage plan"
-        return "gave_up", why, ()
-    if planned.problems:
-        return "gave_up", "the model's plan can't be used", planned.problems
-    if lines := uncovered(planned.plan, spec.frontmatter):
-        return "spec_error", "an expectation has no establishing check", lines
-    return planned.plan
-
-
 def _cost(calls: Sequence[CostRecord]) -> Decimal:
     return sum((call.cost_usd for call in calls), Decimal(0))
 
@@ -272,7 +245,7 @@ def explore(
         )
         _stop("no_response", spec_id, why, (f"run record: {path}",))
     calls = planned.routed.calls
-    judged = _judge(planned, spec)
+    judged = judge(planned, spec)
     if isinstance(judged, CoveragePlan):
         path = _write_record(
             record, spec, outcome="planned", calls=calls, plan=judged, reasons=()

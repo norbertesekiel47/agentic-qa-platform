@@ -1,5 +1,5 @@
-"""Exploring a spec (ADR-0024 and its #53 P15b amendment): the attempt's
-phase, and how the run ended.
+"""Exploring a spec (ADR-0024's #53 P15b and P15c amendments): preflight,
+the plan, the attempt's phase, and how the run ended.
 
 `run_attempt` takes a `Run` that preflight made, with its record and that
 record's `attempt-1` part, and the frozen plan it explores by. In order,
@@ -19,8 +19,8 @@ each stop with its exit code (API.md §7):
 Nothing here writes a compiled script: the path `finish` compiled stays in
 memory (`Explored.script`) for the confirmation (#53 P16)."""
 
-from asyncio import timeout_at
-from collections.abc import Callable, Mapping
+from asyncio import get_running_loop, timeout_at
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
@@ -28,18 +28,21 @@ from pathlib import Path
 from typing import Final, Literal
 
 from aqa_core.compiled import CompiledScript
+from aqa_core.compiler import CompileError, contracts_by_meaning, unsupported_features
 from aqa_core.config import ProjectConfig
-from aqa_core.coverage_plan import CoveragePlan, planned_checks
-from aqa_core.project import effective_browser, start_url, subject_contracts
+from aqa_core.coverage_plan import CoveragePlan, plan_hash, planned_checks
+from aqa_core.project import SpecError, effective_browser, start_url, subject_contracts
 from aqa_core.schema import Contract
 from aqa_core.spec import Spec
 from playwright.async_api import Playwright
 
 from aqa_runner import executor
+from aqa_runner.anthropic_client import ProviderError
 from aqa_runner.binding import UnregisteredEngineError
-from aqa_runner.bound_secrets import BoundSecret
+from aqa_runner.bound_secrets import BoundSecret, bound_secrets
 from aqa_runner.browser_session import BrowserSession, open_browser_session
-from aqa_runner.egress import EgressGate
+from aqa_runner.coverage_plan import Planned, judge, make_plan
+from aqa_runner.egress import EgressGate, egress_policy
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.evaluation import AssertionResult
 from aqa_runner.explore_result import (
@@ -52,14 +55,29 @@ from aqa_runner.explore_result import (
     final_outcome,
     present,
 )
-from aqa_runner.explore_turns import UNWRITTEN, Spending, Turning, take_turns
+from aqa_runner.explore_turns import (
+    UNRECORDED,
+    UNSENT,
+    UNWRITTEN,
+    Spending,
+    Turning,
+    UnsentRequestError,
+    take_turns,
+    unspelled,
+)
 from aqa_runner.locator_generation import register_identity_engine
-from aqa_runner.model_router import ModelRouter
-from aqa_runner.navigator import navigator_prefix
+from aqa_runner.model_router import ModelCallError, ModelRouter
+from aqa_runner.navigator import account_problems, navigator_prefix, spec_view
 from aqa_runner.navigator_tools import Attempt
 from aqa_runner.redaction import Redactor
 from aqa_runner.reset import ResetFailedError, reset
-from aqa_runner.run_record import RefusedWriteError, RunRecord, require_clean
+from aqa_runner.run_record import (
+    PARTS,
+    RefusedWriteError,
+    RunRecord,
+    UnrecordedCostError,
+    require_clean,
+)
 from aqa_runner.sandbox import SandboxUnavailableError
 
 # How a run ends: as `explore_result.final_outcome` says once the egress
@@ -67,7 +85,9 @@ from aqa_runner.sandbox import SandboxUnavailableError
 type Ended = Outcome | Literal["spec_error"]
 
 # Why the run stopped, in fixed words.
+_UNMADE: Final = "the run record could not be created; nothing was planned"
 _MINUTES: Final = "the minutes budget ran out"
+_UNSHOWN: Final = "the document still spelled a bound value, so it isn't shown"
 # What a phase's uncertain traffic means, plain, then tunnelled.
 _UNCERTAIN: Final = (
     "a request was still being answered when the browser closed",
@@ -87,8 +107,8 @@ def _exit(outcome: Ended) -> int:
 
 @dataclass(frozen=True)
 class Explored:
-    """How the run ended: its outcome and exit code; its document,
-    `explore.json` as written or as the record couldn't take it, whose
+    """How the run ended: its outcome and exit code; its last document,
+    `plan.json` or `explore.json`, as written or as the record couldn't take it, whose
     `outcome` and `reasons` say why; its record, None when none could be
     made; what its model calls cost; and the script its attempt compiled,
     in memory only, when `finish` compiled one."""
@@ -143,6 +163,257 @@ class Run:
     def stopped(self, outcome: Stoppage, why: str) -> None:
         """Keep a stop, its text scanned with the run's redactor."""
         self.stops.append(Stop(outcome, self.redactor.redact(why)))
+
+    @property
+    def cost(self) -> Decimal:
+        """What the run's priced model calls cost, each counted once."""
+        return sum((call.cost_usd for call in self.spending.calls), Decimal(0))
+
+
+async def explore(
+    spec: Spec,
+    config: ProjectConfig,
+    root: Path,
+    start: str,
+    *,
+    router: ModelRouter,
+    playwright: Playwright,
+) -> Explored:
+    """Explore `spec` (`config`, spec root `root`) from the start origin `start`
+    with `router` and `playwright`: bind and admit (12, 5), make the record (15),
+    plan (3, 5, 11, 15; `plan.json`), then `run_attempt`, checking what it returns."""
+    secrets = bound_secrets(spec, start)
+    redactor = Redactor(secrets.values())
+    _admit(spec, config, secrets, redactor)
+    made = _made(root, redactor)
+    if isinstance(made, Explored):
+        return made
+    record, attempt = made
+    run = Run(
+        spec,
+        config,
+        start,
+        redactor,
+        record,
+        attempt,
+        secrets,
+        router,
+        playwright,
+        get_running_loop().time() + config.budgets.minutes * 60,
+        EgressGate(egress_policy(spec, config, start)),
+    )
+    planned = await _planned(run)
+    if isinstance(planned, Explored):
+        return _shown(run, planned)
+    return _shown(run, await run_attempt(run, planned))
+
+
+def _shown(run: Run, explored: Explored) -> Explored:
+    """`explored`, or fixed words for a document still spelling a bound value."""
+    if not run.redactor.spells(explored.document):
+        return explored
+    document = {"outcome": explored.outcome, "reasons": [_UNSHOWN]}
+    return replace(explored, document=document)
+
+
+def _admit(
+    spec: Spec,
+    config: ProjectConfig,
+    secrets: Mapping[str, BoundSecret],
+    redactor: Redactor,
+) -> None:
+    """`SpecError` naming each place, never its text, where a bound value
+    could reach the model, the browser or the record (ADR-0026, #53 P15c)."""
+    spec_id = spec.frontmatter.id
+    problems = account_problems(spec, redactor)
+    problems.extend(
+        f"{spec.path}: {place}: a bound value's spelling is in it"
+        for place, value in _places(spec)
+        if redactor.spells(value)
+    )
+    problems.extend(
+        f"subjects ({spec_id}, expect {expect}): a bound value's spelling is in "
+        "its region or part"
+        for expect, contract in subject_contracts(config, spec_id).items()
+        if redactor.spells(contract.model_dump(mode="json"))
+    )
+    problems.extend(
+        f"test secret {name}: a bound value's spelling is in its field's name"
+        for name, secret in secrets.items()
+        if secret.destination.field != "password"
+        and redactor.spells(secret.destination.field.name)
+    )
+    if redactor.markers_spell_a_value:
+        problems.append(
+            "test secrets: a marker, [SECRET:<name>], spells a bound value, so no "
+            "scan could take it out: rename the secret or change its value"
+        )
+    if problems:
+        raise SpecError(problems)
+
+
+def _places(spec: Spec) -> Iterator[tuple[str, object]]:
+    """Each place of the spec as the model reads it (`navigator.spec_view`),
+    by name, keys beside values (a probe's name); the start path whole, as
+    the browser and step 0's intent take it. The account is checked apart."""
+    view = spec_view(spec)
+    preconditions = view.pop("preconditions")
+    preconditions.pop("account", None)
+    preconditions["start_url"] = spec.frontmatter.preconditions.start_url
+    for name, value in preconditions.items():
+        view[f"preconditions.{name}"] = value
+    for place, value in view.items():
+        yield place, _keyed(value)
+
+
+def _keyed(value: object) -> object:
+    """`value`, a JSON value, with each mapping's keys among its values."""
+    if isinstance(value, dict):
+        return [[key, _keyed(item)] for key, item in value.items()]
+    if isinstance(value, list):
+        return [_keyed(item) for item in value]
+    return value
+
+
+def _made(root: Path, redactor: Redactor) -> tuple[RunRecord, RunRecord] | Explored:
+    """The run's record, scanning with `redactor`, and its `attempt-1` part,
+    or how the run ended when either can't be made (15). A link at `.aqa` is
+    a spec error; a part not made from the record, a runner defect."""
+    try:
+        record = RunRecord.create(root).redacting(redactor)
+    except OSError:
+        return _unmade(None)
+    except ValueError as error:  # a .aqa or .aqa/runs that is a link
+        raise SpecError([str(error)]) from None
+    try:
+        attempt = record.part(PARTS[0])
+    except OSError, ValueError:  # in a directory just made: no spec's link
+        return _unmade(record)
+    if attempt.redactor is not redactor or not record.shares_journals(attempt):
+        raise ValueError(
+            "the run's attempt-1 must be a part made from its record, scanning "
+            "with the run's redactor"
+        )
+    return record, attempt
+
+
+def _unmade(record: RunRecord | None) -> Explored:
+    return Explored(
+        "record_error",
+        _exit("record_error"),
+        {"outcome": "record_error", "reasons": [_UNMADE]},
+        None if record is None else record.path,
+        Decimal(0),
+    )
+
+
+@dataclass(frozen=True)
+class _Unplanned:
+    """Why planning stopped the run: its outcome, why, and the reasons."""
+
+    outcome: Ended
+    why: str
+    reasons: tuple[str, ...] = ()
+
+
+async def _planned(run: Run) -> Explorable | Explored:
+    """The plan the run explores by, or how planning ended; `plan.json`,
+    written either way and checked as written, says which."""
+    planned = await _planning(run)
+    plan = None if isinstance(planned, _Unplanned) else planned.plan
+    judged = planned if isinstance(planned, _Unplanned) else _explorable(run, planned)
+    stop = judged if isinstance(judged, _Unplanned) else None
+    try:
+        run.record.write(
+            "plan.json",
+            _plan_document(run, plan, stop),
+            check=require_clean(run.redactor, "plan.json"),
+        )
+    except OSError, RefusedWriteError:
+        return _unplanned(run, plan, _Unplanned("record_error", UNWRITTEN))
+    if isinstance(judged, _Unplanned):
+        return _unplanned(run, plan, judged)
+    return judged
+
+
+async def _planning(run: Run) -> Planned | _Unplanned:
+    """The plan call's answer within the minutes budget, or why there is
+    none: time, a request never sent, a cost line lost, or no response."""
+    limit = timeout_at(run.deadline)
+    try:
+        async with limit:
+            return await make_plan(
+                run.router,
+                run.spec,
+                spend=run.spending.spend(),
+                check=unspelled(run.redactor),
+            )
+    except TimeoutError:
+        if not limit.expired():
+            raise  # not the minutes budget's own
+        return _Unplanned("gave_up", _MINUTES)
+    except UnsentRequestError:
+        return _Unplanned("gave_up", UNSENT)
+    except UnrecordedCostError:
+        return _Unplanned("record_error", UNRECORDED)
+    except (ModelCallError, ProviderError) as error:
+        failed = error.__cause__ if isinstance(error, ModelCallError) else error
+        if not isinstance(failed, ProviderError):
+            raise
+        # The error's class, never the provider's message.
+        return _Unplanned(
+            "no_response", f"the model gave no response ({type(failed).__name__})"
+        )
+
+
+def _explorable(run: Run, planned: Planned) -> Explorable | _Unplanned:
+    """The plan, or why exploring can't keep it (D35): `judge`'s refusal, a
+    check it can't compile yet, a subject contract, or the spend gone."""
+    judged = judge(planned, run.spec)
+    if not isinstance(judged, CoveragePlan):
+        return _Unplanned(*judged)
+    if lines := unsupported_features(judged):
+        why = "the plan has checks exploring can't keep"
+        return _Unplanned("spec_error", why, lines)
+    try:
+        rows = subject_contracts(run.config, run.spec.frontmatter.id)
+        contracts = contracts_by_meaning(judged, rows)
+    except CompileError as error:
+        why = "the plan contradicts a subject contract"
+        return _Unplanned("spec_error", why, error.problems)
+    if run.spending.left <= 0:
+        return _Unplanned("gave_up", "the spend budget ran out with the plan")
+    return Explorable(judged, contracts)
+
+
+def _plan_document(
+    run: Run, plan: CoveragePlan | None, stop: _Unplanned | None
+) -> dict[str, object]:
+    """`plan.json`: how planning ended and why, the plan the model wrote,
+    if any, and how many priced responses the run kept."""
+    said = run.redactor.redact
+    return {
+        "run_id": run.record.run_id,
+        "spec_id": run.spec.frontmatter.id,
+        "spec_hash": run.spec.spec_hash,
+        "outcome": "planned" if stop is None else stop.outcome,
+        "reasons": [] if stop is None else [said(stop.why), *map(said, stop.reasons)],
+        "plan": None
+        if plan is None
+        else plan.model_dump(mode="json", exclude_none=True),
+        "plan_hash": None if plan is None else plan_hash(plan),
+        "costs": len(run.spending.calls),
+    }
+
+
+def _unplanned(run: Run, plan: CoveragePlan | None, stop: _Unplanned) -> Explored:
+    return Explored(
+        stop.outcome,
+        _exit(stop.outcome),
+        _plan_document(run, plan, stop),
+        run.record.path,
+        run.cost,
+    )
 
 
 async def run_attempt(run: Run, explorable: Explorable) -> Explored:
@@ -346,6 +617,6 @@ def _ended(run: Run, end: ExploreEnd) -> Explored:
         _exit(outcome),
         document,
         end.record.path,
-        sum((call.cost_usd for call in run.spending.calls), Decimal(0)),
+        run.cost,
         run.script,
     )
