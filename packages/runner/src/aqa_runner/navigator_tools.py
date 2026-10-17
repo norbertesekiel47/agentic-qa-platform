@@ -1,12 +1,14 @@
-"""The navigator's tools (ADR-0024's #53 P13 and P14 amendments): one
+"""The navigator's tools (ADR-0024's #53 P13, P14 and P19 amendments): one
 attempt's seven actions through its browser session, each dispatched as
-replay dispatches a step (`executor.dispatched`), and its three check tools,
-which bind each planned check to its target, evaluate it as the confirmation
-will, and compile the path. A call refused before its intent is a tool error
-the attempt survives; a step dispatched without its completion on disk ends
-the attempt, and no tool does any work after it. Every text a tool returns
-is fixed words, plan text and `aqa_runner.reasons`' reasons, scanned
-again."""
+replay dispatches a step (`executor.dispatched`), `describe_parts`, which
+lists an element's parts for the next call (`navigator_parts`), and its three
+check tools, which bind each planned check to its target, a part included,
+evaluate it as the confirmation will, and compile the path. A call refused
+before its intent is a tool error the attempt survives; a step dispatched
+without its completion on disk ends the attempt, and no tool does any work
+after it. Every text a tool returns is fixed words, plan text and
+`aqa_runner.reasons`' reasons, scanned again, but for the parts a description
+lists, which the page chose and `navigator_parts` scans."""
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
@@ -35,12 +37,18 @@ from aqa_runner.document_origins import DocumentChangedError, PolicyEventError
 from aqa_runner.egress import EgressGate
 from aqa_runner.evaluation import AssertionResult, Evaluation, evaluate_each
 from aqa_runner.explore_result import assertion_words
-from aqa_runner.locator_generation import LocatorError, TargetUses, seen_element
+from aqa_runner.locator_generation import (
+    LocatorError,
+    Seen,
+    TargetUses,
+    seen_element,
+)
 from aqa_runner.navigator import (
     TOOLS,
     AssertCheck,
     Call,
     Click,
+    DescribeParts,
     Fill,
     FillSecret,
     Finish,
@@ -50,6 +58,7 @@ from aqa_runner.navigator import (
     Reload,
     Select,
 )
+from aqa_runner.navigator_parts import PART_REF, Described, Parts
 from aqa_runner.reasons import UnansweredError
 from aqa_runner.redaction import Redacted
 from aqa_runner.run_record import RunRecord
@@ -165,6 +174,7 @@ class Attempt:
     observation: Redacted | None = field(init=False, default=None)
     _uses: dict[str, TargetUses] = field(init=False, default_factory=dict)
     _bound: dict[str, _Bound] = field(init=False, default_factory=dict)
+    parts: Parts = field(init=False, default_factory=Parts)
 
     def __post_init__(self) -> None:
         redactor = self.session.redactor
@@ -221,11 +231,13 @@ class Attempt:
         return self._uses[meaning]
 
     async def act(self, call: Action) -> ActionResult:
-        """Run `call`: nothing once the attempt has ended; then its arguments
-        checked (`_unrunnable`, `_unfit`), and everything else before its
-        intent (`_prepared`); nothing either once the run is `interrupted`
-        by then; then its intent, action, settling and completion. A record
-        that can't write its line raises, as does a cancellation."""
+        """Run `call`, once the last description's parts are let go: nothing
+        once the attempt has ended; then its arguments checked
+        (`_unrunnable`, `_unfit`), and everything else before its intent
+        (`_prepared`); nothing either once the run is `interrupted` by then;
+        then its intent, action, settling and completion. A record that
+        can't write its line raises, as does a cancellation."""
+        await self.parts.void()
         tool = TOOL_NAMES[type(call)]
         if problem := self._unrunnable(tool, call) or self._unfit(call):
             return self._refused(problem)
@@ -270,6 +282,22 @@ class Attempt:
             )
         return self._refused(f"{tool} did not run: {step.error}")
 
+    async def describe(self, call: DescribeParts) -> Described:
+        """`describe_parts`: list the parts of the element `call.ref` names
+        in the last observation, for the next turn's call. Nothing is
+        dispatched and no intent is written; a refusal is a tool error."""
+        if problem := self._unrunnable("describe_parts", call):
+            return Described(self._said(problem), self._said(""))
+        try:
+            return await self.parts.describe(
+                self.session, self.observation or "", call.ref
+            )
+        except _REFUSED as error:
+            reason = reasons.reason(error, self.session.redactor)
+            return Described(
+                self._said(f"describe_parts did not run: {reason}"), self._said("")
+            )
+
     async def check(self, call: AssertCheck) -> Redacted:
         """`assert_check`: bind the planned check to the element `call.ref`
         names, through its meaning's targets (`uses`), or to none, then
@@ -304,7 +332,7 @@ class Attempt:
                 "check, and it notes only a not_visible check's element"
             )
         try:
-            seen = await seen_element(self.session, self.observation or "", call.ref)
+            seen = await self._seen(call.ref)
             async with self.session.observing_page() as page:
                 await self.uses(meaning).see_for_negative_check(page, seen)
         except _REFUSED as error:
@@ -466,10 +494,18 @@ class Attempt:
             async with self.session.observing_page() as page:
                 index = await uses.add_negative_check(page)
         else:
-            seen = await seen_element(self.session, self.observation or "", call.ref)
+            seen = await self._seen(call.ref)
             async with self.session.observing_page() as page:
                 index = await uses.add(page, seen, "assertion")
         return uses.targets[index]
+
+    async def _seen(self, ref: str) -> Seen:
+        """The element `ref` names: a part of the last description, by a
+        part's ref such as p1.2, or else its element in the last
+        observation."""
+        if PART_REF.fullmatch(ref):
+            return await self.parts.seen(self.session, ref)
+        return await seen_element(self.session, self.observation or "", ref)
 
     async def _kept(
         self, bindings: Mapping[str, Target | None]
