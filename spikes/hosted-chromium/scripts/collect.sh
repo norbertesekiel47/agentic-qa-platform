@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # The account's billed usage in us-east-2, by usage type and day, from Cost
-# Explorer, printed as JSON. It reports billed snapshot storage (GB-hours)
-# and snapshot reads (GB). Build API memory and disk snapshot sizes are
-# separate measurements, saved before the approved same-session teardown.
+# Explorer, printed as JSON: MicroVM compute, snapshot storage (GB-hours),
+# snapshot reads and writes (GB), and the rest. Build API memory and disk
+# snapshot sizes are separate measurements, saved before the approved
+# same-session teardown; they don't set the billed size (ADR-0032).
 # Collect at least eight days after image creation and check that billed
 # usage has finished posting. Collection requires no live image.
-# API sizes alone do not establish billed cost (ADR-0032).
+# On #38's account, which spends credits, every UnblendedCost came back
+# $0.00, so ADR-0032 prices the billed quantities at list price.
 # Cost Explorer lags by about a day, and each request costs $0.01.
 # https://docs.aws.amazon.com/cli/latest/reference/ce/get-cost-and-usage.html
 #

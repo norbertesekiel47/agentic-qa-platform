@@ -162,24 +162,24 @@ What #38 records for each candidate, with the command and the commit that produc
   cost = s × (1 × $0.0000089944 + 2 × $0.0000009889 + $0.005 / 3,600)
 
   Ephemeral storage is within the 20 GB included.
-- **MicroVM** (a 2 GB, 1 vCPU baseline, and up to 4 × that in bursts). Compute runs while the MicroVM runs. Snapshot reads come from `collect.sh`. A snapshot's size comes from `get-microvm-image-build`, per build of the image version (`list-microvm-image-builds`), and `collect.sh` shows how its storage bills.
+- **MicroVM** (a 2 GB, 1 vCPU baseline, and up to 4 × that in bursts). Compute runs while the MicroVM runs. Snapshot reads come from `collect.sh`, and so do the snapshot's billed size and how its storage bills.
 
   s = (the trial's start − startedAt) + 60, where the trial's start = trial.ready_at − trial.ready_seconds
 
   compute = s × (1 × $0.0000276944 + 2 × $0.0000036667) + burst
 
-  - *When billing starts:* Lambda bills the baseline "while your MicroVM is running", so from `startedAt`. #38 checks that against the compute seconds `collect.sh` reports.
-  - *Burst* is billed only for use above the baseline. The trial's peak memory sits below 2 GB, so any burst is CPU during the launch; #38 reads its cost from `collect.sh`.
+  - *When billing starts:* Lambda bills the baseline "while your MicroVM is running", so from `startedAt`. The compute seconds `collect.sh` reports fit that but can't confirm it to the second: Cost Explorer totals them by day, each image build's with that day's MicroVMs (ADR-0032).
+  - *Burst* is billed only for use above the baseline. The trial's peak memory sits below 2 GB, so any burst is CPU during the launch. The bill has no burst usage type: burst bills as ordinary vCPU-seconds, which `collect.sh` can't separate from the rest.
   - *Snapshot reads:* each MicroVM reads its snapshot on start. The per-run cost is `R × $0.00155`, where R is the GB that `collect.sh` bills as snapshot reads, divided by the number of MicroVMs run.
   - *Snapshot storage:* $0.08 per GB-month for the image's snapshot, with a one-week minimum per image version.
     Per run, it is the monthly storage cost divided by the runs in a month.
     #38 reports it at 1,000 and at 10,000 runs a month.
-    The snapshot's size is the memory and disk snapshot sizes `get-microvm-image-build` reports for each build listed by `list-microvm-image-builds`. #38 saves those measurements before teardown.
+    `get-microvm-image-build` reports each build's memory and disk snapshot sizes (builds listed by `list-microvm-image-builds`), and #38 saved them before each teardown, but they don't set the bill: the billed size is 8–9% larger.
     The approved trial sequence tears down the image in the same session after the trials or the first failure, after saving the logs.
-    AWS doesn't describe how the one-week minimum is billed. #38 runs `collect.sh` at least eight days after the image's creation and checks that billed usage has finished posting.
-    #38 records the billed snapshot-storage GB-hours and costs, including how the minimum appears, from Cost Explorer.
-    Build API sizes alone do not establish billed storage cost. Collection requires no live image or whole UTC day of image retention.
-  - *Snapshot writes* ($0.0038 per GB): the successful October 1 trials terminated before the one-minute idle window. A failed trial can outlast that window; the October 4 attempt did, without a report that establishes whether suspension occurred. Suspending writes a snapshot. Whether either the image build or the failed attempt bills a write is for `collect.sh` to show.
+    AWS doesn't describe how the one-week minimum is billed. `collect.sh`, run on 2026-10-17, eight days after the last image's creation, showed it: each image version's storage bills by the hour for 168 hours from the end of its build, even after its delete.
+    ADR-0032 records the billed GB-hours, their cost and the posting's limits.
+    Collection requires no live image or whole UTC day of image retention.
+  - *Snapshot writes* ($0.0038 per GB): the successful October 1 trials terminated before the one-minute idle window. A failed trial can outlast that window; the October 4 attempt did, without a report that establishes whether suspension occurred. Suspending writes a snapshot. `collect.sh` showed a write billed on October 4 and none for October 9's build and trials, so the build bills none and the October 4 attempt's MicroVM was most likely suspended (ADR-0032).
 - **Every candidate** also stores its package: ECR at $0.10 per GB-month for the Lambda function's and the Fargate task's image, and S3 Standard ([S3](https://aws.amazon.com/s3/pricing/)) for the MicroVM's zip. Per run: the package's GB × the monthly price ÷ the runs in a month.
 
 
@@ -187,4 +187,6 @@ What #38 records for each candidate, with the command and the commit that produc
 
 #38 ran the trials on 2026-10-01. Their rows are in `results/2026-10-01.jsonl`, redacted for the public repository, and ADR-0032 holds every figure, with the commands that derive it from those rows.
 
-The current-package rerun on 2026-10-04 stopped after its first cold request timed out. There were no successful trial rows and no warm attempts. `results/2026-10-04-failed-attempt.json` records the failed attempt and scoped cleanup separately; it is not a trial `Report`. ADR-0032 records the evidence limits, pending task-definition/tag disappearance and outstanding billed costs. Hosted validation of the current launcher remains open.
+The current-package rerun on 2026-10-04 stopped after its first cold request timed out. There were no successful trial rows and no warm attempts. `results/2026-10-04-failed-attempt.json` records the failed attempt and scoped cleanup separately; it is not a trial `Report`. ADR-0032 records the evidence limits and pending task-definition/tag disappearance. Hosted validation of the current launcher remains open.
+
+`collect.sh` collected the billed usage on 2026-10-17, and ADR-0032's Cost consequence records it.
