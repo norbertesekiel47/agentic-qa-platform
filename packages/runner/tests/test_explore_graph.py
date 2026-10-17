@@ -139,6 +139,15 @@ def shop_spec(root: Path, config: ProjectConfig, page: str, preconditions: str) 
     return load_spec(path, config)
 
 
+def configured(root: Path, config: ProjectConfig | None = None) -> Path:
+    """The spec root `root`, made, with `config` as its `config.yaml`, which
+    publication reads again before it writes."""
+    root.mkdir(parents=True, exist_ok=True)
+    held = (config or ProjectConfig()).model_dump(mode="json", exclude_unset=True)
+    (root / "config.yaml").write_text(json.dumps(held))
+    return root
+
+
 def explored(
     app: App, tmp_path: Path, client: Scripted, **setup: Unpack[Setup]
 ) -> Explored:
@@ -237,8 +246,7 @@ def files(explored: Explored) -> list[str]:
 def test_a_finished_attempt_finalizes_with_its_script_in_memory(
     app: App, tmp_path: Path
 ) -> None:
-    (tmp_path / "qa").mkdir()
-    (tmp_path / "qa" / "config.yaml").write_text("{}\n")
+    configured(tmp_path / "qa")
 
     run = explored(app, tmp_path, Scripted(FILL, CLICK, ASSERT, FINISH))
 
@@ -272,8 +280,7 @@ def test_a_finished_attempt_finalizes_with_its_script_in_memory(
     assert [
         each.model_dump(include={"id", "target"}) for each in script.assertions
     ] == [{"id": "a1", "target": "t3"}]
-    # A side-effect path whose spec has no reset hook is published as it
-    # was compiled, unconfirmed, and never replayed (AGENTS.md §6).
+    # With no reset hook, published unconfirmed, never replayed (AGENTS.md §6).
     compiled = tmp_path / "qa" / ".compiled"
     assert sorted(path.name for path in compiled.iterdir()) == ["shop.json"]
     assert load_compiled(compiled / "shop.json", ProjectConfig()) == script

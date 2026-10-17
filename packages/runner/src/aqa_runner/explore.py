@@ -62,6 +62,7 @@ from aqa_runner.explore_result import (
     ExploreEnd,
     Outcome,
     Phase,
+    Published,
     Stop,
     Stoppage,
     final_outcome,
@@ -102,9 +103,6 @@ from aqa_runner.sandbox import SandboxUnavailableError
 # How a run ends: as `explore_result.final_outcome` says once the egress
 # proxy opened, or a spec error before it (#53 P15c).
 type Ended = Outcome | Literal["spec_error"]
-# Whether a run published its script, confirmed or not.
-type Published = Literal["confirmed", "unconfirmed"]
-
 # Why the run stopped, in fixed words.
 _UNMADE: Final = "the run record could not be created; nothing was planned"
 _UNREAD: Final = "the compiled script could not be read; nothing was planned"
@@ -137,8 +135,9 @@ class Explored:
     `plan.json` or `explore.json`, as written or as the record couldn't take it, whose
     `outcome` and `reasons` say why; its record, None when none could be
     made; what its model calls cost; the script its attempt compiled, as
-    `finish` compiled it, when it compiled one; and whether the run's
-    `egress.json` was written."""
+    `finish` compiled it (unconfirmed, every locator kept), when it compiled
+    one that spells no bound value; and whether the run's `egress.json` was
+    written."""
 
     outcome: Ended
     exit_code: int
@@ -241,7 +240,12 @@ async def explore(
 
 
 def _shown(run: Run, explored: Explored) -> Explored:
-    """`explored`, or fixed words for a document still spelling a bound value."""
+    """`explored`, with no script when its script spells a bound value, as
+    one `finish` compiled with a locator the attempt's own drop missed
+    does, and fixed words for a document still spelling one."""
+    script = explored.script
+    if script is not None and run.redactor.spells(script.model_dump(mode="json")):
+        explored = replace(explored, script=None)
     if not run.redactor.spells(explored.document):
         return explored
     document = {"outcome": explored.outcome, "reasons": [_UNSHOWN]}
@@ -475,7 +479,7 @@ async def _attempted(run: Run, explorable: Explorable) -> ExploreEnd:
     path published, if it may be."""
     expected = run.config.egress.expected_blocked
     confirmation: Confirmation | None = None
-    published: Published | None = None
+    intended: Published | None = None
     async with EgressProxy(run.gate) as proxy:
 
         def interrupted() -> bool:
@@ -492,14 +496,14 @@ async def _attempted(run: Run, explorable: Explorable) -> ExploreEnd:
         _uncertain(run, traffic)
         script = _publishable(run, interrupted)
         if script is not None and _unconfirmable(run.spec, script):
-            published = "unconfirmed"
+            intended = "unconfirmed"
         elif script is not None:
             confirmation = await _confirming(run, proxy, script, interrupted)
-            if _passed(run, confirmation):
-                published = "confirmed"
+            intended = "confirmed" if _passed(run, confirmation) else None
         blocks = proxy.egress_blocks(expected)
-    if script is not None and published is not None:
-        published = await _published(run, script, published)
+    published = None
+    if script is not None and intended is not None:
+        published = await _published(run, script, intended)
     return ExploreEnd(
         run.record,
         Phase(run.attempt, traffic, events),

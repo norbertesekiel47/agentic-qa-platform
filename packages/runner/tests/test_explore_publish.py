@@ -1,29 +1,40 @@
 """Publishing what explore confirmed (#53 P16b; ADR-0024's #53 P16
 amendments): the compiled file read once the record is made, before
-planning; the spec, its contracts and the file compared under the spec's
-lock; the published text checked as written; what each failure on either
-side of the install point exits with; and whether `egress.json` was saved.
-Real Chromium against the executor's fixture app, with a scripted model."""
+planning; nothing published after a stop, a block or a dropped target, and
+every locator that spells a bound value dropped first; the spec, its
+contracts and the file compared under the spec's lock; the published text
+checked as written; what each failure on either side of the install point
+exits with; and whether `egress.json` was saved. Real Chromium against the
+executor's fixture app, with a scripted model."""
 
 import asyncio
 import errno
 import json
 import os
+import socket
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
+from aqa_core.compiled import CompiledScript
 from aqa_core.config import ProjectConfig
 from aqa_core.project import SpecError
-from aqa_runner import publication
+from aqa_runner import executor, explore, publication, settling
 from aqa_runner.egress_proxy import EgressProxy
+from aqa_runner.explore_turns import Turning, take_turns
+from aqa_runner.navigator_tools import Attempt
 from aqa_runner.run_record import RunRecord
 
-from packages.runner.tests.executor_fixtures import App, serving_app
+from packages.runner.tests.document_fixtures import until
+from packages.runner.tests.egress_fixtures import get
+from packages.runner.tests.executor_fixtures import PAGES, SHOPS, App, serving_app
 from packages.runner.tests.explore_graph_fixtures import FILL, Scripted, tool
-from packages.runner.tests.secret_fixtures import FAKE_VALUE
+from packages.runner.tests.secret_fixtures import FAKE_VALUE, copies_found
+from packages.runner.tests.test_executor_runs import while_closing
 from packages.runner.tests.test_explore_confirm import (
+    HELD_LATE,
+    PASS,
     PATH,
     RESET,
     compiled_file,
@@ -33,8 +44,11 @@ from packages.runner.tests.test_explore_confirm import (
 )
 from packages.runner.tests.test_explore_graph import (
     ACCOUNT,
+    PLAIN,
     SECRETS,
     UNWRITTEN,
+    files,
+    proxies,
     written,
 )
 from packages.runner.tests.test_explore_preflight import planned
@@ -290,3 +304,182 @@ def test_a_run_with_no_block_saves_no_egress_record(app: App, tmp_path: Path) ->
     assert (run.exit_code, run.egress_saved) == (0, False)
     assert run.record is not None
     assert not (run.record / "egress.json").exists()
+
+
+@pytest.mark.usefixtures("secret")
+def test_no_written_script_or_record_holds_a_secret_copy(
+    app: App, tmp_path: Path
+) -> None:
+    run = confirming(
+        app,
+        tmp_path,
+        Scripted(planned(), *PATH),
+        config=SECRETS,
+        preconditions=ACCOUNT + RESET,
+    )
+
+    assert written(run)["published"] == "confirmed"
+    written_files = [path for path in tmp_path.rglob("*") if path.is_file()]
+    assert compiled_file(tmp_path) in written_files
+    assert copies_found(FAKE_VALUE, files=written_files) == []
+
+
+# A value the status paragraph's ID and test ID spell, bound as the test
+# secret: a locator by either spells it.
+SPELLED = "fake-status-value-49"
+SPELLING = (
+    SHOPS["shop"].replace('"status"', f'"{SPELLED}"').replace("#status", f"#{SPELLED}")
+)
+
+
+def spelling(monkeypatch: pytest.MonkeyPatch, page: str) -> None:
+    """Bind `SPELLED`, serve `page` as the shop, and let the attempt keep a
+    locator that spells a bound value, which its own drop would refuse, so
+    only explore's drop before the confirmation stands between it and the
+    published script."""
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", SPELLED)
+    monkeypatch.setitem(PAGES, "shop", page)
+    monkeypatch.setattr(Attempt, "_spelled", lambda _attempt, _locator: False)
+
+
+def test_a_locator_spelling_a_bound_value_is_dropped_before_the_confirmation(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spelling(monkeypatch, SPELLING)
+    compiled: list[CompiledScript | None] = []
+
+    async def taking(turning: Turning) -> None:
+        await take_turns(turning)
+        compiled.append(turning.script)
+
+    monkeypatch.setattr(explore, "take_turns", taking)
+
+    run = confirming(
+        app,
+        tmp_path,
+        Scripted(planned(), *PATH),
+        config=SECRETS,
+        preconditions=ACCOUNT + RESET,
+    )
+
+    assert (run.outcome, run.exit_code) == ("compiled", 0)
+    # The script the attempt compiled spells the value, so it isn't returned.
+    assert run.script is None
+    assert compiled[0] is not None
+    compiled_locators = [
+        locator.model_dump(exclude_none=True)
+        for locator in compiled[0].targets["t3"].locators
+    ]
+    assert compiled_locators == [
+        {"testid": SPELLED},
+        {"css": f"#{SPELLED}"},
+        {"role": "paragraph"},
+        {"css": "p"},
+    ]
+    script = published(tmp_path)
+    assert script.confirmed is True
+    assert [
+        locator.model_dump(exclude_none=True)
+        for locator in script.targets["t3"].locators
+    ] == [{"role": "paragraph"}, {"css": "p"}]
+    assert {
+        name: target for name, target in script.targets.items() if name != "t3"
+    } == {name: target for name, target in compiled[0].targets.items() if name != "t3"}
+
+
+def test_a_target_left_with_no_locator_publishes_nothing_naming_it(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The status's section spells the value too, and a second paragraph
+    # outside it: no locator by role or tag finds the status alone.
+    page = SPELLING.replace('"status-area"', f'"{SPELLED}-area"') + "<p>Elsewhere</p>"
+    spelling(monkeypatch, page)
+
+    run = confirming(
+        app,
+        tmp_path,
+        Scripted(planned(), *PATH),
+        config=SECRETS,
+        preconditions=ACCOUNT + RESET,
+    )
+
+    assert (run.outcome, run.exit_code) == ("gave_up", 3)
+    document = written(run)
+    assert document["reasons"] == [
+        "target t3 has no locator that spells no bound value"
+    ]
+    assert (document["confirmation"], document["published"]) == (None, None)
+    assert [name for name in files(run) if name.startswith("confirmation")] == []
+    assert app.paths().count("/write/reset") == 1
+    assert not compiled_file(tmp_path).parent.exists()
+
+
+@pytest.mark.parametrize("preconditions", ["", RESET], ids=["no hook", "a hook"])
+def test_uncertain_traffic_left_by_the_attempt_after_finish_publishes_nothing(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, preconditions: str
+) -> None:
+    monkeypatch.setattr(settling, "SETTLE_SECONDS", 1)
+    monkeypatch.setitem(PAGES, "shop", HELD_LATE)
+
+    run = confirming(
+        app, tmp_path, Scripted(planned(), *PATH), preconditions=preconditions
+    )
+
+    assert (run.outcome, run.exit_code) == ("reset_unsafe", 14)
+    document = written(run)
+    assert document["reasons"] == [PLAIN]
+    assert (document["confirmation"], document["published"]) == (None, None)
+    assert run.script is not None
+    # No reset follows uncertain traffic, and nothing is replayed (D29).
+    assert app.paths().count("/write/reset") == (1 if preconditions else 0)
+    assert app.paths().count("/write/save") == 1
+    assert not compiled_file(tmp_path).parent.exists()
+
+
+def test_a_block_recorded_as_the_attempts_browser_closes_after_finish_publishes_nothing(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened = proxies(monkeypatch)
+    late: list[socket.socket] = []
+
+    async def refused() -> None:
+        # A late request of the browser's, as it closes.
+        late.append(socket.create_connection(("127.0.0.1", opened[0][1])))
+        late[0].sendall(get("http://evil.example.test/", close=True))
+        await until(lambda: "evil.example.test" in json.dumps(written_blocks(opened)))
+
+    while_closing(monkeypatch, refused)
+
+    try:
+        run = confirming(app, tmp_path, Scripted(planned(), *PATH), preconditions="")
+    finally:
+        for connection in late:
+            connection.close()
+
+    assert (run.outcome, run.exit_code) == ("egress_blocked", 6)
+    document = written(run)
+    assert document["reasons"] == []
+    assert document["egress"]["refused"] == [{"host": "evil.example.test", "port": 80}]
+    assert document["published"] is None
+    assert not compiled_file(tmp_path).parent.exists()
+
+
+def written_blocks(opened: list[tuple[EgressProxy, int]]) -> list[str]:
+    """The hosts the run's proxy has refused so far."""
+    blocks = opened[0][0].egress_blocks(())
+    return [refused.host for refused in blocks.refused]
+
+
+def test_a_timeout_that_isnt_the_minutes_budgets_own_propagates_from_the_confirmation(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def foreign(*_args: Any, **_kwargs: Any) -> Any:
+        raise TimeoutError
+
+    monkeypatch.setattr(executor, "replay", foreign)
+
+    with pytest.raises(TimeoutError):
+        confirming(app, tmp_path, Scripted(planned(), *PATH))
+
+    assert app.paths() == [*PASS, "/write/reset"]
+    assert not compiled_file(tmp_path).parent.exists()

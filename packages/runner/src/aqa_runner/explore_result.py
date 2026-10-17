@@ -73,6 +73,9 @@ type Stoppage = Literal[
     "no_sandbox", "reset_unsafe", "record_error", "no_response", "gave_up"
 ]
 
+# Whether a run published its compiled script, confirmed or not.
+type Published = Literal["confirmed", "unconfirmed"]
+
 
 @dataclass(frozen=True)
 class Stop:
@@ -128,7 +131,7 @@ class ExploreEnd:
     infrastructure_events: tuple[InfrastructureEvent, ...]
     checks: Mapping[str, AssertionResult | None]
     stops: tuple[Stop, ...]
-    published: Literal["confirmed", "unconfirmed"] | None
+    published: Published | None
 
     def __post_init__(self) -> None:
         for part, phase in _phases(self):
