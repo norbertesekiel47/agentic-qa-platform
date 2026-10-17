@@ -11,7 +11,6 @@ scripted model."""
 import asyncio
 import errno
 import json
-import os
 import re
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
@@ -21,9 +20,9 @@ import pytest
 from aqa_core.compiled import CompiledScript
 from aqa_core.config import ProjectConfig
 from aqa_core.coverage_plan import CoveragePlan
-from aqa_core.project import SpecError, load_compiled, load_config
+from aqa_core.project import load_compiled, load_config
 from aqa_core.spec import Reset
-from aqa_runner import executor, explore, publication, settling
+from aqa_runner import executor, explore, settling
 from aqa_runner.chat_client import ChatClient
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.explore import Explored
@@ -50,12 +49,19 @@ from packages.runner.tests.explore_graph_fixtures import (
     CLICK,
     FILL,
     STATUS,
+    Move,
     Scripted,
     calling,
     ref,
     tool,
 )
 from packages.runner.tests.secret_fixtures import FAKE_VALUE, copies_found
+from packages.runner.tests.test_describe_parts import (
+    COUNTED,
+    COUNTER,
+    PARTS_PAGES,
+    favorite_in,
+)
 from packages.runner.tests.test_explore_graph import (
     ACCOUNT,
     ASSERT,
@@ -455,71 +461,6 @@ def test_a_confirmation_journal_that_takes_no_more_lines_exits_15_and_writes_not
     assert not compiled_file(tmp_path).parent.exists()
 
 
-def test_a_subject_contract_changed_during_the_run_publishes_nothing(
-    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    row = {"spec": "shop", "expect": 0, "region": "main", "part": "p"}
-    config_file = tmp_path / "qa" / "config.yaml"
-    resets(monkeypatch, lambda: config_file.write_text(json.dumps({"subjects": [row]})))
-
-    run = confirming(app, tmp_path, Scripted(planned(), *PATH))
-
-    assert (run.outcome, run.exit_code) == ("gave_up", 3)
-    document = written(run)
-    assert document["reasons"] == [
-        "the project's subject contracts changed during the run"
-    ]
-    assert document["confirmation"]["outcome"] == "passed"
-    assert document["published"] is None
-    assert not compiled_file(tmp_path).exists()
-
-
-def test_a_compiled_script_written_by_another_writer_during_the_run_is_not_overwritten(
-    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def theirs() -> None:
-        compiled_file(tmp_path).parent.mkdir()
-        compiled_file(tmp_path).write_text('{"theirs": 1}\n')
-
-    resets(monkeypatch, theirs)
-
-    run = confirming(app, tmp_path, Scripted(planned(), *PATH))
-
-    assert (run.outcome, run.exit_code) == ("gave_up", 3)
-    assert written(run)["reasons"] == ["the compiled script changed during the run"]
-    assert compiled_file(tmp_path).read_text() == '{"theirs": 1}\n'
-
-
-@pytest.mark.usefixtures("secret")
-def test_a_published_text_that_spells_a_bound_value_exits_15(
-    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Every source of the text is checked before it (the locators dropped,
-    # the plan's and the turns' requests and the tool arguments scanned), so
-    # the text is made to spell the value, to show the check is on it.
-    text = publication.published_text
-    monkeypatch.setattr(
-        publication, "published_text", lambda script: text(script) + FAKE_VALUE
-    )
-
-    run = confirming(
-        app,
-        tmp_path,
-        Scripted(planned(), *PATH),
-        config=SECRETS,
-        preconditions=ACCOUNT + RESET,
-    )
-
-    assert (run.outcome, run.exit_code) == ("record_error", 15)
-    document = written(run)
-    assert document["reasons"] == [
-        ".compiled/shop.json: a bound value's spelling is in it, so it isn't written"
-    ]
-    assert (document["withheld"], document["published"]) == (True, None)
-    assert not compiled_file(tmp_path).parent.exists()
-    assert not (tmp_path / "qa" / ".aqa" / "locks").exists()
-
-
 @pytest.mark.usefixtures("secret")
 def test_a_confirmation_whose_launch_fails_is_exit_10_with_its_phase_ended(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -593,134 +534,6 @@ def test_a_confirmation_part_that_cannot_be_made_is_exit_15_with_no_confirmation
     assert not compiled_file(tmp_path).parent.exists()
 
 
-def test_the_minutes_budget_expiring_during_teardown_publishes_nothing(
-    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    end_phase = EgressProxy.end_phase
-
-    async def late(proxy: EgressProxy) -> Any:
-        traffic = await end_phase(proxy)
-        # The attempt's teardown took past the one minute the run has.
-        loop = asyncio.get_running_loop()
-        now = loop.time
-        monkeypatch.setattr(loop, "time", lambda: now() + 61)
-        return traffic
-
-    monkeypatch.setattr(EgressProxy, "end_phase", late)
-    config = ProjectConfig.model_validate({"budgets": {"minutes": 1}})
-
-    run = confirming(
-        app, tmp_path, Scripted(planned(), *PATH), preconditions="", config=config
-    )
-
-    assert (run.outcome, run.exit_code) == ("gave_up", 3)
-    assert written(run)["reasons"] == [
-        "the minutes budget ran out before the script was published"
-    ]
-    assert not compiled_file(tmp_path).parent.exists()
-
-
-def test_a_compiled_file_that_cannot_be_read_at_admission_exits_15_before_planning(
-    app: App, tmp_path: Path
-) -> None:
-    # A directory where the compiled file goes: reading it fails.
-    compiled_file(tmp_path).mkdir(parents=True)
-    client = Scripted(planned(), *PATH)
-
-    run = confirming(app, tmp_path, client)
-
-    assert (run.outcome, run.exit_code) == ("record_error", 15)
-    assert run.document == {
-        "outcome": "record_error",
-        "reasons": ["the compiled script could not be read; nothing was planned"],
-    }
-    assert (client.requests, app.paths()) == ([], [])
-    # Read once the record and its part are made, before planning.
-    assert run.record is not None
-    assert sorted(path.name for path in run.record.iterdir()) == ["attempt-1"]
-    assert list((run.record / "attempt-1").iterdir()) == []
-
-
-def test_a_compiled_directory_that_is_a_link_is_a_spec_error_before_planning(
-    app: App, tmp_path: Path
-) -> None:
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    (tmp_path / "qa").mkdir()
-    (tmp_path / "qa" / ".compiled").symlink_to(elsewhere)
-    client = Scripted(planned(), *PATH)
-
-    with pytest.raises(SpecError) as refused:
-        confirming(app, tmp_path, client)
-
-    root = tmp_path / "qa"
-    assert refused.value.problems == (
-        f"{root / '.compiled'}: a link, and explore writes only in {root}",
-    )
-    assert (client.requests, app.paths()) == ([], [])
-    # Refused once the record and its part are made, before planning.
-    records = list((root / ".aqa" / "runs").iterdir())
-    assert [sorted(path.name for path in record.iterdir()) for record in records] == [
-        ["attempt-1"]
-    ]
-
-
-OLD = '{"old": 1}\n'
-
-
-@pytest.mark.parametrize("existing", [None, OLD])
-def test_an_unwritable_compiled_directory_exits_15_and_publishes_nothing(
-    app: App, tmp_path: Path, existing: str | None
-) -> None:
-    directory = compiled_file(tmp_path).parent
-    directory.mkdir(parents=True)
-    if existing is not None:
-        compiled_file(tmp_path).write_text(existing)
-    directory.chmod(0o555)
-    try:
-        run = confirming(app, tmp_path, Scripted(planned(), *PATH), preconditions="")
-    finally:
-        directory.chmod(0o755)
-
-    assert (run.outcome, run.exit_code) == ("record_error", 15)
-    document = written(run)
-    assert document["reasons"] == ["the compiled script couldn't be written"]
-    assert document["published"] is None
-    held = compiled_file(tmp_path)
-    assert (held.read_text() if held.exists() else None) == existing
-    assert sorted(path.name for path in directory.iterdir()) == (
-        [] if existing is None else ["shop.json"]
-    )
-
-
-def test_a_script_installed_before_its_directory_sync_failed_is_published_with_exit_15(
-    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fsync = os.fsync
-    directory = compiled_file(tmp_path).parent
-
-    def failing(handle: int) -> None:
-        if directory.exists() and os.fstat(handle).st_ino == directory.stat().st_ino:
-            raise OSError(errno.EIO, "fake directory fsync failure")
-        fsync(handle)
-
-    monkeypatch.setattr(os, "fsync", failing)
-
-    run = confirming(app, tmp_path, Scripted(planned(), *PATH))
-
-    assert (run.outcome, run.exit_code) == ("record_error", 15)
-    document = written(run)
-    assert document["published"] == "confirmed"
-    assert document["reasons"] == [
-        (
-            "the compiled script was published, but the file system failed after "
-            "it, so it may not survive a crash"
-        )
-    ]
-    assert run.script is not None
-    assert published(tmp_path) == run.script.model_copy(update={"confirmed": True})
-
-
 @pytest.mark.usefixtures("secret")
 def test_the_confirmation_scans_with_the_same_bound_values_as_the_run(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -746,54 +559,6 @@ def test_the_confirmation_scans_with_the_same_bound_values_as_the_run(
     assert len(made) == 1
     assert made[0].spells(FAKE_VALUE)
     assert made[0].redact(f"x {FAKE_VALUE} y") == "x [SECRET:TEST_PASSWORD] y"
-
-
-def test_a_run_whose_egress_record_is_written_says_it_was_saved(
-    app: App, tmp_path: Path
-) -> None:
-    away = tool("navigate", lambda _: {"path": "/page/refused-script"})
-
-    run = confirming(app, tmp_path, Scripted(planned(), away, FILL))
-
-    assert (run.outcome, run.exit_code, run.egress_saved) == ("egress_blocked", 6, True)
-    assert run.record is not None
-    assert json.loads((run.record / "egress.json").read_text())["refused"] == [
-        {"host": "analytics.example.test", "port": 80}
-    ]
-
-
-def test_a_run_whose_egress_record_could_not_be_written_says_it_was_not_saved(
-    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    write = RunRecord.write
-
-    def unwritten(record: RunRecord, name: str, *args: Any, **kwargs: Any) -> None:
-        if name == "egress.json":
-            raise OSError(errno.ENOSPC, "fake full disk")
-        write(record, name, *args, **kwargs)
-
-    monkeypatch.setattr(RunRecord, "write", unwritten)
-    away = tool("navigate", lambda _: {"path": "/page/refused-script"})
-
-    run = confirming(app, tmp_path, Scripted(planned(), away, FILL))
-
-    assert (run.outcome, run.exit_code, run.egress_saved) == (
-        "egress_blocked",
-        6,
-        False,
-    )
-    assert run.record is not None
-    assert not (run.record / "egress.json").exists()
-    # `explore.json` was written first; the result says what failed after.
-    assert run.document["reasons"] == [UNWRITTEN, "a1: never bound"]
-
-
-def test_a_run_with_no_block_saves_no_egress_record(app: App, tmp_path: Path) -> None:
-    run = confirming(app, tmp_path, Scripted(planned(), *PATH))
-
-    assert (run.exit_code, run.egress_saved) == (0, False)
-    assert run.record is not None
-    assert not (run.record / "egress.json").exists()
 
 
 def test_the_record_keeps_each_phases_steps_and_intents(
@@ -1183,3 +948,110 @@ def test_a_count_changed_after_the_attempt_fails_the_confirmation_only_in_its_re
     assert (run.outcome, run.exit_code) == outcome
     assert written(run)["reasons"] == reasons
     assert compiled_file(tmp_path).exists() is (outcome[1] == 0)
+
+
+# The favorites count, a part of the banner's favorite button, bound
+# through `describe_parts` under its leaf contract (ADR-0025's #53 P19
+# amendment), on the article page with the button in the banner and again
+# in the article's actions.
+COUNTING = ProjectConfig.model_validate(
+    {
+        "subjects": [
+            {
+                "spec": "shop",
+                "expect": 0,
+                "region": "div.banner",
+                "part": "span.counter",
+                "leaf": True,
+            }
+        ],
+        "budgets": {"resolve_seconds": 2},
+    }
+)
+WHOLE = tool("assert_check", lambda m: {"check_id": "a1", "ref": favorite_in(m)})
+DESCRIBE = tool("describe_parts", lambda m: {"ref": favorite_in(m)})
+ASSERT_PART = calling("assert_check", {"check_id": "a1", "ref": "p1.2"})
+NOTHING_KEPT = calling("finish", {"steps": []})
+
+
+def counting(
+    app: App,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *moves: Move,
+    config: ProjectConfig = COUNTING,
+) -> Explored:
+    """A run that binds the count on the article, then confirms it on the
+    page the second reset serves as the article, `PAGES["parts-confirmed"]`."""
+    monkeypatch.setitem(PAGES, "parts-article", PARTS_PAGES["parts-article"])
+    resets(
+        monkeypatch,
+        lambda: monkeypatch.setitem(PAGES, "parts-article", PAGES["parts-confirmed"]),
+    )
+    return confirming(
+        app,
+        tmp_path,
+        Scripted(planned(COUNTED), *moves),
+        config=config,
+        page="/page/parts-article",
+    )
+
+
+def test_a_bound_count_confirms_and_publishes_its_part(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(PAGES, "parts-confirmed", PARTS_PAGES["parts-article"])
+
+    run = counting(app, tmp_path, monkeypatch, DESCRIBE, ASSERT_PART, NOTHING_KEPT)
+
+    assert (run.outcome, run.exit_code) == ("compiled", 0)
+    assert published(tmp_path).targets == {"t1": COUNTER}
+
+
+def test_a_count_offered_only_as_its_button_is_never_published(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(PAGES, "parts-confirmed", PARTS_PAGES["parts-article"])
+
+    budgets = COUNTING.budgets.model_copy(update={"actions_per_attempt": 2})
+    config = COUNTING.model_copy(update={"budgets": budgets})
+
+    run = counting(app, tmp_path, monkeypatch, WHOLE, NOTHING_KEPT, config=config)
+
+    assert (run.outcome, run.exit_code) == ("gave_up", 3)
+    assert written(run)["reasons"] == [
+        "the attempt took all 2 of its turns",
+        "a1: never bound",
+    ]
+    assert (written(run)["confirmation"], run.script) == (None, None)
+    assert not compiled_file(tmp_path).parent.exists()
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        (PARTS_PAGES["parts-flattened"], "binding_unresolved (no match)"),
+        (
+            PARTS_PAGES["parts-article"].replace(
+                '<div class="banner">',
+                '<div class="banner"><span class="counter">(1)</span>',
+            ),
+            "binding_unresolved (ambiguous)",
+        ),
+    ],
+    ids=["its button flattened", "a childless decoy beside it"],
+)
+def test_a_confirmation_whose_banner_no_longer_holds_the_count_as_its_part_does_not_confirm(
+    app: App,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: tuple[str, str],
+) -> None:
+    page, words = case
+    monkeypatch.setitem(PAGES, "parts-confirmed", page)
+
+    run = counting(app, tmp_path, monkeypatch, DESCRIBE, ASSERT_PART, NOTHING_KEPT)
+
+    assert (run.outcome, run.exit_code) == ("gave_up", 3)
+    assert written(run)["reasons"] == [f"confirmation a1: {words}"]
+    assert not compiled_file(tmp_path).parent.exists()

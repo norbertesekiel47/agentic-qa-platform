@@ -582,7 +582,7 @@ async def _confirming(
                 gate=run.gate,
                 every_locator=True,
             )
-    # Before the rest: a TimeoutError is an OSError.
+    # First: a TimeoutError is an OSError.
     except TimeoutError:
         if not limit.expired():
             raise  # not the minutes budget's own
@@ -614,10 +614,11 @@ async def _published(
     """Publish `script` as `kind` before the run's deadline, its text
     checked as written: `kind` once it is installed, with a stop when a
     failure came after; None, with a stop, when it isn't."""
-    place = f".compiled/{run.spec.frontmatter.id}.json"
+    at = run.publication
+    place = str(at.target.relative_to(at.root))
     try:
         await publish(
-            run.publication,
+            at,
             script.model_copy(update={"confirmed": kind == "confirmed"}),
             check=require_clean(run.redactor, place),
             deadline=run.deadline,
