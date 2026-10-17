@@ -12,7 +12,8 @@ import asyncio
 import errno
 import json
 import os
-from collections.abc import Callable, Iterator
+import re
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -28,14 +29,23 @@ from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.explore import Explored
 from aqa_runner.loopback_server import LoopbackServer
 from aqa_runner.model_router import ModelRouter
+from aqa_runner.navigator_tools import Attempt
 from aqa_runner.redaction import Redactor
 from aqa_runner.reset import reset
 from aqa_runner.run_record import RunRecord
 from aqa_runner.sandbox import SandboxUnavailableError, launch
+from langchain_core.messages import BaseMessage
 from playwright.async_api import Browser, async_playwright
 
 from packages.runner.tests.document_fixtures import until
-from packages.runner.tests.executor_fixtures import PAGES, SHOP, App, serving_app
+from packages.runner.tests.executor_fixtures import (
+    PAGES,
+    SHOP,
+    SHOPS,
+    App,
+    read_steps,
+    serving_app,
+)
 from packages.runner.tests.explore_graph_fixtures import (
     CLICK,
     FILL,
@@ -45,7 +55,7 @@ from packages.runner.tests.explore_graph_fixtures import (
     ref,
     tool,
 )
-from packages.runner.tests.secret_fixtures import FAKE_VALUE
+from packages.runner.tests.secret_fixtures import FAKE_VALUE, copies_found
 from packages.runner.tests.test_explore_graph import (
     ACCOUNT,
     ASSERT,
@@ -60,6 +70,7 @@ from packages.runner.tests.test_explore_graph import (
     written,
 )
 from packages.runner.tests.test_explore_preflight import planned
+from packages.runner.tests.test_navigator_checks import ARTICLE, BUTTON_ROW, FAVORITE
 
 RESET = "  reset: { http: POST /write/reset }\n"
 # The path the scripted attempt explores and compiles: fill, save, check.
@@ -783,3 +794,392 @@ def test_a_run_with_no_block_saves_no_egress_record(app: App, tmp_path: Path) ->
     assert (run.exit_code, run.egress_saved) == (0, False)
     assert run.record is not None
     assert not (run.record / "egress.json").exists()
+
+
+def test_the_record_keeps_each_phases_steps_and_intents(
+    app: App, tmp_path: Path
+) -> None:
+    run = confirming(app, tmp_path, Scripted(planned(), *PATH))
+
+    assert run.record is not None
+    attempt = read_steps(run.record / "attempt-1")
+    assert [(line["seq"], line["state"]) for line in attempt] == [
+        (0, "intent"),
+        (0, "completed"),
+        (1, "intent"),
+        (1, "completed"),
+        (2, "intent"),
+        (2, "completed"),
+    ]
+    assert read_steps(run.record / "confirmation") == [
+        {
+            "action": {"action": "navigate", "url": "/page/shop"},
+            "seq": 0,
+            "side_effect": False,
+            "state": "intent",
+            "target_used": None,
+        },
+        {"locator_used": None, "seq": 0, "settled": "idle", "state": "completed"},
+        {
+            "action": {"action": "fill", "target": "t1", "value": "Ada"},
+            "seq": 1,
+            "side_effect": True,
+            "state": "intent",
+            "target_used": "t1",
+        },
+        {"locator_used": 0, "seq": 1, "settled": "idle", "state": "completed"},
+        {
+            "action": {"action": "click", "target": "t2"},
+            "seq": 2,
+            "side_effect": True,
+            "state": "intent",
+            "target_used": "t2",
+        },
+        {"locator_used": 0, "seq": 2, "settled": "idle", "state": "completed"},
+    ]
+
+
+def test_every_sink_gets_the_presented_result_never_the_run_result(
+    app: App, tmp_path: Path
+) -> None:
+    run = confirming(app, tmp_path, Scripted(planned(), *PATH))
+
+    document = written(run)
+    assert sorted(document) == [
+        "confirmation",
+        "egress",
+        "exit_code",
+        "infrastructure_events",
+        "non_resumable",
+        "outcome",
+        "phases",
+        "published",
+        "reasons",
+        "run_id",
+        "withheld",
+    ]
+    assert sorted(document["confirmation"]) == [
+        "assertions",
+        "error_code",
+        "invariants",
+        "outcome",
+        "steps",
+    ]
+    assert document["phases"][1] == CONFIRMATION_PHASE
+    # No settle window, request or page URL leaves through the run's
+    # document or the confirmation's journal; the step evidence is
+    # `aqa_runner.evidence`'s own.
+    assert run.record is not None
+    saved = [run.record / "explore.json", run.record / "confirmation" / "steps.jsonl"]
+    assert [
+        path for path in saved if app.origin in path.read_text(errors="replace")
+    ] == []
+
+
+def test_the_reset_waits_for_the_attempts_browser_to_close_and_its_phase_to_end(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    end_phase = EgressProxy.end_phase
+    begin_phase = EgressProxy.begin_phase
+    seen: list[int] = []
+
+    async def held(proxy: EgressProxy) -> Any:
+        if seen:
+            return await end_phase(proxy)
+        seen.append(int(proxy.url.rsplit(":", 1)[1]))
+        # The attempt's phase is held ending: no reset may go meanwhile.
+        await asyncio.sleep(0.5)
+        seen.append(app.paths().count("/write/reset"))
+        traffic = await end_phase(proxy)
+        seen.append(len(app.paths()))
+        return traffic
+
+    async def begun(proxy: EgressProxy) -> None:
+        await begin_phase(proxy)
+        seen.append(int(proxy.url.rsplit(":", 1)[1]))
+
+    monkeypatch.setattr(EgressProxy, "end_phase", held)
+    monkeypatch.setattr(EgressProxy, "begin_phase", begun)
+
+    run = confirming(app, tmp_path, Scripted(planned(), *PATH))
+
+    assert written(run)["published"] == "confirmed"
+    attempt_port, resets_while_held, ended_at, confirmation_port = seen
+    assert resets_while_held == 1
+    assert app.paths()[ended_at:] == PASS
+    assert confirmation_port != attempt_port
+
+
+# The shop page whose save also logs a console error.
+CONSOLE_ERROR = SHOP.replace(
+    "SAID",
+    "status.textContent = `Saved ${name} in size ${size}`; "
+    "console.error('fake: the save logged an error')",
+)
+
+
+def test_an_enabled_invariant_violated_during_confirmation_blocks_the_write(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resets(monkeypatch, lambda: monkeypatch.setitem(PAGES, "shop", CONSOLE_ERROR))
+
+    run = confirming(app, tmp_path, Scripted(planned(), *PATH))
+
+    assert (run.outcome, run.exit_code) == ("gave_up", 3)
+    document = written(run)
+    assert document["reasons"] == ["confirmation invariant console_errors: violated"]
+    assert document["published"] is None
+    assert not compiled_file(tmp_path).parent.exists()
+
+
+def test_an_invariant_violated_on_a_detour_does_not_count(
+    app: App, tmp_path: Path
+) -> None:
+    detour = tool("navigate", lambda _: {"path": "/page/console-error"})
+    back = tool("navigate", lambda _: {"path": "/page/shop"})
+    client = Scripted(
+        planned(),
+        detour,
+        back,
+        FILL,
+        CLICK,
+        ASSERT,
+        calling("finish", {"steps": [3, 4]}),
+    )
+
+    run = confirming(app, tmp_path, client)
+
+    assert (run.outcome, run.exit_code) == ("compiled", 0)
+    assert written(run)["published"] == "confirmed"
+    assert [step.action for step in published(tmp_path).steps] == ["fill", "click"]
+
+
+# The shop page whose save first asks a host no origin of the run allows.
+BEACON = SHOPS["shop"].replace(
+    'document.querySelector("#save").addEventListener("click", () => {',
+    'document.querySelector("#save").addEventListener("click", () => {\n'
+    "            fetch('http://analytics.example.test/beacon').catch(() => {});",
+)
+REFUSED_RECORD = {
+    "error_code": "egress_blocked",
+    "refused": [{"host": "analytics.example.test", "port": 80}],
+    "overflowed": False,
+    "hosts_and_ports_withheld": False,
+}
+
+
+def test_an_undeclared_host_during_confirmation_ends_the_run(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resets(monkeypatch, lambda: monkeypatch.setitem(PAGES, "shop", BEACON))
+
+    run = confirming(app, tmp_path, Scripted(planned(), *PATH))
+
+    assert (run.outcome, run.exit_code, run.egress_saved) == ("egress_blocked", 6, True)
+    document = written(run)
+    assert document["reasons"] == [
+        "confirmation a1: not_evaluated: step 2 stopped the run"
+    ]
+    assert (document["egress"], document["published"]) == (REFUSED_RECORD, None)
+    assert run.record is not None
+    assert json.loads((run.record / "egress.json").read_text()) == REFUSED_RECORD
+    assert not compiled_file(tmp_path).parent.exists()
+
+
+@pytest.mark.usefixtures("secret")
+def test_no_file_in_the_explore_record_names_a_refused_host_when_a_secret_is_bound(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resets(monkeypatch, lambda: monkeypatch.setitem(PAGES, "shop", BEACON))
+
+    run = confirming(
+        app,
+        tmp_path,
+        Scripted(planned(), *PATH),
+        config=SECRETS,
+        preconditions=ACCOUNT + RESET,
+    )
+
+    assert (run.outcome, run.exit_code) == ("egress_blocked", 6)
+    withheld = {
+        "error_code": "egress_blocked",
+        "refused_count": 1,
+        "overflowed": False,
+        "hosts_and_ports_withheld": True,
+    }
+    assert run.record is not None
+    assert written(run)["egress"] == withheld
+    assert json.loads((run.record / "egress.json").read_text()) == withheld
+    saved = [path for path in run.record.rglob("*") if path.is_file()]
+    assert "confirmation/egress.json" in files(run)
+    assert [path for path in saved if "analytics" in path.read_text()] == []
+
+
+@pytest.mark.usefixtures("secret")
+def test_no_written_script_or_record_holds_a_secret_copy(
+    app: App, tmp_path: Path
+) -> None:
+    run = confirming(
+        app,
+        tmp_path,
+        Scripted(planned(), *PATH),
+        config=SECRETS,
+        preconditions=ACCOUNT + RESET,
+    )
+
+    assert written(run)["published"] == "confirmed"
+    written_files = [path for path in tmp_path.rglob("*") if path.is_file()]
+    assert compiled_file(tmp_path) in written_files
+    assert copies_found(FAKE_VALUE, files=written_files) == []
+
+
+# A value the status paragraph's ID and test ID spell, bound as the test
+# secret: a locator by either spells it.
+SPELLED = "fake-status-value-49"
+SPELLING = (
+    SHOPS["shop"].replace('"status"', f'"{SPELLED}"').replace("#status", f"#{SPELLED}")
+)
+
+
+def spelling(monkeypatch: pytest.MonkeyPatch, page: str) -> None:
+    """Bind `SPELLED`, serve `page` as the shop, and let the attempt keep a
+    locator that spells a bound value, which its own drop would refuse, so
+    only explore's drop before the confirmation stands between it and the
+    published script."""
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", SPELLED)
+    monkeypatch.setitem(PAGES, "shop", page)
+    monkeypatch.setattr(Attempt, "_spelled", lambda _attempt, _locator: False)
+
+
+def test_a_locator_spelling_a_bound_value_is_dropped_before_the_confirmation(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spelling(monkeypatch, SPELLING)
+
+    run = confirming(
+        app,
+        tmp_path,
+        Scripted(planned(), *PATH),
+        config=SECRETS,
+        preconditions=ACCOUNT + RESET,
+    )
+
+    assert (run.outcome, run.exit_code) == ("compiled", 0)
+    assert run.script is not None
+    compiled_locators = [
+        locator.model_dump(exclude_none=True)
+        for locator in run.script.targets["t3"].locators
+    ]
+    assert compiled_locators == [
+        {"testid": SPELLED},
+        {"css": f"#{SPELLED}"},
+        {"role": "paragraph"},
+        {"css": "p"},
+    ]
+    script = published(tmp_path)
+    assert script.confirmed is True
+    assert [
+        locator.model_dump(exclude_none=True)
+        for locator in script.targets["t3"].locators
+    ] == [{"role": "paragraph"}, {"css": "p"}]
+    assert {
+        name: target for name, target in script.targets.items() if name != "t3"
+    } == {name: target for name, target in run.script.targets.items() if name != "t3"}
+
+
+def test_a_target_left_with_no_locator_publishes_nothing_naming_it(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The status's section spells the value too, and a second paragraph
+    # outside it: no locator by role or tag finds the status alone.
+    page = SPELLING.replace('"status-area"', f'"{SPELLED}-area"') + "<p>Elsewhere</p>"
+    spelling(monkeypatch, page)
+
+    run = confirming(
+        app,
+        tmp_path,
+        Scripted(planned(), *PATH),
+        config=SECRETS,
+        preconditions=ACCOUNT + RESET,
+    )
+
+    assert (run.outcome, run.exit_code) == ("gave_up", 3)
+    document = written(run)
+    assert document["reasons"] == [
+        "target t3 has no locator that spells no bound value"
+    ]
+    assert (document["confirmation"], document["published"]) == (None, None)
+    assert [name for name in files(run) if name.startswith("confirmation")] == []
+    assert app.paths().count("/write/reset") == 1
+    assert not compiled_file(tmp_path).parent.exists()
+
+
+# The banner's favorite button and the article actions' copy of it, and the
+# plan whose check reads the banner's count through its subject contract.
+FAVORITES = CoveragePlan.model_validate(
+    {
+        "expectations": [
+            {
+                "expect_index": 0,
+                "subject": FAVORITE,
+                "claim": "shows one favorite",
+                "checks": [
+                    {
+                        "check": "text_in_target",
+                        "target_meaning": FAVORITE,
+                        "text": "Unfavorite Article (1)",
+                    }
+                ],
+            }
+        ],
+        "requires": [],
+    }
+)
+BANNER = ProjectConfig.model_validate(
+    {"subjects": [{"spec": "shop", "expect": 0} | BUTTON_ROW.model_dump()]}
+)
+
+
+def banner_button(messages: Sequence[BaseMessage]) -> dict[str, object]:
+    refs = re.findall(
+        r'button "Unfavorite Article \(1\)"[^\n]*?\[ref=(e\d+)\]', messages[-1].text
+    )
+    return {"check_id": "a1", "ref": refs[0]}
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        (ARTICLE.replace("(1)", "(3)", 1), ("gave_up", 3), ["confirmation a1: failed"]),
+        ("(3)".join(ARTICLE.rsplit("(1)", 1)), ("compiled", 0), []),
+    ],
+    ids=["the banner's copy", "the article actions' copy"],
+)
+def test_a_count_changed_after_the_attempt_fails_the_confirmation_only_in_its_region(
+    app: App,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: tuple[str, tuple[str, int], list[str]],
+) -> None:
+    changed, outcome, reasons = case
+    monkeypatch.setitem(PAGES, "article", ARTICLE)
+    resets(monkeypatch, lambda: monkeypatch.setitem(PAGES, "article", changed))
+    client = Scripted(
+        planned(FAVORITES),
+        tool("assert_check", banner_button),
+        calling("finish", {"steps": []}),
+    )
+
+    run = confirming(
+        app,
+        tmp_path,
+        client,
+        config=BANNER.model_copy(
+            update={"budgets": BANNER.budgets.model_copy(update={"resolve_seconds": 2})}
+        ),
+        page="/page/article",
+    )
+
+    assert (run.outcome, run.exit_code) == outcome
+    assert written(run)["reasons"] == reasons
+    assert compiled_file(tmp_path).exists() is (outcome[1] == 0)

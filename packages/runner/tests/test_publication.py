@@ -928,3 +928,25 @@ def test_a_script_with_no_utf8_form_publishes_nothing(tmp_path: Path) -> None:
     assert str(refused.value) == "the script doesn't load as written"
     assert refused.value.__cause__ is None
     assert not at.target.exists()
+
+
+def test_a_temporary_name_that_cannot_be_drawn_installs_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    at = project(tmp_path, existing=OLD)
+    script = script_for(at)
+
+    def unavailable(_size: int) -> bytes:
+        raise failing(errno.ENOSYS)
+
+    monkeypatch.setattr(os, "urandom", unavailable)
+
+    with pytest.raises(PublishWriteError) as failed:
+        published(at, script)
+
+    assert failed.value.installed is False
+    assert str(failed.value) == UNWRITTEN
+    assert at.target.read_text() == OLD
+    assert temporaries(tmp_path) == []
+    # Released: another writer takes the lock at once.
+    os.close(holding(at))
