@@ -28,8 +28,9 @@ from aqa_runner.bound_secrets import (
 from aqa_runner.chat_client import Reply
 from aqa_runner.explore import Explorable, Explored, Run, explore
 from aqa_runner.explore_result import ExploreEnd, present
-from aqa_runner.model_router import ModelRouter
+from aqa_runner.model_router import ModelCallError, ModelRouter
 from aqa_runner.navigator_tools import Attempt
+from aqa_runner.redaction import Redactor
 from aqa_runner.run_record import RunRecord
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from playwright.async_api import async_playwright
@@ -344,10 +345,12 @@ def test_a_plan_exploring_cant_keep_exits_5_naming_it_before_the_proxy(
     assert app.paths() == []
 
 
+@pytest.mark.parametrize("budget", [0.002, 0.003], ids=["past it", "all of it"])
 def test_a_plan_over_budget_gives_up_with_exit_3_and_its_cost_on_disk(
-    app: App, tmp_path: Path
+    app: App, tmp_path: Path, budget: float
 ) -> None:
-    config = ProjectConfig.model_validate({"budgets": {"model_usd": 0.002}})
+    # The plan's response costs $0.003.
+    config = ProjectConfig.model_validate({"budgets": {"model_usd": budget}})
 
     run = exploring(app, tmp_path, Scripted(planned()), config=config)
 
@@ -525,6 +528,10 @@ def test_a_plan_request_that_still_spells_a_bound_value_is_never_sent(
 
 # A bound value that fits a URL, a name and a selector.
 PLAIN = "fake-token-1234"
+UNSCANNABLE = (
+    "test secrets: a marker, [SECRET:<name>], spells or completes a bound value, "
+    "so no scan could take it out: rename the secret or change its value"
+)
 SPELLED = "a bound value's spelling is in it"
 # What a run that binds a field by its role and name refuses.
 NAMED = ProjectConfig.model_validate(
@@ -688,15 +695,36 @@ REFUSED_PLACES = {
         NAMED,
         "test secret TEST_PASSWORD: a bound value's spelling is in its field's name",
     ),
-    "a marker": Admission(
+    "a marker": Admission("TEST_PASSWORD", "shop", SIGNED_IN, SECRETS, UNSCANNABLE),
+    # The field's line would print the secret's name, which is the value.
+    "a secret named as its value": Admission(
         "TEST_PASSWORD",
         "shop",
         SIGNED_IN,
-        SECRETS,
-        (
-            "test secrets: a marker, [SECRET:<name>], spells a bound value, so no "
-            "scan could take it out: rename the secret or change its value"
+        NAMED.model_copy(
+            update={
+                "secrets": ProjectConfig.model_validate(
+                    {
+                        "secrets": {
+                            "TEST_PASSWORD": {
+                                "origins": ["start"],
+                                "field": {"role": "textbox", "name": "TEST_PASSWORD"},
+                            }
+                        }
+                    }
+                ).secrets
+            }
         ),
+        UNSCANNABLE,
+    ),
+    # The id's scan leaves "[SECRET:TEST_PASSWORD]zzz9", whose "]zzz9" is
+    # the value again.
+    "a value a marker's edge completes": Admission(
+        "]zzz9",
+        "]zzz9zzz9",
+        signed_in("id: shop", "id: ']zzz9zzz9'"),
+        SECRETS,
+        UNSCANNABLE,
     ),
 }
 
@@ -718,8 +746,11 @@ def test_admission_refuses_each_place_a_bound_value_would_reach(
             name=case.name,
         )
 
-    path = tmp_path / "qa" / f"{case.name}.spec.md"
-    assert list(refused.value.problems) == [case.problem.replace("SPEC", str(path))]
+    # The spec's path names the place, scanned like every refusal.
+    path = str(tmp_path / "qa" / f"{case.name}.spec.md")
+    shown = path.replace(case.value, "[SECRET:TEST_PASSWORD]")
+    assert list(refused.value.problems) == [case.problem.replace("SPEC", shown)]
+    assert case.value not in str(refused.value)
     assert not (tmp_path / "qa" / ".aqa").exists()
     assert client.requests == []
     assert app.paths() == []
@@ -864,12 +895,15 @@ def test_an_attempt_part_that_cannot_be_made_exits_15_before_planning(
     assert app.paths() == []
 
 
+@pytest.mark.parametrize("made", ["of another record", "with another redactor"])
 def test_an_attempt_part_of_another_record_is_refused_before_planning(
-    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, made: str
 ) -> None:
     part = RunRecord.part
 
     def foreign(self: RunRecord, name: str) -> RunRecord:
+        if made == "with another redactor":
+            return part(self, name).redacting(Redactor([]))
         # A part scanning with the run's redactor, made from another record.
         (tmp_path / "other").mkdir(exist_ok=True)
         other = RunRecord.create(tmp_path / "other").redacting(self.redactor)
@@ -888,8 +922,8 @@ def test_an_attempt_part_of_another_record_is_refused_before_planning(
         exploring(app, tmp_path, client)
 
     assert client.requests == []
-    (record,) = (tmp_path / "qa" / ".aqa" / "runs").iterdir()
-    assert list(record.iterdir()) == []
+    # Nothing was written: no plan.json, no cost line.
+    assert [path for path in made_record(tmp_path).rglob("*") if path.is_file()] == []
 
 
 @pytest.mark.usefixtures("secret")
@@ -1033,3 +1067,36 @@ def test_the_run_total_counts_each_priced_response_once(
     assert len((run.record / "costs.jsonl").read_text().splitlines()) == 3
     assert plan_json(run)["costs"] == 2
     assert (run.outcome, run.exit_code) == ("gave_up", 3)
+
+
+def made_record(tmp_path: Path) -> Path:
+    """The one run record made under the spec root."""
+    (record,) = (tmp_path / "qa" / ".aqa" / "runs").iterdir()
+    return record
+
+
+def test_a_timeout_that_isnt_the_minutes_budgets_own_propagates_from_planning(
+    app: App, tmp_path: Path
+) -> None:
+    with pytest.raises(TimeoutError):
+        exploring(app, tmp_path, Scripted(TimeoutError()))
+
+    # Nothing says the minutes budget ran out: no plan.json.
+    assert [path.name for path in made_record(tmp_path).iterdir()] == ["attempt-1"]
+
+
+def test_a_planning_failure_that_isnt_the_providers_propagates_with_its_cost_kept(
+    app: App, tmp_path: Path
+) -> None:
+    fault = RuntimeError("fake: not the provider's")
+
+    with pytest.raises(ModelCallError) as raised:
+        exploring(app, tmp_path, Scripted(planned(SHORT), fault))
+
+    assert raised.value.__cause__ is fault
+    record = made_record(tmp_path)
+    assert sorted(path.name for path in record.iterdir()) == [
+        "attempt-1",
+        "costs.jsonl",
+    ]
+    assert len((record / "costs.jsonl").read_text().splitlines()) == 1
