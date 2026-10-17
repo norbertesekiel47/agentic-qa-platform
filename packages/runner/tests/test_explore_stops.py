@@ -277,9 +277,11 @@ def test_a_document_that_spells_a_bound_value_is_refused_never_redacted_into_pla
     )
 
     assert (run.outcome, run.exit_code) == ("record_error", 15)
+    reasons = run.document["reasons"]
+    assert isinstance(reasons, list)
     # Then the leaking scan's own reason: what the caller shows of the
     # document it is handed is #53 P15c's.
-    assert run.document["reasons"][:3] == [
+    assert reasons[:3] == [
         "the model refused its turn",
         UNWRITTEN,
         "a1: never bound",
