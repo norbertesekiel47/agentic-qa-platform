@@ -368,14 +368,8 @@ def test_a_plan_over_budget_gives_up_with_exit_3_and_its_cost_on_disk(
 NO_ANSWER = "the model gave no response (APIConnectionError)"
 # A plan of the shop's one expectation under the wrong index: it doesn't
 # fit, so it is asked for once more.
-SHORT = CoveragePlan.model_validate(
-    PLAN.model_dump(mode="json")
-    | {
-        "expectations": [
-            PLAN.expectations[0].model_dump(mode="json") | {"expect_index": 1}
-        ]
-    }
-)
+SAVED = PLAN.expectations[0].model_dump(mode="json")
+SHORT = plan_of(SAVED | {"expect_index": 1})
 
 
 @pytest.mark.parametrize(
@@ -483,15 +477,8 @@ def test_a_correction_request_that_spells_a_bound_value_is_never_sent(
 ) -> None:
     # A plan under the wrong index, whose check reads the bound value: its
     # correction quotes the plan.
-    quoting = CoveragePlan.model_validate(
-        SHORT.model_dump(mode="json")
-        | {
-            "expectations": [
-                SHORT.expectations[0].model_dump(mode="json")
-                | {"checks": [{"check": "text_visible", "text": FAKE_VALUE}]}
-            ]
-        }
-    )
+    checks = [{"check": "text_visible", "text": FAKE_VALUE}]
+    quoting = plan_of(SAVED | {"expect_index": 1, "checks": checks})
     client = Scripted(planned(quoting), planned())
 
     run = exploring(app, tmp_path, client, config=SECRETS, frontmatter=SIGNED_IN)
@@ -533,27 +520,19 @@ UNSCANNABLE = (
     "so no scan could take it out: rename the secret or change its value"
 )
 SPELLED = "a bound value's spelling is in it"
-# What a run that binds a field by its role and name refuses.
-NAMED = ProjectConfig.model_validate(
-    {
-        "secrets": {
-            "TEST_PASSWORD": {
-                "origins": ["start"],
-                "field": {"role": "textbox", "name": f"{PLAIN} field"},
-            }
-        }
-    }
-)
+
+
+def named(field: str) -> ProjectConfig:
+    """A project binding TEST_PASSWORD to the textbox named `field`."""
+    secret = {"origins": ["start"], "field": {"role": "textbox", "name": field}}
+    return ProjectConfig.model_validate({"secrets": {"TEST_PASSWORD": secret}})
 
 
 def subject(**contract: str) -> ProjectConfig:
     """SECRETS, with the shop's expectation 0 under `contract`."""
+    rows = [{"spec": "shop", "expect": 0} | contract]
     return SECRETS.model_copy(
-        update={
-            "subjects": ProjectConfig.model_validate(
-                {"subjects": [{"spec": "shop", "expect": 0} | contract]}
-            ).subjects
-        }
+        update={"subjects": ProjectConfig.model_validate({"subjects": rows}).subjects}
     )
 
 
@@ -575,78 +554,42 @@ def signed_in(old: str, new: str) -> str:
     return SIGNED_IN.replace(old, new)
 
 
+def place(where: str, old: str, new: str, value: str = PLAIN) -> Admission:
+    """SIGNED_IN with `old` replaced by `new`, refused at the place `where`."""
+    name = value if where == "id" else "shop"
+    problem = f"SPEC: {where}: {SPELLED}"
+    return Admission(value, name, signed_in(old, new), SECRETS, problem)
+
+
+EXPECT = "expect:"
+CONTRACT = (
+    "subjects (shop, expect 0): a bound value's spelling is in its region or part"
+)
 REFUSED_PLACES = {
-    "goal": Admission(
-        PLAIN,
-        "shop",
-        signed_in("their name.", f"{PLAIN}."),
-        SECRETS,
-        f"SPEC: goal: {SPELLED}",
+    "goal": place("goal", "their name.", f"{PLAIN}."),
+    "steps": place("steps", EXPECT, f"steps:\n  - Type {PLAIN}\n{EXPECT}"),
+    "expect": place("expect", "the name was", f"{PLAIN} was"),
+    "the start path's query": place(
+        "preconditions.start_url", "/page/shop", f"/page/shop?token={PLAIN}"
     ),
-    "steps": Admission(
-        PLAIN,
-        "shop",
-        signed_in("expect:", f"steps:\n  - Type {PLAIN}\nexpect:"),
-        SECRETS,
-        f"SPEC: steps: {SPELLED}",
+    "a probe's path": place(
+        "preconditions.probes", EXPECT, f"  probes: {{ c: GET /p/{PLAIN} }}\n{EXPECT}"
     ),
-    "expect": Admission(
-        PLAIN,
-        "shop",
-        signed_in("the name was", f"{PLAIN} was"),
-        SECRETS,
-        f"SPEC: expect: {SPELLED}",
+    "a probe's name": place(
+        "preconditions.probes", EXPECT, f"  probes: {{ {PLAIN}: GET /p }}\n{EXPECT}"
     ),
-    "the start path's query": Admission(
-        PLAIN,
-        "shop",
-        signed_in("/page/shop", f"/page/shop?token={PLAIN}"),
-        SECRETS,
-        f"SPEC: preconditions.start_url: {SPELLED}",
+    "allowed_origins": place(
+        "allowed_origins", EXPECT, f"allowed_origins: [http://{PLAIN}.test]\n{EXPECT}"
     ),
-    "a probe's path": Admission(
-        PLAIN,
-        "shop",
-        signed_in("expect:", f"  probes: {{ count: GET /probe/{PLAIN} }}\nexpect:"),
-        SECRETS,
-        f"SPEC: preconditions.probes: {SPELLED}",
-    ),
-    "a probe's name": Admission(
-        PLAIN,
-        "shop",
-        signed_in("expect:", f"  probes: {{ {PLAIN}: GET /probe/count }}\nexpect:"),
-        SECRETS,
-        f"SPEC: preconditions.probes: {SPELLED}",
-    ),
-    "allowed_origins": Admission(
-        PLAIN,
-        "shop",
-        signed_in(
-            "expect:", f"allowed_origins: ['http://{PLAIN}.example.test']\nexpect:"
-        ),
-        SECRETS,
-        f"SPEC: allowed_origins: {SPELLED}",
-    ),
-    "id": Admission(
-        PLAIN,
-        PLAIN,
-        signed_in("id: shop", f"id: {PLAIN}"),
-        SECRETS,
-        f"SPEC: id: {SPELLED}",
-    ),
-    "browser": Admission(
+    "id": place("id", "id: shop", f"id: {PLAIN}"),
+    "browser": place(
+        "browser",
+        EXPECT,
+        f"browser: {{ timezone: Europe/Berlin }}\n{EXPECT}",
         "Europe/Berlin",
-        "shop",
-        signed_in("expect:", "browser: { timezone: Europe/Berlin }\nexpect:"),
-        SECRETS,
-        f"SPEC: browser: {SPELLED}",
     ),
-    "invariants": Admission(
-        "console_errors",
-        "shop",
-        signed_in("expect:", "invariants: { disable: [console_errors] }\nexpect:"),
-        SECRETS,
-        f"SPEC: invariants: {SPELLED}",
+    "invariants": place(
+        "invariants", EXPECT, "invariants: { disable: [http_5xx] }\nexpect:", "http_5xx"
     ),
     "the account's email": Admission(
         PLAIN,
@@ -669,53 +612,22 @@ REFUSED_PLACES = {
         ),
     ),
     "a contract's region": Admission(
-        PLAIN,
-        "shop",
-        SIGNED_IN,
-        subject(region=f"div#{PLAIN}", part="p"),
-        (
-            "subjects (shop, expect 0): a bound value's spelling is in its region "
-            "or part"
-        ),
+        PLAIN, "shop", SIGNED_IN, subject(region=f"div#{PLAIN}", part="p"), CONTRACT
     ),
     "a contract's part": Admission(
-        PLAIN,
-        "shop",
-        SIGNED_IN,
-        subject(region="main", part=f"p.{PLAIN}"),
-        (
-            "subjects (shop, expect 0): a bound value's spelling is in its region "
-            "or part"
-        ),
+        PLAIN, "shop", SIGNED_IN, subject(region="main", part=f"p.{PLAIN}"), CONTRACT
     ),
     "a field's name": Admission(
         PLAIN,
         "shop",
         SIGNED_IN,
-        NAMED,
+        named(f"{PLAIN} field"),
         "test secret TEST_PASSWORD: a bound value's spelling is in its field's name",
     ),
     "a marker": Admission("TEST_PASSWORD", "shop", SIGNED_IN, SECRETS, UNSCANNABLE),
     # The field's line would print the secret's name, which is the value.
     "a secret named as its value": Admission(
-        "TEST_PASSWORD",
-        "shop",
-        SIGNED_IN,
-        NAMED.model_copy(
-            update={
-                "secrets": ProjectConfig.model_validate(
-                    {
-                        "secrets": {
-                            "TEST_PASSWORD": {
-                                "origins": ["start"],
-                                "field": {"role": "textbox", "name": "TEST_PASSWORD"},
-                            }
-                        }
-                    }
-                ).secrets
-            }
-        ),
-        UNSCANNABLE,
+        "TEST_PASSWORD", "shop", SIGNED_IN, named("TEST_PASSWORD"), UNSCANNABLE
     ),
     # The id's scan leaves "[SECRET:TEST_PASSWORD]zzz9", whose "]zzz9" is
     # the value again.
@@ -992,23 +904,8 @@ def test_a_plan_that_spells_a_bound_value_is_never_shown(
     app: App, tmp_path: Path
 ) -> None:
     # The model wrote the value it was never sent: plan.json refuses it.
-    spelling = CoveragePlan.model_validate(
-        PLAN.model_dump(mode="json")
-        | {
-            "expectations": [
-                PLAN.expectations[0].model_dump(mode="json")
-                | {
-                    "checks": [
-                        {
-                            "check": "text_in_target",
-                            "target_meaning": STATUS,
-                            "text": FAKE_VALUE,
-                        }
-                    ]
-                }
-            ]
-        }
-    )
+    check = {"check": "text_in_target", "target_meaning": STATUS, "text": FAKE_VALUE}
+    spelling = plan_of(SAVED | {"checks": [check]})
 
     run = exploring(
         app,
