@@ -522,9 +522,9 @@ UNSCANNABLE = (
 SPELLED = "a bound value's spelling is in it"
 
 
-def named(field: str) -> ProjectConfig:
-    """A project binding TEST_PASSWORD to the textbox named `field`."""
-    secret = {"origins": ["start"], "field": {"role": "textbox", "name": field}}
+def bound(field: object = "password", origin: str = "start") -> ProjectConfig:
+    """A project binding TEST_PASSWORD to `field` on `origin`."""
+    secret = {"origins": [origin], "field": field}
     return ProjectConfig.model_validate({"secrets": {"TEST_PASSWORD": secret}})
 
 
@@ -621,13 +621,17 @@ REFUSED_PLACES = {
         PLAIN,
         "shop",
         SIGNED_IN,
-        named(f"{PLAIN} field"),
+        bound({"role": "textbox", "name": f"{PLAIN} field"}),
         "test secret TEST_PASSWORD: a bound value's spelling is in its field's name",
     ),
     "a marker": Admission("TEST_PASSWORD", "shop", SIGNED_IN, SECRETS, UNSCANNABLE),
     # The field's line would print the secret's name, which is the value.
     "a secret named as its value": Admission(
-        "TEST_PASSWORD", "shop", SIGNED_IN, named("TEST_PASSWORD"), UNSCANNABLE
+        "TEST_PASSWORD",
+        "shop",
+        SIGNED_IN,
+        bound({"role": "textbox", "name": "TEST_PASSWORD"}),
+        UNSCANNABLE,
     ),
     # The id's scan leaves "[SECRET:TEST_PASSWORD]zzz9", whose "]zzz9" is
     # the value again.
@@ -701,16 +705,7 @@ UNBOUND = {
     ),
     "a binding the run can't allow": Unbound(
         {"AQA_SECRET_TEST_PASSWORD": FAKE_VALUE},
-        ProjectConfig.model_validate(
-            {
-                "secrets": {
-                    "TEST_PASSWORD": {
-                        "origins": ["http://elsewhere.example.test"],
-                        "field": "password",
-                    }
-                }
-            }
-        ),
+        bound(origin="http://elsewhere.example.test"),
         SpecError,
         (
             "SPEC: preconditions.account.password: secret TEST_PASSWORD is bound "
@@ -761,20 +756,23 @@ def test_a_run_record_that_cannot_be_made_exits_15_before_planning(
     assert client.requests == []
 
 
+@pytest.mark.parametrize("value", ["", "]zzz9"], ids=["unbound", "completed"])
 def test_a_link_at_aqa_is_a_spec_error_before_planning(
-    app: App, tmp_path: Path
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
-    (tmp_path / "qa").mkdir()
-    (tmp_path / "qa" / ".aqa").symlink_to(tmp_path)
+    # Bound, the record's place is under "]zzz9zzz9", which its scan leaves
+    # as "[SECRET:TEST_PASSWORD]zzz9": the value again.
+    root = tmp_path / ("]zzz9zzz9" if value else "") / "qa"
+    root.mkdir(parents=True)
+    (root / ".aqa").symlink_to(tmp_path)
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", value or FAKE_VALUE)
     client = Scripted(planned())
 
     with pytest.raises(SpecError) as refused:
-        exploring(app, tmp_path, client)
+        exploring(app, root.parent, client, config=SECRETS, frontmatter=SIGNED_IN)
 
-    root = tmp_path / "qa"
-    assert list(refused.value.problems) == [
-        f"{root / '.aqa'}: a link, and a run record stays in {root}"
-    ]
+    plain = f"{root / '.aqa'}: a link, and a run record stays in {root}"
+    assert list(refused.value.problems) == [UNSCANNABLE if value else plain]
     assert client.requests == []
 
 

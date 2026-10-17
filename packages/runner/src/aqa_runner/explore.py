@@ -286,7 +286,8 @@ def _made(root: Path, redactor: Redactor) -> tuple[RunRecord, RunRecord] | Explo
     except OSError:
         return _unmade(None)
     except ValueError as error:  # a .aqa or .aqa/runs that is a link
-        raise SpecError([redactor.redact(str(error))]) from None
+        shown = redactor.redact(str(error))
+        raise SpecError([_UNSCANNABLE if redactor.finds(shown) else shown]) from None
     try:
         attempt = record.part(PARTS[0])
     except OSError, ValueError:  # in a directory just made: no spec's link
