@@ -16,7 +16,7 @@ import pytest
 from aqa_core.compiled import Target
 from aqa_core.config import ProjectConfig
 from aqa_core.project import SpecError
-from aqa_runner import executor
+from aqa_runner import document_origins, executor
 from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.document_origins import DocumentChangedError, PolicyEvent
 from aqa_runner.egress_proxy import EgressBlocks, EgressProxy, RefusedHost
@@ -782,3 +782,25 @@ def test_a_dispatch_refuses_a_record_its_sessions_redactor_doesnt_scan(
 
     assert (done.seq, done.outcome, done.settled) == (1, "completed", "idle")
     assert acted == ["act"]
+
+
+def test_a_replay_counts_every_policy_event_beyond_those_it_keeps(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(document_origins, "RECORD_LIMIT", 1)
+    pop = {"seq": 1, "action": "click", "target": "pop", "side_effect": False}
+    script = compiled(
+        [pop, pop | {"seq": 2}],
+        targets={
+            "pop": {
+                "semantic": "the pop button",
+                "locators": [by_role("button", "Pop")],
+            }
+        },
+    )
+    spec = a_spec(tmp_path, ProjectConfig(), start_url="/page/blank-popup")
+
+    result = run(app, tmp_path, script, spec=spec).result
+
+    assert [event.kind for event in result.policy_events] == ["popup"]
+    assert result.policy_events_total == 2
