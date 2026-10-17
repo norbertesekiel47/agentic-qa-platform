@@ -5,21 +5,24 @@ browser whose selector engines were never registered, blocks and events
 together with other stops, and a journal poisoned mid-turn. Real Chromium
 against the executor's fixture app, with a scripted model."""
 
+import asyncio
 import json
 import re
 from collections.abc import Awaitable, Callable, Iterator, Sequence
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
 import pytest
 from aqa_runner import explore
 from aqa_runner.binding import register_binding_engine
+from aqa_runner.browser_session import open_browser_session
 from aqa_runner.chat_client import Reply
 from aqa_runner.explore import Run
 from aqa_runner.locator_generation import TargetUses
 from aqa_runner.redaction import Redactor
 from langchain_core.messages import BaseMessage
-from playwright.async_api import Playwright
+from playwright.async_api import Browser, Playwright
 
 from packages.runner.tests.egress_fixtures import gate
 from packages.runner.tests.executor_fixtures import App, read_steps, serving_app
@@ -174,6 +177,58 @@ def test_a_browser_whose_selector_engines_were_never_registered_exits_10(
         "costs.jsonl",
         "explore.json",
         "turns/1.json",
+    ]
+
+
+def overtaking(monkeypatch: pytest.MonkeyPatch, limits: list[asyncio.Timeout]) -> None:
+    """Have the minutes budget run out as the browser starts to close,
+    wherever its span still holds the close."""
+    close = Browser.close
+
+    async def overtaken(browser: Browser, *, reason: str | None = None) -> None:
+        # Once the budget's span has ended, its deadline can't move, and
+        # nothing is left for it to cancel.
+        with suppress(RuntimeError):
+            limits[-1].reschedule(asyncio.get_running_loop().time())
+        await close(browser, reason=reason)
+
+    monkeypatch.setattr(Browser, "close", overtaken)
+
+
+@pytest.mark.usefixtures("secret")
+def test_a_refused_session_stays_refused_when_the_minutes_budget_runs_out_as_it_closes(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    overtaking(monkeypatch, deadlines(monkeypatch))
+
+    def unscanned(*args: Any, **kwargs: Any) -> Any:
+        return open_browser_session(*args, **(kwargs | {"redactor": Redactor([])}))
+
+    monkeypatch.setattr(explore, "open_browser_session", unscanned)
+
+    with pytest.raises(
+        ValueError, match=r"^the browser session must scan with the run's redactor$"
+    ):
+        explored(app, tmp_path, Scripted(), config=SECRETS, preconditions=ACCOUNT)
+
+    assert not list(tmp_path.rglob("explore.json"))
+
+
+def test_an_unregistered_engine_exits_10_when_the_minutes_budget_runs_out_as_the_browser_closes(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    overtaking(monkeypatch, deadlines(monkeypatch))
+    monkeypatch.setattr(explore, "register_identity_engine", nothing_registered)
+
+    run = explored(app, tmp_path, Scripted(CLICK))
+
+    assert (run.outcome, run.exit_code) == ("no_sandbox", 10)
+    assert written(run)["reasons"] == [
+        (
+            "the binding engine isn't registered: call register_identity_engine "
+            "before the browser session opens"
+        ),
+        "a1: never bound",
     ]
 
 
