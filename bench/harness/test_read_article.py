@@ -186,6 +186,7 @@ def result(
         seen,
         EgressBlocks((), False),
         None,
+        0,
     )
 
 

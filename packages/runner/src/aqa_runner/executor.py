@@ -141,11 +141,12 @@ class StepResult:
 @dataclass(frozen=True)
 class RunResult:
     """A replay: every step that ran and every assertion, each with its
-    outcome, and the run's; the egress gate's infrastructure events and the
-    session's policy events (the first 100). Invariants are judged for every
-    run, errored ones included; in a run that binds a test secret they keep
-    no text. Egress blocks keep hosts and ports in memory: what #53 prints
-    or saves of them is its preflight's."""
+    outcome, and the run's; the egress gate's infrastructure events, and the
+    session's policy events (the first 100) and how many it recorded in
+    all. Invariants are judged for every run, errored ones included; in a
+    run that binds a test secret they keep no text. Egress blocks keep hosts
+    and ports in memory: what #53 prints or saves of them is its
+    preflight's."""
 
     run_id: str
     outcome: RunOutcome
@@ -156,6 +157,7 @@ class RunResult:
     invariants: tuple[InvariantResult, ...]
     egress_blocks: EgressBlocks
     error_code: ErrorCode | None
+    policy_events_total: int
 
 
 async def replay(
@@ -217,7 +219,7 @@ async def replay(
 class _Replayed:
     """What a replay's browser left: its record and redactor, the hosts
     the project config expects blocked, and every step, assertion,
-    invariant and kept policy event."""
+    invariant and kept policy event, and how many it recorded."""
 
     record: RunRecord
     redactor: Redactor
@@ -226,6 +228,7 @@ class _Replayed:
     assertions: tuple[AssertionResult, ...]
     invariants: tuple[InvariantResult, ...]
     policy_events: tuple[PolicyEvent, ...]
+    policy_events_total: int
 
 
 async def _replayed(
@@ -311,9 +314,16 @@ async def _replayed(
         )
         if run.evaluation.withheld:
             invariants = tuple(replace(result, seen=()) for result in invariants)
-        policy_events = tuple(session.policy_events.kept)
+        events = session.policy_events
     return _Replayed(
-        record, redactor, expected, tuple(steps), assertions, invariants, policy_events
+        record,
+        redactor,
+        expected,
+        tuple(steps),
+        assertions,
+        invariants,
+        tuple(events.kept),
+        events.total,
     )
 
 
@@ -349,6 +359,7 @@ def _run_result(replayed: _Replayed, proxy: EgressProxy, gate: EgressGate) -> Ru
         replayed.invariants,
         blocks,
         "egress_blocked" if blocks.blocked else None,
+        replayed.policy_events_total,
     )
 
 

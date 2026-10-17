@@ -21,7 +21,7 @@ import pytest
 from aqa_core.compiler import contracts_by_meaning
 from aqa_core.config import ProjectConfig
 from aqa_core.coverage_plan import CoveragePlan
-from aqa_core.project import load_spec, subject_contracts
+from aqa_core.project import load_compiled, load_spec, subject_contracts
 from aqa_core.spec import Spec
 from aqa_runner import executor, explore, sandbox, settling
 from aqa_runner.bound_secrets import bound_secrets
@@ -32,6 +32,7 @@ from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.explore import Explorable, Explored, Run, run_attempt
 from aqa_runner.model_router import ModelRouter
 from aqa_runner.navigator_tools import Attempt
+from aqa_runner.publication import publication
 from aqa_runner.redaction import Redactor
 from aqa_runner.reset import reset
 from aqa_runner.run_record import RunRecord
@@ -178,6 +179,7 @@ def explored(
                 playwright,
                 asyncio.get_running_loop().time() + 90,
                 setup.get("egress") or gate(allowed=(start,)),
+                publication(root, spec),
             )
             setup.get("runs", []).append(run)
             return await run_attempt(run, explorable)
@@ -235,15 +237,18 @@ def files(explored: Explored) -> list[str]:
 def test_a_finished_attempt_finalizes_with_its_script_in_memory(
     app: App, tmp_path: Path
 ) -> None:
+    (tmp_path / "qa").mkdir()
+    (tmp_path / "qa" / "config.yaml").write_text("{}\n")
+
     run = explored(app, tmp_path, Scripted(FILL, CLICK, ASSERT, FINISH))
 
-    assert (run.outcome, run.exit_code) == ("gave_up", 3)
+    assert (run.outcome, run.exit_code) == ("compiled", 0)
     assert run.document == written(run)
     assert {key: value for key, value in written(run).items() if key != "run_id"} == {
-        "outcome": "gave_up",
-        "exit_code": 3,
+        "outcome": "compiled",
+        "exit_code": 0,
         "withheld": False,
-        "published": None,
+        "published": "unconfirmed",
         "reasons": [],
         "non_resumable": [],
         "phases": [CLEAN_PHASE],
@@ -267,9 +272,11 @@ def test_a_finished_attempt_finalizes_with_its_script_in_memory(
     assert [
         each.model_dump(include={"id", "target"}) for each in script.assertions
     ] == [{"id": "a1", "target": "t3"}]
-    # Until the confirmation publishes it (#53 P16), the script stays in memory.
-    assert not (tmp_path / "qa" / ".compiled").exists()
-    assert list(tmp_path.rglob("*.compiled*")) == []
+    # A side-effect path whose spec has no reset hook is published as it
+    # was compiled, unconfirmed, and never replayed (AGENTS.md §6).
+    compiled = tmp_path / "qa" / ".compiled"
+    assert sorted(path.name for path in compiled.iterdir()) == ["shop.json"]
+    assert load_compiled(compiled / "shop.json", ProjectConfig()) == script
 
 
 def test_the_start_url_is_step_0_and_no_side_effect_step(

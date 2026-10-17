@@ -1,5 +1,6 @@
-"""Exploring a spec (ADR-0024's #53 P15b and P15c amendments): preflight,
-the plan, the attempt's phase, and how the run ended.
+"""Exploring a spec (ADR-0024's #53 P15b, P15c and P16 amendments):
+preflight, the plan, the attempt's phase, the confirmation's, publication,
+and how the run ended.
 
 `run_attempt` takes a `Run` that preflight made, with its record and that
 record's `attempt-1` part, and the frozen plan it explores by. In order,
@@ -10,14 +11,24 @@ each stop with its exit code (API.md §7):
    for an engine left unregistered), load the start URL as step 0, and,
    unless something stopped or interrupted the run, take the navigator's
    turns (`explore_turns`).
-2. Close the browser, end the phase, read the egress blocks and the
-   infrastructure events once, and write `explore.json`, and `egress.json`
-   when blocked, from `explore_result.present`; its outcome decides. A
-   record that doesn't scan with the run's redactor is refused there,
-   whether or not a browser opened.
-
-Nothing here writes a compiled script: the path `finish` compiled stays in
-memory (`Explored.script`) for the confirmation (#53 P16)."""
+2. Close the browser and end the phase (14 for uncertain traffic). When the
+   attempt compiled a path and nothing stopped or interrupted it, drop
+   every locator that spells a bound value (3 for a target left with
+   none). A path with a side-effect step whose spec has no reset hook is
+   published unconfirmed, never replayed (AGENTS.md §6). Any other is
+   confirmed within the minutes budget: the reset hook, when the spec has
+   one (14), then, in the record's `confirmation` part (15 when it can't be
+   made), in a phase of its own, the path replayed with every locator in a
+   fresh browser and no model (`executor.replay`), which ends that phase
+   however it leaves (10, 15, 3, 14).
+3. Read the egress blocks and the infrastructure events once, after the
+   last phase's end. With the proxy closed, publish the path when nothing
+   stopped the run, confirmed when its confirmation passed, under the
+   spec's lock (`publication.publish`; 3, or 15 for a file that failed).
+4. Write `explore.json`, and `egress.json` when blocked, from
+   `explore_result.present`; its outcome decides. A record that doesn't
+   scan with the run's redactor is refused there, whether or not a browser
+   opened."""
 
 from asyncio import get_running_loop, timeout_at
 from collections.abc import Callable, Iterator, Mapping
@@ -43,10 +54,11 @@ from aqa_runner.bound_secrets import BoundSecret, bound_secrets
 from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.coverage_plan import Planned, judge, make_plan
 from aqa_runner.egress import EgressGate, egress_policy
-from aqa_runner.egress_proxy import EgressProxy
+from aqa_runner.egress_proxy import EgressProxy, PhaseTraffic
 from aqa_runner.evaluation import AssertionResult
 from aqa_runner.explore_result import (
     EXIT_CODES,
+    Confirmation,
     ExploreEnd,
     Outcome,
     Phase,
@@ -69,6 +81,13 @@ from aqa_runner.locator_generation import register_identity_engine
 from aqa_runner.model_router import ModelCallError, ModelRouter
 from aqa_runner.navigator import account_problems, navigator_prefix, spec_view
 from aqa_runner.navigator_tools import Attempt
+from aqa_runner.publication import (
+    Publication,
+    PublishError,
+    PublishWriteError,
+    publication,
+    publish,
+)
 from aqa_runner.redaction import Redactor
 from aqa_runner.reset import ResetFailedError, reset
 from aqa_runner.run_record import (
@@ -83,9 +102,12 @@ from aqa_runner.sandbox import SandboxUnavailableError
 # How a run ends: as `explore_result.final_outcome` says once the egress
 # proxy opened, or a spec error before it (#53 P15c).
 type Ended = Outcome | Literal["spec_error"]
+# Whether a run published its script, confirmed or not.
+type Published = Literal["confirmed", "unconfirmed"]
 
 # Why the run stopped, in fixed words.
 _UNMADE: Final = "the run record could not be created; nothing was planned"
+_UNREAD: Final = "the compiled script could not be read; nothing was planned"
 _MINUTES: Final = "the minutes budget ran out"
 _UNSHOWN: Final = "the document still spelled a bound value, so it isn't shown"
 _UNSCANNABLE: Final = (
@@ -114,8 +136,9 @@ class Explored:
     """How the run ended: its outcome and exit code; its last document,
     `plan.json` or `explore.json`, as written or as the record couldn't take it, whose
     `outcome` and `reasons` say why; its record, None when none could be
-    made; what its model calls cost; and the script its attempt compiled,
-    in memory only, when `finish` compiled one."""
+    made; what its model calls cost; the script its attempt compiled, as
+    `finish` compiled it, when it compiled one; and whether the run's
+    `egress.json` was written."""
 
     outcome: Ended
     exit_code: int
@@ -123,6 +146,7 @@ class Explored:
     record: Path | None
     cost: Decimal
     script: CompiledScript | None = None
+    egress_saved: bool = False
 
 
 @dataclass(frozen=True)
@@ -141,9 +165,10 @@ class Run:
     the authority every scan of the run answers to; the record and its
     `attempt-1` part, made from it; the secrets the attempt may fill; the
     router; the Playwright whose Chromium it browses with; the minutes
-    budget's deadline, on the event loop's clock; and the egress gate.
-    Its spend is recorded in its record, and it keeps each stop it made
-    and the script `finish` compiled."""
+    budget's deadline, on the event loop's clock; the egress gate; and
+    where it publishes, as it found the compiled file at its start. Its
+    spend is recorded in its record, and it keeps each stop it made and
+    the script `finish` compiled."""
 
     spec: Spec
     config: ProjectConfig
@@ -156,6 +181,7 @@ class Run:
     playwright: Playwright
     deadline: float
     gate: EgressGate
+    publication: Publication
     spending: Spending = field(init=False)
     stops: list[Stop] = field(init=False, default_factory=list)
     script: CompiledScript | None = field(init=False, default=None)
@@ -184,15 +210,16 @@ async def explore(
     playwright: Playwright,
 ) -> Explored:
     """Explore `spec` (`config`, spec root `root`) from the start origin `start`
-    with `router` and `playwright`: bind and admit (12, 5), make the record (15),
-    plan (3, 5, 11, 15; `plan.json`), then `run_attempt`, checking what it returns."""
+    with `router` and `playwright`: bind and admit (12, 5), read the compiled
+    file and make the record (5, 15), plan (3, 5, 11, 15; `plan.json`), then
+    `run_attempt`, checking what it returns."""
     secrets = bound_secrets(spec, start)
     redactor = Redactor(secrets.values())
     _admit(spec, config, secrets, redactor)
-    made = _made(root, redactor)
+    made = _made(root, spec, redactor)
     if isinstance(made, Explored):
         return made
-    record, attempt = made
+    at, record, attempt = made
     run = Run(
         spec,
         config,
@@ -205,6 +232,7 @@ async def explore(
         playwright,
         get_running_loop().time() + config.budgets.minutes * 60,
         EgressGate(egress_policy(spec, config, start)),
+        at,
     )
     planned = await _planned(run)
     if isinstance(planned, Explored):
@@ -277,34 +305,49 @@ def _keyed(value: object) -> object:
     return value
 
 
-def _made(root: Path, redactor: Redactor) -> tuple[RunRecord, RunRecord] | Explored:
-    """The run's record, scanning with `redactor`, and its `attempt-1` part,
-    or how the run ended when either can't be made (15). A link at `.aqa` is
-    a spec error; a part not made from the record, a runner defect."""
+def _made(
+    root: Path, spec: Spec, redactor: Redactor
+) -> tuple[Publication, RunRecord, RunRecord] | Explored:
+    """The run's record, scanning with `redactor`, its `attempt-1` part,
+    and where `spec` publishes, with the compiled file as found now, or how
+    the run ended when either can't be made or the file can't be read (15).
+    A link at `.aqa`, or where the script is published, is a spec error; a
+    part not made from the record, a runner defect."""
     try:
         record = RunRecord.create(root).redacting(redactor)
     except OSError:
-        return _unmade(None)
+        return _unmade(None, _UNMADE)
     except ValueError as error:  # a .aqa or .aqa/runs that is a link
-        shown = redactor.redact(str(error))
-        raise SpecError([_UNSCANNABLE if redactor.finds(shown) else shown]) from None
+        raise _linked(str(error), redactor) from None
     try:
         attempt = record.part(PARTS[0])
     except OSError, ValueError:  # in a directory just made: no spec's link
-        return _unmade(record)
+        return _unmade(record, _UNMADE)
     if attempt.redactor is not redactor or not record.shares_journals(attempt):
         raise ValueError(
             "the run's attempt-1 must be a part made from its record, scanning "
             "with the run's redactor"
         )
-    return record, attempt
+    try:
+        at = publication(root, spec)
+    except OSError:
+        return _unmade(record, _UNREAD)
+    except SpecError as error:  # a link where the script is published
+        raise _linked(str(error), redactor) from None
+    return at, record, attempt
 
 
-def _unmade(record: RunRecord | None) -> Explored:
+def _linked(problem: str, redactor: Redactor) -> SpecError:
+    """`problem`, a link's, which names its path, scanned with `redactor`."""
+    shown = redactor.redact(problem)
+    return SpecError([_UNSCANNABLE if redactor.finds(shown) else shown])
+
+
+def _unmade(record: RunRecord | None, why: str) -> Explored:
     return Explored(
         "record_error",
         _exit("record_error"),
-        {"outcome": "record_error", "reasons": [_UNMADE]},
+        {"outcome": "record_error", "reasons": [why]},
         None if record is None else record.path,
         Decimal(0),
     )
@@ -420,14 +463,19 @@ def _unplanned(run: Run, plan: CoveragePlan | None, stop: _Unplanned) -> Explore
 
 
 async def run_attempt(run: Run, explorable: Explorable) -> Explored:
-    """Run the attempt's phase by `explorable`, from the egress proxy's
-    opening to its end, and say how the run ended (module docstring)."""
+    """Run the attempt's phase by `explorable`, then the confirmation's,
+    from the egress proxy's opening to its end, publish, and say how the
+    run ended (module docstring)."""
     return _ended(run, await _attempted(run, explorable))
 
 
 async def _attempted(run: Run, explorable: Explorable) -> ExploreEnd:
-    """The attempt's phase, from the egress proxy's opening to its end."""
+    """The attempt's phase and, for a path it may publish, the
+    confirmation's, from the egress proxy's opening to its end; then the
+    path published, if it may be."""
     expected = run.config.egress.expected_blocked
+    confirmation: Confirmation | None = None
+    published: Published | None = None
     async with EgressProxy(run.gate) as proxy:
 
         def interrupted() -> bool:
@@ -438,23 +486,151 @@ async def _attempted(run: Run, explorable: Explorable) -> ExploreEnd:
 
         checks, events = await _phase(run, explorable, proxy, interrupted)
         # The browser has closed. Ending the phase joins every connection,
-        # so nothing records a block or an event after the snapshot below.
+        # and replay ends the confirmation's, so nothing records a block or
+        # an event after the snapshot below.
         traffic = await proxy.end_phase()
+        _uncertain(run, traffic)
+        script = _publishable(run, interrupted)
+        if script is not None and _unconfirmable(run.spec, script):
+            published = "unconfirmed"
+        elif script is not None:
+            confirmation = await _confirming(run, proxy, script, interrupted)
+            if _passed(run, confirmation):
+                published = "confirmed"
         blocks = proxy.egress_blocks(expected)
-    uncertain = (traffic.plain_uncertain, traffic.tunnel_uncertain)
-    for why, count in zip(_UNCERTAIN, uncertain, strict=True):
-        if count:
-            run.stopped("reset_unsafe", why)
+    if script is not None and published is not None:
+        published = await _published(run, script, published)
     return ExploreEnd(
         run.record,
         Phase(run.attempt, traffic, events),
-        confirmation=None,
+        confirmation=confirmation,
         blocks=blocks,
         infrastructure_events=tuple(run.gate.infrastructure_events),
         checks=checks,
         stops=tuple(run.stops),
-        published=None,
+        published=published,
     )
+
+
+def _uncertain(run: Run, traffic: PhaseTraffic) -> None:
+    """Stop for each kind of exchange `traffic` left uncertain (D29)."""
+    uncertain = (traffic.plain_uncertain, traffic.tunnel_uncertain)
+    for why, count in zip(_UNCERTAIN, uncertain, strict=True):
+        if count:
+            run.stopped("reset_unsafe", why)
+
+
+def _publishable(run: Run, interrupted: Callable[[], bool]) -> CompiledScript | None:
+    """The path `finish` compiled, when nothing stopped or interrupted the
+    attempt, with every locator that spells a bound value dropped, never
+    redacted; None, with a stop naming it, when a target has none left."""
+    if run.script is None or run.stops or interrupted():
+        return None
+    targets = {}
+    for name, target in run.script.targets.items():
+        kept = tuple(
+            locator
+            for locator in target.locators
+            if not run.redactor.spells(locator.model_dump(mode="json"))
+        )
+        if not kept:
+            run.stopped(
+                "gave_up", f"target {name} has no locator that spells no bound value"
+            )
+            return None
+        targets[name] = target.model_copy(update={"locators": kept})
+    return run.script.model_copy(update={"targets": targets})
+
+
+def _unconfirmable(spec: Spec, script: CompiledScript) -> bool:
+    """Whether confirming `script` would repeat a side-effect step with no
+    reset before it, which no replay may (AGENTS.md §6)."""
+    hook = spec.frontmatter.preconditions.reset
+    return hook is None and any(step.side_effect for step in script.steps)
+
+
+async def _confirming(
+    run: Run,
+    proxy: EgressProxy,
+    script: CompiledScript,
+    interrupted: Callable[[], bool],
+) -> Confirmation | None:
+    """Within the minutes budget, reset the app, when the spec has a hook,
+    then open a phase and replay `script` with every locator in a fresh
+    browser, into the record's `confirmation` part, with no model: the
+    confirmation's phase, None when it never began. Replay ends the phase
+    however it leaves, so its traffic is the proxy's to give."""
+    began: RunRecord | None = None
+    result: executor.RunResult | None = None
+    limit = timeout_at(run.deadline)
+    try:
+        async with limit:
+            if not await _reset(run) or interrupted():
+                return None
+            try:
+                part = run.record.part(PARTS[1])
+            except OSError, ValueError:  # in a directory just made: no spec's link
+                run.stopped("record_error", UNWRITTEN)
+                return None
+            await proxy.begin_phase()
+            began = part
+            result = await executor.replay(
+                script,
+                executor.RunSetup(run.spec, run.config, run.start, part),
+                chromium=run.playwright.chromium,
+                proxy=proxy,
+                gate=run.gate,
+                every_locator=True,
+            )
+    # Before the rest: a TimeoutError is an OSError.
+    except TimeoutError:
+        if not limit.expired():
+            raise  # not the minutes budget's own
+        run.stopped("gave_up", _MINUTES)
+    except (SandboxUnavailableError, UnregisteredEngineError) as error:
+        run.stopped("no_sandbox", str(error))
+    except OSError, RefusedWriteError:
+        if began is None:
+            raise  # the phase's listener, which propagates as the attempt's does
+        # A journal line the record couldn't take: nothing more may go.
+        run.stopped("record_error", UNWRITTEN)
+    if began is None:
+        return None
+    traffic = proxy.ended_traffic()
+    _uncertain(run, traffic)
+    total = None if result is None else result.policy_events_total
+    return Confirmation(began, traffic, total, result)
+
+
+def _passed(run: Run, confirmation: Confirmation | None) -> bool:
+    """Whether the confirmation replayed and passed with no stop held."""
+    replayed = None if confirmation is None else confirmation.result
+    return replayed is not None and replayed.outcome == "passed" and not run.stops
+
+
+async def _published(
+    run: Run, script: CompiledScript, kind: Published
+) -> Published | None:
+    """Publish `script` as `kind` before the run's deadline, its text
+    checked as written: `kind` once it is installed, with a stop when a
+    failure came after; None, with a stop, when it isn't."""
+    place = f".compiled/{run.spec.frontmatter.id}.json"
+    try:
+        await publish(
+            run.publication,
+            script.model_copy(update={"confirmed": kind == "confirmed"}),
+            check=require_clean(run.redactor, place),
+            deadline=run.deadline,
+        )
+    except PublishError as error:
+        run.stopped("gave_up", str(error))
+    except (RefusedWriteError, PublishWriteError) as error:
+        run.stopped("record_error", str(error))
+        if isinstance(error, PublishWriteError) and error.installed:
+            return kind
+    else:
+        return kind
+    return None
 
 
 async def _phase(
@@ -599,10 +775,12 @@ def _ended(run: Run, end: ExploreEnd) -> Explored:
     scan with the run's redactor is refused before anything is written,
     with or without a browser (`ValueError`). One the record refuses or
     can't write adds a record error, which decides unless a more decisive
-    outcome holds."""
+    outcome holds. Whether `egress.json` was written is the result's
+    `egress_saved`."""
     if end.record.redactor is not run.redactor:
         raise ValueError("the run's record must scan with the run's redactor")
     document = present(end)
+    saved = False
     try:
         end.record.write(
             "explore.json", document, check=require_clean(run.redactor, "explore.json")
@@ -610,6 +788,7 @@ def _ended(run: Run, end: ExploreEnd) -> Explored:
         if (egress := document["egress"]) is not None:
             check = require_clean(run.redactor, "egress.json")
             end.record.write("egress.json", egress, check=check)
+            saved = True
     except OSError, RefusedWriteError:
         run.stopped("record_error", UNWRITTEN)
         end = replace(end, stops=tuple(run.stops))
@@ -622,4 +801,5 @@ def _ended(run: Run, end: ExploreEnd) -> Explored:
         end.record.path,
         run.cost,
         run.script,
+        egress_saved=saved,
     )

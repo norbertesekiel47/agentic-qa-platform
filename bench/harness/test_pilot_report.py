@@ -285,7 +285,7 @@ class PilotReportTests(unittest.TestCase):
         checks = (AssertionResult("a0", "pass"), AssertionResult("a1", "failed"))
         held = tuple(InvariantResult(name, "held", (), 0) for name in INVARIANTS)
         egress = EgressBlocks((), False)
-        failed = RunResult("r1", "failed", steps, checks, (), (), held, egress, None)
+        failed = RunResult("r1", "failed", steps, checks, (), (), held, egress, None, 0)
         raised = AssertionResult("a1", "not_evaluated", error="fake page error")
         found = []
         for result in (failed, replace(failed, assertions=(checks[0], raised))):
@@ -302,7 +302,7 @@ class PilotReportTests(unittest.TestCase):
         checks = (AssertionResult("a0", "pass"), fallback)
         held = tuple(InvariantResult(name, "held", (), 0) for name in INVARIANTS)
         egress = EgressBlocks((), False)
-        passed = RunResult("r2", "passed", steps, checks, (), (), held, egress, None)
+        passed = RunResult("r2", "passed", steps, checks, (), (), held, egress, None, 0)
         patched = seen(observe(SCRIPT, passed, invariants=SETTINGS))
         pair = judge_case(
             "c", "pilot", BENIGN, seen(DRIFTED), patched, settings=SETTINGS
@@ -327,7 +327,7 @@ class PilotReportTests(unittest.TestCase):
         checks = (AssertionResult("a0", "pass"), changed)
         held = tuple(InvariantResult(name, "held", (), 0) for name in INVARIANTS)
         egress = EgressBlocks((), False)
-        failed = RunResult("r2", "failed", steps, checks, (), (), held, egress, None)
+        failed = RunResult("r2", "failed", steps, checks, (), (), held, egress, None, 0)
         attempt = seen(observe(SCRIPT, failed, invariants=SETTINGS))
         kind = classify(attempt, SETTINGS)
         entry = Entry("scored", attempt, kind)
