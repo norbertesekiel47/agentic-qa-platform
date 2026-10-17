@@ -247,7 +247,7 @@ def _admit(
         if secret.destination.field != "password"
         and redactor.spells(secret.destination.field.name)
     )
-    shown = [redactor.redact(problem) for problem in problems]
+    shown: list[str] = [redactor.redact(problem) for problem in problems]
     if redactor.markers_spell_a_value or any(map(redactor.finds, shown)):
         shown = [_UNSCANNABLE]
     if shown:
