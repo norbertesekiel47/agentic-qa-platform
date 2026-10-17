@@ -47,6 +47,7 @@ from aqa_runner.explore_result import (
     Outcome,
     Phase,
     Stop,
+    Stoppage,
     final_outcome,
     present,
 )
@@ -138,6 +139,10 @@ class Run:
         budget = Decimal(str(self.config.budgets.model_usd))
         self.spending = Spending(self.record, budget)
 
+    def stopped(self, outcome: Stoppage, why: str) -> None:
+        """Keep a stop, its text scanned with the run's redactor."""
+        self.stops.append(Stop(outcome, self.redactor.redact(why)))
+
 
 async def run_attempt(run: Run, explorable: Explorable) -> Explored:
     """Run the attempt's phase by `explorable`, from the egress proxy's
@@ -162,22 +167,18 @@ async def _attempted(run: Run, explorable: Explorable) -> ExploreEnd:
         traffic = await proxy.end_phase()
         blocks = proxy.egress_blocks(expected)
     uncertain = (traffic.plain_uncertain, traffic.tunnel_uncertain)
+    for why, count in zip(_UNCERTAIN, uncertain, strict=True):
+        if count:
+            run.stopped("reset_unsafe", why)
     return ExploreEnd(
         run.record,
         Phase(run.attempt, traffic, events),
-        None,
-        blocks,
-        tuple(run.gate.infrastructure_events),
-        checks,
-        (
-            *run.stops,
-            *(
-                Stop("reset_unsafe", run.redactor.redact(why))
-                for why, count in zip(_UNCERTAIN, uncertain, strict=True)
-                if count
-            ),
-        ),
-        None,
+        confirmation=None,
+        blocks=blocks,
+        infrastructure_events=tuple(run.gate.infrastructure_events),
+        checks=checks,
+        stops=tuple(run.stops),
+        published=None,
     )
 
 
@@ -214,11 +215,11 @@ async def _phase(
                         await _turns(run, attempt, explorable.plan)
     except (SandboxUnavailableError, UnregisteredEngineError) as error:
         # The browser isn't as the run requires: launched, or prepared.
-        run.stops.append(Stop("no_sandbox", run.redactor.redact(str(error))))
+        run.stopped("no_sandbox", str(error))
     except TimeoutError:
         if not limit.expired():
             raise  # not the minutes budget's own
-        run.stops.append(Stop("gave_up", run.redactor.redact(_MINUTES)))
+        run.stopped("gave_up", _MINUTES)
     checks = (
         dict.fromkeys(planned_checks(explorable.plan))
         if attempt is None
@@ -237,7 +238,7 @@ async def _reset(run: Run) -> bool:
     try:
         await reset(run.gate, hook, run.start, seconds=seconds)
     except ResetFailedError as error:
-        run.stops.append(Stop("reset_unsafe", run.redactor.redact(str(error))))
+        run.stopped("reset_unsafe", str(error))
         return False
     return True
 
@@ -259,11 +260,11 @@ def _attempt(
         explorable.plan,
         explorable.contracts,
         run.secrets,
-        seconds,
-        run.spec,
-        run.config,
-        run.gate,
-        interrupted,
+        budget=seconds,
+        spec=run.spec,
+        config=run.config,
+        gate=run.gate,
+        interrupted=interrupted,
     )
 
 
@@ -285,11 +286,10 @@ async def _started(run: Run, session: BrowserSession) -> None:
         )
     except OSError:
         # A journal line the record couldn't take: nothing more may go.
-        run.stops.append(Stop("record_error", run.redactor.redact(UNWRITTEN)))
+        run.stopped("record_error", UNWRITTEN)
         return
     if step.outcome != "completed":
-        why = f"the start URL didn't load: {step.error}"
-        run.stops.append(Stop("gave_up", run.redactor.redact(why)))
+        run.stopped("gave_up", f"the start URL didn't load: {step.error}")
 
 
 async def _turns(run: Run, attempt: Attempt, plan: CoveragePlan) -> None:
@@ -324,8 +324,8 @@ def _ended(run: Run, end: ExploreEnd) -> Explored:
             check = require_clean(run.redactor, "egress.json")
             run.record.write("egress.json", egress, check=check)
     except OSError, RefusedWriteError:
-        stop = Stop("record_error", run.redactor.redact(UNWRITTEN))
-        end = replace(end, stops=(*end.stops, stop))
+        run.stopped("record_error", UNWRITTEN)
+        end = replace(end, stops=tuple(run.stops))
         document = present(end)
     outcome = final_outcome(end)
     return Explored(
