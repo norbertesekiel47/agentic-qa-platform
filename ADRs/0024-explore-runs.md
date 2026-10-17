@@ -688,3 +688,25 @@ Explore writes `.compiled/<spec id>.json` once a confirmation passes (#53 P16b).
 - **Swapped directories** are a residual, as for the run record: a concurrent local process that swaps `.compiled`, `.aqa` or `.aqa/locks` for a link between a check and a write can redirect it.
 - Stray temporaries (`.compiled/.<spec id>.<random>.tmp`) are left only when removing one fails.
 - No new dependency, paid resource or model call. Tests: `packages/runner/tests/test_publication.py`, `test_replay_phases.py` (real Chromium), `test_egress_phases.py`.
+
+## Amendment (2026-10-16): an attempt's phase and its outcome (#53 P15b)
+
+`aqa_runner.explore.run_attempt` runs one attempt's phase and says how the run ended (`Explored`). It takes a `Run` that explore's preflight made (#53 P15c): the redactor built from every test secret the spec references, the run record made scanning with it, that record's `attempt-1` part, the router, the Playwright instance, the minutes budget's deadline on the event loop's clock and the egress gate. It also takes the frozen plan with each meaning's contract (`Explorable`).
+
+- **The order, and each failure's exit.** One egress proxy serves the phase (#53 P16 adds the confirmation's phase to it). Within the minutes budget:
+  1. The spec's reset hook, if it has one, before any browser (D19); a failure is `reset_unsafe`, 14.
+  2. The selector engines are registered on the run's Playwright.
+  3. The browser session opens with the run's redactor. A launch or sandbox check that fails is `no_sandbox`, 10.
+  4. The start URL loads as step 0 through `executor.dispatched`, `{"action": "navigate", "url": PATH}` with `side_effect: false`. A load that fails is `the start URL didn't load: ...` (`gave_up`), and its intent is read-only, so never 4. An unreachable start origin is also an infrastructure event, 13.
+  5. The navigator's turns run (`explore_turns.take_turns`, the #53 P15a amendment), only when nothing has stopped the run and no egress block or infrastructure event has arrived.
+
+  Then the browser closes, `EgressProxy.end_phase()` joins every connection, and the blocks and the gate's infrastructure events are read once (#53 P8).
+- **Stops the phase adds.** `the minutes budget ran out` (`gave_up`) when the budget's own deadline cancels the phase wherever it is, a model call or a dispatch included; a dispatch it cancels leaves its intent unresolved. `reset_unsafe` with fixed words for each kind of uncertain traffic: `a request was still being answered when the browser closed`, and `an encrypted or WebSocket connection carried data, and the proxy can't see whether its requests were answered`. `record_error` when step 0's journal line, `explore.json` or `egress.json` can't be written.
+- **Checks are kept however the phase ends.** `ExploreEnd.checks` is the attempt's `checks` whenever an attempt was made, so a check evaluated before the deadline keeps its result (`a1: failed`), never `a1: never bound`.
+- **The retained redactor, checked twice** (the #53 P12 amendment's "What P15 and P16 must hold"). A session that doesn't scan with the run's redactor is refused before any intent (`ValueError`). At finalization the run's record is refused unless it scans with it, with or without a session, so a run whose reset or launch failed is refused too, and nothing is written. The spend's record is the run's record by construction (`Run.spending`). `Attempt` and `ExploreEnd` check the part.
+- **An unregistered selector engine exits 10** (the maintainer, session 16). `binding.UnregisteredEngineError`, a `RuntimeError`, is raised where the binding and identity engines find themselves unregistered (`binding._query`, `locator_generation._held`), and the phase stops `no_sandbox` with its fixed text.
+  - *Options:* (1) propagate it, a crash with no document; (2) exit 3; (3) exit 10.
+  - *Chosen: 3.* D2 makes 10 every failure to launch or prepare the browser as the run requires, and the engines are part of that preparation. Exit 3 would read as worth a paid retry. Only a block (6) or a non-resumable intent (4) outranks it.
+- **The documents.** `explore.json` is `present(end)`, and `egress.json` is its `egress` when blocked (ADR-0026's #53 P12 amendment). Each is written once and checked as written. One the record refuses or can't write adds `record_error`, and the returned document says so; the outcome follows the #53 P12 amendment's precedence.
+- **No publication yet.** Until #53 P16, a finished attempt ends with `published: null` and exit 3, with no reason of its own. Its script stays in memory (`Explored.script`), and no `.compiled/` is written.
+- **Consequences and limits.** `explore.json` is written before `egress.json`, so when only the second fails, the document on disk lacks the record error that the returned one holds. No dependency, paid resource or live model call. Tests: `packages/runner/tests/test_explore_graph.py` and `test_explore_stops.py`, with a scripted model in real Chromium.
