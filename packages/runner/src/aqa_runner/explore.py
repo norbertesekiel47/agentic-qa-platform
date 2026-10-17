@@ -256,6 +256,9 @@ def _attempt(
     explorable: Explorable,
     interrupted: Callable[[], bool],
 ) -> Attempt:
+    """The attempt the navigator acts through, interrupted as `interrupted`
+    says. The project's `resolve_seconds` bound its looks and the session's
+    actions, and navigation keeps the executor's bound, as replay's does."""
     seconds = run.config.budgets.resolve_seconds
     session.limit_waits(
         action_seconds=seconds, navigation_seconds=executor.NAVIGATION_SECONDS
@@ -300,6 +303,9 @@ async def _started(run: Run, session: BrowserSession) -> None:
 
 
 async def _turns(run: Run, attempt: Attempt, plan: CoveragePlan) -> None:
+    """Take the navigator's turns (`explore_turns.take_turns`) with the
+    run's spend, turn budget and stops, and keep the script `finish`
+    compiled, if any."""
     rows = subject_contracts(run.config, run.spec.frontmatter.id)
     turning = Turning(
         attempt,
@@ -324,12 +330,12 @@ def _ended(run: Run, end: ExploreEnd) -> Explored:
         raise ValueError("the run's record must scan with the run's redactor")
     document = present(end)
     try:
-        run.record.write(
+        end.record.write(
             "explore.json", document, check=require_clean(run.redactor, "explore.json")
         )
         if (egress := document["egress"]) is not None:
             check = require_clean(run.redactor, "egress.json")
-            run.record.write("egress.json", egress, check=check)
+            end.record.write("egress.json", egress, check=check)
     except OSError, RefusedWriteError:
         run.stopped("record_error", UNWRITTEN)
         end = replace(end, stops=tuple(run.stops))
@@ -339,7 +345,7 @@ def _ended(run: Run, end: ExploreEnd) -> Explored:
         outcome,
         _exit(outcome),
         document,
-        run.record.path,
+        end.record.path,
         sum((call.cost_usd for call in run.spending.calls), Decimal(0)),
         run.script,
     )
