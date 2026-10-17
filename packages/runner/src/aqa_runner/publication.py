@@ -228,7 +228,11 @@ def _install(at: Publication, data: bytes, deadline: float) -> None:
     temporary and keeps that failure; one after says the script is
     installed."""
     directory = at.target.parent
-    temporary = directory / f".{at.spec_id}.{os.urandom(8).hex()}.tmp"
+    try:
+        suffix = os.urandom(8).hex()
+    except OSError:
+        raise PublishWriteError(installed=False) from None
+    temporary = directory / f".{at.spec_id}.{suffix}.tmp"
     try:
         directory.mkdir(exist_ok=True)
         _write_new(temporary, data)

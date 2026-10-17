@@ -63,6 +63,7 @@ def clean() -> RunResult:
         ),
         EgressBlocks((), False),
         None,
+        0,
     )
 
 

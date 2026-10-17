@@ -106,7 +106,7 @@ def confirmed(
 def replayed(made: Parts, **changes: Any) -> RunResult:
     """What the confirmation's replay returned: it passed, with no step,
     assertion, event, invariant or block, except what `changes` says."""
-    passed = RunResult(made.record.run_id, "passed", (), (), (), (), (), CLEAN, None)
+    passed = RunResult(made.record.run_id, "passed", (), (), (), (), (), CLEAN, None, 0)
     return replace(passed, **changes)
 
 
@@ -594,6 +594,7 @@ def test_a_field_the_presenter_does_not_list_never_reaches_its_output(
         invariants=(later(InvariantResult)("console_errors", "held", (), 0),),
         egress_blocks=CLEAN,
         error_code=None,
+        policy_events_total=0,
     )
     checks = {"a1": later(AssertionResult)("a1", "failed")}
 

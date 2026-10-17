@@ -88,11 +88,12 @@ class Phase:
     """How one phase of the run ended: its part of the run's record, which
     holds the phase's unresolved intents (`RunRecord.unresolved`), what
     ending its listener found uncertain (`EgressProxy.end_phase`), and how
-    many policy events its browser session recorded."""
+    many policy events its browser session recorded, None for a
+    confirmation whose replay raised, which reports none."""
 
     record: RunRecord
     traffic: PhaseTraffic
-    policy_events: int
+    policy_events: int | None
 
 
 @dataclass(frozen=True)

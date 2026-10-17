@@ -16,7 +16,7 @@ from typing import Any, NamedTuple
 import pytest
 from aqa_core.config import ProjectConfig
 from aqa_core.coverage_plan import CoveragePlan, plan_hash
-from aqa_core.project import SpecError, load_spec
+from aqa_core.project import SpecError, load_compiled, load_spec
 from aqa_core.spec import Spec
 from aqa_runner import coverage_plan
 from aqa_runner import explore as explore_module
@@ -140,13 +140,15 @@ def plan_json(run: Explored) -> dict[str, Any]:
 def test_a_scripted_explore_of_the_shop_spec_compiles_in_memory(
     app: App, tmp_path: Path
 ) -> None:
+    (tmp_path / "qa").mkdir()
+    (tmp_path / "qa" / "config.yaml").write_text("{}\n")
     client = Scripted(planned(), FILL, CLICK, ASSERT, FINISH)
 
     run = exploring(app, tmp_path, client)
 
-    assert (run.outcome, run.exit_code) == ("gave_up", 3)
+    assert (run.outcome, run.exit_code) == ("compiled", 0)
     assert run.document["reasons"] == []
-    assert run.document["published"] is None
+    assert run.document["published"] == "unconfirmed"
     assert plan_json(run) == {
         "spec_id": "shop",
         "spec_hash": shop(tmp_path).spec_hash,
@@ -206,9 +208,11 @@ def test_a_scripted_explore_of_the_shop_spec_compiles_in_memory(
         }
     ]
     assert run.cost == Decimal("0.015")
-    # Until the confirmation publishes it (#53 P16), the script stays in memory.
-    assert not (tmp_path / "qa" / ".compiled").exists()
-    assert list(tmp_path.rglob("*.compiled*")) == []
+    # A side-effect path whose spec has no reset hook is published as it
+    # was compiled, unconfirmed, and never replayed (AGENTS.md §6).
+    compiled = tmp_path / "qa" / ".compiled"
+    assert sorted(path.name for path in compiled.iterdir()) == ["shop.json"]
+    assert load_compiled(compiled / "shop.json", ProjectConfig()) == script
 
 
 def unplanned(
