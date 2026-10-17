@@ -4,16 +4,18 @@ own text, and nothing from a page, a run or the machine."""
 
 import json
 import re
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import cast
+from typing import Literal, cast
 
-from aqa_core.coverage_plan import CoveragePlan, PlannedCheck, misfits
+from aqa_core.coverage_plan import CoveragePlan, PlannedCheck, misfits, uncovered
 from aqa_core.model_costs import CostRecord
 from aqa_core.spec import UNHASHED_KEYS, Spec
 from aqa_core.text import has_text
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
+from aqa_runner.anthropic_client import MAX_OUTPUT_TOKENS
 from aqa_runner.model_router import ModelCallError, ModelRouter, Routed, Spend
 from aqa_runner.text_search import SearchTimeoutError, pattern_matches
 
@@ -236,7 +238,11 @@ def _keeping(spend: Spend, raised: list[Exception]) -> Spend:
 
 
 async def make_plan(
-    router: ModelRouter, spec: Spec, *, spend: Spend | None = None
+    router: ModelRouter,
+    spec: Spec,
+    *,
+    spend: Spend | None = None,
+    check: Callable[[Sequence[BaseMessage]], None] | None = None,
 ) -> Planned:
     """Ask the navigator role's model for `spec`'s coverage plan: a call in
     explore mode, with the plan as its response format and no tools, so no
@@ -246,9 +252,13 @@ async def make_plan(
     refusal falls back as the router does; a call that gets no response raises
     as the router does, and a retry's failure raises `ModelCallError` holding
     the first answer's record too. The retry gets what the first answer left
-    of `spend`'s ceiling, and none once it is reached (ADR-0007's #53 P3)."""
+    of `spend`'s ceiling, and none once it is reached (ADR-0007's #53 P3).
+    `check` gets each request, the retry's included, before it is sent, and
+    what it raises leaves as it came (ADR-0026's #53 P15c amendment)."""
     request = plan_request(spec)
     ask = partial(router.call, "navigator", "explore", schema=CoveragePlan)
+    if check is not None:
+        check(request)
     first = await _planned(await ask(request, spend=spend), spec)
     if first.plan is None or not first.problems:
         return first
@@ -263,6 +273,8 @@ async def make_plan(
             )
         ),
     ]
+    if check is not None:
+        check(retry)
     billed = first.routed.calls
     raised: list[Exception] = []
     retry_spend = None if spend is None else _keeping(spend.after(billed), raised)
@@ -276,3 +288,31 @@ async def make_plan(
         # The first answer was billed: its record must outlive the failure.
         raise ModelCallError(billed) from error
     return await _planned(replace(routed, calls=(*billed, *routed.calls)), spec)
+
+
+# Why a plan call's answer gives no usable plan: the outcome, why, the reasons.
+type Unusable = tuple[Literal["gave_up", "spec_error"], str, tuple[str, ...]]
+
+
+def _cut_off(planned: Planned) -> bool:
+    """Whether the answer stopped at the output bound (the adapter leaves
+    such an answer unparsed, and the router records it `invalid`)."""
+    return planned.routed.message.response_metadata.get("stop_reason") == "max_tokens"
+
+
+def judge(planned: Planned, spec: Spec) -> CoveragePlan | Unusable:
+    """The plan, if the call gave one that covers the spec; otherwise how
+    the run fails, why, and the reasons."""
+    if planned.plan is None:
+        if planned.routed.outcome == "refusal":
+            why = "the model refused to write the plan"
+        elif _cut_off(planned):
+            why = f"the model's plan was cut off at the {MAX_OUTPUT_TOKENS}-token bound"
+        else:
+            why = "the model's plan didn't parse as a coverage plan"
+        return "gave_up", why, ()
+    if planned.problems:
+        return "gave_up", "the model's plan can't be used", planned.problems
+    if lines := uncovered(planned.plan, spec.frontmatter):
+        return "spec_error", "an expectation has no establishing check", lines
+    return planned.plan
