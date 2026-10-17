@@ -6,6 +6,7 @@ together with other stops, and a journal poisoned mid-turn. Real Chromium
 against the executor's fixture app, with a scripted model."""
 
 import json
+import re
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
@@ -56,23 +57,39 @@ def secret(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.usefixtures("secret")
+@pytest.mark.parametrize(
+    ("preconditions", "refusal", "seen"),
+    [
+        # No browser opens: finalization refuses the record.
+        (
+            "  reset: { http: POST /status/500 }\n",
+            "the run's record must scan with the run's redactor",
+            ["/status/500"],
+        ),
+        # A browser opens: the attempt refuses its part before step 0.
+        ("", "an attempt's record must be scanned by its session's redactor", []),
+    ],
+    ids=["no browser", "a browser"],
+)
 def test_a_run_record_with_another_redactor_is_refused(
-    app: App, tmp_path: Path
+    app: App, tmp_path: Path, preconditions: str, refusal: str, seen: list[str]
 ) -> None:
-    with pytest.raises(
-        ValueError, match=r"^the run's record must scan with the run's redactor$"
-    ):
+    client = Scripted()
+
+    with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
         explored(
             app,
             tmp_path,
-            Scripted(),
+            client,
             config=SECRETS,
-            preconditions=ACCOUNT + "  reset: { http: POST /status/500 }\n",
+            preconditions=ACCOUNT + preconditions,
             scan=Redactor([]),
         )
 
     assert not list(tmp_path.rglob("explore.json"))
-    assert app.paths() == ["/status/500"]
+    assert not list(tmp_path.rglob("steps.jsonl"))
+    assert client.requests == []
+    assert app.paths() == seen
 
 
 def test_the_minutes_budget_keeps_each_evaluated_checks_result(
