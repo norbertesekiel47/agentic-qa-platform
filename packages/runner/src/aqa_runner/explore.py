@@ -196,9 +196,9 @@ async def _phase(
     session: BrowserSession | None = None
     attempt: Attempt | None = None
     limit = timeout_at(run.deadline)
-    # The browser closes once the budget's span has ended, so the budget
-    # never cancels its close and never takes the place of an error the
-    # phase raised as it closes.
+    # Once its session has opened, the browser closes after the budget's
+    # span has ended, so the budget never cancels that close and never
+    # takes the place of an error the phase raised as it closes.
     async with AsyncExitStack() as browser:
         try:
             async with limit:
