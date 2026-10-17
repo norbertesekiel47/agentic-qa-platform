@@ -285,18 +285,18 @@ class Attempt:
     async def describe(self, call: DescribeParts) -> Described:
         """`describe_parts`: list the parts of the element `call.ref` names
         in the last observation, for the next turn's call. Nothing is
-        dispatched and no intent is written; a refusal is a tool error."""
-        if problem := self._unrunnable("describe_parts", call):
-            return Described(self._said(problem), self._said(""))
-        try:
-            return await self.parts.describe(
-                self.session, self.observation or "", call.ref
-            )
-        except _REFUSED as error:
-            reason = reasons.reason(error, self.session.redactor)
-            return Described(
-                self._said(f"describe_parts did not run: {reason}"), self._said("")
-            )
+        dispatched and no intent is written; a refusal is a tool error, with
+        no parts."""
+        problem = self._unrunnable("describe_parts", call)
+        if problem is None:
+            try:
+                return await self.parts.describe(
+                    self.session, self.observation or "", call.ref
+                )
+            except _REFUSED as error:
+                reason = reasons.reason(error, self.session.redactor)
+                problem = f"describe_parts did not run: {reason}"
+        return Described(self._said(problem), self._said(""))
 
     async def check(self, call: AssertCheck) -> Redacted:
         """`assert_check`: bind the planned check to the element `call.ref`
