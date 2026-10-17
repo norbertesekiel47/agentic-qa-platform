@@ -449,6 +449,9 @@ def save_in(request: Sequence[BaseMessage]) -> str:
     return graph_ref(request, "button", "Save")
 
 
+# A scripted move that answers at once: a reply, or a function of the request.
+type Plain = Reply | Callable[[Sequence[BaseMessage]], Reply]
+
 DESCRIBE = tool("describe_parts", lambda m: {"ref": favorite_in(m)})
 WHOLE = tool("assert_check", lambda m: {"check_id": "a1", "ref": favorite_in(m)})
 ASSERT_PART = calling("assert_check", {"check_id": "a1", "ref": "p1.2"})
@@ -526,7 +529,20 @@ def test_a_part_described_in_one_turn_binds_in_the_next(
 
 
 def test_parts_are_void_two_turns_later(app: App, tmp_path: Path, held: Held) -> None:
-    client = Scripted(DESCRIBE, NOTES, ASSERT_PART, NOTES)
+    during: list[int] = []
+
+    def counting(move: Plain) -> Callable[[Sequence[BaseMessage]], Reply]:
+        """`move`, noting how many of the parts' handles are held as the
+        model is called."""
+
+        def counted(messages: Sequence[BaseMessage]) -> Reply:
+            during.append(held.count)
+            return move if isinstance(move, Reply) else move(messages)
+
+        return counted
+
+    moves: list[Plain] = [DESCRIBE, NOTES, ASSERT_PART, NOTES]
+    client = Scripted(*map(counting, moves))
 
     context = on_the_article(app, tmp_path, client, turns=4)
 
@@ -537,6 +553,8 @@ def test_parts_are_void_two_turns_later(app: App, tmp_path: Path, held: Held) ->
         False,
     ]
     assert results(client.requests[3]) == EARLIER
+    # Held through the serving turn's call only, and let go at its end.
+    assert during == [0, 3, 0, 0]
     assert stops(context) == [("gave_up", "the attempt took all 4 of its turns")]
     assert (len(held.made), held.count) == (4, 0)
 
