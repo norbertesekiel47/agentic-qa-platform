@@ -118,7 +118,8 @@ A checkpoint preserves graph state, not the browser. Resuming therefore requires
 | `fill_secret(ref, meaning, name)` | Inject a named secret at the browser layer, only into a field and origin the secret is bound to (project config, DATA_MODEL §9); a refusal comes back to the agent as a tool error that names the secret, never its value (`BrowserSession.fill_secret`, ADR-0026) |
 | `screenshot(region?)` | Visual observation for verification (hybrid perception, M2; M1's navigator reads the accessibility tree only) |
 | `vision_click(x, y)` | Vision fallback, only when the tree lacks a usable ref (M2) |
-| `assert_check(check_id, ref)`, `note_for_absence(check_id, ref)` | Explore: bind a coverage-plan check, named by its ID (`a1`, `a2`, ... in plan order), to the element ref it reads, or to none for a check that reads no element, and evaluate it; a `not_visible` check first notes its element while it shows. Compiles directly into the script |
+| `describe_parts(ref)` | Explore: list the parts of the element ref, the elements inside it that the snapshot gives no ref of their own (up to twelve, four deep), each under a ref such as `p1.2` that serves only the next call, in a `<parts>` block of the next request. Dispatches nothing (ADR-0025's and ADR-0024's #53 P19 amendments) |
+| `assert_check(check_id, ref)`, `note_for_absence(check_id, ref)` | Explore: bind a coverage-plan check, named by its ID (`a1`, `a2`, ... in plan order), to the element ref it reads, or to a part's ref from the last `describe_parts`, or to none for a check that reads no element, and evaluate it; a `not_visible` check first notes its element while it shows. Compiles directly into the script |
 | `restart()` | Explore: start a new attempt, allowed only under the reset rule in §3.3 (ADR-0024) |
 | `finish(steps)` | Explore: name the log's step numbers that form the path. Heal: a structured verdict (Pydantic-validated) with evidence refs |
 
