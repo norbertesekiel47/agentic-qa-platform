@@ -33,6 +33,7 @@ from aqa_runner.model_router import ModelCallError, ModelRouter, Routed, Spend
 from aqa_runner.navigator import (
     AssertCheck,
     Decision,
+    DescribeParts,
     Finish,
     NoteForAbsence,
     Prefix,
@@ -94,12 +95,14 @@ def unspelled(redactor: Redactor) -> Callable[[Sequence[BaseMessage]], None]:
 class Turns(TypedDict):
     """The graph's state, plain data a checkpoint keeps: the turns taken,
     the attempt's log of steps, the model's last notes, what its last tool
-    call did, and whether the turns are over."""
+    call did, the parts it listed for the next turn's call, and whether
+    the turns are over."""
 
     turn: int
     log: tuple[str, ...]
     notes: str
     results: tuple[str, ...]
+    parts: str
     done: bool
 
 
@@ -168,16 +171,21 @@ async def take_turns(context: Turning) -> None:
     graph.add_node("turn", _turn)
     graph.add_edge(START, "turn")
     graph.add_conditional_edges("turn", _next)
-    await graph.compile(checkpointer=InMemorySaver()).ainvoke(
-        Turns(turn=0, log=(), notes="", results=(), done=False),
-        # One superstep per turn, and one to stop: the budget stops the
-        # turns, never LangGraph's limit, which an environment can lower.
-        {
-            "configurable": {"thread_id": context.spending.record.run_id},
-            "recursion_limit": context.turns + 2,
-        },
-        context=context,
-    )
+    try:
+        await graph.compile(checkpointer=InMemorySaver()).ainvoke(
+            Turns(turn=0, log=(), notes="", results=(), parts="", done=False),
+            # One superstep per turn, and one to stop: the budget stops the
+            # turns, never LangGraph's limit, which an environment can lower.
+            {
+                "configurable": {"thread_id": context.spending.record.run_id},
+                "recursion_limit": context.turns + 2,
+            },
+            context=context,
+        )
+    finally:
+        # However the turns stop, a finish, a stop, an error or a
+        # cancellation, the parts they hold go with their handles.
+        await context.attempt.parts.void()
 
 
 def _next(state: Turns) -> str:
@@ -214,7 +222,8 @@ async def _taken(context: Turning, state: Turns) -> Turns | Stop | None:
         chosen = _kept(context, number, messages, reply, priced)
         if reply.stop is not None or chosen is None or attempt.interrupted():
             return reply.stop
-        results, logged = await _ran(context, chosen)
+        results, logged, parts = await _ran(context, chosen)
+        await attempt.parts.turned()
     except OSError, RefusedWriteError:
         # A journal or a document the record couldn't take, a broken
         # journal's refusal included: nothing more may be dispatched.
@@ -224,6 +233,7 @@ async def _taken(context: Turning, state: Turns) -> Turns | Stop | None:
         log=(*state["log"], *logged),
         notes=chosen.notes,
         results=results,
+        parts=parts,
         done=context.script is not None or attempt.ended or attempt.interrupted(),
     )
 
@@ -249,7 +259,7 @@ async def _request(context: Turning, state: Turns) -> list[BaseMessage]:
         why = reasons.reason(error, context.redactor)
         snapshot, looked = context.said(""), (f"the page couldn't be looked at: {why}",)
     results = (*state["results"], *looked)
-    turn = Turn(tuple(state["log"]), state["notes"], results, snapshot)
+    turn = Turn(tuple(state["log"]), state["notes"], results, snapshot, state["parts"])
     return navigator_request(context.prefix, turn, redactor=context.redactor)
 
 
@@ -321,15 +331,20 @@ def _kept(
 
 async def _ran(
     context: Turning, chosen: Decision
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Run the reply's first call on the attempt: what it did, and the log
-    line of the step it dispatched, if it did."""
+) -> tuple[tuple[str, ...], tuple[str, ...], str]:
+    """Run the reply's first call on the attempt: what it did, the log
+    line of the step it dispatched, if it did, and the parts it listed,
+    if it listed any."""
     attempt, call = context.attempt, chosen.call
     logged: tuple[str, ...] = ()
+    parts = ""
     if call is None:
         text: str = context.said("the reply called no tool, so nothing ran")
     elif isinstance(call, Unrunnable):
         text = call.problem
+    elif isinstance(call, DescribeParts):
+        described = await attempt.describe(call)
+        text, parts = described.text, described.parts
     elif isinstance(call, AssertCheck):
         text = await attempt.check(call)
     elif isinstance(call, NoteForAbsence):
@@ -346,7 +361,7 @@ async def _ran(
         f"only the first of the reply's {chosen.unrun + 1} tool calls ran: "
         "a turn runs one"
     )
-    return ((text, unrun) if chosen.unrun else (text,)), logged
+    return ((text, unrun) if chosen.unrun else (text,)), logged, parts
 
 
 def _line(call: Action, step: StepResult | None) -> tuple[str, ...]:
