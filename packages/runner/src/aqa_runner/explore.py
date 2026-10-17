@@ -21,6 +21,7 @@ memory (`Explored.script`) for the confirmation (#53 P16)."""
 
 from asyncio import timeout_at
 from collections.abc import Callable, Mapping
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from pathlib import Path
@@ -195,16 +196,22 @@ async def _phase(
     session: BrowserSession | None = None
     attempt: Attempt | None = None
     limit = timeout_at(run.deadline)
-    try:
-        async with limit:
-            if await _reset(run):
-                await register_identity_engine(run.playwright)
-                async with open_browser_session(
-                    run.playwright.chromium,
-                    egress=proxy,
-                    settings=effective_browser(run.spec, run.config),
-                    redactor=run.redactor,
-                ) as session:
+    # The browser closes once the budget's span has ended, so the budget
+    # never cancels its close and never takes the place of an error the
+    # phase raised as it closes.
+    async with AsyncExitStack() as browser:
+        try:
+            async with limit:
+                if await _reset(run):
+                    await register_identity_engine(run.playwright)
+                    session = await browser.enter_async_context(
+                        open_browser_session(
+                            run.playwright.chromium,
+                            egress=proxy,
+                            settings=effective_browser(run.spec, run.config),
+                            redactor=run.redactor,
+                        )
+                    )
                     if session.redactor is not run.redactor:
                         raise ValueError(
                             "the browser session must scan with the run's redactor"
@@ -213,13 +220,13 @@ async def _phase(
                     await _started(run, session)
                     if not run.stops and not interrupted():
                         await _turns(run, attempt, explorable.plan)
-    except (SandboxUnavailableError, UnregisteredEngineError) as error:
-        # The browser isn't as the run requires: launched, or prepared.
-        run.stopped("no_sandbox", str(error))
-    except TimeoutError:
-        if not limit.expired():
-            raise  # not the minutes budget's own
-        run.stopped("gave_up", _MINUTES)
+        except (SandboxUnavailableError, UnregisteredEngineError) as error:
+            # The browser isn't as the run requires: launched, or prepared.
+            run.stopped("no_sandbox", str(error))
+        except TimeoutError:
+            if not limit.expired():
+                raise  # not the minutes budget's own
+            run.stopped("gave_up", _MINUTES)
     checks = (
         dict.fromkeys(planned_checks(explorable.plan))
         if attempt is None
