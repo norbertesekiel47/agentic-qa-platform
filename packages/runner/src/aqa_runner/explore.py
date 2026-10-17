@@ -136,8 +136,8 @@ class Explored:
     `outcome` and `reasons` say why; its record, None when none could be
     made; what its model calls cost; the script its attempt compiled, as
     `finish` compiled it (unconfirmed, every locator kept), when it compiled
-    one that spells no bound value; and whether the run's `egress.json` was
-    written."""
+    one, which `explore` returns only when it spells no bound value; and
+    whether the run's `egress.json` was written."""
 
     outcome: Ended
     exit_code: int
