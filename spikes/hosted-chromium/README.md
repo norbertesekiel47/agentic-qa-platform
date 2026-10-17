@@ -51,7 +51,7 @@ A successful HTTP trial emits at most 13 phase records in this order:
 
 Health checks and lifecycle hooks emit no trial-phase records. A refused sandbox emits 11 records, including the handler and Playwright phases, and still returns the existing refusal report. No phase record is emitted inside the ready-time interval or the memory-sampling loop; diagnostic overhead still limits comparisons between different package versions. Missing markers identify the last observed boundary, not the root cause.
 
-`invoke.sh` explicitly selects `/aqa-spike/hosted-chromium/microvm` for runtime logs. Its idle window now matches the 900-second lifetime cap, with suspended duration zero and auto-resume false; the single trial POST still times out after 120 seconds and failures still terminate the known VM without repeating that POST. This removes the shorter 60-second idle window from the proposed next experiment; it does not establish that idle termination caused the failed October 4 attempt. These changes are local pending review: building a new artifact and making any further AWS attempt need their separate approvals.
+`invoke.sh` explicitly selects `/aqa-spike/hosted-chromium/microvm` for runtime logs. Its idle window now matches the 900-second lifetime cap, with suspended duration zero and auto-resume false; the single trial POST still times out after 120 seconds and failures still terminate the known VM without repeating that POST. This removed the shorter 60-second idle window from the next hosted attempt; it does not establish that idle termination caused the failed October 4 attempt. The 2026-10-09 rerun, under its own approvals, ran with these settings, and each of its MicroVMs' runtime logs held the 13 records in order (ADR-0032).
 
 ## The packages
 
@@ -127,7 +127,7 @@ What #38 records for each candidate, with the command and the commit that produc
 **Runs.** Each candidate runs with 2 GB: the Fargate task and the MicroVM with 1 vCPU, and the Lambda function with about 1.16, since its CPU follows its memory (1,769 MB is one vCPU).
 - Lambda, 2,048 MB: at least five cold and five warm trials. `invoke.sh lambda cold` changes the function's configuration first, which makes Lambda start a new execution environment. `warm` invokes again, which may reuse it.
 - Fargate, 1 vCPU and 2 GB: at least five cold trials. Every task starts cold, and a warm start doesn't exist.
-- MicroVM, a 2 GB baseline: one cold trial per image build (the first MicroVM after `deploy.sh`), then at least five warm ones. Every MicroVM is a new VM restored from the image's snapshot. The second and later MicroVMs may read a snapshot that Lambda has already cached.
+- MicroVM, a 2 GB baseline: one cold trial per image version (the first MicroVM after its build), then at least five warm ones. Every MicroVM is a new VM restored from the image's snapshot. The second and later MicroVMs may read a snapshot that Lambda has already cached.
 
 **Time to a ready browser.**
 - *In the trial:* `trial.ready_seconds`.
@@ -182,11 +182,12 @@ What #38 records for each candidate, with the command and the commit that produc
   - *Snapshot writes* ($0.0038 per GB): the successful October 1 trials terminated before the one-minute idle window. A failed trial can outlast that window; the October 4 attempt did, without a report that establishes whether suspension occurred. Suspending writes a snapshot. `collect.sh` showed a write billed on October 4 and none for October 9's build and trials, so the build bills none and the October 4 attempt's MicroVM was most likely suspended (ADR-0032).
 - **Every candidate** also stores its package: ECR at $0.10 per GB-month for the Lambda function's and the Fargate task's image, and S3 Standard ([S3](https://aws.amazon.com/s3/pricing/)) for the MicroVM's zip. Per run: the package's GB × the monthly price ÷ the runs in a month.
 
-
 ## Results
 
 #38 ran the trials on 2026-10-01. Their rows are in `results/2026-10-01.jsonl`, redacted for the public repository, and ADR-0032 holds every figure, with the commands that derive it from those rows.
 
-The current-package rerun on 2026-10-04 stopped after its first cold request timed out. There were no successful trial rows and no warm attempts. `results/2026-10-04-failed-attempt.json` records the failed attempt and scoped cleanup separately; it is not a trial `Report`. ADR-0032 records the evidence limits and pending task-definition/tag disappearance. Hosted validation of the current launcher remains open.
+The current-package rerun on 2026-10-04 stopped after its first cold request timed out. There were no successful trial rows and no warm attempts. `results/2026-10-04-failed-attempt.json` records the failed attempt and scoped cleanup separately; it is not a trial `Report`. ADR-0032 records its evidence limits, and what later listings found of the task definition and tag-index entries its cleanup left.
+
+The MicroVM's rerun on 2026-10-09 ran the current launcher: version 1.0 of a new image, built from `microvm-dd05cb4781b1.zip` (the package at `dd05cb4781b1`, with the diagnostic phases above). It ran 1 cold and 10 warm trials, and none failed: in 11 of 11 the sandbox was on, each MicroVM's renderer sat in user, PID and network namespaces of its own with more seccomp filters than the browser (1 to the browser's 0), and every MicroVM was new. Ready in the trial: cold 71.92 s, warm median 5.66 s (0.64–51.69 s). One poll of `/health` got a 502, which `invoke.sh` retried. The redacted rows are in `results/2026-10-09.jsonl`, and those figures come from ADR-0032's D1, D2, D4 and D10 on them.
 
 `collect.sh` collected the billed usage on 2026-10-17, and ADR-0032's Cost consequence records it.
