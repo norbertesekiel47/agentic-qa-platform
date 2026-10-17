@@ -10,15 +10,18 @@ import json
 import re
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextlib import suppress
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
+from aqa_core.config import ProjectConfig
 from aqa_runner import explore
 from aqa_runner.binding import register_binding_engine
 from aqa_runner.browser_session import open_browser_session
 from aqa_runner.chat_client import Reply
 from aqa_runner.explore import Run
+from aqa_runner.explore_result import ExploreEnd, present
 from aqa_runner.locator_generation import TargetUses
 from aqa_runner.redaction import Redactor
 from langchain_core.messages import BaseMessage
@@ -253,6 +256,67 @@ def test_explore_json_that_cannot_be_written_ends_the_run_15(
     assert run.document["exit_code"] == 15
     assert run.record is not None
     assert (run.record / "explore.json").read_text() == "taken\n"
+
+
+@pytest.mark.usefixtures("secret")
+def test_a_document_that_spells_a_bound_value_is_refused_never_redacted_into_place(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def leaking(end: ExploreEnd) -> dict[str, object]:
+        # A document whose scan let a bound value through, as none of
+        # present's may.
+        document = present(end)
+        reasons = document["reasons"]
+        assert isinstance(reasons, list)
+        return document | {"reasons": [*reasons, FAKE_VALUE]}
+
+    monkeypatch.setattr(explore, "present", leaking)
+
+    run = explored(
+        app, tmp_path, Scripted(REFUSED), config=SECRETS, preconditions=ACCOUNT
+    )
+
+    assert (run.outcome, run.exit_code) == ("record_error", 15)
+    assert run.document["reasons"] == [
+        "the model refused its turn",
+        UNWRITTEN,
+        "a1: never bound",
+        FAKE_VALUE,
+    ]
+    assert files(run) == ["attempt-1/steps.jsonl", "costs.jsonl", "turns/1.json"]
+
+
+def test_a_timeout_that_isnt_the_minutes_budgets_own_propagates(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def timed_out(*_args: object, **_kwargs: object) -> None:
+        raise TimeoutError
+
+    monkeypatch.setattr(explore, "reset", timed_out)
+
+    with pytest.raises(TimeoutError):
+        explored(
+            app,
+            tmp_path,
+            Scripted(),
+            preconditions="  reset: { http: POST /write/reset }\n",
+        )
+
+    assert not list(tmp_path.rglob("explore.json"))
+    assert app.paths() == []
+
+
+def test_the_spend_budget_is_the_projects_model_usd(app: App, tmp_path: Path) -> None:
+    config = ProjectConfig.model_validate({"budgets": {"model_usd": 0.008}})
+
+    run = explored(app, tmp_path, Scripted(FILL, CLICK, FILL), config=config)
+
+    assert (run.outcome, run.exit_code) == ("gave_up", 3)
+    assert written(run)["reasons"] == [
+        "the spend budget ran out on this turn, so its call didn't run",
+        "a1: never bound",
+    ]
+    assert run.cost == Decimal("0.009")
 
 
 def test_a_block_with_no_model_response_exits_6(app: App, tmp_path: Path) -> None:

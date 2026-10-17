@@ -11,7 +11,8 @@ import json
 import re
 import socket
 import sys
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from contextlib import asynccontextmanager
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Self, TypedDict, Unpack
@@ -22,14 +23,17 @@ from aqa_core.config import ProjectConfig
 from aqa_core.coverage_plan import CoveragePlan
 from aqa_core.project import load_spec, subject_contracts
 from aqa_core.spec import Spec
-from aqa_runner import explore, sandbox, settling
+from aqa_runner import executor, explore, sandbox, settling
 from aqa_runner.bound_secrets import bound_secrets
-from aqa_runner.browser_session import open_browser_session
+from aqa_runner.browser_session import BrowserSession, open_browser_session
+from aqa_runner.document_origins import PolicyEvent
 from aqa_runner.egress import EgressGate
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.explore import Explorable, Explored, Run, run_attempt
 from aqa_runner.model_router import ModelRouter
+from aqa_runner.navigator_tools import Attempt
 from aqa_runner.redaction import Redactor
+from aqa_runner.reset import reset
 from aqa_runner.run_record import RunRecord
 from aqa_runner.sandbox import HOST_FIXES, OTHER_FIX, SandboxObservations
 from aqa_runner.settling import Settled
@@ -289,6 +293,67 @@ def test_the_start_url_is_step_0_and_no_side_effect_step(
     assert app.records[0] == ("GET", "/page/shop", [intent])
     assert written(run)["reasons"] == ["the model refused its turn", "a1: never bound"]
     assert run.exit_code == 3
+
+
+def test_the_projects_resolve_seconds_bound_the_reset_the_actions_and_the_looks(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resets: list[float] = []
+
+    async def resetting(*args: Any, seconds: float) -> None:
+        resets.append(seconds)
+        await reset(*args, seconds=seconds)
+
+    waits: list[dict[str, float]] = []
+    limit_waits = BrowserSession.limit_waits
+
+    def limiting(session: BrowserSession, **seconds: float) -> None:
+        waits.append(seconds)
+        limit_waits(session, **seconds)
+
+    attempts: list[Attempt] = []
+
+    def attempted(*args: Any, **kwargs: Any) -> Attempt:
+        attempts.append(Attempt(*args, **kwargs))
+        return attempts[-1]
+
+    monkeypatch.setattr(explore, "reset", resetting)
+    monkeypatch.setattr(BrowserSession, "limit_waits", limiting)
+    monkeypatch.setattr(explore, "Attempt", attempted)
+    config = ProjectConfig.model_validate({"budgets": {"resolve_seconds": 7}})
+
+    explored(
+        app,
+        tmp_path,
+        Scripted(REFUSED),
+        config=config,
+        preconditions="  reset: { http: POST /write/reset }\n",
+    )
+
+    assert resets == [7]
+    # Navigation keeps the executor's own bound, as replay's does.
+    assert waits == [
+        {"action_seconds": 7, "navigation_seconds": executor.NAVIGATION_SECONDS}
+    ]
+    assert [attempt.budget for attempt in attempts] == [7]
+
+
+def test_the_phase_counts_the_policy_events_its_session_recorded(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @asynccontextmanager
+    async def watched(*args: Any, **kwargs: Any) -> AsyncIterator[BrowserSession]:
+        async with open_browser_session(*args, **kwargs) as session:
+            session.policy_events.add(
+                PolicyEvent("navigation", "http://elsewhere.example.test/", None)
+            )
+            yield session
+
+    monkeypatch.setattr(explore, "open_browser_session", watched)
+
+    run = explored(app, tmp_path, Scripted(REFUSED))
+
+    assert written(run)["phases"] == [CLEAN_PHASE | {"policy_events": 1}]
 
 
 @pytest.mark.usefixtures("secret")
