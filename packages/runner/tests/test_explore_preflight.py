@@ -55,6 +55,7 @@ from packages.runner.tests.test_explore_graph import (
     FINISH,
     SECRETS,
     UNWRITTEN,
+    configured,
     deadlines,
     expiring,
     files,
@@ -140,8 +141,7 @@ def plan_json(run: Explored) -> dict[str, Any]:
 def test_a_scripted_explore_of_the_shop_spec_compiles_in_memory(
     app: App, tmp_path: Path
 ) -> None:
-    (tmp_path / "qa").mkdir()
-    (tmp_path / "qa" / "config.yaml").write_text("{}\n")
+    configured(tmp_path / "qa")
     client = Scripted(planned(), FILL, CLICK, ASSERT, FINISH)
 
     run = exploring(app, tmp_path, client)
@@ -208,8 +208,6 @@ def test_a_scripted_explore_of_the_shop_spec_compiles_in_memory(
         }
     ]
     assert run.cost == Decimal("0.015")
-    # A side-effect path whose spec has no reset hook is published as it
-    # was compiled, unconfirmed, and never replayed (AGENTS.md §6).
     compiled = tmp_path / "qa" / ".compiled"
     assert sorted(path.name for path in compiled.iterdir()) == ["shop.json"]
     assert load_compiled(compiled / "shop.json", ProjectConfig()) == script

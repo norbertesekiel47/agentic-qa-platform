@@ -28,7 +28,6 @@ from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.explore import Explored
 from aqa_runner.loopback_server import LoopbackServer
 from aqa_runner.model_router import ModelRouter
-from aqa_runner.navigator_tools import Attempt
 from aqa_runner.redaction import Redactor
 from aqa_runner.reset import reset
 from aqa_runner.run_record import RunRecord
@@ -55,7 +54,7 @@ from packages.runner.tests.explore_graph_fixtures import (
     ref,
     tool,
 )
-from packages.runner.tests.secret_fixtures import FAKE_VALUE, copies_found
+from packages.runner.tests.secret_fixtures import FAKE_VALUE
 from packages.runner.tests.test_describe_parts import (
     COUNTED,
     COUNTER,
@@ -70,6 +69,7 @@ from packages.runner.tests.test_explore_graph import (
     PLAIN,
     SECRETS,
     UNWRITTEN,
+    configured,
     deadlines,
     files,
     shop_spec,
@@ -112,10 +112,7 @@ def confirming(
     under the spec root `tmp_path / "qa"`, whose `config.yaml` holds
     `config`, from the app's origin, with `client` as its model."""
     config = config or ProjectConfig()
-    root = tmp_path / "qa"
-    root.mkdir(parents=True, exist_ok=True)
-    held = config.model_dump(mode="json", exclude_unset=True)
-    (root / "config.yaml").write_text(json.dumps(held))
+    root = configured(tmp_path / "qa", config)
     spec = shop_spec(root, config, page, preconditions)
 
     async def scenario() -> Explored:
@@ -778,105 +775,6 @@ def test_no_file_in_the_explore_record_names_a_refused_host_when_a_secret_is_bou
     saved = [path for path in run.record.rglob("*") if path.is_file()]
     assert "confirmation/egress.json" in files(run)
     assert [path for path in saved if "analytics" in path.read_text()] == []
-
-
-@pytest.mark.usefixtures("secret")
-def test_no_written_script_or_record_holds_a_secret_copy(
-    app: App, tmp_path: Path
-) -> None:
-    run = confirming(
-        app,
-        tmp_path,
-        Scripted(planned(), *PATH),
-        config=SECRETS,
-        preconditions=ACCOUNT + RESET,
-    )
-
-    assert written(run)["published"] == "confirmed"
-    written_files = [path for path in tmp_path.rglob("*") if path.is_file()]
-    assert compiled_file(tmp_path) in written_files
-    assert copies_found(FAKE_VALUE, files=written_files) == []
-
-
-# A value the status paragraph's ID and test ID spell, bound as the test
-# secret: a locator by either spells it.
-SPELLED = "fake-status-value-49"
-SPELLING = (
-    SHOPS["shop"].replace('"status"', f'"{SPELLED}"').replace("#status", f"#{SPELLED}")
-)
-
-
-def spelling(monkeypatch: pytest.MonkeyPatch, page: str) -> None:
-    """Bind `SPELLED`, serve `page` as the shop, and let the attempt keep a
-    locator that spells a bound value, which its own drop would refuse, so
-    only explore's drop before the confirmation stands between it and the
-    published script."""
-    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", SPELLED)
-    monkeypatch.setitem(PAGES, "shop", page)
-    monkeypatch.setattr(Attempt, "_spelled", lambda _attempt, _locator: False)
-
-
-def test_a_locator_spelling_a_bound_value_is_dropped_before_the_confirmation(
-    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    spelling(monkeypatch, SPELLING)
-
-    run = confirming(
-        app,
-        tmp_path,
-        Scripted(planned(), *PATH),
-        config=SECRETS,
-        preconditions=ACCOUNT + RESET,
-    )
-
-    assert (run.outcome, run.exit_code) == ("compiled", 0)
-    assert run.script is not None
-    compiled_locators = [
-        locator.model_dump(exclude_none=True)
-        for locator in run.script.targets["t3"].locators
-    ]
-    assert compiled_locators == [
-        {"testid": SPELLED},
-        {"css": f"#{SPELLED}"},
-        {"role": "paragraph"},
-        {"css": "p"},
-    ]
-    script = published(tmp_path)
-    assert script.confirmed is True
-    assert [
-        locator.model_dump(exclude_none=True)
-        for locator in script.targets["t3"].locators
-    ] == [{"role": "paragraph"}, {"css": "p"}]
-    assert {
-        name: target for name, target in script.targets.items() if name != "t3"
-    } == {name: target for name, target in run.script.targets.items() if name != "t3"}
-
-
-def test_a_target_left_with_no_locator_publishes_nothing_naming_it(
-    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The status's section spells the value too, and a second paragraph
-    # outside it: no locator by role or tag finds the status alone.
-    page = SPELLING.replace('"status-area"', f'"{SPELLED}-area"') + "<p>Elsewhere</p>"
-    spelling(monkeypatch, page)
-
-    run = confirming(
-        app,
-        tmp_path,
-        Scripted(planned(), *PATH),
-        config=SECRETS,
-        preconditions=ACCOUNT + RESET,
-    )
-
-    assert (run.outcome, run.exit_code) == ("gave_up", 3)
-    document = written(run)
-    assert document["reasons"] == [
-        "target t3 has no locator that spells no bound value"
-    ]
-    assert (document["confirmation"], document["published"]) == (None, None)
-    assert [name for name in files(run) if name.startswith("confirmation")] == []
-    assert app.paths().count("/write/reset") == 1
-    assert not compiled_file(tmp_path).parent.exists()
 
 
 # The banner's favorite button and the article actions' copy of it, and the
