@@ -36,7 +36,12 @@ from playwright.async_api import ElementHandle, Error, Page, Playwright
 from playwright.async_api import Locator as PlaywrightLocator
 from pydantic import Field, StringConstraints, TypeAdapter, ValidationError
 
-from aqa_runner.binding import Refused, binding_verdict, register_binding_engine
+from aqa_runner.binding import (
+    Refused,
+    UnregisteredEngineError,
+    binding_verdict,
+    register_binding_engine,
+)
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.locators import Absent, Resolved, Use, resolve
 from aqa_runner.snapshot_refs import ELEMENT_REF, LINE
@@ -472,7 +477,7 @@ async def _held(page: Page, element: ElementHandle) -> str:
         if page.is_closed():
             raise
         if f'Unknown engine "{_IDENTITY}"' in str(error):
-            raise RuntimeError(
+            raise UnregisteredEngineError(
                 "the identity engine isn't registered: call "
                 "register_identity_engine before the browser session opens"
             ) from None

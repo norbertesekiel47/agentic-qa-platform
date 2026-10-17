@@ -1,0 +1,252 @@
+"""The stops of an attempt's phase that combine, or that a run's own state
+makes (#53 P15b; ADR-0024's #53 P15b amendment): a record that doesn't scan
+with the run's redactor, checks kept when the minutes budget runs out, a
+browser whose selector engines were never registered, blocks and events
+together with other stops, and a journal poisoned mid-turn. Real Chromium
+against the executor's fixture app, with a scripted model."""
+
+import json
+from collections.abc import Awaitable, Callable, Iterator, Sequence
+from pathlib import Path
+from typing import Any
+
+import pytest
+from aqa_runner import explore
+from aqa_runner.binding import register_binding_engine
+from aqa_runner.chat_client import Reply
+from aqa_runner.explore import Run
+from aqa_runner.locator_generation import TargetUses
+from aqa_runner.redaction import Redactor
+from langchain_core.messages import BaseMessage
+from playwright.async_api import Playwright
+
+from packages.runner.tests.egress_fixtures import gate
+from packages.runner.tests.executor_fixtures import App, read_steps, serving_app
+from packages.runner.tests.explore_graph_fixtures import (
+    CLICK,
+    FILL,
+    NO_RESPONSE,
+    REFUSED,
+    Scripted,
+)
+from packages.runner.tests.secret_fixtures import FAKE_VALUE
+from packages.runner.tests.test_explore_graph import (
+    ACCOUNT,
+    ASSERT_NOW,
+    SECRETS,
+    UNWRITTEN,
+    deadlines,
+    expiring,
+    explored,
+    files,
+    written,
+)
+
+
+@pytest.fixture
+def app() -> Iterator[App]:
+    with serving_app() as served:
+        yield served
+
+
+@pytest.fixture
+def secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TEST_PASSWORD's fake value, for a spec that references it."""
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
+
+
+@pytest.mark.usefixtures("secret")
+def test_a_run_record_with_another_redactor_is_refused(
+    app: App, tmp_path: Path
+) -> None:
+    with pytest.raises(
+        ValueError, match=r"^the run's record must scan with the run's redactor$"
+    ):
+        explored(
+            app,
+            tmp_path,
+            Scripted(),
+            config=SECRETS,
+            preconditions=ACCOUNT + "  reset: { http: POST /status/500 }\n",
+            scan=Redactor([]),
+        )
+
+    assert not list(tmp_path.rglob("explore.json"))
+    assert app.paths() == ["/status/500"]
+
+
+def test_the_minutes_budget_keeps_each_evaluated_checks_result(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    limits = deadlines(monkeypatch)
+
+    run = explored(app, tmp_path, Scripted(ASSERT_NOW, expiring(limits)))
+
+    assert (run.outcome, run.exit_code) == ("gave_up", 3)
+    assert written(run)["reasons"] == ["the minutes budget ran out", "a1: failed"]
+    # The cancelled call left no record of its turn.
+    assert files(run) == [
+        "attempt-1/steps.jsonl",
+        "costs.jsonl",
+        "explore.json",
+        "turns/1.json",
+    ]
+
+
+def test_a_block_with_the_minutes_budget_run_out_exits_6(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    limits = deadlines(monkeypatch)
+    egress = gate(allowed=(app.origin,))
+
+    def refused() -> None:
+        egress.record_refusal("analytics.example.test", 80, "host", "fake refusal")
+
+    run = explored(app, tmp_path, Scripted(expiring(limits, refused)), egress=egress)
+
+    assert (run.outcome, run.exit_code) == ("egress_blocked", 6)
+    assert written(run)["reasons"] == ["the minutes budget ran out", "a1: never bound"]
+    assert files(run) == [
+        "attempt-1/steps.jsonl",
+        "egress.json",
+        "explore.json",
+    ]
+    assert run.record is not None
+    assert json.loads((run.record / "egress.json").read_text()) == {
+        "error_code": "egress_blocked",
+        "refused": [{"host": "analytics.example.test", "port": 80}],
+        "overflowed": False,
+        "hosts_and_ports_withheld": False,
+    }
+
+
+async def nothing_registered(_playwright: Playwright) -> None:
+    pass
+
+
+@pytest.mark.parametrize(
+    ("registered", "unregistered"),
+    [(nothing_registered, "binding"), (register_binding_engine, "identity")],
+    ids=["none", "binding only"],
+)
+def test_a_browser_whose_selector_engines_were_never_registered_exits_10(
+    app: App,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    registered: Callable[[Playwright], Awaitable[None]],
+    unregistered: str,
+) -> None:
+    monkeypatch.setattr(explore, "register_identity_engine", registered)
+
+    run = explored(app, tmp_path, Scripted(CLICK))
+
+    assert (run.outcome, run.exit_code) == ("no_sandbox", 10)
+    assert written(run)["reasons"] == [
+        (
+            f"the {unregistered} engine isn't registered: call register_identity_engine "
+            "before the browser session opens"
+        ),
+        "a1: never bound",
+    ]
+    assert run.record is not None
+    assert [
+        (line["seq"], line["state"]) for line in read_steps(run.record / "attempt-1")
+    ] == [(0, "intent"), (0, "completed")]
+    assert files(run) == [
+        "attempt-1/steps.jsonl",
+        "costs.jsonl",
+        "explore.json",
+        "turns/1.json",
+    ]
+
+
+def test_explore_json_that_cannot_be_written_ends_the_run_15(
+    app: App, tmp_path: Path
+) -> None:
+    def taken(_messages: Sequence[BaseMessage]) -> Reply:
+        # A file is already in explore.json's place, and a record never
+        # writes over one.
+        assert app.record is not None
+        (app.record.parent / "explore.json").write_text("taken\n")
+        return REFUSED
+
+    run = explored(app, tmp_path, Scripted(taken))
+
+    assert (run.outcome, run.exit_code) == ("record_error", 15)
+    assert run.document["reasons"] == [
+        "the model refused its turn",
+        UNWRITTEN,
+        "a1: never bound",
+    ]
+    assert run.document["exit_code"] == 15
+    assert run.record is not None
+    assert (run.record / "explore.json").read_text() == "taken\n"
+
+
+def test_a_block_with_no_model_response_exits_6(app: App, tmp_path: Path) -> None:
+    egress = gate(allowed=(app.origin,))
+
+    def unanswered(_messages: Sequence[BaseMessage]) -> Reply:
+        egress.record_refusal("analytics.example.test", 80, "host", "fake refusal")
+        raise NO_RESPONSE
+
+    run = explored(app, tmp_path, Scripted(unanswered), egress=egress)
+
+    assert (run.outcome, run.exit_code) == ("egress_blocked", 6)
+    assert written(run)["reasons"] == [
+        "the model gave no response (APIConnectionError)",
+        "a1: never bound",
+    ]
+    assert files(run) == [
+        "attempt-1/steps.jsonl",
+        "egress.json",
+        "explore.json",
+        "turns/1.json",
+    ]
+
+
+def test_an_infrastructure_event_during_an_actions_preparation_exits_13_before_its_intent(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    egress = gate(allowed=(app.origin,))
+    generate = TargetUses.add
+
+    async def failing(uses: TargetUses, *args: Any) -> int:
+        added = await generate(uses, *args)
+        egress.record_failure("127.0.0.1", 9, "fake: connection refused")
+        return added
+
+    monkeypatch.setattr(TargetUses, "add", failing)
+
+    run = explored(app, tmp_path, Scripted(CLICK, CLICK), egress=egress)
+
+    assert (run.outcome, run.exit_code) == ("unreachable", 13)
+    assert written(run)["reasons"] == ["a1: never bound"]
+    assert run.record is not None
+    assert [
+        (line["seq"], line["state"]) for line in read_steps(run.record / "attempt-1")
+    ] == [(0, "intent"), (0, "completed")]
+    assert app.paths() == ["/page/shop"]
+
+
+def test_a_poisoned_steps_journal_mid_turn_exits_15_with_no_dispatch(
+    app: App, tmp_path: Path
+) -> None:
+    runs: list[Run] = []
+
+    def poisoning(messages: Sequence[BaseMessage]) -> Reply:
+        # A write to the attempt's journal fails, before the click's
+        # intent: the journal takes no more lines.
+        part = runs[0].attempt
+        (part.path / "steps.jsonl").chmod(0o444)
+        with pytest.raises(PermissionError):
+            part.step_completed(1, locator_used=None, settled="idle")
+        return CLICK(messages)
+
+    run = explored(app, tmp_path, Scripted(FILL, poisoning), runs=runs)
+
+    assert (run.outcome, run.exit_code) == ("record_error", 15)
+    assert written(run)["reasons"] == [UNWRITTEN, "a1: never bound"]
+    assert run.record is not None
+    assert len(read_steps(run.record / "attempt-1")) == 4
+    assert app.paths() == ["/page/shop", "/did/fill"]

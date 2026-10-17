@@ -127,6 +127,13 @@ SHOWN = f"{ENGINE}=shown:"
 DOCUMENT = f"{ENGINE}=document:"
 
 
+class UnregisteredEngineError(RuntimeError):
+    """A selector engine a browser session needs isn't registered: whoever
+    opened the session skipped `register_identity_engine`, a runner defect
+    an explore run ends on as it ends on a browser it can't launch
+    (ADR-0024's #53 P15b amendment)."""
+
+
 async def register_binding_engine(playwright: Playwright) -> None:
     await playwright.selectors.register(ENGINE, script=SCRIPT, content_script=True)
 
@@ -136,7 +143,7 @@ async def _query(element: ElementHandle, body: str) -> list[ElementHandle]:
         return await element.query_selector_all(f"{ENGINE}={body}")
     except Error as error:
         if f'Unknown engine "{ENGINE}"' in str(error):
-            raise RuntimeError(
+            raise UnregisteredEngineError(
                 "the binding engine isn't registered: call register_identity_engine "
                 "before the browser session opens"
             ) from None
