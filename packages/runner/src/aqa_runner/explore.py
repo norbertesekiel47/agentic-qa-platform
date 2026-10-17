@@ -88,6 +88,10 @@ type Ended = Outcome | Literal["spec_error"]
 _UNMADE: Final = "the run record could not be created; nothing was planned"
 _MINUTES: Final = "the minutes budget ran out"
 _UNSHOWN: Final = "the document still spelled a bound value, so it isn't shown"
+_UNSCANNABLE: Final = (
+    "test secrets: a marker, [SECRET:<name>], spells or completes a bound value, "
+    "so no scan could take it out: rename the secret or change its value"
+)
 # What a phase's uncertain traffic means, plain, then tunnelled.
 _UNCERTAIN: Final = (
     "a request was still being answered when the browser closed",
@@ -222,8 +226,8 @@ def _admit(
     secrets: Mapping[str, BoundSecret],
     redactor: Redactor,
 ) -> None:
-    """`SpecError` naming each place, never its text, where a bound value
-    could reach the model, the browser or the record (ADR-0026, #53 P15c)."""
+    """`SpecError` naming each place where a bound value could reach the model,
+    the browser or the record, each line scanned (ADR-0026's #53 P15c)."""
     spec_id = spec.frontmatter.id
     problems = account_problems(spec, redactor)
     problems.extend(
@@ -243,13 +247,11 @@ def _admit(
         if secret.destination.field != "password"
         and redactor.spells(secret.destination.field.name)
     )
-    if redactor.markers_spell_a_value:
-        problems.append(
-            "test secrets: a marker, [SECRET:<name>], spells a bound value, so no "
-            "scan could take it out: rename the secret or change its value"
-        )
-    if problems:
-        raise SpecError(problems)
+    shown = [redactor.redact(problem) for problem in problems]
+    if redactor.markers_spell_a_value or any(map(redactor.finds, shown)):
+        shown = [_UNSCANNABLE]
+    if shown:
+        raise SpecError(shown)
 
 
 def _places(spec: Spec) -> Iterator[tuple[str, object]]:
@@ -284,7 +286,7 @@ def _made(root: Path, redactor: Redactor) -> tuple[RunRecord, RunRecord] | Explo
     except OSError:
         return _unmade(None)
     except ValueError as error:  # a .aqa or .aqa/runs that is a link
-        raise SpecError([str(error)]) from None
+        raise SpecError([redactor.redact(str(error))]) from None
     try:
         attempt = record.part(PARTS[0])
     except OSError, ValueError:  # in a directory just made: no spec's link
