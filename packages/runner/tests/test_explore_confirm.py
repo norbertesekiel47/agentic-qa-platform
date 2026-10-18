@@ -436,6 +436,31 @@ def test_the_minutes_budget_expiring_mid_confirmation_dispatch_is_exit_4(
     assert not compiled_file(tmp_path).parent.exists()
 
 
+def test_the_minutes_budget_expiring_during_the_confirmations_reset_begins_no_phase(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    limits = deadlines(monkeypatch)
+
+    async def expiring(gate: Any, hook: Reset, start: str, **kwargs: Any) -> None:
+        if app.paths().count("/write/reset"):
+            # The confirmation's reset: the budget runs out while it waits.
+            limits[-1].reschedule(asyncio.get_running_loop().time())
+            await asyncio.sleep(3600)
+        await reset(gate, hook, start, **kwargs)
+
+    monkeypatch.setattr(explore, "reset", expiring)
+
+    run = confirming(app, tmp_path, Scripted(planned(), *PATH))
+
+    assert (run.outcome, run.exit_code) == ("gave_up", 3)
+    document = written(run)
+    assert document["reasons"] == ["the minutes budget ran out"]
+    assert (document["phases"], document["confirmation"]) == ([CLEAN_PHASE], None)
+    assert [name for name in files(run) if name.startswith("confirmation")] == []
+    assert app.paths().count("/write/reset") == 1
+    assert not compiled_file(tmp_path).parent.exists()
+
+
 def test_a_confirmation_journal_that_takes_no_more_lines_exits_15_and_writes_nothing(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
