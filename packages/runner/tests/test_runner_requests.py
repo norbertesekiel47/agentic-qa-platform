@@ -15,6 +15,7 @@ import tracemalloc
 from collections import Counter
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from ipaddress import ip_address
 from pathlib import Path
@@ -30,7 +31,12 @@ from aqa_runner.egress import (
 )
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.loopback_server import LoopbackServer
-from aqa_runner.runner_requests import Method, RunnerResponse, runner_request
+from aqa_runner.runner_requests import (
+    BodyTooLongError,
+    Method,
+    RunnerResponse,
+    runner_request,
+)
 from playwright.async_api import async_playwright
 
 from packages.runner.tests.egress_fixtures import (
@@ -567,3 +573,122 @@ def test_a_runner_request_needs_an_absolute_http_url(url: str) -> None:
     assert resolver.lookups == Counter()
     assert egress.refusals == []
     assert egress.infrastructure_events == []
+
+
+# A body limit, as exploring's probe capture sets it (#53 P20).
+LIMIT = 65_536
+
+
+@dataclass
+class Streamed:
+    """A streaming origin's port, how many body bytes it wrote, whether its
+    client went away before it finished, and when its handler ended."""
+
+    port: int = 0
+    written: int = 0
+    stopped_early: bool = False
+    ended: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+@asynccontextmanager
+async def streaming(framing: str, size: int) -> AsyncIterator[Streamed]:
+    """A loopback origin that answers 200 with a `size`-byte body framed by
+    its `Content-Length` ("length"), by chunks ("chunked") or by its close
+    ("close"), written 64 KiB at a time until its client goes away."""
+    streamed = Streamed()
+
+    async def handle(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+            head = b"HTTP/1.1 200 OK\r\n"
+            if framing == "length":
+                head += b"Content-Length: %d\r\n" % size
+            elif framing == "chunked":
+                head += b"Transfer-Encoding: chunked\r\n"
+            writer.write(head + b"\r\n")
+            left = size
+            while left:
+                part = b"7" * min(LIMIT, left)
+                chunked = framing == "chunked"
+                writer.write(b"%x\r\n%b\r\n" % (len(part), part) if chunked else part)
+                await writer.drain()
+                streamed.written += len(part)
+                left -= len(part)
+            if framing == "chunked":
+                writer.write(b"0\r\n\r\n")
+                await writer.drain()
+            writer.close()
+        except ConnectionError:
+            streamed.stopped_early = True
+        finally:
+            streamed.ended.set()
+
+    async with LoopbackServer(handle) as server:
+        streamed.port = server.port
+        yield streamed
+
+
+def limited(
+    framing: str, size: int
+) -> tuple[RunnerResponse | BodyTooLongError, Streamed, EgressGate, int]:
+    """What a GET with a `LIMIT` got from a `streaming` origin: its response
+    or its refusal; the origin, once its handler ended; the gate; and the
+    peak of the memory traced while the request ran."""
+
+    async def scenario() -> tuple[
+        RunnerResponse | BodyTooLongError, Streamed, EgressGate, int
+    ]:
+        async with streaming(framing, size) as streamed:
+            start = f"http://127.0.0.1:{streamed.port}"
+            egress = gate(allowed=(start,))
+            got: RunnerResponse | BodyTooLongError
+            tracemalloc.start()
+            try:
+                got = await runner_request(egress, "GET", f"{start}/count", limit=LIMIT)
+            except BodyTooLongError as error:
+                got = error
+            finally:
+                _, peak = tracemalloc.get_traced_memory()
+                tracemalloc.stop()
+            await asyncio.wait_for(streamed.ended.wait(), 5)
+            return got, streamed, egress, peak
+
+    return asyncio.run(scenario())
+
+
+FRAMINGS = ["length", "chunked", "close"]
+
+
+@pytest.mark.parametrize("framing", FRAMINGS)
+def test_a_runner_request_reads_a_body_of_exactly_its_limit(framing: str) -> None:
+    got, _, egress, _ = limited(framing, LIMIT)
+
+    assert got == RunnerResponse(HTTPStatus.OK, b"7" * 65_536)
+    assert (egress.refusals, egress.infrastructure_events) == ([], [])
+
+
+@pytest.mark.parametrize("framing", FRAMINGS)
+def test_a_runner_request_refuses_a_body_one_byte_past_its_limit(framing: str) -> None:
+    got, _, egress, _ = limited(framing, LIMIT + 1)
+
+    assert isinstance(got, BodyTooLongError)
+    assert str(got) == "the response's body is over 65536 bytes"
+    # The app's answer, not the gate's: nothing is recorded.
+    assert (egress.refusals, egress.infrastructure_events) == ([], [])
+
+
+@pytest.mark.parametrize("framing", FRAMINGS)
+def test_a_runner_request_stops_reading_a_body_past_its_limit(framing: str) -> None:
+    size = 32 * 2**20
+
+    got, streamed, egress, peak = limited(framing, size)
+
+    assert isinstance(got, BodyTooLongError)
+    assert (egress.refusals, egress.infrastructure_events) == ([], [])
+    # The origin saw its client go away with most of the body unwritten.
+    assert streamed.stopped_early
+    assert streamed.written < size // 2
+    # A kept 32 MiB body would hold all of it, and its copy as much again.
+    assert peak < 2**20
