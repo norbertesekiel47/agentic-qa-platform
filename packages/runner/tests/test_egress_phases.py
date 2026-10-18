@@ -19,7 +19,11 @@ from urllib.parse import urlsplit
 
 import pytest
 from aqa_runner.egress import InfrastructureEvent
-from aqa_runner.egress_proxy import EgressProxy, PhaseTraffic
+from aqa_runner.egress_proxy import (
+    EgressProxy,
+    ListenerUnavailableError,
+    PhaseTraffic,
+)
 from aqa_runner.loopback_server import LoopbackServer
 
 from packages.runner.tests.document_fixtures import until
@@ -919,7 +923,7 @@ def test_ended_traffic_after_a_failed_opening_never_gives_the_previous_phases_co
                 writer.close()
                 with monkeypatch.context() as patch:
                     patch.setattr(LoopbackServer, "__aenter__", no_descriptors)
-                    with pytest.raises(OSError, match="Too many open files"):
+                    with pytest.raises(ListenerUnavailableError, match=UNAVAILABLE):
                         await proxy.begin_phase()
                 with pytest.raises(RuntimeError, match="last phase hasn't ended"):
                     proxy.ended_traffic()
@@ -939,3 +943,56 @@ def test_ended_traffic_before_any_phase_ended_raises() -> None:
                 proxy.ended_traffic()
 
     asyncio.run(scenario())
+
+
+# What a listener that couldn't open says, whatever the OS said.
+UNAVAILABLE = "^the egress listener couldn't start$"
+
+
+def unavailable(monkeypatch: pytest.MonkeyPatch, *, after: int = 0) -> None:
+    """Make every listener after the first `after` fail to open, as one out
+    of file descriptors on an address the OS names does."""
+    enter = LoopbackServer.__aenter__
+    opened: list[LoopbackServer] = []
+
+    async def opening(server: LoopbackServer) -> LoopbackServer:
+        opened.append(server)
+        if len(opened) > after:
+            raise OSError(errno.EMFILE, "Too many open files: 127.0.0.1:4321")
+        return await enter(server)
+
+    monkeypatch.setattr(LoopbackServer, "__aenter__", opening)
+
+
+def test_a_first_phase_whose_listener_cannot_open_raises_fixed_words(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unavailable(monkeypatch)
+
+    async def scenario() -> None:
+        async with EgressProxy(gate(allowed=("http://127.0.0.1:9",))):
+            pytest.fail("the proxy opened")
+
+    with pytest.raises(ListenerUnavailableError, match=UNAVAILABLE) as raised:
+        asyncio.run(scenario())
+
+    assert isinstance(raised.value, OSError)
+    assert (raised.value.errno, raised.value.__cause__) == (None, None)
+    assert raised.value.__suppress_context__ is True
+
+
+def test_a_later_phase_whose_listener_cannot_open_raises_fixed_words(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unavailable(monkeypatch, after=1)
+
+    async def scenario() -> None:
+        async with EgressProxy(gate(allowed=("http://127.0.0.1:9",))) as proxy:
+            await proxy.end_phase()
+            await proxy.begin_phase()
+
+    with pytest.raises(ListenerUnavailableError, match=UNAVAILABLE) as raised:
+        asyncio.run(scenario())
+
+    assert "4321" not in str(raised.value)
+    assert raised.value.__cause__ is None
