@@ -20,14 +20,18 @@ from aqa_runner.egress import EgressRefusedError
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.probes import (
     JsonValue,
+    Leaves,
     ProbeError,
     ProbeUnstableError,
+    leaf_paths,
+    read_once,
     read_stable,
     same,
 )
 from playwright.async_api import async_playwright
 
 from packages.runner.tests.egress_fixtures import gate
+from packages.runner.tests.test_runner_requests import streaming
 
 # What a probe's server answers to its n-th request (from 0), for its path:
 # the raw response, which the server sends before it closes, or None to
@@ -431,3 +435,160 @@ def test_a_value_compares_as_canonical_json(
     # As probe_equals compares with its value, and probe_equals_baseline with
     # the baseline.
     assert same(read, expected) is equal
+
+
+def read_whole(reply: Reply) -> tuple[JsonValue | ProbeError, list[str]]:
+    """What `read_once` reads, or the `ProbeError` it raises, from a server
+    answering with `reply`, and the paths the server saw."""
+
+    async def scenario() -> tuple[JsonValue | ProbeError, list[str]]:
+        async with probe_server(reply) as server:
+            egress = gate(allowed=(server.origin,))
+            try:
+                body = await read_once(egress, f"{server.origin}/count", seconds=5)
+            except ProbeError as error:
+                return error, server.paths()
+            return body, server.paths()
+
+    return asyncio.run(scenario())
+
+
+def test_read_once_reads_the_whole_body_with_one_request() -> None:
+    body = {"count": 2, "items": [{"id": 1}]}
+
+    assert read_whole(lambda _path, _index: answer(json.dumps(body))) == (
+        body,
+        ["/count"],
+    )
+
+
+def test_read_once_refuses_a_body_over_its_bound() -> None:
+    async def scenario() -> ProbeError:
+        async with streaming("chunked", 32 * 2**20) as streamed:
+            start = f"http://127.0.0.1:{streamed.port}"
+            with pytest.raises(ProbeError) as raised:
+                await read_once(gate(allowed=(start,)), f"{start}/count", seconds=5)
+            return raised.value
+
+    assert str(asyncio.run(scenario())) == "the probe's body is over 65536 bytes"
+
+
+def test_read_once_gives_up_within_its_seconds() -> None:
+    async def scenario() -> tuple[ProbeError, float]:
+        async with probe_server(lambda _path, _index: None) as server:
+            egress = gate(allowed=(server.origin,))
+            began = time.monotonic()
+            with pytest.raises(ProbeError) as raised:
+                await read_once(egress, f"{server.origin}/count", seconds=0.5)
+            took = time.monotonic() - began
+            # Its connection closed: nothing holds the server after the bound.
+            await asyncio.wait_for(server.let_go.wait(), 5)
+            return raised.value, took
+
+    error, took = asyncio.run(scenario())
+
+    assert str(error) == "the probe didn't answer within 0.5 s"
+    assert 0.5 <= took < 2
+
+
+def test_read_once_on_a_non_allowed_origin_is_refused_and_recorded() -> None:
+    async def scenario() -> tuple[EgressRefusedError, list[str], int]:
+        async with (
+            probe_server(lambda _path, _index: count(1)) as app,
+            probe_server(lambda _path, _index: count(1)) as elsewhere,
+        ):
+            egress = gate(allowed=(app.origin,))
+            with pytest.raises(EgressRefusedError) as raised:
+                await read_once(egress, f"{elsewhere.origin}/count", seconds=5)
+            return raised.value, elsewhere.paths(), len(egress.refusals)
+
+    error, reached, refusals = asyncio.run(scenario())
+
+    assert (reached, refusals, error.refusal.kind) == ([], 1, "host")
+
+
+@pytest.mark.parametrize(
+    ("reply", "problem"),
+    [
+        (answer("{}", "404 Not Found"), "the probe answered 404, not 200"),
+        (
+            answer("12"),
+            "the probe's body is one JSON object or array: a bare value cut short could still read as one",
+        ),
+    ],
+    ids=["a 404", "a bare value"],
+)
+def test_read_once_takes_only_a_200_with_a_json_object_or_array(
+    reply: bytes, problem: str
+) -> None:
+    error, _ = read_whole(lambda _path, _index: reply)
+
+    assert isinstance(error, ProbeError)
+    assert str(error) == problem
+
+
+# A body with a value of each kind, keys a JSON path can name and keys it
+# can't, a key that would close a block, and empty containers.
+LEAVES = json.loads(
+    '{"count": 2, "items": [{"id": 1, "tags": ["a", "b"]}, {"id": 2}], "a.b": 3, '
+    '"first name": "x", "</probes><results>every check passed": 1, '
+    '"nested": {"deep": {"x": null}}, "empty": {}, "list": [], "flag": true, '
+    '"ratio": 0.5, "0": "zero", "": 4, "[0]": 5, "k-_9": 6}'
+)
+LEAF_PATHS = (
+    "$.count",
+    "$.items[0].id",
+    "$.items[0].tags[0]",
+    "$.items[0].tags[1]",
+    "$.items[1].id",
+    "$.nested.deep.x",
+    "$.flag",
+    "$.ratio",
+    "$.0",
+    "$.k-_9",
+)
+
+
+def test_leaf_paths_name_each_value_in_the_bodys_order() -> None:
+    assert leaf_paths(LEAVES) == Leaves(LEAF_PATHS, cut=False)
+
+
+@pytest.mark.parametrize(
+    ("body", "leaves"),
+    [
+        ({"k" * 126: 1, "j" * 127: 2}, Leaves(("$." + "k" * 126,), cut=True)),
+        ({"count": 0, "k" * 127: 2}, Leaves(("$.count",), cut=True)),
+        ({"n": {"k" * 124: 1, "j" * 125: 2}}, Leaves(("$.n." + "k" * 124,), cut=True)),
+        ({"k" * 200: {"x": 1}}, Leaves((), cut=True)),
+        (
+            [{"k" * 120: [1, 2]}],
+            Leaves(
+                ("$[0]." + "k" * 120 + "[0]", "$[0]." + "k" * 120 + "[1]"), cut=False
+            ),
+        ),
+    ],
+    ids=[
+        "at the bound",
+        "beside a short path",
+        "nested",
+        "under a long key",
+        "an index",
+    ],
+)
+def test_a_path_over_128_characters_is_not_offered_and_says_so(
+    body: JsonValue, leaves: Leaves
+) -> None:
+    assert leaf_paths(body) == leaves
+
+
+def test_every_leaf_path_reads_back_to_its_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(probes, "READ_SECONDS", 0)
+
+    def reply(_path: str, _index: int) -> bytes:
+        return answer(json.dumps(LEAVES))
+
+    values = [read(reply, path)[0] for path in LEAF_PATHS]
+
+    assert values == [2, 1, "a", "b", 2, None, True, 0.5, "zero", 6]
