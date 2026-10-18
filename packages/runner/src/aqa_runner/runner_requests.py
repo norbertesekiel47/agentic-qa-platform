@@ -30,8 +30,22 @@ class RunnerResponse:
     body: bytes
 
 
+class BodyTooLongError(Exception):
+    """A response whose body ran past its request's `limit`: the read
+    stopped there and the connection closed. The app's answer, not the
+    gate's, so the gate records nothing."""
+
+    def __init__(self, limit: int) -> None:
+        super().__init__(f"the response's body is over {limit} bytes")
+
+
 async def runner_request(
-    gate: EgressGate, method: Method, url: str, *, keep_body: bool = True
+    gate: EgressGate,
+    method: Method,
+    url: str,
+    *,
+    keep_body: bool = True,
+    limit: int | None = None,
 ) -> RunnerResponse:
     """Send `method` to the absolute http or https `url` through `gate`, and
     read the response. Raises ValueError, before any connection, for a URL
@@ -45,7 +59,9 @@ async def runner_request(
     It has no deadline of its own past the gate's for connecting, its TLS
     handshake included: a caller bounds it with `asyncio.timeout`. Without
     `keep_body`, the response is still read to its end, and its body comes
-    back empty, so a long one holds no memory."""
+    back empty, so a long one holds no memory. With a `limit`, a body
+    longer than `limit` bytes raises `BodyTooLongError` as soon as a read
+    passes it, before those bytes are kept."""
     parts = urlsplit(url)
     origin = parse_origin(f"{parts.scheme}://{parts.netloc}")
     host, port = authority(origin)
@@ -83,19 +99,26 @@ async def runner_request(
     try:
         await upstream.send(request)
         await upstream.send(h11.EndOfMessage())
-        return await _response(upstream, keep_body=keep_body)
+        return await _response(upstream, keep_body=keep_body, limit=limit)
     finally:
         writer.close()
 
 
-async def _response(upstream: Upstream, *, keep_body: bool) -> RunnerResponse:
-    """The final response, past any 1xx, with its body when `keep_body`."""
+async def _response(
+    upstream: Upstream, *, keep_body: bool, limit: int | None
+) -> RunnerResponse:
+    """The final response, past any 1xx, with its body when `keep_body`,
+    read only up to `limit` bytes."""
     head = await upstream.next()
     while not isinstance(head, h11.Response):
         head = await upstream.next()
     body = bytearray()
+    read = 0
     # After a response head, h11 gives Data until the EndOfMessage.
     while isinstance(event := await upstream.next(), h11.Data):
+        read += len(event.data)
+        if limit is not None and read > limit:
+            raise BodyTooLongError(limit)
         if keep_body:
             body += event.data
     return RunnerResponse(head.status_code, bytes(body))
