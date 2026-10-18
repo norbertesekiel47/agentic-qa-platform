@@ -22,6 +22,7 @@ from aqa_core.compiled import (
     FillSecret,
     Step,
     Target,
+    json_path_steps,
 )
 from aqa_core.config import ModelRoleName, ProjectConfig
 from aqa_core.coverage_plan import (
@@ -43,7 +44,6 @@ from aqa_core.schema import Contract, NonEmpty, StrictModel
 from aqa_core.spec import Spec
 
 _ASSERTION: Final[TypeAdapter[Assertion]] = TypeAdapter(Assertion)
-_PROBES: Final = frozenset({"probe_equals", "probe_equals_baseline"})
 _STEP: Final[TypeAdapter[Step]] = TypeAdapter(Step)
 # Until #54 infers the flag from evidence, every compiled step is a
 # side-effect step (ADR-0025: false needs positive evidence).
@@ -55,6 +55,7 @@ _COMPILER_FIELDS: Final = frozenset(
     {"seq", "target", "side_effect", "side_effect_basis", "satisfies"}
 )
 _NOT_ITS_CONTRACT: Final = "its target's subject contract isn't its meaning's"
+_NO_PATH: Final = "reads a probe, but is bound to no JSON path of it"
 _LOADER: Final = "the compiled script doesn't pass the loader's checks (DATA_MODEL §7, \"Checked by the loader\")"
 
 
@@ -66,13 +67,30 @@ class CompileError(Exception):
         self.problems = tuple(problems)
 
 
+@dataclass(frozen=True)
+class ProbePath:
+    """Where a `probe_equals` check reads its probe's response: a JSON path
+    (`aqa_core.compiled.JsonPath`), one of the options exploring offered it.
+    ValueError for any other text."""
+
+    json_path: str
+
+    def __post_init__(self) -> None:
+        json_path_steps(self.json_path)
+
+
 def assertion_for(
-    check_id: str, expect_index: int, check: PlannedCheck, *, target: str | None = None
+    check_id: str,
+    expect_index: int,
+    check: PlannedCheck,
+    *,
+    target: str | None = None,
+    json_path: str | None = None,
 ) -> Assertion:
     """The assertion `check` compiles to, reading the target named `target`
-    when its type reads an element. A `visible_unoccluded` check must fit the
-    viewport and have a size (DATA_MODEL §7); a `probe_equals` needs the JSON
-    path exploring doesn't bind yet (#53 P20)."""
+    when its type reads an element, or its probe's value at `json_path` for a
+    `probe_equals`. A `visible_unoccluded` check must fit the viewport and
+    have a size (DATA_MODEL §7)."""
     fields: dict[str, object] = {
         "id": check_id,
         "expect_index": expect_index,
@@ -80,20 +98,22 @@ def assertion_for(
     }
     if target is not None:
         fields["target"] = target
+    if json_path is not None:
+        fields["json_path"] = json_path
     if check.check == "visible_unoccluded":
         fields |= {"min_size_px": (1, 1), "in_viewport": True}
     return _ASSERTION.validate_python(fields)
 
 
 def unsupported_features(plan: CoveragePlan) -> tuple[str, ...]:
-    """A line for each probe check and each required condition in `plan`,
-    which exploring can't compile yet (ADR-0024's D35): explore refuses such
-    a plan before the browser opens."""
+    """A line for each baseline probe check and each required condition in
+    `plan`, which exploring can't compile yet (ADR-0024's D35): explore
+    refuses such a plan before the browser opens."""
     return (
         *(
             f"{check_id} (expect[{index}], {check.check}): exploring can't compile a {check.check} check yet"
             for check_id, (index, check) in planned_checks(plan).items()
-            if check.check in _PROBES
+            if check.check == "probe_equals_baseline"
         ),
         *(
             f'requires {condition.id} ("{condition.condition}"): exploring can\'t keep a required condition in the path yet'
@@ -164,12 +184,13 @@ class PathStep:
 @dataclass(frozen=True)
 class ExploredPath:
     """What one attempt explored: its steps by the number it gave each, the
-    numbers `finish` kept, and each planned check it bound, by ID, to the
-    target the check reads, or to None for a check that reads no element."""
+    numbers `finish` kept, and each planned check it bound, by ID, to what
+    the check reads: a target, a probe's JSON path, or None for a check that
+    reads neither."""
 
     steps: Mapping[int, PathStep]
     kept: Sequence[int]
-    bound: Mapping[str, Target | None]
+    bound: Mapping[str, Target | ProbePath | None]
 
 
 class Provenance(StrictModel):
@@ -258,9 +279,15 @@ def _invalid(error: str, loc: tuple[int | str, ...]) -> str:
 
 
 def _binding_problem(
-    check: PlannedCheck, target: Target | None, contracts: Mapping[str, Contract | None]
+    check: PlannedCheck,
+    target: Target | ProbePath | None,
+    contracts: Mapping[str, Contract | None],
 ) -> str | None:
     """What's wrong with binding `check` to `target`, if anything."""
+    if check.check == "probe_equals":
+        return None if isinstance(target, ProbePath) else _NO_PATH
+    if isinstance(target, ProbePath):
+        return "reads no probe, but is bound to a JSON path"
     if check.target_meaning is None:
         return None if target is None else "reads no element, but is bound to one"
     if target is None:
@@ -278,15 +305,15 @@ def _assertions(
     has_steps: bool,
 ) -> tuple[list[Assertion], list[str]]:
     """Each bound check's assertion, in plan order, and what's wrong with the
-    checks. Probe checks are `unsupported_features`' to name."""
+    checks. Baseline checks are `unsupported_features`' to name."""
     assertions: list[Assertion] = []
     problems: list[str] = []
     if path.bound.keys() - planned_checks(plan).keys():
         problems.append("the path binds a check ID the plan doesn't have")
     for check_id, (index, check) in planned_checks(plan).items():
         where = f"{check_id} (expect[{index}], {check.check})"
-        if check.check in _PROBES:
-            if check.check == "probe_equals_baseline" and not has_steps:
+        if check.check == "probe_equals_baseline":
+            if not has_steps:
                 problems.append(
                     f"{where}: a path with no steps has no step to capture its baseline before"
                 )
@@ -298,8 +325,15 @@ def _assertions(
         if problem := _binding_problem(check, target, contracts):
             problems.append(f"{where}: {problem}")
             continue
-        name = None if target is None else _named(names, target)
-        assertions.append(assertion_for(check_id, index, check, target=name))
+        assertions.append(
+            assertion_for(
+                check_id,
+                index,
+                check,
+                target=_named(names, target) if isinstance(target, Target) else None,
+                json_path=target.json_path if isinstance(target, ProbePath) else None,
+            )
+        )
     return assertions, problems
 
 

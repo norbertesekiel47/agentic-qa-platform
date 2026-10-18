@@ -135,7 +135,6 @@ def test_unsupported_features_name_each_probe_check_and_condition() -> None:
     )
 
     assert unsupported_features(probing) == (
-        "a2 (expect[1], probe_equals): exploring can't compile a probe_equals check yet",
         (
             "a3 (expect[1], probe_equals_baseline): exploring can't compile a "
             "probe_equals_baseline check yet"
