@@ -152,6 +152,14 @@ class EgressBlocks:
         return bool(self.refused) or self.overflowed
 
 
+class ListenerUnavailableError(OSError):
+    """A phase's listener couldn't open, in fixed words: never a host, a
+    port or the operating system's error, so a caller may print it."""
+
+    def __init__(self) -> None:
+        super().__init__("the egress listener couldn't start")
+
+
 @dataclass(frozen=True)
 class PhaseTraffic:
     """What a phase's browser connections left uncertain when it ended: plain
@@ -234,7 +242,9 @@ class EgressProxy:
             await self._end(self._phase, kind, error, trace)
 
     async def begin_phase(self) -> None:
-        """Open a phase: a new listener, on a new port."""
+        """Open a phase: a new listener, on a new port. A listener that
+        can't open raises `ListenerUnavailableError`, as the first phase's
+        does on entry."""
         if not self._entered:
             raise RuntimeError("the egress proxy serves only inside `async with`")
         await self._open_phase()
@@ -247,7 +257,10 @@ class EgressProxy:
         listener = LoopbackServer(
             partial(self._serve, phase), on_retired=partial(self._retired, phase)
         )
-        await listener.__aenter__()
+        try:
+            await listener.__aenter__()
+        except OSError:
+            raise ListenerUnavailableError from None
         phase.listener, phase.port = listener, listener.port
         self._phase = phase
 

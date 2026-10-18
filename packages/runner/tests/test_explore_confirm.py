@@ -24,7 +24,7 @@ from aqa_core.project import load_compiled, load_config
 from aqa_core.spec import Reset
 from aqa_runner import executor, explore, settling
 from aqa_runner.chat_client import ChatClient
-from aqa_runner.egress_proxy import EgressProxy
+from aqa_runner.egress_proxy import EgressProxy, ListenerUnavailableError
 from aqa_runner.explore import Explored
 from aqa_runner.loopback_server import LoopbackServer
 from aqa_runner.model_router import ModelRouter
@@ -61,6 +61,7 @@ from packages.runner.tests.test_describe_parts import (
     PARTS_PAGES,
     favorite_in,
 )
+from packages.runner.tests.test_egress_phases import UNAVAILABLE, unavailable
 from packages.runner.tests.test_explore_graph import (
     ACCOUNT,
     ASSERT,
@@ -527,11 +528,23 @@ def test_a_confirmation_listener_that_cannot_open_propagates_and_publishes_nothi
 
     monkeypatch.setattr(LoopbackServer, "__aenter__", second_unavailable)
 
-    with pytest.raises(OSError, match="Too many open files"):
+    with pytest.raises(ListenerUnavailableError, match=UNAVAILABLE):
         confirming(app, tmp_path, Scripted(planned(), *PATH))
 
     assert len(opened) == 2
     assert app.paths() == [*PASS, "/write/reset"]
+    assert not compiled_file(tmp_path).parent.exists()
+
+
+def test_an_attempt_listener_that_cannot_open_propagates_before_any_browser(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unavailable(monkeypatch)
+
+    with pytest.raises(ListenerUnavailableError, match=UNAVAILABLE):
+        confirming(app, tmp_path, Scripted(planned(), *PATH))
+
+    assert app.paths() == []
     assert not compiled_file(tmp_path).parent.exists()
 
 
