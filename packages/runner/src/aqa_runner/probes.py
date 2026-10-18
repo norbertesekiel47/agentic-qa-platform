@@ -17,13 +17,14 @@ import asyncio
 import json
 import math
 from collections.abc import Sequence
+from dataclasses import dataclass
 from http import HTTPStatus
 
 from aqa_core.compiled import json_path_steps
 from aqa_core.spec import canonical_hash
 
 from aqa_runner.egress import EgressGate
-from aqa_runner.runner_requests import runner_request
+from aqa_runner.runner_requests import BodyTooLongError, RunnerResponse, runner_request
 
 # How long reading a probe until its value holds still may take, every
 # request included, and how long apart its reads are (ADR-0024's #48
@@ -35,6 +36,14 @@ READ_SECONDS = 0.5
 # compiled script's (`aqa_core.project`): deeper, and comparing two values
 # could run out of stack (#48's security review).
 DEEPEST_JSON = 256
+
+# What exploring reads of a probe to offer its JSON paths, and what one probe
+# offers (ADR-0025's #53 P20 amendment): a body of at most 64 KiB, cut off
+# while it is read; paths of at most 128 characters, so a long key can't
+# fill every request; and at most 100 of them.
+OFFERED_BYTES = 65_536
+OFFERED_PATH_CHARS = 128
+OFFERED_PATHS = 100
 
 type JsonValue = (
     bool | int | float | str | list[JsonValue] | dict[str, JsonValue] | None
@@ -94,13 +103,77 @@ async def read_stable(gate: EgressGate, url: str, json_path: str) -> JsonValue:
         ) from None
 
 
+async def read_once(gate: EgressGate, url: str, *, seconds: float) -> JsonValue:
+    """The probe at `url`'s whole body, read once within `seconds`, for
+    exploring to offer its JSON paths: not a value to compare, so it is never
+    read until it holds still. `ProbeError` as `read_stable` gives it, and
+    for a body over `OFFERED_BYTES`, whose read stops there; the gate's
+    errors pass through."""
+    limit = asyncio.timeout(seconds)
+    try:
+        async with limit:
+            response = await runner_request(gate, "GET", url, limit=OFFERED_BYTES)
+    except TimeoutError:
+        if not limit.expired():
+            raise  # not the read's own bound
+        raise ProbeError(f"the probe didn't answer within {seconds:g} s") from None
+    except BodyTooLongError:
+        raise ProbeError(f"the probe's body is over {OFFERED_BYTES} bytes") from None
+    return _body(response)
+
+
+@dataclass(frozen=True)
+class Leaves:
+    """The JSON path of each value in a probe's body that is no object or
+    array, in the body's order, of at most `OFFERED_PATH_CHARS`; and whether
+    the body holds a key or an index whose path is longer, so that what it
+    holds has no path here."""
+
+    paths: tuple[str, ...]
+    cut: bool
+
+
+def leaf_paths(body: JsonValue) -> Leaves:
+    """The `Leaves` of `body`. A value under a key no JSON path can name
+    (`aqa_core.compiled.json_path_steps`) has none."""
+    paths: list[str] = []
+    cut = False
+    stack: list[tuple[str, JsonValue]] = [("$", body)]
+    while stack:
+        path, value = stack.pop()
+        if isinstance(value, dict):
+            children = [(f"{path}.{k}", v) for k, v in value.items() if _named(k)]
+        elif isinstance(value, list):
+            children = [(f"{path}[{i}]", v) for i, v in enumerate(value)]
+        else:
+            paths.append(path)
+            continue
+        # A child's descendants' paths are longer still.
+        kept = [child for child in children if len(child[0]) <= OFFERED_PATH_CHARS]
+        cut = cut or len(kept) < len(children)
+        stack.extend(reversed(kept))
+    return Leaves(tuple(paths), cut=cut)
+
+
+def _named(key: str) -> bool:
+    """Whether a JSON path's `.name` step names `key`, and only it."""
+    try:
+        return json_path_steps(f"$.{key}") == (key,)
+    except ValueError:
+        return False
+
+
 async def _read(gate: EgressGate, url: str, json_path: str) -> JsonValue:
     """One read: the probe's response, its body parsed, `json_path`'s
     value."""
-    response = await runner_request(gate, "GET", url)
+    return _select(_body(await runner_request(gate, "GET", url)), json_path)
+
+
+def _body(response: RunnerResponse) -> JsonValue:
+    """A probe's response's body, parsed, when it answered 200."""
     if response.status != HTTPStatus.OK:
         raise ProbeError(f"the probe answered {response.status}, not 200")
-    return _select(_parsed(response.body), json_path)
+    return _parsed(response.body)
 
 
 def _parsed(body: bytes) -> JsonValue:
