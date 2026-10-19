@@ -13,9 +13,9 @@ check requires. Only a run that will call a model needs the provider's key. With
 `--plan-only`, one call on the navigator role writes the plan into the run
 record, with every response's cost record.
 
-Everything this module prints goes through `_say`, which scans the whole
-text with the run's test secrets once they are bound, and writes none of a
-text that still spells one (ADR-0026)."""
+Everything this module prints goes through `_rendered`, which scans the whole
+text with the run's test secrets once they are bound; a text that still spells
+one is never written, nor are a run's two streams if their join does (ADR-0026)."""
 
 import asyncio
 import contextlib
@@ -143,14 +143,20 @@ def _visible(text: str) -> str:
 def _say(
     scan: Redactor, *lines: str, err: bool = False, withheld: Sequence[str] = ()
 ) -> None:
-    """Write `lines` to stdout, or to stderr with `err`, as one text: each
-    line scanned whole with `scan`, so a bound value a join spells is found,
-    then escaped (`_visible`), and the escaped text scanned whole again,
-    since escaping and the line breaks can spell one too (ADR-0026's A2
-    amendment, as `redaction.error_text`). A text that still spells one, as
-    a marker does when the value is in its secret's name, is never written:
-    the `withheld` lines are, each escaped before its check, less any that
-    spells one, and only the last, the caller's status, if their join does.
+    """Write `_rendered`'s text to stdout, or to stderr with `err`, if any."""
+    if text := _rendered(scan, lines, withheld):
+        typer.echo(text, err=err)
+
+
+def _rendered(scan: Redactor, lines: Sequence[str], withheld: Sequence[str]) -> str:
+    """`lines` as one text: each line scanned whole with `scan`, so a bound
+    value a join spells is found, then escaped (`_visible`), and the escaped
+    text scanned whole again, since escaping and the line breaks can spell
+    one too (ADR-0026's A2 amendment, as `redaction.error_text`). A text
+    that still spells one, as a marker does when the value is in its
+    secret's name, is never returned; `_fallback` returns the `withheld`
+    lines instead, each escaped before its check, less any that spells one,
+    and only the last, the caller's status, if their join does.
 
     `scan` holds the run's test secrets once `bound_secrets` gave them. It
     is empty where none is bound: before then (usage, the spec, the
@@ -158,12 +164,13 @@ def _say(
     out the account and the reset hook; and for a script kept up to date,
     with no run at all."""
     text: str = scan.redact("\n".join(_visible(scan.redact(line)) for line in lines))
-    if scan.finds(text):
-        kept = [w for w in map(_visible, withheld) if not scan.finds(w)]
-        text = "\n".join(kept)
-        text = kept[-1] if scan.finds(text) else text
-    if text:
-        typer.echo(text, err=err)
+    return _fallback(scan, withheld) if scan.finds(text) else text
+
+
+def _fallback(scan: Redactor, withheld: Sequence[str]) -> str:
+    kept = [w for w in map(_visible, withheld) if not scan.finds(w)]
+    text = "\n".join(kept)
+    return kept[-1] if scan.finds(text) else text
 
 
 def _stop(
@@ -551,7 +558,9 @@ def _said(
     didn't compile, and "non-resumable" whenever a side effect's outcome is
     unknown, whatever the exit (D42), alone if the rest is withheld. Then,
     on stderr, a published script's warning, each reason the run's document
-    gives and where its egress record is, and exit with the run's code."""
+    gives and where its egress record is, and exit with the run's code. If
+    the two streams' texts, joined as `2>&1` writes them, spell a bound value,
+    each gets the fallback, and stderr nothing if the fallbacks' join does."""
     document = explored.document
     published = document.get("published")
     facts = [f"{seconds:.1f}s", f"${explored.cost}"]
@@ -563,18 +572,21 @@ def _said(
     if document.get("non_resumable"):
         facts.append("non-resumable")
         withheld.append("non-resumable")
-    lines = [f"{explored.outcome} {spec_id}: {', '.join(facts)}"]
-    if not explored.exit_code:
-        _say(scan, *lines, withheld=withheld)
-        lines = []
+    status = [f"{explored.outcome} {spec_id}: {', '.join(facts)}"]
+    stdout, stderr = ([], status) if explored.exit_code else (status, [])
     if published == "unconfirmed":
-        lines.append(_UNCONFIRMED.format(path=target))
-    lines.extend(f"  {reason}" for reason in _reasons(document))
+        stderr.append(_UNCONFIRMED.format(path=target))
+    stderr.extend(f"  {reason}" for reason in _reasons(document))
     if document.get("egress") is not None and explored.record is not None:
         saved = "is" if explored.egress_saved else "couldn't be saved to"
-        lines.append(f"  the egress record {saved} {explored.record / 'egress.json'}")
-    if lines:
-        _say(scan, *lines, err=True, withheld=withheld)
+        stderr.append(f"  the egress record {saved} {explored.record / 'egress.json'}")
+    out, err = _rendered(scan, stdout, withheld), _rendered(scan, stderr, withheld)
+    if out and err and scan.finds(f"{out}\n{err}"):
+        out = err = _fallback(scan, withheld)
+        err = "" if scan.finds(f"{out}\n{err}") else err
+    for text, to_stderr in ((out, False), (err, True)):
+        if text:
+            typer.echo(text, err=to_stderr)
     if explored.exit_code:
         raise typer.Exit(explored.exit_code)
 
