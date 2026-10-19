@@ -420,6 +420,7 @@ def test_a_request_past_the_runs_limit_is_refused_before_it_is_sent(
 EARLIER = {
     "spent": "0.66",
     "nothing": "0",
+    "no_overrun_field": "0",
     "unknown": None,
     "negative": "-1",
     "minus_infinity": "-Infinity",
@@ -441,6 +442,8 @@ def test_a_request_past_the_rounds_limit_is_refused_before_it_is_sent(
     before.mkdir(parents=True)
     if EARLIER[earlier] is not None:
         spend = {"spent_usd": EARLIER[earlier], "overrun": earlier == "overran"}
+        if earlier == "no_overrun_field":
+            del spend["overrun"]
         (before / "receipt.json").write_text(json.dumps({"spend": spend}))
     if earlier == "nothing":
         # An earlier attempt refused before it spent anything leaves the round.
@@ -715,22 +718,38 @@ def test_an_explore_capture_withholds_a_key_in_its_plan_or_a_turn(
     ]
 
 
+@pytest.mark.parametrize("failing", ["removal", "stat"])
 def test_a_scrub_that_fails_tries_every_other_name_and_says_so(
     provider: Start,
     library: Path,
     attempt: Path,
     monkeypatch: pytest.MonkeyPatch,
+    failing: str,
 ) -> None:
     # A plan spill reaches the compiled script as well as the run record.
     provider(spilled("plan"))
-    rmtree = shutil.rmtree
+    if failing == "removal":
+        rmtree = shutil.rmtree
 
-    def refuse(path: Path, *args: Any, **kwargs: Any) -> None:
-        if Path(path).name == ".aqa":
-            raise OSError("fake disk failure")
-        rmtree(path, *args, **kwargs)
+        def refuse(path: Path, *args: Any, **kwargs: Any) -> None:
+            if Path(path).name == ".aqa":
+                raise OSError("fake disk failure")
+            rmtree(path, *args, **kwargs)
 
-    monkeypatch.setattr(shutil, "rmtree", refuse)
+        monkeypatch.setattr(shutil, "rmtree", refuse)
+    else:
+        # The spec root can't be searched while the attempt is finished, so
+        # neither name under it can be looked at.
+        finish = recorder.finish
+
+        def unsearchable(*args: Any) -> None:
+            (attempt / "qa").chmod(0o600)
+            try:
+                finish(*args)
+            finally:
+                (attempt / "qa").chmod(0o755)
+
+        monkeypatch.setattr(recorder, "finish", unsearchable)
 
     with pytest.raises(ValueError, match="error"):
         record(EXPLORE, attempt, library=library)
@@ -739,11 +758,13 @@ def test_a_scrub_that_fails_tries_every_other_name_and_says_so(
     assert (kept["outcome"], kept["finalization_failures"], kept["scrubbed"]) == (
         "error",
         ["scrub"],
-        [f"{EXPLORE}.yaml", "qa/.compiled"],
+        [f"{EXPLORE}.yaml", *(["qa/.compiled"] if failing == "removal" else [])],
     )
-    assert {Path(name).parts[:2] for name in holding_the_key(attempt)} == {
-        ("qa", ".aqa")
-    }
+    assert {Path(name).parts[:2] for name in holding_the_key(attempt)} == (
+        {("qa", ".aqa")}
+        if failing == "removal"
+        else {("qa", ".aqa"), ("qa", ".compiled")}
+    )
     assert (library / f"{EXPLORE}.yaml").read_text() == PREVIOUS
 
 
