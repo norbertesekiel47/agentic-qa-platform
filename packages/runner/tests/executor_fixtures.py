@@ -365,6 +365,9 @@ class App:
     # Each POST's path and body, in order.
     bodies: list[tuple[str, bytes]] = field(default_factory=list)
     probes: dict[str, list[object]] = field(default_factory=dict)
+    # What `/probe/<name>` answers on each read in place of `probes`' count:
+    # a raw JSON body, or a status with no body; the last answer repeats.
+    probe_bodies: dict[str, list[bytes | int]] = field(default_factory=dict)
     probe_reads: dict[str, int] = field(default_factory=dict)
     cookies: list[tuple[str, str | None]] = field(default_factory=list)
 
@@ -439,8 +442,16 @@ class _Handler(BaseHTTPRequestHandler):
         with self.app.arrived:
             index = self.app.probe_reads.get(name, 0)
             self.app.probe_reads[name] = index + 1
-            values = self.app.probes[name]
-            value = values[min(index, len(values) - 1)] if values else index
+            bodies = self.app.probe_bodies.get(name, [])
+            values = [] if bodies else self.app.probes[name]
+        if bodies:
+            body = bodies[min(index, len(bodies) - 1)]
+            if isinstance(body, int):
+                self._empty(body)
+            else:
+                self._send("application/json", body)
+            return
+        value = values[min(index, len(values) - 1)] if values else index
         self._send(
             "application/json",
             json.dumps({"count": value}).encode(),

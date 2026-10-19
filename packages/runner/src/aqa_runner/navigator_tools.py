@@ -3,7 +3,8 @@ attempt's seven actions through its browser session, each dispatched as
 replay dispatches a step (`executor.dispatched`), `describe_parts`, which
 lists an element's parts for the next call (`navigator_parts`), and its three
 check tools, which bind each planned check to its target, a part included,
-evaluate it as the confirmation will, and compile the path. A call refused
+or a `probe_equals` check to one of its probe's options (#53 P20), evaluate
+it as the confirmation will, and compile the path. A call refused
 before its intent is a tool error the attempt survives; a step dispatched
 without its completion on disk ends the attempt, and no tool does any work
 after it. Every text a tool returns is fixed words, plan text and
@@ -19,6 +20,7 @@ from aqa_core.compiler import (
     CompileError,
     ExploredPath,
     PathStep,
+    ProbePath,
     Provenance,
     assertion_for,
     compile_script,
@@ -54,6 +56,7 @@ from aqa_runner.navigator import (
     Finish,
     Navigate,
     NoteForAbsence,
+    Offered,
     Press,
     Reload,
     Select,
@@ -96,9 +99,6 @@ _REFUSED = (
     Error,
 )
 
-# The checks exploring can't bind until #53 P20.
-_PROBES = frozenset({"probe_equals", "probe_equals_baseline"})
-
 
 @dataclass(frozen=True)
 class ActionResult:
@@ -121,18 +121,21 @@ class Finished:
 
 @dataclass(frozen=True)
 class _Bound:
-    """A planned check's binding: the target it reads, or None for a check
-    that reads no element, and its last evaluation in the attempt."""
+    """A planned check's binding: what it reads, a target or a probe's JSON
+    path, or None for a check that reads neither, and its last evaluation in
+    the attempt."""
 
-    target: Target | None
+    reads: Target | ProbePath | None
     result: AssertionResult
 
 
 def _misfit(call: AssertCheck, check: PlannedCheck) -> str | None:
     """Why `call` can't bind `check` as written."""
     named = call.check_id
-    if check.check in _PROBES:
+    if check.check == "probe_equals_baseline":
         return f"{named} is a {check.check} check, which exploring can't bind yet"
+    if check.check == "probe_equals":
+        return None  # its ref names an option (`_option`)
     if check.check == "not_visible" and call.ref is not None:
         return (
             f"{named} is a not_visible check: note its element with "
@@ -152,11 +155,12 @@ class Attempt:
     run's start origin and frozen plan, each planned meaning's contract
     (`contracts_by_meaning`), the secrets it binds and its `budget`, the
     run's `resolve_seconds`, the spec, project config and egress gate its
-    checks are evaluated and compiled with, and `interrupted`, whether the
-    run has an egress block or an infrastructure event. It keeps its completed
-    actions by step number, as compiling takes them (`ExploredPath`), its
-    last observation, and each planned check's binding: the target it reads
-    and its last evaluation. A run whose admission couldn't keep its secrets
+    checks are evaluated and compiled with, `interrupted`, whether the run
+    has an egress block or an infrastructure event, and what the probes its
+    checks read offer it (`offered`). It keeps its completed actions by step
+    number, as compiling takes them (`ExploredPath`), its last observation,
+    and each planned check's binding: what it reads and its last
+    evaluation. A run whose admission couldn't keep its secrets
     is `ValueError`, before any use of the browser."""
 
     session: BrowserSession
@@ -170,6 +174,7 @@ class Attempt:
     config: ProjectConfig
     gate: EgressGate
     interrupted: Callable[[], bool]
+    offered: Offered = field(default_factory=Offered)
     steps: dict[int, PathStep] = field(init=False, default_factory=dict)
     observation: Redacted | None = field(init=False, default=None)
     _uses: dict[str, TargetUses] = field(init=False, default_factory=dict)
@@ -300,7 +305,8 @@ class Attempt:
 
     async def check(self, call: AssertCheck) -> Redacted:
         """`assert_check`: bind the planned check to the element `call.ref`
-        names, through its meaning's targets (`uses`), or to none, then
+        names, through its meaning's targets (`uses`), a `probe_equals`
+        check to the option it names (`_option`), or a check to none, then
         evaluate it once on the page now. A binding is kept whatever its
         outcome; a refusal binds nothing and changes no earlier binding."""
         if problem := self._unrunnable("assert_check", call):
@@ -309,11 +315,17 @@ class Attempt:
         if problem := _misfit(call, check):
             return self._said(f"assert_check did not run: {problem}")
         try:
-            target = await self._target(call, check)
+            reads = (
+                self._option(call, check)
+                if check.check == "probe_equals"
+                else await self._target(call, check)
+            )
         except _REFUSED as error:
             reason = reasons.reason(error, self.session.redactor)
             return self._said(f"assert_check did not run: {reason}")
-        (result,) = await self._kept({call.check_id: target})
+        if isinstance(reads, str):
+            return self._said(f"assert_check did not run: {reads}")
+        (result,) = await self._kept({call.check_id: reads})
         return self._said(
             f"{call.check_id} is bound, and on this page it is {assertion_words(result)}"
         )
@@ -350,7 +362,7 @@ class Attempt:
         problem are one tool error the attempt survives."""
         if problem := self._unrunnable("finish", call):
             return Finished(None, self._said(problem))
-        bound = {check_id: each.target for check_id, each in self._bound.items()}
+        bound = {check_id: each.reads for check_id, each in self._bound.items()}
         failing = [
             f"{result.id} is {assertion_words(result)}"
             for result in await self._kept(bound)
@@ -483,6 +495,25 @@ class Attempt:
         await session.secret_refusal(element, secret)
         return target, lambda: session.fill_secret(element, secret)
 
+    def _option(self, call: AssertCheck, check: PlannedCheck) -> ProbePath | str:
+        """The JSON path of the option `call.ref` names, or why it can't bind
+        `check`: it isn't one of the check's probe's options, or its path
+        holds a bound value, which no compiled script may."""
+        option = self.offered.options.get(call.ref or "")
+        if option is None:
+            return (
+                f"{call.check_id} reads probe {check.probe}: call it with the ref "
+                "of one of that probe's options in the probes block"
+            )
+        if option.probe != check.probe:
+            return (
+                f"{call.ref} is an option of probe {option.probe}, and "
+                f"{call.check_id} reads probe {check.probe}"
+            )
+        if self.session.redactor.finds(option.json_path):
+            return f"{call.ref}'s path holds a test secret's value, so no check can read it"
+        return ProbePath(option.json_path)
+
     async def _target(self, call: AssertCheck, check: PlannedCheck) -> Target | None:
         """The target `check` reads: none for a check that reads no element;
         a not_visible check's, where its element was noted; else the one the
@@ -508,7 +539,7 @@ class Attempt:
         return await seen_element(self.session, self.observation or "", ref)
 
     async def _kept(
-        self, bindings: Mapping[str, Target | None]
+        self, bindings: Mapping[str, Target | ProbePath | None]
     ) -> tuple[AssertionResult, ...]:
         """Evaluate each binding's check once on the page now, in plan order,
         with every locator of its target, as the confirmation does
@@ -518,13 +549,16 @@ class Attempt:
         targets = {
             check_id: target
             for check_id in ordered
-            if (target := bindings[check_id]) is not None
+            if isinstance(target := bindings[check_id], Target)
         }
         assertions = [
             assertion_for(
                 check_id,
                 *plan[check_id],
                 target=check_id if check_id in targets else None,
+                json_path=read.json_path
+                if isinstance(read := bindings[check_id], ProbePath)
+                else None,
             )
             for check_id in ordered
         ]
