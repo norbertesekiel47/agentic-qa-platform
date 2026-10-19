@@ -92,6 +92,10 @@ HEADROOM_TOKENS = 1024
 # protocol trace (printed by its Python side), its driver's debug log and
 # debug file, its inspector, and its driver's full error output.
 LOUD = ("DEBUGP", "DEBUG", "DEBUG_FILE", "PWDEBUG", "PWDEBUGIMPL")
+# What a withheld explore response can reach under the attempt once the SDK
+# has it: the attempt's cassette, whose later requests carry it, and the
+# run's record and compiled script under its spec root.
+SCRUBBED = (f"{EXPLORE}.yaml", "qa/.aqa", "qa/.compiled")
 
 
 class SpendRefusedError(Exception):
@@ -161,11 +165,9 @@ class Allowance:
         # its run on a call that got no response.
         if self.held is not None and self.held.body == body:
             return
-        if self.held is not None:
-            # The request before got no response: it keeps its worst case.
-            self.spent += self.held.usd
-            self.held = None
-        held = self.reserve(body)
+        # One request at a time: while one is held, unanswered or in flight,
+        # another is refused, and the held one keeps its worst case.
+        held = self.reserve(body) if self.held is None else None
         if (
             self.overrun
             or held is None
@@ -609,22 +611,27 @@ def admitting(vcr: Any, capture: Capture, allowance: Allowance) -> None:
 
 
 def scrub(attempt: Path, state: AttemptState) -> list[str]:
-    """Remove what a withheld explore response reached once the SDK had it,
-    since VCR withholds only the copy it keeps: the attempt's cassette, whose
-    later requests carry it, and the run's record and compiled script."""
+    """Remove what a withheld explore response reached once the SDK had it
+    (SCRUBBED), since VCR withholds only the copy it keeps. Each name is
+    tried whatever happened to the one before."""
     removed: list[str] = []
-    try:
-        for name in (f"{EXPLORE}.yaml", "qa/.aqa", "qa/.compiled"):
-            path = attempt / name
+    failed = False
+    for name in SCRUBBED:
+        path = attempt / name
+        try:
             if path.is_dir():
                 shutil.rmtree(path)
             elif path.exists():
                 path.unlink()
             else:
                 continue
-            removed.append(name)
-    except OSError:
-        # The receipt is still written; the failure is its own category.
+        except OSError:
+            # The rest are still tried and the receipt still written; the
+            # failure is its own category.
+            failed = True
+            continue
+        removed.append(name)
+    if failed:
         state.finalization_failures.append("scrub")
     return removed
 
@@ -652,6 +659,7 @@ def finish(
         or not all(response["request_id"] for response in capture.responses)
     ):
         state.outcome = "rejected"
+    # Each later outcome wins over the ones above it.
     if state.ending is not None and state.ending["outcome"] == "no_response":
         state.outcome = "provider_error"
     if capture.allowance is not None and capture.allowance.refused:
