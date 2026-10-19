@@ -332,6 +332,51 @@ def test_two_probes_number_their_options_on_from_each_other_in_plan_order(
     assert run.exit_code == 0
 
 
+def test_a_probe_of_exactly_100_values_offers_them_all(
+    app: App, tmp_path: Path
+) -> None:
+    app.probe_bodies["count"] = [json.dumps(list(range(100))).encode()]
+    client = Scripted(planned(COUNTED), check("o3"), FINISH)
+
+    run = probed(app, tmp_path, client, COUNT)
+
+    listing = blocks(client, "probes")[0]
+    assert listing is not None
+    lines = listing.split("\n")
+    assert (len(lines), lines[0], lines[99]) == (
+        100,
+        "o1 count $[0]",
+        "o100 count $[99]",
+    )
+    assert (run.outcome, run.exit_code) == ("compiled", 0)
+
+
+def test_a_refusal_met_at_the_capture_stops_before_the_browser_and_is_exit_6(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gates: list[EgressGate] = []
+
+    def recording(policy: EgressPolicy) -> EgressGate:
+        gates.append(EgressGate(policy))
+        return gates[-1]
+
+    async def refused(*_: object, **__: object) -> probes.JsonValue:
+        raise gates[0].record_refusal("analytics.example.test", 80, "host", "fake")
+
+    monkeypatch.setattr(explore, "EgressGate", recording)
+    monkeypatch.setattr(probes, "read_once", refused)
+    client = Scripted(planned(COUNTED))
+
+    run = probed(app, tmp_path, client, COUNT)
+
+    assert (run.outcome, run.exit_code) == ("egress_blocked", 6)
+    assert written(run)["reasons"] == [
+        "probe count offers no option: the probe request was refused by the egress policy",
+        "a1: never bound",
+    ]
+    assert (len(client.requests), app.paths()) == (1, [])
+
+
 NO_OPTION = (
     "probe count offers no option: its response has {} values that a JSON path of "
     "at most 128 characters names, and an attempt offers 1 to 100"

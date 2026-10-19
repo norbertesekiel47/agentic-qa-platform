@@ -473,6 +473,20 @@ def test_read_once_refuses_a_body_over_its_bound() -> None:
     assert str(asyncio.run(scenario())) == "the probe's body is over 65536 bytes"
 
 
+def test_read_once_passes_a_timeout_that_isnt_its_own_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Only the read's own bound becomes a ProbeError.
+    async def times_out(*_: object, **__: object) -> None:
+        raise TimeoutError
+
+    monkeypatch.setattr(probes, "runner_request", times_out)
+    egress = gate(allowed=("http://127.0.0.1:9",))
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(read_once(egress, "http://127.0.0.1:9/count", seconds=5))
+
+
 def test_read_once_gives_up_within_its_seconds() -> None:
     async def scenario() -> tuple[ProbeError, float]:
         async with probe_server(lambda _path, _index: None) as server:
@@ -560,6 +574,7 @@ def test_leaf_paths_name_each_value_in_the_bodys_order() -> None:
         ({"count": 0, "k" * 127: 2}, Leaves(("$.count",), cut=True)),
         ({"n": {"k" * 124: 1, "j" * 125: 2}}, Leaves(("$.n." + "k" * 124,), cut=True)),
         ({"k" * 200: {"x": 1}}, Leaves((), cut=True)),
+        ({"j" * 200: 1, "a": {"x": 1}}, Leaves(("$.a.x",), cut=True)),
         (
             [{"k" * 120: [1, 2]}],
             Leaves(
@@ -572,6 +587,7 @@ def test_leaf_paths_name_each_value_in_the_bodys_order() -> None:
         "beside a short path",
         "nested",
         "under a long key",
+        "before an object whose paths are short",
         "an index",
     ],
 )
