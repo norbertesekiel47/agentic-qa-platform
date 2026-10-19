@@ -25,7 +25,7 @@ from aqa_core.project import load_compiled, load_spec, subject_contracts
 from aqa_core.spec import Spec
 from aqa_runner import executor, explore, sandbox, settling
 from aqa_runner.bound_secrets import bound_secrets
-from aqa_runner.browser_session import BrowserSession, open_browser_session
+from aqa_runner.browser_session import BrowserSession, prepared_session
 from aqa_runner.document_origins import PolicyEvent
 from aqa_runner.egress import EgressGate
 from aqa_runner.egress_proxy import EgressProxy
@@ -357,13 +357,13 @@ def test_the_phase_counts_the_policy_events_its_session_recorded(
 ) -> None:
     @asynccontextmanager
     async def watched(*args: Any, **kwargs: Any) -> AsyncIterator[BrowserSession]:
-        async with open_browser_session(*args, **kwargs) as session:
+        async with prepared_session(*args, **kwargs) as session:
             session.policy_events.add(
                 PolicyEvent("navigation", "http://elsewhere.example.test/", None)
             )
             yield session
 
-    monkeypatch.setattr(explore, "open_browser_session", watched)
+    monkeypatch.setattr(explore, "prepared_session", watched)
 
     run = explored(app, tmp_path, Scripted(REFUSED))
 
@@ -413,7 +413,12 @@ def test_a_successful_reset_comes_before_the_engines_the_browser_and_step_0(
 
         return spy
 
-    for name in ("reset", "register_identity_engine", "open_browser_session"):
+    for name in (
+        "reset",
+        "register_identity_engine",
+        "launched_browser",
+        "prepared_session",
+    ):
         monkeypatch.setattr(explore, name, spied(name))
 
     run = explored(
@@ -423,7 +428,12 @@ def test_a_successful_reset_comes_before_the_engines_the_browser_and_step_0(
         preconditions="  reset: { http: POST /write/reset }\n",
     )
 
-    assert calls == ["reset", "register_identity_engine", "open_browser_session"]
+    assert calls == [
+        "reset",
+        "register_identity_engine",
+        "launched_browser",
+        "prepared_session",
+    ]
     assert app.records[0] == ("POST", "/write/reset", [])
     assert app.records[1][:2] == ("GET", "/page/shop")
     assert [line["state"] for line in app.records[1][2]] == ["intent"]
@@ -503,9 +513,9 @@ def test_a_session_with_another_redactor_is_refused(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def unscanned(*args: Any, **kwargs: Any) -> Any:
-        return open_browser_session(*args, **(kwargs | {"redactor": Redactor([])}))
+        return prepared_session(*args, **(kwargs | {"redactor": Redactor([])}))
 
-    monkeypatch.setattr(explore, "open_browser_session", unscanned)
+    monkeypatch.setattr(explore, "prepared_session", unscanned)
 
     with pytest.raises(
         ValueError, match=r"^the browser session must scan with the run's redactor$"
