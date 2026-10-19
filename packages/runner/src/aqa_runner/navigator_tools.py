@@ -557,8 +557,8 @@ class Attempt:
     ) -> tuple[AssertionResult, ...]:
         """Evaluate each binding's check once on the page now, in plan order,
         with every locator of its target, as the confirmation does
-        (`evaluate_each`), and keep the binding with its result, and a
-        probe path whose result isn't a pass as its check's for good."""
+        (`evaluate_each`), and keep the binding with its result. A probe
+        path whose result isn't a pass stays its check's (`_pinned`)."""
         plan = planned_checks(self.plan)
         ordered = [check_id for check_id in plan if check_id in bindings]
         targets = {

@@ -10,13 +10,14 @@ import json
 from collections.abc import Awaitable, Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Unpack
+from typing import Unpack
 
 import pytest
 from aqa_core.compiled import CompiledScript
 from aqa_core.compiler import Provenance
 from aqa_core.coverage_plan import CoveragePlan
 from aqa_runner import probes
+from aqa_runner.egress import EgressGate
 from aqa_runner.navigator import AssertCheck, Finish, Offered, ProbeOption
 from aqa_runner.navigator_tools import Attempt
 
@@ -294,7 +295,7 @@ KEPT = {
 
 
 @pytest.mark.parametrize(
-    ("bodies", "moves", "seen", "reads"), KEPT.values(), ids=KEPT.keys()
+    ("bodies", "moves", "expected", "reads"), KEPT.values(), ids=KEPT.keys()
 )
 def test_a_probe_check_that_didnt_pass_keeps_its_option(
     app: App,
@@ -302,12 +303,12 @@ def test_a_probe_check_that_didnt_pass_keeps_its_option(
     *,
     bodies: list[bytes | int],
     moves: list[Move],
-    seen: list[object],
+    expected: list[object],
     reads: int,
 ) -> None:
     app.probe_bodies["count"] = bodies
 
-    assert probing(app, tmp_path, played(moves), offered=TWO_KEYS) == seen
+    assert probing(app, tmp_path, played(moves), offered=TWO_KEYS) == expected
     assert app.probe_reads == {"count": reads}
 
 
@@ -318,11 +319,13 @@ def test_a_probe_check_that_timed_out_keeps_its_option(
     stable = probes.read_stable
     calls: list[str] = []
 
-    async def unstable_once(*args: Any) -> probes.JsonValue:
-        calls.append(args[2])
+    async def unstable_once(
+        gate: EgressGate, url: str, json_path: str
+    ) -> probes.JsonValue:
+        calls.append(json_path)
         if len(calls) == 1:
             raise probes.ProbeUnstableError("fake: never held still")
-        return await stable(*args)
+        return await stable(gate, url, json_path)
 
     monkeypatch.setattr(probes, "read_stable", unstable_once)
     moves: list[Move] = [("a1", "o1"), ("a1", "o2"), None]

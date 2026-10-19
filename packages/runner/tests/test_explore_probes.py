@@ -539,10 +539,14 @@ def test_admission_refuses_a_probe_whose_query_spells_a_bound_value(
     assert (client.requests, app.paths()) == ([], [])
 
 
+# Offers o1 for the count, which isn't 2, and o2 for a decoy key that holds 2.
+DECOY = b'{"count": 3, "other": 2}'
+
+
 def test_a_failed_probe_check_is_refused_another_option_and_publishes_nothing(
     app: App, tmp_path: Path
 ) -> None:
-    app.probe_bodies["count"] = [b'{"count": 3, "other": 2}']
+    app.probe_bodies["count"] = [DECOY]
     client = Scripted(planned(COUNTED), check("o1"), check("o2"), FINISH)
     budget = ProjectConfig.model_validate({"budgets": {"actions_per_attempt": 3}})
 
@@ -567,7 +571,7 @@ def test_a_failed_probe_check_is_refused_another_option_and_publishes_nothing(
 
 
 def test_an_option_bound_first_publishes_its_path(app: App, tmp_path: Path) -> None:
-    app.probe_bodies["count"] = [b'{"count": 3, "other": 2}']
+    app.probe_bodies["count"] = [DECOY]
     client = Scripted(planned(COUNTED), check("o2"), FINISH)
 
     run = probed(app, tmp_path, client, RESET + COUNT)
