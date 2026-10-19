@@ -23,6 +23,7 @@ from aqa_runner.egress import EgressGate
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.executor import NAVIGATION_SECONDS
 from aqa_runner.locator_generation import register_identity_engine
+from aqa_runner.navigator import Offered
 from aqa_runner.navigator_tools import Attempt
 from aqa_runner.redaction import Redactor
 from aqa_runner.run_record import RunRecord
@@ -70,8 +71,9 @@ class Run(TypedDict, total=False):
     """How an attempt's run is set up, past its start origin: the page it
     starts on (the form by default), its egress gate (one allowing only the
     start origin by default), the secrets it binds, its plan and contracts,
-    its `resolve_seconds`, and its project config (an empty one by
-    default)."""
+    its `resolve_seconds`, its project config (an empty one by default),
+    the probes its spec declares, and what they offer the attempt (nothing
+    by default)."""
 
     page: str
     egress: EgressGate
@@ -80,6 +82,8 @@ class Run(TypedDict, total=False):
     contracts: Mapping[str, Contract | None]
     budget: float
     config: ProjectConfig
+    probes: dict[str, str]
+    offered: Offered
 
 
 def explored[T](
@@ -131,13 +135,14 @@ def explored[T](
                     run.get("contracts", {}),
                     {secret.name: secret for secret in secrets},
                     budget,
-                    a_spec(tmp_path, config, start_url=page),
+                    a_spec(tmp_path, config, start_url=page, probes=run.get("probes")),
                     config,
                     run_gate,
                     lambda: (
                         bool(run_gate.infrastructure_events)
                         or proxy.egress_blocks(expected).blocked
                     ),
+                    offered=run.get("offered", Offered()),
                 )
                 await session.navigate(f"{start}{page}")
                 await attempt.observe()
