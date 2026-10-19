@@ -124,10 +124,9 @@ async def read_once(gate: EgressGate, url: str, *, seconds: float) -> JsonValue:
 
 @dataclass(frozen=True)
 class Leaves:
-    """The JSON path of each value in a probe's body that is no object or
-    array, in the body's order, of at most `OFFERED_PATH_CHARS`; and whether
-    the body holds a key or an index whose path is longer, so that what it
-    holds has no path here."""
+    """The JSON path, of at most `OFFERED_PATH_CHARS`, of each value in a
+    probe's body that is no object or array, in the body's order; and whether
+    the body holds a key or an index whose path is longer, which is `cut`."""
 
     paths: tuple[str, ...]
     cut: bool

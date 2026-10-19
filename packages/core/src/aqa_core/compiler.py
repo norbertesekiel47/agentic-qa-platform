@@ -184,9 +184,8 @@ class PathStep:
 @dataclass(frozen=True)
 class ExploredPath:
     """What one attempt explored: its steps by the number it gave each, the
-    numbers `finish` kept, and each planned check it bound, by ID, to what
-    the check reads: a target, a probe's JSON path, or None for a check that
-    reads neither."""
+    numbers `finish` kept, and each planned check it bound, by ID, to the
+    target or probe JSON path the check reads, or to None when it reads neither."""
 
     steps: Mapping[int, PathStep]
     kept: Sequence[int]

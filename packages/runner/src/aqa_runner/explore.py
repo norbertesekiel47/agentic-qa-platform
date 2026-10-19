@@ -7,11 +7,11 @@ record's `attempt-1` part, and the frozen plan it explores by. In order,
 each stop with its exit code (API.md §7):
 
 1. Open the egress proxy. Within the minutes budget: send the spec's reset
-   hook (14), read once each probe a `probe_equals` check reads, for the
-   options it offers (3 for one that offers none), register the selector
-   engines, open the browser (10, and 10 for an engine left unregistered),
-   load the start URL as step 0, and, unless something stopped or
-   interrupted the run, take the navigator's turns (`explore_turns`).
+   hook (14), register the selector engines, open the browser (10, and 10
+   for an engine left unregistered), load the start URL as step 0, and,
+   unless something stopped or interrupted the run, take the navigator's
+   turns (`explore_turns`). Between the reset and the engines, each probe a
+   `probe_equals` check reads is read once for its options (3 for none).
 2. Close the browser and end the phase (14 for uncertain traffic). When the
    attempt compiled a path and nothing stopped or interrupted it, drop
    every locator that spells a bound value (3 for a target left with
@@ -54,18 +54,13 @@ from aqa_core.schema import Contract
 from aqa_core.spec import Spec
 from playwright.async_api import Playwright
 
-from aqa_runner import executor, probes, reasons
+from aqa_runner import egress, executor, navigator, probes, reasons
 from aqa_runner.anthropic_client import ProviderError
 from aqa_runner.binding import UnregisteredEngineError
 from aqa_runner.bound_secrets import BoundSecret, bound_secrets
 from aqa_runner.browser_session import BrowserSession, open_browser_session
 from aqa_runner.coverage_plan import Planned, judge, make_plan
-from aqa_runner.egress import (
-    EgressGate,
-    EgressRefusedError,
-    EgressUpstreamError,
-    egress_policy,
-)
+from aqa_runner.egress import EgressGate, egress_policy
 from aqa_runner.egress_proxy import EgressProxy, PhaseTraffic
 from aqa_runner.evaluation import AssertionResult
 from aqa_runner.explore_result import (
@@ -92,13 +87,7 @@ from aqa_runner.explore_turns import (
 )
 from aqa_runner.locator_generation import register_identity_engine
 from aqa_runner.model_router import ModelCallError, ModelRouter
-from aqa_runner.navigator import (
-    Offered,
-    ProbeOption,
-    account_problems,
-    navigator_prefix,
-    spec_view,
-)
+from aqa_runner.navigator import account_problems, navigator_prefix, spec_view
 from aqa_runner.navigator_tools import Attempt
 from aqa_runner.publication import (
     Publication,
@@ -665,10 +654,10 @@ async def _phase(
     proxy: EgressProxy,
     interrupted: Callable[[], bool],
 ) -> tuple[Mapping[str, AssertionResult | None], int]:
-    """Reset, read the probes' options, open the browser, load the start URL
-    and take the turns, all within the minutes budget: each planned check's
-    last evaluation, None while never bound, kept however the phase ended,
-    and how many policy events the session recorded."""
+    """Reset, open the browser, load the start URL and take the turns, all
+    within the minutes budget: each planned check's last evaluation, None
+    while never bound, kept however the phase ended, and how many policy
+    events the session recorded. The probes are read after the reset."""
     session: BrowserSession | None = None
     attempt: Attempt | None = None
     limit = timeout_at(run.deadline)
@@ -678,10 +667,7 @@ async def _phase(
     async with AsyncExitStack() as browser:
         try:
             async with limit:
-                if (
-                    await _reset(run)
-                    and (offered := await _offered(run, explorable.plan)) is not None
-                ):
+                if await _reset(run) and (offered := await _offered(run, explorable)):
                     await register_identity_engine(run.playwright)
                     session = await browser.enter_async_context(
                         open_browser_session(
@@ -714,16 +700,16 @@ async def _phase(
     return checks, 0 if session is None else session.policy_events.total
 
 
-async def _offered(run: Run, plan: CoveragePlan) -> Offered | None:
+async def _offered(run: Run, explorable: Explorable) -> navigator.Offered | None:
     """What the probes `probe_equals` checks read offer: their values' JSON
     paths, each read once now, after the reset and before the browser,
     numbered o1, o2, ... in the plan's order (ADR-0025's #53 P20
     amendment). None, with the run's stop, when a probe offers none."""
-    options: dict[str, ProbeOption] = {}
+    options: dict[str, navigator.ProbeOption] = {}
     cut: list[str] = []
     for name in dict.fromkeys(
         check.probe
-        for _, check in planned_checks(plan).values()
+        for _, check in planned_checks(explorable.plan).values()
         if check.check == "probe_equals" and check.probe is not None
     ):
         leaves = await _leaves(run, name)
@@ -731,12 +717,12 @@ async def _offered(run: Run, plan: CoveragePlan) -> Offered | None:
             run.stopped("gave_up", f"probe {name} offers no option: {leaves}")
             return None
         options |= {
-            f"o{n}": ProbeOption(name, path)
+            f"o{n}": navigator.ProbeOption(name, path)
             for n, path in enumerate(leaves.paths, start=len(options) + 1)
         }
         if leaves.cut:
             cut.append(name)
-    return Offered(options, tuple(cut))
+    return navigator.Offered(options, tuple(cut))
 
 
 async def _leaves(run: Run, name: str) -> probes.Leaves | str:
@@ -745,7 +731,11 @@ async def _leaves(run: Run, name: str) -> probes.Leaves | str:
     seconds = run.config.budgets.resolve_seconds
     try:
         body = await probes.read_once(run.gate, url, seconds=seconds)
-    except (probes.ProbeError, EgressRefusedError, EgressUpstreamError) as error:
+    except (
+        probes.ProbeError,
+        egress.EgressRefusedError,
+        egress.EgressUpstreamError,
+    ) as error:
         return reasons.reason(error, run.redactor)
     leaves = probes.leaf_paths(body)
     if not 0 < len(leaves.paths) <= probes.OFFERED_PATHS:
@@ -777,10 +767,10 @@ def _attempt(
     session: BrowserSession,
     explorable: Explorable,
     interrupted: Callable[[], bool],
-    offered: Offered,
+    offered: navigator.Offered,
 ) -> Attempt:
     """The attempt the navigator acts through, interrupted as `interrupted`
-    says, with what the probes offered. The project's `resolve_seconds` bound its looks and the session's
+    says. The project's `resolve_seconds` bound its looks and the session's
     actions, and navigation keeps the executor's bound, as replay's does."""
     seconds = run.config.budgets.resolve_seconds
     session.limit_waits(
