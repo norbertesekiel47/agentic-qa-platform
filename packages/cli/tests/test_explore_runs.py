@@ -266,7 +266,7 @@ def test_the_spend_budget_gives_up_with_exit_3(
     root = tmp_path / "qa"
     args = [str(shop(root)), "--url", "http://127.0.0.1:4100"]
 
-    result = explore(
+    result = unlaunched(
         monkeypatch, [*args, "--budget", "model_usd=0.003"], Scripted(planned())
     )
 
@@ -633,11 +633,12 @@ def test_a_stale_script_is_explored_again(
     assert load_compiled(target, ProjectConfig()).spec_hash == spec_hash
 
 
-# A sign-in page that shows the password typed into it.
+# A sign-in page that shows the password typed into it, and the shop's
+# unsaved status, which the plan's check reads false.
 REFLECTS = (
     '<label>Password <input type="password" '
     "oninput=\"document.querySelector('#said').textContent = this.value\"></label>"
-    '<p id="said">nothing typed</p>'
+    '<p id="said">nothing typed</p><p id="status">Not saved</p>'
 )
 FILL_SECRET = tool(
     "fill_secret",
@@ -654,7 +655,7 @@ def test_explore_diagnostics_hold_no_secret_copy(
 ) -> None:
     monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
     monkeypatch.setitem(PAGES, "reflects", REFLECTS)
-    client = Scripted(planned(), FILL_SECRET, REFUSED)
+    client = Scripted(planned(), FILL_SECRET, ASSERT_NOW, REFUSED)
     spec = shop(
         tmp_path / "qa", preconditions=ACCOUNT, config=SECRETS, page="/page/reflects"
     )
@@ -662,6 +663,7 @@ def test_explore_diagnostics_hold_no_secret_copy(
     result = explore(monkeypatch, on(app, spec), client)
 
     assert result.exit_code == 3, result.output
+    assert result.stderr.endswith("\n  the model refused its turn\n  a1: failed\n")
     assert copies_found(FAKE_VALUE, texts=[result.stdout, result.stderr]) == []
     # The page did show it: the next request held its marker.
     assert "[SECRET:TEST_PASSWORD]" in client.requests[2][-1].text
