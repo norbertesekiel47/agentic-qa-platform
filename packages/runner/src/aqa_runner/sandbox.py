@@ -266,7 +266,7 @@ async def launch_with_observations(
             f"Chromium's sandbox can't start on this host. {fixes[0]}"
         ) from error
     async with AsyncExitStack() as on_failure:
-        on_failure.push_async_callback(browser.close)
+        on_failure.push_async_callback(close_while_raising, browser)
         observed, problems = await _observe(browser)
         # A check that read nothing has proved nothing.
         if problems or observed is None:
@@ -279,11 +279,32 @@ async def launch_with_observations(
     return browser, observed
 
 
+# Playwright 1.63's error for a browser closed after its driver exited, as a
+# terminal's Ctrl-C makes it exit: the driver shares the runner's process
+# group (`_impl/_transport.py:166`, named by `_connection.py`'s
+# `wrap_api_call`). Its type is `Exception` itself.
+DRIVER_GONE = ("Browser.close: Connection closed while reading from the driver",)
+
+
+async def close_while_raising(browser: Browser) -> None:
+    """Close `browser` while an error or a cancellation propagates: a close
+    that fails only because Playwright's driver has gone (`DRIVER_GONE`)
+    leaves it to go on. Any other failure of the close raises (#204)."""
+    try:
+        await browser.close()
+    except Exception as error:
+        # Only that exact type and text: a Playwright `Error` with the same
+        # words, or any other failure, is the close's own and raises.
+        if type(error) is not Exception or error.args != DRIVER_GONE:
+            raise
+
+
 async def check_sandbox(browser: Browser) -> list[str]:
     """Why the browser's renderers can't be shown to be sandboxed; empty when
     they are. The browser must have been launched on this host, not connected
     to. A renderer exists only once a page does, so the check opens a blank
-    page in a context of its own and closes it before returning."""
+    page in a context of its own and closes it before returning; when the
+    check raises, the browser's close takes that context (#204)."""
     _, problems = await _observe(browser)
     return problems
 
@@ -291,12 +312,10 @@ async def check_sandbox(browser: Browser) -> list[str]:
 async def _observe(browser: Browser) -> tuple[SandboxObservations | None, list[str]]:
     """`check_sandbox`, which also returns what the check observed."""
     context = await browser.new_context()
-    try:
-        await context.new_page()
-        browser_pid, renderer_pids = await _process_ids(browser)
-        return check_processes(browser_pid, renderer_pids)
-    finally:
-        await context.close()
+    await context.new_page()
+    checked = check_processes(*await _process_ids(browser))
+    await context.close()
+    return checked
 
 
 async def _process_ids(browser: Browser) -> tuple[int, list[int]]:
@@ -307,10 +326,8 @@ async def _process_ids(browser: Browser) -> tuple[int, list[int]]:
     so the check never guesses from the process tree, where a renderer's
     parent is the zygote, not the browser."""
     session = await browser.new_browser_cdp_session()
-    try:
-        info = await session.send("SystemInfo.getProcessInfo")
-    finally:
-        await session.detach()
+    info = await session.send("SystemInfo.getProcessInfo")
+    await session.detach()
     processes = [
         (str(process["type"]), int(process["id"])) for process in info["processInfo"]
     ]

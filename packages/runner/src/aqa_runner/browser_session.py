@@ -15,7 +15,7 @@ from typing import Literal, overload
 
 from aqa_core.browser import BrowserSettings
 from aqa_core.compiled import NetworkNone, NetworkSeen, Target
-from playwright.async_api import ElementHandle, Error, Frame, Page
+from playwright.async_api import Browser, ElementHandle, Error, Frame, Page
 
 from aqa_runner import keys, settling, snapshot_refs
 from aqa_runner.bound_secrets import BoundSecret
@@ -54,6 +54,7 @@ from aqa_runner.sandbox import (
     OTHER_FIX,
     Chromium,
     SandboxUnavailableError,
+    close_while_raising,
     launch,
 )
 from aqa_runner.secret_fields import (
@@ -893,11 +894,27 @@ async def open_browser_session(
     settings: BrowserSettings = PINNED_SETTINGS,
     redactor: Redactor = NO_SECRETS,
 ) -> AsyncIterator[BrowserSession]:
-    """Launch a fresh browser through the sandbox check, open one page with
-    `settings`, downloads and service workers refused, and every request
-    through routing and `egress`, the run's egress proxy, and close the
-    browser, its temporary profile with it, when the session ends."""
-    proxy = egress.url  # an egress proxy that isn't serving fails before a launch
+    """Launch a fresh browser through the sandbox check (`launched_browser`),
+    open one page with `settings`, downloads and service workers refused,
+    and every request through routing and `egress`, the run's egress proxy
+    (`prepared_session`), and close the browser, its temporary profile with
+    it, when the session ends."""
+    _ = egress.url  # an egress proxy that isn't serving fails before a launch
+    async with (
+        launched_browser(chromium) as browser,
+        prepared_session(
+            browser, egress=egress, settings=settings, redactor=redactor
+        ) as session,
+    ):
+        yield session
+
+
+@asynccontextmanager
+async def launched_browser(chromium: Chromium) -> AsyncIterator[Browser]:
+    """A fresh browser launched through the sandbox check, closed when this
+    ends. A launch or check that fails is a `SandboxUnavailableError`. While
+    an error or a cancellation propagates, a close that fails only because
+    Playwright's driver has gone leaves it to go on (#204)."""
     try:
         browser = await launch(chromium)
     except (Error, KeyError, ValueError, OSError) as error:
@@ -905,6 +922,29 @@ async def open_browser_session(
             "Chromium could not be launched or its sandbox checked "
             f"({type(error).__name__}). {HOST_FIXES.get(sys.platform, OTHER_FIX)}"
         ) from error
+    try:
+        yield browser
+    except BaseException:
+        await close_while_raising(browser)
+        raise
+    await browser.close()
+
+
+@asynccontextmanager
+async def prepared_session(
+    browser: Browser,
+    *,
+    egress: EgressProxy,
+    settings: BrowserSettings = PINNED_SETTINGS,
+    redactor: Redactor = NO_SECRETS,
+) -> AsyncIterator[BrowserSession]:
+    """The session of one new page in a new context of `browser`, as
+    `open_browser_session` prepares it. A Playwright `Error` as it is
+    prepared, Chromium exiting after its check included, is a
+    `SandboxUnavailableError` naming its class only (#204). The context
+    closes once the session has ended normally; an error or a cancellation
+    leaves it to the browser's close, so no close of it takes their place."""
+    proxy = egress.url
     try:
         width, height = settings.viewport
         # https://playwright.dev/python/docs/api/class-browser#browser-new-context
@@ -935,6 +975,10 @@ async def open_browser_session(
         page = await context.new_page()
         # Before the page's first navigation.
         observers = await Observers.watch(page, egress.policy)
-        yield BrowserSession(page, egress.policy, observers, redactor)
-    finally:
-        await browser.close()
+    except Error as error:
+        raise SandboxUnavailableError(
+            "Chromium's session couldn't be prepared after its sandbox check "
+            f"({type(error).__name__})"
+        ) from error
+    yield BrowserSession(page, egress.policy, observers, redactor)
+    await context.close()
