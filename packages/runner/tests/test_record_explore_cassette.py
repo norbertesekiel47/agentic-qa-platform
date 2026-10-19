@@ -3,6 +3,7 @@ real Chromium from a local stand-in for the provider, with a fake key, within
 the recording's spend bound. No test here reaches a provider."""
 
 import json
+import logging
 import os
 import shutil
 import socketserver
@@ -13,11 +14,14 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import yaml
 from aqa_core.config import ProjectConfig
+from aqa_core.model_roles import resolve_roles
+from aqa_core.price_map import vendored
 from aqa_core.spec import Spec
 
 from packages.runner.tests import record_cassettes as recorder
@@ -301,6 +305,82 @@ def test_every_explore_interaction_is_priced_once(
     }
 
 
+# The bound's own model, and a request body of 50 bytes, whose worst case is
+# 1,074 input tokens and 4,096 output at $2 and $10 a million.
+MODEL = resolve_roles(recorder.FIXTURE_CONFIG, vendored())["navigator"].model
+SMALL = json.dumps({"model": "claude-sonnet-5-5", "max_tokens": 4096}).encode()
+
+
+def sent(body: bytes | None) -> SimpleNamespace:
+    """A request as VCR's request filter hands it over."""
+    return SimpleNamespace(body=body)
+
+
+@pytest.mark.parametrize(
+    ("limit", "admitted"), [("0.043108", True), ("0.043107", False)]
+)
+def test_the_bound_admits_a_request_whose_worst_case_reaches_its_limit_exactly(
+    limit: str, admitted: bool
+) -> None:
+    bound = recorder.Allowance(MODEL, Decimal(limit), recorder.ROUND_USD)
+
+    if admitted:
+        bound.admit(sent(SMALL))
+    else:
+        with pytest.raises(recorder.SpendRefusedError):
+            bound.admit(sent(SMALL))
+
+    assert bound.receipt() == {
+        "run_usd": limit,
+        "round_left_usd": "0.699946",
+        "spent_usd": "0.043108" if admitted else "0",
+        "refused": not admitted,
+        "overrun": False,
+    }
+
+
+UNPRICEABLE: dict[str, bytes | None] = {
+    "not_json": b"not json",
+    "not_an_object": b"[]",
+    "no_body": None,
+    "another_model": json.dumps(
+        {"model": "claude-opus-5-5", "max_tokens": 4096}
+    ).encode(),
+    "no_max_tokens": json.dumps({"model": "claude-sonnet-5-5"}).encode(),
+    "max_tokens_a_bool": json.dumps(
+        {"model": "claude-sonnet-5-5", "max_tokens": True}
+    ).encode(),
+    "max_tokens_zero": json.dumps(
+        {"model": "claude-sonnet-5-5", "max_tokens": 0}
+    ).encode(),
+    "max_tokens_past_the_adapters": json.dumps(
+        {"model": "claude-sonnet-5-5", "max_tokens": 4097}
+    ).encode(),
+}
+
+
+@pytest.mark.parametrize("body", UNPRICEABLE)
+def test_the_bound_refuses_a_request_it_cannot_price(body: str) -> None:
+    bound = recorder.Allowance(MODEL, recorder.RUN_USD, recorder.ROUND_USD)
+
+    with pytest.raises(recorder.SpendRefusedError):
+        bound.admit(sent(UNPRICEABLE[body]))
+
+    assert (bound.receipt()["spent_usd"], bound.refused) == ("0", True)
+
+
+def test_the_bound_refuses_a_second_request_while_one_is_held() -> None:
+    bound = recorder.Allowance(MODEL, recorder.RUN_USD, recorder.ROUND_USD)
+    bound.admit(sent(SMALL))
+    # VCR filters the held request again just before keeping its response.
+    bound.admit(sent(SMALL))
+
+    with pytest.raises(recorder.SpendRefusedError):
+        bound.admit(sent(SMALL.replace(b"4096", b"4095")))
+
+    assert (bound.receipt()["spent_usd"], bound.refused) == ("0.043108", True)
+
+
 def heavy(turn: int) -> dict[str, int]:
     """About $0.049 a call, within the input each request reserves: after
     three the run has spent $0.14706, under explore's own $0.15, and the
@@ -339,6 +419,7 @@ def test_a_request_past_the_runs_limit_is_refused_before_it_is_sent(
 
 EARLIER = {
     "spent": "0.66",
+    "nothing": "0",
     "unknown": None,
     "negative": "-1",
     "minus_infinity": "-Infinity",
@@ -361,6 +442,14 @@ def test_a_request_past_the_rounds_limit_is_refused_before_it_is_sent(
     if EARLIER[earlier] is not None:
         spend = {"spent_usd": EARLIER[earlier], "overrun": earlier == "overran"}
         (before / "receipt.json").write_text(json.dumps({"spend": spend}))
+    if earlier == "nothing":
+        # An earlier attempt refused before it spent anything leaves the round.
+        record(EXPLORE, attempt, library=library)
+        assert (len(stand_in.sent), receipt(attempt)["spend"]["round_left_usd"]) == (
+            5,
+            "0.699946",
+        )
+        return
     refusal = {
         "spent": "spend_refused",
         "overran": "an earlier attempt in this round billed past its reservation",
@@ -412,18 +501,62 @@ def test_an_overloaded_or_unanswered_request_is_sent_once(
         if failure == "overloaded"
         else (None, [])
     )
-    # No usage came back, so the plan request keeps its worst case.
+    # No usage came back, so the plan request keeps its worst case: its
+    # body's bytes plus 1,024 input tokens and 4,096 output, at $2 and $10 a
+    # million.
+    worst = (len(stand_in.sent[0]) + 1024) * Decimal(2) + 4096 * Decimal(10)
     assert (kept["cost_records"], kept["spend"]) == (
         [],
         {
             "run_usd": "0.20",
             "round_left_usd": "0.699946",
-            "spent_usd": "0.060496",
+            "spent_usd": str(worst / 1_000_000),
             "refused": False,
             "overrun": False,
         },
     )
     assert (library / f"{EXPLORE}.yaml").read_text() == PREVIOUS
+
+
+def test_a_recording_runs_quiet_and_gives_back_the_callers_logging_and_switches(
+    provider: Start,
+    library: Path,
+    attempt: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Values that can't pause the run or write outside tmp_path, had they
+    # reached Playwright.
+    switches = {
+        "DEBUGP": "0",
+        "DEBUG": "pw:fake",
+        "DEBUG_FILE": str(tmp_path / "playwright-debug.log"),
+        "PWDEBUG": "0",
+        "PWDEBUGIMPL": "0",
+    }
+    for name, value in switches.items():
+        monkeypatch.setenv(name, value)
+    level = logging.root.manager.disable
+    during: list[tuple[dict[str, str | None], int]] = []
+
+    def watching(_body: bytes) -> Answer:
+        # The stand-in answers while the recording is sending.
+        during.append(
+            (
+                {name: os.environ.get(name) for name in switches},
+                logging.root.manager.disable,
+            )
+        )
+        return DROPPED, b""
+
+    provider([watching])
+
+    with pytest.raises(ValueError, match="provider_error"):
+        record(EXPLORE, attempt, library=library)
+
+    assert during == [(dict.fromkeys(switches), logging.CRITICAL)]
+    assert {name: os.environ.get(name) for name in switches} == switches
+    assert logging.root.manager.disable == level
 
 
 def billing(turn: int, past: int, *, cached: int = 0) -> Callable[[bytes], Answer]:
@@ -495,10 +628,11 @@ def test_a_response_billed_past_its_reservation_stops_the_round(
         Decimal(cost["cost_usd"]) for cost in kept["cost_records"]
     )
     if overran:
+        sent_before = len(stand_in.sent)
         assert (library / f"{EXPLORE}.yaml").read_text() == PREVIOUS
         with pytest.raises(ValueError, match="billed past its reservation"):
             record(EXPLORE, attempt.parent / "002", library=library)
-        assert len(stand_in.sent) in {1, 5}
+        assert len(stand_in.sent) == sent_before
 
 
 def escaped(text: str) -> str:
@@ -581,14 +715,14 @@ def test_an_explore_capture_withholds_a_key_in_its_plan_or_a_turn(
     ]
 
 
-def test_a_scrub_that_fails_is_its_own_finalization_failure(
+def test_a_scrub_that_fails_tries_every_other_name_and_says_so(
     provider: Start,
     library: Path,
     attempt: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    provider(spilled("turn"))
-
+    # A plan spill reaches the compiled script as well as the run record.
+    provider(spilled("plan"))
     rmtree = shutil.rmtree
 
     def refuse(path: Path, *args: Any, **kwargs: Any) -> None:
@@ -605,8 +739,11 @@ def test_a_scrub_that_fails_is_its_own_finalization_failure(
     assert (kept["outcome"], kept["finalization_failures"], kept["scrubbed"]) == (
         "error",
         ["scrub"],
-        [f"{EXPLORE}.yaml"],
+        [f"{EXPLORE}.yaml", "qa/.compiled"],
     )
+    assert {Path(name).parts[:2] for name in holding_the_key(attempt)} == {
+        ("qa", ".aqa")
+    }
     assert (library / f"{EXPLORE}.yaml").read_text() == PREVIOUS
 
 
