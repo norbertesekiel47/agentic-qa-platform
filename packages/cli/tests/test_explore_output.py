@@ -799,6 +799,7 @@ GIVE = (
     ("overrides", "line"),
     [
         ([SENTINEL], GIVE),
+        (["minutes"], GIVE),
         ([f"{SENTINEL}=1", "neither"], GIVE),
         (
             [f"minutes={SENTINEL}"],
@@ -826,6 +827,7 @@ GIVE = (
     ],
     ids=[
         "malformed",
+        "bare-name",
         "unknown",
         "text",
         "json-text",
@@ -852,11 +854,16 @@ def test_a_budget_diagnostic_names_the_budget_and_the_rule_never_what_was_given(
     assert client.models == []
 
 
+@pytest.mark.parametrize(
+    "given",
+    [["--force"], ["--budget", "minutes=1"], ["--force", "--budget", "minutes=1"]],
+    ids=["force", "budget", "both"],
+)
 def test_plan_only_refuses_the_options_only_exploring_reads(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, given: list[str]
 ) -> None:
     spec = shop(tmp_path / "qa")
-    args = [str(spec), "--plan-only", "--force", "--budget", "minutes=1"]
+    args = [str(spec), "--plan-only", *given]
 
     result = unstarted(monkeypatch, args)
 

@@ -380,14 +380,19 @@ def test_an_undeclared_host_during_confirmation_exits_6_and_records_it(
 def test_an_unreachable_start_origin_exits_13(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    spec = shop(tmp_path / "qa")
+    root = tmp_path / "qa"
     closed = f"http://127.0.0.1:{unused_port()}"
 
-    result = explore(monkeypatch, [str(spec), "--url", closed], Scripted(planned()))
+    result = explore(
+        monkeypatch, [str(shop(root)), "--url", closed], Scripted(planned())
+    )
 
     assert result.exit_code == 13, result.output
-    assert result.stderr.startswith("unreachable shop: ")
-    assert "non-resumable" not in result.output
+    # No action's outcome is unknown, so the line ends at the record.
+    assert re.fullmatch(
+        rf"unreachable shop: {SECONDS}, \$0\.003, run record: {record_in(root)}",
+        result.stderr.splitlines()[0],
+    )
 
 
 def test_an_invalid_spec_exits_5_before_any_model_call_or_browser(

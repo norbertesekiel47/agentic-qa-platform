@@ -12,9 +12,11 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import langsmith
 import pytest
 import typer.testing
 from aqa_cli import explore as explore_module
@@ -52,8 +54,11 @@ REASON = "the model refused to write the plan"
 
 
 @pytest.fixture(autouse=True)
-def key(monkeypatch: pytest.MonkeyPatch) -> None:
+def key(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
+    yield
+    # A router switches LangSmith's tracing off for the whole process.
+    langsmith.configure(enabled=None, client=None)
 
 
 def asyncio_log(caplog: pytest.LogCaptureFixture) -> list[str]:
