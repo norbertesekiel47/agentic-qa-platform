@@ -218,9 +218,14 @@ def test_a_probe_that_cannot_be_read_now_leaves_its_check_not_evaluated(
     ]
 
 
-# The count probe's two keys: o2 is a decoy that holds the expected 2.
-TWO_KEYS = Offered(
-    {"o1": ProbeOption("count", "$.count"), "o2": ProbeOption("count", "$.other")}
+# The count probe's two keys, o2 a decoy that holds the expected 2, and the
+# other probe's key on o1's path, which a count check never keeps.
+OPTIONS = Offered(
+    {
+        "o1": ProbeOption("count", "$.count"),
+        "o2": ProbeOption("count", "$.other"),
+        "o3": ProbeOption("other", "$.count"),
+    }
 )
 DIFFERS = b'{"count": 3, "other": 2}'
 HOLDS = b'{"count": 2, "other": 2}'
@@ -308,7 +313,7 @@ def test_a_probe_check_that_didnt_pass_keeps_its_option(
 ) -> None:
     app.probe_bodies["count"] = bodies
 
-    assert probing(app, tmp_path, played(moves), offered=TWO_KEYS) == expected
+    assert probing(app, tmp_path, played(moves), offered=OPTIONS) == expected
     assert app.probe_reads == {"count": reads}
 
 
@@ -330,7 +335,7 @@ def test_a_probe_check_that_timed_out_keeps_its_option(
     monkeypatch.setattr(probes, "read_stable", unstable_once)
     moves: list[Move] = [("a1", "o1"), ("a1", "o2"), None]
 
-    assert probing(app, tmp_path, played(moves), offered=TWO_KEYS) == [
+    assert probing(app, tmp_path, played(moves), offered=OPTIONS) == [
         ["a1 is bound, and on this page it is check_timed_out", KEEPS_O1, COMPILED],
         ["$.count"],
     ]
@@ -345,7 +350,7 @@ def test_a_check_left_unevaluated_by_another_checks_look_keeps_its_option(
     plan = plan_of(probe_check("count", 2), probe_check("count", 3))
     moves: list[Move] = [("a1", "o1"), ("a2", "o2"), None, ("a2", "o1"), None]
 
-    assert probing(app, tmp_path, played(moves), plan=plan, offered=TWO_KEYS) == [
+    assert probing(app, tmp_path, played(moves), plan=plan, offered=OPTIONS) == [
         [
             BOUND,
             "a2 is bound, and on this page it is pass",
@@ -370,7 +375,7 @@ def test_a_kept_option_is_its_checks_alone(app: App, tmp_path: Path) -> None:
     plan = plan_of(probe_check("count", 2), probe_check("count", 3))
     moves: list[Move] = [("a1", "o1"), ("a2", "o2")]
 
-    assert probing(app, tmp_path, played(moves), plan=plan, offered=TWO_KEYS) == [
+    assert probing(app, tmp_path, played(moves), plan=plan, offered=OPTIONS) == [
         [FAILED, "a2 is bound, and on this page it is pass"],
         None,
     ]
