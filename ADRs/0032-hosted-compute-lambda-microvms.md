@@ -149,6 +149,8 @@ This supersedes ADR-0008's choice of Lambda functions for hosted runs. These ADR
 ## Evidence
 Run from the repository root. `R` holds October 1's rows and `R2` the 2026-10-09 rerun's; `T` holds three helpers: ISO 8601 timestamps with an offset in seconds, a median, and rounding.
 
+The commits this ADR cites were made on #38's branch and reached main rebased, with the same changes, when #210 landed: `36cf3dc` is main's `15ac81a`, `cf629e8` is `da5ba62`, `dd05cb4` is `e538d81` and `550ec7b` is `25e0e15`. The packages were built, and the scripts ran, at the branch commits.
+
 ```bash
 R=spikes/hosted-chromium/results/2026-10-01.jsonl
 R2=spikes/hosted-chromium/results/2026-10-09.jsonl
