@@ -42,6 +42,7 @@ from aqa_runner.navigator import (
     decision,
     navigator_request,
     navigator_tools,
+    probe_listing,
 )
 from aqa_runner.navigator_tools import TOOL_NAMES, Action, Attempt
 from aqa_runner.reasons import UnansweredError
@@ -258,8 +259,14 @@ async def _request(context: Turning, state: Turns) -> list[BaseMessage]:
     except (PolicyEventError, DocumentChangedError, UnansweredError, Error) as error:
         why = reasons.reason(error, context.redactor)
         snapshot, looked = context.said(""), (f"the page couldn't be looked at: {why}",)
-    results = (*state["results"], *looked)
-    turn = Turn(tuple(state["log"]), state["notes"], results, snapshot, state["parts"])
+    turn = Turn(
+        log=tuple(state["log"]),
+        notes=state["notes"],
+        results=(*state["results"], *looked),
+        snapshot=snapshot,
+        parts=state["parts"],
+        probes=probe_listing(context.attempt.offered, context.redactor),
+    )
     return navigator_request(context.prefix, turn, redactor=context.redactor)
 
 
