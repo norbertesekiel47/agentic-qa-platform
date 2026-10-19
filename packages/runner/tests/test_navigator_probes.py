@@ -10,12 +10,13 @@ import json
 from collections.abc import Awaitable, Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Unpack
+from typing import Any, Unpack
 
 import pytest
 from aqa_core.compiled import CompiledScript
 from aqa_core.compiler import Provenance
 from aqa_core.coverage_plan import CoveragePlan
+from aqa_runner import probes
 from aqa_runner.navigator import AssertCheck, Finish, Offered, ProbeOption
 from aqa_runner.navigator_tools import Attempt
 
@@ -213,4 +214,160 @@ def test_a_probe_that_cannot_be_read_now_leaves_its_check_not_evaluated(
     assert probing(app, tmp_path, scenario) == [
         "a1 is bound, and on this page it is not_evaluated: the probe could not be read",
         "not_evaluated",
+    ]
+
+
+# The count probe's two keys: o2 is a decoy that holds the expected 2.
+TWO_KEYS = Offered(
+    {"o1": ProbeOption("count", "$.count"), "o2": ProbeOption("count", "$.other")}
+)
+DIFFERS = b'{"count": 3, "other": 2}'
+HOLDS = b'{"count": 2, "other": 2}'
+FAILED = "a1 is bound, and on this page it is failed"
+UNREAD = (
+    "a1 is bound, and on this page it is not_evaluated: the probe could not be read"
+)
+KEEPS_O1 = (
+    "assert_check did not run: a1 didn't pass on o1, so it keeps o1 for the rest "
+    "of this attempt"
+)
+
+# An `assert_check` call's check ID and ref, or None for `finish`.
+type Move = tuple[str, str] | None
+
+
+def played(moves: list[Move]) -> Callable[[Attempt], Awaitable[list[object]]]:
+    """A scenario that makes `moves` in order, then gives each call's text
+    and the last `finish`'s compiled JSON paths, None when it compiled
+    nothing."""
+
+    async def scenario(attempt: Attempt) -> list[object]:
+        texts: list[str] = []
+        script: CompiledScript | None = None
+        for move in moves:
+            if move is None:
+                finished = await attempt.finish(Finish(steps=()), BY)
+                texts.append(finished.text)
+                script = finished.script
+            else:
+                check_id, ref = move
+                texts.append(
+                    await attempt.check(AssertCheck(check_id=check_id, ref=ref))
+                )
+        return [texts, script and json_paths(script)]
+
+    return scenario
+
+
+KEPT = {
+    "a value that differs": (
+        [DIFFERS, DIFFERS, HOLDS],
+        [("a1", "o1"), ("a1", "o2"), None],
+        [[FAILED, KEEPS_O1, COMPILED], ["$.count"]],
+        4,
+    ),
+    "a key that went away": (
+        [b'{"other": 2}', HOLDS],
+        [("a1", "o1"), ("a1", "o2"), None],
+        [[UNREAD, KEEPS_O1, COMPILED], ["$.count"]],
+        3,
+    ),
+    "passing, then failed at finish": (
+        [HOLDS, HOLDS, DIFFERS],
+        [("a1", "o1"), None, ("a1", "o2")],
+        [[BOUND, "finish compiled nothing: on this page a1 is failed", KEEPS_O1], None],
+        4,
+    ),
+    "its own option again, then another": (
+        [DIFFERS, DIFFERS, HOLDS],
+        [("a1", "o1"), ("a1", "o1"), ("a1", "o2"), None],
+        [[FAILED, BOUND, KEEPS_O1, COMPILED], ["$.count"]],
+        6,
+    ),
+    "control: passed, then another": (
+        [HOLDS],
+        [("a1", "o1"), ("a1", "o2"), None],
+        [[BOUND, BOUND, COMPILED], ["$.other"]],
+        6,
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("bodies", "moves", "seen", "reads"), KEPT.values(), ids=KEPT.keys()
+)
+def test_a_probe_check_that_didnt_pass_keeps_its_option(
+    app: App,
+    tmp_path: Path,
+    *,
+    bodies: list[bytes | int],
+    moves: list[Move],
+    seen: list[object],
+    reads: int,
+) -> None:
+    app.probe_bodies["count"] = bodies
+
+    assert probing(app, tmp_path, played(moves), offered=TWO_KEYS) == seen
+    assert app.probe_reads == {"count": reads}
+
+
+def test_a_probe_check_that_timed_out_keeps_its_option(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app.probe_bodies["count"] = [HOLDS]
+    stable = probes.read_stable
+    calls: list[str] = []
+
+    async def unstable_once(*args: Any) -> probes.JsonValue:
+        calls.append(args[2])
+        if len(calls) == 1:
+            raise probes.ProbeUnstableError("fake: never held still")
+        return await stable(*args)
+
+    monkeypatch.setattr(probes, "read_stable", unstable_once)
+    moves: list[Move] = [("a1", "o1"), ("a1", "o2"), None]
+
+    assert probing(app, tmp_path, played(moves), offered=TWO_KEYS) == [
+        ["a1 is bound, and on this page it is check_timed_out", KEEPS_O1, COMPILED],
+        ["$.count"],
+    ]
+    assert (calls, app.probe_reads) == (["$.count", "$.count"], {"count": 2})
+
+
+def test_a_check_left_unevaluated_by_another_checks_look_keeps_its_option(
+    app: App, tmp_path: Path
+) -> None:
+    both = b'{"count": 2, "other": 3}'
+    app.probe_bodies["count"] = [both, both, both, both, 500, both]
+    plan = plan_of(probe_check("count", 2), probe_check("count", 3))
+    moves: list[Move] = [("a1", "o1"), ("a2", "o2"), None, ("a2", "o1"), None]
+
+    assert probing(app, tmp_path, played(moves), plan=plan, offered=TWO_KEYS) == [
+        [
+            BOUND,
+            "a2 is bound, and on this page it is pass",
+            (
+                "finish compiled nothing: on this page a1 is not_evaluated: the probe "
+                "could not be read; a2 is not_evaluated: not evaluated after a1's look "
+                "at the page raised"
+            ),
+            (
+                "assert_check did not run: a2 didn't pass on o2, so it keeps o2 for "
+                "the rest of this attempt"
+            ),
+            COMPILED,
+        ],
+        ["$.count", "$.other"],
+    ]
+    assert app.probe_reads == {"count": 9}
+
+
+def test_a_kept_option_is_its_checks_alone(app: App, tmp_path: Path) -> None:
+    app.probe_bodies["count"] = [b'{"count": 3, "other": 3}']
+    plan = plan_of(probe_check("count", 2), probe_check("count", 3))
+    moves: list[Move] = [("a1", "o1"), ("a2", "o2")]
+
+    assert probing(app, tmp_path, played(moves), plan=plan, offered=TWO_KEYS) == [
+        [FAILED, "a2 is bound, and on this page it is pass"],
+        None,
     ]
