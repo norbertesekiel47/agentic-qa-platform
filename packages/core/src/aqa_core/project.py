@@ -24,7 +24,7 @@ from aqa_core.compiled import (
     TextInTarget,
     VisibleUnoccluded,
 )
-from aqa_core.config import ProjectConfig, SecretField
+from aqa_core.config import Budgets, ProjectConfig, SecretField
 from aqa_core.model_roles import RoleError, resolve_roles
 from aqa_core.price_map import vendored
 from aqa_core.schema import Contract, parse_origin
@@ -574,6 +574,35 @@ def start_origin(url: str | None, config: ProjectConfig) -> str:
         return parse_origin(url)
     except ValueError as error:
         raise SpecError([f"--url: {error}"]) from None
+
+
+def with_budgets(config: ProjectConfig, overrides: Sequence[str]) -> ProjectConfig:
+    """`config` with each `--budget NAME=VALUE` of `overrides` laid over its
+    budgets, the value read as JSON, or as text when it isn't JSON, and
+    checked as the config file's are (DATA_MODEL §9). Each problem names the
+    budget and the rule, never what was given: an override that isn't
+    NAME=VALUE with a budget's name, a name given twice, or a value the
+    config file couldn't hold."""
+    names = config.budgets.model_dump()
+    given: dict[str, object] = {}
+    problems: list[str] = []
+    for override in overrides:
+        name, equals, value = override.partition("=")
+        if not equals or name not in names:
+            problems.append(
+                f"--budget: give NAME=VALUE, NAME one of {', '.join(names)}"
+            )
+        elif name in given:
+            problems.append(f"--budget: {name}: given twice")
+        else:
+            try:
+                given[name] = json.loads(value)
+            except ValueError:  # checked as text, as a quoted YAML value is
+                given[name] = value
+    if problems:
+        raise SpecError(list(dict.fromkeys(problems)))
+    laid = _validate(Budgets, names | given, Path("--budget"))
+    return config.model_copy(update={"budgets": laid})
 
 
 def allowed_origins(spec: Spec, start: str) -> tuple[str, ...]:
