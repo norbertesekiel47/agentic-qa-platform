@@ -445,6 +445,35 @@ def test_the_two_streams_are_checked_as_a_merged_log_reads_them(
     assert copies_found(password, texts=[result.output]) == []
 
 
+@pytest.mark.parametrize("case", ["non-resumable", "one-fell-back"])
+def test_the_join_is_checked_on_what_each_stream_would_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    # A non-resumable run's line ends with `non-resumable`, which the
+    # warning's `warning:` joins into the password; both fallbacks keep the
+    # fact. Otherwise the password, which its own markers spell, is in the
+    # printed path, so stdout falls back alone, and the email spans that
+    # fallback's end and stderr's reason.
+    non_resumable = case == "non-resumable"
+    password = "resumable\nwarning:" if non_resumable else "password"
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", password)
+    monkeypatch.setenv("AQA_SECRET_TEST_EMAIL", "value\n  zork")
+    spec = signed_in(tmp_path / "password" / "qa", email="TEST_EMAIL")
+    scan = scan_of(spec)
+    if non_resumable:
+        done = ended("compiled", 0, published="unconfirmed", non_resumable=INTENT)
+    else:
+        done = ended("compiled", 0, published="confirmed", reasons=["zork went"])
+
+    result, _ = invoke(monkeypatch, spec, done, Driver())
+
+    fallback = WITHHELD.format("compiled", "shop")
+    fallback += "non-resumable\n" if non_resumable else ""
+    assert (result.exit_code, result.stdout, result.stderr) == (0, fallback, fallback)
+    assert result.output == result.stdout + result.stderr
+    assert not scan.finds(result.output)
+
+
 @pytest.mark.parametrize(
     ("spec_id", "stderr"),
     [
