@@ -412,6 +412,39 @@ def test_the_run_line_falls_back_on_its_own_stream(
     )
 
 
+@pytest.mark.parametrize("case", ["spanning", "fallbacks-spanning", "clean"])
+def test_the_two_streams_are_checked_as_a_merged_log_reads_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    # On exit 0 the line ends with the compiled script's path, and the
+    # warning after it starts with `warning:`: `2>&1` writes
+    # `shop.json\nwarning:`, which neither stream spells alone, so both fall
+    # back. The email spans the two fallbacks' join, so stderr's goes too.
+    password = "fake-pass-4u49" if case == "clean" else "shop.json\nwarning:"
+    email = "value\ncompiled" if case == "fallbacks-spanning" else "fake-mail-4u49"
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", password)
+    monkeypatch.setenv("AQA_SECRET_TEST_EMAIL", email)
+    spec = signed_in(tmp_path / "qa", email="TEST_EMAIL")
+    scan = scan_of(spec)
+    target = tmp_path / "qa" / ".compiled" / "shop.json"
+    done = ended("compiled", 0, cost="0.015", published="unconfirmed")
+
+    result, _ = invoke(monkeypatch, spec, done, Driver())
+
+    fallback = WITHHELD.format("compiled", "shop")
+    assert result.exit_code == 0
+    if case == "clean":
+        line = rf"compiled shop: \d+\.\ds, \$0\.015, {re.escape(str(target))}\n"
+        assert re.fullmatch(line, result.stdout)
+        assert result.stderr == UNCONFIRMED.format(target)
+    else:
+        written = {"spanning": fallback, "fallbacks-spanning": ""}[case]
+        assert (result.stdout, result.stderr) == (fallback, written)
+    assert result.output == result.stdout + result.stderr
+    assert not scan.finds(result.output)
+    assert copies_found(password, texts=[result.output]) == []
+
+
 @pytest.mark.parametrize(
     ("spec_id", "stderr"),
     [
