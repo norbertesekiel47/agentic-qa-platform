@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from re import Pattern
+from stat import S_ISDIR
 from typing import Any, Literal, TypedDict, cast
 
 from aqa_core.config import Effort, ModelRole, ProjectConfig
@@ -619,12 +620,14 @@ def scrub(attempt: Path, state: AttemptState) -> list[str]:
     for name in SCRUBBED:
         path = attempt / name
         try:
-            if path.is_dir():
+            # lstat, since is_dir() and exists() read a name they can't look
+            # at as absent; a link is removed, never followed.
+            if S_ISDIR(path.lstat().st_mode):
                 shutil.rmtree(path)
-            elif path.exists():
-                path.unlink()
             else:
-                continue
+                path.unlink()
+        except FileNotFoundError:
+            continue
         except OSError:
             # The rest are still tried and the receipt still written; the
             # failure is its own category.
