@@ -80,9 +80,9 @@ SECRET_FORMATS = cast(
     tuple[tuple[str, Pattern[str]], ...],
     runpy.run_path(str(ROOT / ".claude/hooks/policy_rules.py"))["SECRET_FORMATS"],
 )
-# The explore recording's spend bound (maintainer, session 19): a run's
-# limit, and the round's, the $1.00 pre-approval less the program's USD
-# 0.300054 already spent.
+# The explore recording's spend bound (ADR-0024's #53 P21a amendment): a
+# run's limit, and the round's, the $1.00 pre-approval less the program's
+# USD 0.300054 already spent.
 RUN_USD = Decimal("0.20")
 ROUND_USD = Decimal("0.699946")
 # Input tokens a request may use beyond its body's bytes: the tool and
@@ -178,7 +178,7 @@ class Allowance:
     def settle(self, usage: Usage | None) -> None:
         """Price the held request's response. One billed more input tokens
         than its request reserved shows the bound is unsound: no request is
-        admitted after it (maintainer, session 19)."""
+        admitted after it."""
         if self.held is None:
             return
         if usage is None:
@@ -239,12 +239,9 @@ def earlier_spend(earlier: Path) -> Decimal:
     it spent is unknown. So does one billed past its reservation."""
     try:
         spend = json.loads((earlier / "receipt.json").read_text())["spend"]
-        amount = Decimal(spend["spent_usd"])
-        overrun = spend["overrun"]
+        amount, overrun = Decimal(spend["spent_usd"]), spend["overrun"]
     except OSError, ValueError, LookupError, TypeError, ArithmeticError:
-        raise ValueError(
-            "an earlier attempt in this round has no priced receipt"
-        ) from None
+        amount, overrun = Decimal("NaN"), False
     if not amount.is_finite() or amount < 0:
         raise ValueError("an earlier attempt in this round has no priced receipt")
     if overrun is not False:
@@ -437,7 +434,7 @@ class AttemptState:
     receipt_attempted: bool = False
     receipt_written: bool = False
     promoting: bool = False
-    explored: Ending | None = None
+    ending: Ending | None = None
 
     def remember_interrupt(self, error: BaseException | None) -> None:
         if self.first_interrupt is not None:
@@ -593,7 +590,7 @@ async def answered(
     return routed.calls, accepted, None
 
 
-def exploring(vcr: Any, capture: Capture, allowance: Allowance) -> None:
+def admitting(vcr: Any, capture: Capture, allowance: Allowance) -> None:
     """Before an explore request leaves the process, hold its worst case
     against the spend bound; inspect its response as it asked, the plan's as
     structured output, a turn's as notes and tool calls. VCR filters a
@@ -655,7 +652,7 @@ def finish(
         or not all(response["request_id"] for response in capture.responses)
     ):
         state.outcome = "rejected"
-    if state.explored is not None and state.explored["outcome"] == "no_response":
+    if state.ending is not None and state.ending["outcome"] == "no_response":
         state.outcome = "provider_error"
     if capture.allowance is not None and capture.allowance.refused:
         state.outcome = "spend_refused"
@@ -680,7 +677,7 @@ def finish(
         "no_response": not capture.responses,
         "withheld": capture.withheld,
         "scrubbed": scrubbed,
-        "explore": state.explored,
+        "explore": state.ending,
         "spend": None if capture.allowance is None else capture.allowance.receipt(),
     }
     try:
@@ -744,7 +741,7 @@ def capture_attempt(
     config = load_config(spec.path.parent / "config.yaml")
     model = resolve_roles(config, vendored())["navigator"].model
     if name == EXPLORE:
-        exploring(vcr, capture, Allowance(model, RUN_USD, round_left(attempt)))
+        admitting(vcr, capture, Allowance(model, RUN_USD, round_left(attempt)))
     call_completed = capture_completed = completed = False
     try:
         with warnings.catch_warnings(), quiet():
@@ -753,7 +750,7 @@ def capture_attempt(
                 try:
                     with vcr.use_cassette(f"{name}.yaml"):
                         try:
-                            state.calls, accepted, state.explored = asyncio.run(
+                            state.calls, accepted, state.ending = asyncio.run(
                                 answered(name, router, spec)
                             )
                             state.outcome = "accepted" if accepted else "rejected"

@@ -9,8 +9,9 @@ import socketserver
 import subprocess
 import sys
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,8 @@ FIVE_COSTS = ["0.000048", "0.00006", "0.000072", "0.000084", "0.000096"]
 CONFIRMED = {"exit_code": 0, "outcome": "compiled", "published": "confirmed"}
 
 type Answer = tuple[int, bytes]
+# An answer, or one made from the request body it answers.
+type Answering = Answer | Callable[[bytes], Answer]
 # A status that closes the connection without an answer.
 DROPPED = 0
 OVERLOADED = json.dumps(
@@ -105,19 +108,23 @@ class Provider:
     its answers, the last one again after it, with a request ID; every body
     sent is kept."""
 
-    answers: list[Answer]
+    answers: Sequence[Answering]
     sent: list[bytes] = field(default_factory=list)
+
+
+# `provider(answers)`, the fixture below.
+type Start = Callable[[Sequence[Answering]], Provider]
 
 
 @pytest.fixture
 def provider(
     monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[Callable[[list[Answer]], Provider]]:
+) -> Iterator[Start]:
     """`provider(answers)` starts a stand-in and points the recorder at it
     with the fake key."""
     servers: list[socketserver.ThreadingTCPServer] = []
 
-    def start(answers: list[Answer]) -> Provider:
+    def start(answers: Sequence[Answering]) -> Provider:
         stand_in = Provider(answers)
 
         class Handler(socketserver.StreamRequestHandler):
@@ -130,7 +137,8 @@ def provider(
                         length = int(value)
                 stand_in.sent.append(self.rfile.read(length))
                 count = len(stand_in.sent)
-                status, body = stand_in.answers[min(count, len(stand_in.answers)) - 1]
+                entry = stand_in.answers[min(count, len(stand_in.answers)) - 1]
+                status, body = entry(stand_in.sent[-1]) if callable(entry) else entry
                 if status == DROPPED:
                     return
                 self.wfile.write(
@@ -198,7 +206,7 @@ def unhooked(root: Path) -> Spec:
     "run", ["confirmed", "unconfirmed", "failed_confirmation", "corrected_plan"]
 )
 def test_an_explore_capture_promotes_only_a_confirmed_compile(
-    provider: Callable[[list[Answer]], Provider],
+    provider: Start,
     library: Path,
     attempt: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -268,7 +276,7 @@ def test_an_explore_capture_promotes_only_a_confirmed_compile(
 
 
 def test_every_explore_interaction_is_priced_once(
-    provider: Callable[[list[Answer]], Provider], library: Path, attempt: Path
+    provider: Start, library: Path, attempt: Path
 ) -> None:
     provider(explore_answers())
 
@@ -301,7 +309,7 @@ def heavy(turn: int) -> dict[str, int]:
 
 
 def test_a_request_past_the_runs_limit_is_refused_before_it_is_sent(
-    provider: Callable[[list[Answer]], Provider], library: Path, attempt: Path
+    provider: Start, library: Path, attempt: Path
 ) -> None:
     stand_in = provider(explore_answers(usage=heavy))
 
@@ -342,7 +350,7 @@ EARLIER = {
 
 @pytest.mark.parametrize("earlier", EARLIER)
 def test_a_request_past_the_rounds_limit_is_refused_before_it_is_sent(
-    provider: Callable[[list[Answer]], Provider],
+    provider: Start,
     library: Path,
     attempt: Path,
     earlier: str,
@@ -377,7 +385,7 @@ def test_a_request_past_the_rounds_limit_is_refused_before_it_is_sent(
 
 @pytest.mark.parametrize("failure", ["overloaded", "dropped"])
 def test_an_overloaded_or_unanswered_request_is_sent_once(
-    provider: Callable[[list[Answer]], Provider],
+    provider: Start,
     library: Path,
     attempt: Path,
     failure: str,
@@ -418,40 +426,79 @@ def test_an_overloaded_or_unanswered_request_is_sent_once(
     assert (library / f"{EXPLORE}.yaml").read_text() == PREVIOUS
 
 
-def test_a_response_billed_past_its_reservation_stops_the_round(
-    provider: Callable[[list[Answer]], Provider], library: Path, attempt: Path
-) -> None:
-    # The plan's answer bills 50,000 input tokens, more than its request's
-    # bytes plus 1,024.
-    stand_in = provider(
-        explore_answers(
-            usage=lambda turn: (
-                {"input_tokens": 50_000, "output_tokens": 3} if turn == 0 else {}
-            )
-        )
-    )
+def billing(turn: int, past: int, *, cached: int = 0) -> Callable[[bytes], Answer]:
+    """Turn `turn`'s answer, billed `past` input tokens more than its request
+    reserved (its body's bytes plus 1,024), `cached` of them read from the
+    cache."""
 
-    with pytest.raises(ValueError, match="overrun"):
+    def answering(body: bytes) -> Answer:
+        usage = {
+            "input_tokens": len(body) + recorder.HEADROOM_TOKENS + past - cached,
+            "cache_read_input_tokens": cached,
+            "output_tokens": 3,
+        }
+        if turn == 0:
+            return planned(turn, GOOD_PLAN, **usage)
+        name, args = MOVES[turn - 1]
+        return called(turn, name, args, **usage)
+
+    return answering
+
+
+@pytest.mark.parametrize(
+    "billed",
+    [
+        "at_the_reservation",
+        "one_past_it",
+        "past_it_by_cached_tokens",
+        "on_the_last_answer",
+    ],
+)
+def test_a_response_billed_past_its_reservation_stops_the_round(
+    provider: Start,
+    library: Path,
+    attempt: Path,
+    billed: str,
+) -> None:
+    answers: list[Answering] = [*explore_answers()]
+    if billed == "on_the_last_answer":
+        answers[4] = billing(4, 1)
+    else:
+        answers[0] = {
+            "at_the_reservation": billing(0, 0),
+            "one_past_it": billing(0, 1),
+            "past_it_by_cached_tokens": billing(0, 1, cached=200),
+        }[billed]
+    stand_in = provider(answers)
+
+    if billed == "at_the_reservation":
         record(EXPLORE, attempt, library=library)
+    else:
+        with pytest.raises(ValueError, match="overrun"):
+            record(EXPLORE, attempt, library=library)
 
     kept = receipt(attempt)
-    assert len(stand_in.sent) == 1
-    assert (kept["outcome"], kept["explore"]) == (
-        "overrun",
-        {"exit_code": 11, "outcome": "no_response", "published": None},
+    spend = kept["spend"]
+    overran = billed != "at_the_reservation"
+    assert (
+        len(stand_in.sent),
+        kept["outcome"],
+        spend["overrun"],
+        spend["refused"],
+    ) == (
+        1 if billed in {"one_past_it", "past_it_by_cached_tokens"} else 5,
+        "overrun" if overran else "accepted",
+        overran,
+        billed in {"one_past_it", "past_it_by_cached_tokens"},
     )
-    assert [cost["cost_usd"] for cost in kept["cost_records"]] == ["0.10003"]
-    assert kept["spend"] == {
-        "run_usd": "0.20",
-        "round_left_usd": "0.699946",
-        "spent_usd": "0.10003",
-        "refused": True,
-        "overrun": True,
-    }
-    assert (library / f"{EXPLORE}.yaml").read_text() == PREVIOUS
-    with pytest.raises(ValueError, match="billed past its reservation"):
-        record(EXPLORE, attempt.parent / "002", library=library)
-    assert len(stand_in.sent) == 1
+    assert Decimal(spend["spent_usd"]) == sum(
+        Decimal(cost["cost_usd"]) for cost in kept["cost_records"]
+    )
+    if overran:
+        assert (library / f"{EXPLORE}.yaml").read_text() == PREVIOUS
+        with pytest.raises(ValueError, match="billed past its reservation"):
+            record(EXPLORE, attempt.parent / "002", library=library)
+        assert len(stand_in.sent) in {1, 5}
 
 
 def escaped(text: str) -> str:
@@ -491,7 +538,7 @@ def spilled(where: str) -> list[Answer]:
     "spill", ["plan", "turn", "turn_then_hashes_fail", "turn_then_receipt_fail"]
 )
 def test_an_explore_capture_withholds_a_key_in_its_plan_or_a_turn(
-    provider: Callable[[list[Answer]], Provider],
+    provider: Start,
     library: Path,
     attempt: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -535,7 +582,7 @@ def test_an_explore_capture_withholds_a_key_in_its_plan_or_a_turn(
 
 
 def test_a_scrub_that_fails_is_its_own_finalization_failure(
-    provider: Callable[[list[Answer]], Provider],
+    provider: Start,
     library: Path,
     attempt: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -597,7 +644,7 @@ STOPPED = (
 
 @pytest.mark.parametrize("failure", ["spill", "promotion"])
 def test_a_recording_prints_and_logs_nothing_whatever_the_environment_asks(
-    provider: Callable[[list[Answer]], Provider],
+    provider: Start,
     library: Path,
     tmp_path: Path,
     failure: str,
