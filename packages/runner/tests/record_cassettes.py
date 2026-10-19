@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import runpy
 import shutil
@@ -11,29 +12,39 @@ import subprocess
 import sys
 import time
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from re import Pattern
-from typing import Any, cast
+from typing import Any, Literal, TypedDict, cast
 
-from aqa_core.config import ModelRole
+from aqa_core.config import Effort, ModelRole, ProjectConfig
 from aqa_core.coverage_plan import uncovered
 from aqa_core.model_costs import CostRecord, Usage, cost_record
 from aqa_core.model_roles import RoutedModel, resolve_roles
 from aqa_core.price_map import vendored
-from aqa_core.project import load_config, load_spec
+from aqa_core.project import load_compiled, load_config, load_spec
 from aqa_core.spec import Spec
-from aqa_runner.anthropic_client import AnthropicClient, ProviderError
+from aqa_runner.anthropic_client import (
+    MAX_OUTPUT_TOKENS,
+    AnthropicClient,
+    ProviderError,
+)
 from aqa_runner.coverage_plan import make_plan
+from aqa_runner.explore import Ended, explore
 from aqa_runner.model_router import ModelCallError, ModelRouter, Routed
+from aqa_runner.run_record import COSTS
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration
 from langchain_core.utils.json import parse_json_markdown
+from playwright.async_api import async_playwright
 from vcr.persisters.filesystem import FilesystemPersister
 
 from packages.runner.tests.conftest import CASSETTES, REDIRECTS, _canonical, _vcr
+from packages.runner.tests.executor_fixtures import serving_app
 from packages.runner.tests.test_anthropic_client import (
     CLICK_PROMPT,
     PLAIN_PROMPT,
@@ -42,6 +53,8 @@ from packages.runner.tests.test_anthropic_client import (
     click,
 )
 from packages.runner.tests.test_coverage_plan import checkout
+from packages.runner.tests.test_explore_confirm import RESET
+from packages.runner.tests.test_explore_graph import configured, shop_spec
 
 ROOT = Path(__file__).resolve().parents[3]
 PILOTS = ROOT / "bench/apps/conduit/qa"
@@ -55,11 +68,188 @@ CASES = (
     "plan_post-comment",
     "plan_favorite-article",
     "plan_publish-article",
+    "explore_fixture",
+)
+# The whole explore of the fixture spec: the plan and every turn.
+EXPLORE = "explore_fixture"
+# The explore's own guard: the run stops calling once it has spent this.
+FIXTURE_CONFIG = ProjectConfig.model_validate(
+    {"budgets": {"model_usd": 0.15, "actions_per_attempt": 12}}
 )
 SECRET_FORMATS = cast(
     tuple[tuple[str, Pattern[str]], ...],
     runpy.run_path(str(ROOT / ".claude/hooks/policy_rules.py"))["SECRET_FORMATS"],
 )
+# The explore recording's spend bound (maintainer, session 19): a run's
+# limit, and the round's, the $1.00 pre-approval less the program's USD
+# 0.300054 already spent.
+RUN_USD = Decimal("0.20")
+ROUND_USD = Decimal("0.699946")
+# Input tokens a request may use beyond its body's bytes: the tool and
+# output-format preambles and the framing, which the body doesn't spell.
+HEADROOM_TOKENS = 1024
+# What makes Playwright print or write what a recording sends or types: its
+# protocol trace (printed by its Python side), its driver's debug log and
+# debug file, its inspector, and its driver's full error output.
+LOUD = ("DEBUGP", "DEBUG", "DEBUG_FILE", "PWDEBUG", "PWDEBUGIMPL")
+
+
+class SpendRefusedError(Exception):
+    """A request the recording's spend bound kept from leaving the process."""
+
+    def __init__(self) -> None:
+        super().__init__("the recording's spend bound refused a request")
+
+
+@dataclass(frozen=True)
+class Reservation:
+    """What an admitted request holds until its response settles it: its
+    body, the input tokens reserved for it, and the price of those with its
+    own `max_tokens` as output."""
+
+    body: bytes
+    input_tokens: int
+    usd: Decimal
+
+
+@dataclass
+class Allowance:
+    """The explore recording's spend bound. Before a request leaves the
+    process it reserves its worst case at the price map's list prices, and
+    is refused if that would take the run past `run_usd` or the round past
+    `round_usd`. A response settles at its usage's price; one without usage,
+    or a request that got none, keeps its worst case."""
+
+    model: RoutedModel
+    run_usd: Decimal
+    round_usd: Decimal
+    spent: Decimal = Decimal(0)
+    held: Reservation | None = None
+    refused: bool = False
+    overrun: bool = False
+
+    def price(self, usage: Usage) -> Decimal:
+        return cost_record(
+            role="navigator",
+            mode="explore",
+            model=self.model,
+            usage=usage,
+            latency_ms=0,
+            status="ok",
+        ).cost_usd
+
+    def reserve(self, body: bytes) -> Reservation | None:
+        """`body`'s worst case, or None when the bound can't price it: not
+        JSON, another model's, or without a `max_tokens` the adapter allows."""
+        try:
+            request = json.loads(body)
+        except ValueError:
+            return None
+        if not isinstance(request, dict) or request.get("model") != self.model.name:
+            return None
+        output = request.get("max_tokens")
+        if type(output) is not int or not 0 < output <= MAX_OUTPUT_TOKENS:
+            return None
+        tokens = len(body) + HEADROOM_TOKENS
+        usage = Usage(input_tokens=tokens, cached_input_tokens=0, output_tokens=output)
+        return Reservation(body, tokens, self.price(usage))
+
+    def admit(self, request: Any) -> None:
+        body = request.body if isinstance(request.body, bytes) else b""
+        # VCR filters the held request again just before keeping its response.
+        # It is never sent again unchanged: retries are off, and explore ends
+        # its run on a call that got no response.
+        if self.held is not None and self.held.body == body:
+            return
+        if self.held is not None:
+            # The request before got no response: it keeps its worst case.
+            self.spent += self.held.usd
+            self.held = None
+        held = self.reserve(body)
+        if (
+            self.overrun
+            or held is None
+            or self.spent + held.usd > min(self.run_usd, self.round_usd)
+        ):
+            self.refused = True
+            raise SpendRefusedError
+        self.held = held
+
+    def settle(self, usage: Usage | None) -> None:
+        """Price the held request's response. One billed more input tokens
+        than its request reserved shows the bound is unsound: no request is
+        admitted after it (maintainer, session 19)."""
+        if self.held is None:
+            return
+        if usage is None:
+            self.spent += self.held.usd
+        else:
+            self.spent += self.price(usage)
+            self.overrun = self.overrun or usage.input_tokens > self.held.input_tokens
+        self.held = None
+
+    def receipt(self) -> dict[str, Any]:
+        unsettled = self.held.usd if self.held is not None else Decimal(0)
+        return {
+            "run_usd": str(self.run_usd),
+            "round_left_usd": str(self.round_usd),
+            "spent_usd": str(self.spent + unsettled),
+            "refused": self.refused,
+            "overrun": self.overrun,
+        }
+
+
+@contextmanager
+def quiet() -> Iterator[None]:
+    """Nothing a recording sends, types or receives reaches a log: every
+    Python logger is off (the SDK's, which ANTHROPIC_LOG turns on, httpx's,
+    VCR's, LangChain's), and Playwright's switches are cleared before its
+    driver starts. Both are restored after."""
+    kept = {name: os.environ.pop(name) for name in LOUD if name in os.environ}
+    disabled = logging.root.manager.disable
+    logging.disable(logging.CRITICAL)
+    try:
+        yield
+    finally:
+        logging.disable(disabled)
+        os.environ.update(kept)
+
+
+def retryless(model: RoutedModel, effort: Effort | None) -> AnthropicClient:
+    """The adapter with the SDK's automatic retries off, so each request the
+    spend bound admits is sent once."""
+    client = AnthropicClient(model, effort)
+    client.chat = client.chat.model_copy(update={"max_retries": 0})
+    return client
+
+
+def round_left(attempt: Path) -> Decimal:
+    """What the round has left: ROUND_USD less what each earlier attempt
+    beside `attempt` spent, as its receipt says."""
+    spent = Decimal(0)
+    for earlier in sorted(attempt.parent.iterdir()):
+        if earlier != attempt and earlier.is_dir():
+            spent += earlier_spend(earlier)
+    return ROUND_USD - spent
+
+
+def earlier_spend(earlier: Path) -> Decimal:
+    """What an earlier attempt spent. One whose receipt doesn't say, or says
+    an amount that isn't finite and non-negative, stops the recording: what
+    it spent is unknown. So does one billed past its reservation."""
+    try:
+        spend = json.loads((earlier / "receipt.json").read_text())["spend"]
+        amount = Decimal(spend["spent_usd"])
+        overrun = spend["overrun"]
+    except OSError, ValueError, LookupError, TypeError, ArithmeticError:
+        raise ValueError(
+            "an earlier attempt in this round has no priced receipt"
+        ) from None
+    if not amount.is_finite() or amount < 0:
+        raise ValueError("an earlier attempt in this round has no priced receipt")
+    if overrun is not False:
+        raise ValueError("an earlier attempt in this round billed past its reservation")
+    return amount
 
 
 def observed_usage(body: bytes | str) -> Usage | None:
@@ -145,6 +335,7 @@ class Capture:
     filter_response: Callable[[dict[str, Any]], dict[str, Any]]
     attempt: Path
     structured: bool
+    allowance: Allowance | None = None
     withheld: str | None = None
     responses: list[dict[str, Any]] = field(default_factory=list)
     previous: float = field(default_factory=time.perf_counter)
@@ -153,6 +344,8 @@ class Capture:
         response = self.filter_response(response)
         now = time.perf_counter()
         usage = observed_usage(response["body"]["string"])
+        if self.allowance is not None:
+            self.allowance.settle(usage)
         identifiers = response["headers"].get("request-id", [])
         safe_id = identifiers[0] if identifiers else None
         if contains_credential(safe_id, self.key):
@@ -225,6 +418,14 @@ def accounted(
     return (records if responses else calls), failed
 
 
+class Ending(TypedDict):
+    """How an explore ended, in fields that can't spell a value."""
+
+    exit_code: int
+    outcome: Ended
+    published: Literal["confirmed", "unconfirmed"] | None
+
+
 @dataclass
 class AttemptState:
     calls: tuple[CostRecord, ...] = ()
@@ -236,6 +437,7 @@ class AttemptState:
     receipt_attempted: bool = False
     receipt_written: bool = False
     promoting: bool = False
+    explored: Ending | None = None
 
     def remember_interrupt(self, error: BaseException | None) -> None:
         if self.first_interrupt is not None:
@@ -304,7 +506,10 @@ def plan_case(name: str) -> bool:
 def answers_expected(name: str, calls: tuple[CostRecord, ...]) -> int:
     """One answer per case. A plan case holds two when its plan couldn't be
     used and make_plan asked once more: two answers, both `ok` (ADR-0024's
-    #161 amendment). A refusal and its fallback stay rejected."""
+    #161 amendment). A refusal and its fallback stay rejected. The explore
+    case holds one per priced call: the plan's, its retry's, each turn's."""
+    if name == EXPLORE:
+        return len(calls)
     retried = plan_case(name) and [call.status for call in calls] == ["ok", "ok"]
     return 2 if retried else 1
 
@@ -344,6 +549,89 @@ async def ask(name: str, router: ModelRouter, spec: Spec) -> tuple[Routed, bool]
     return routed, accepted
 
 
+async def explored(
+    router: ModelRouter, spec: Spec
+) -> tuple[tuple[CostRecord, ...], bool, Ending]:
+    """Explore `spec` against the executor's fixture app in real Chromium:
+    the run's priced calls, as its own cost lines keep them; whether it
+    exited 0 having published a confirmed script; and how it ended."""
+    root = spec.path.parent
+    config = load_config(root / "config.yaml")
+    with serving_app() as app:
+        async with async_playwright() as playwright:
+            run = await explore(
+                spec, config, root, app.origin, router=router, playwright=playwright
+            )
+    costs = None if run.record is None else run.record / COSTS
+    lines = costs.read_text().splitlines() if costs and costs.is_file() else []
+    said = run.document.get("published")
+    ending = Ending(
+        exit_code=run.exit_code,
+        outcome=run.outcome,
+        published="confirmed"
+        if said == "confirmed"
+        else "unconfirmed"
+        if said == "unconfirmed"
+        else None,
+    )
+    script = root / ".compiled" / f"{spec.frontmatter.id}.json"
+    confirmed = (
+        run.exit_code == 0
+        and ending["published"] == "confirmed"
+        and script.is_file()
+        and load_compiled(script, config).confirmed
+    )
+    return tuple(map(CostRecord.model_validate_json, lines)), confirmed, ending
+
+
+async def answered(
+    name: str, router: ModelRouter, spec: Spec
+) -> tuple[tuple[CostRecord, ...], bool, Ending | None]:
+    if name == EXPLORE:
+        return await explored(router, spec)
+    routed, accepted = await ask(name, router, spec)
+    return routed.calls, accepted, None
+
+
+def exploring(vcr: Any, capture: Capture, allowance: Allowance) -> None:
+    """Before an explore request leaves the process, hold its worst case
+    against the spend bound; inspect its response as it asked, the plan's as
+    structured output, a turn's as notes and tool calls. VCR filters a
+    request before sending it and again just before keeping its response
+    (vcrpy 8.3.0, `_vcr_request` and `Cassette.append`), and explore makes
+    its calls one at a time."""
+    kept = vcr.before_record_request
+    capture.allowance = allowance
+
+    def admitted(request: Any) -> Any:
+        allowance.admit(request)
+        capture.structured = "output_config" in json.loads(request.body)
+        return kept(request)
+
+    vcr.before_record_request = admitted
+
+
+def scrub(attempt: Path, state: AttemptState) -> list[str]:
+    """Remove what a withheld explore response reached once the SDK had it,
+    since VCR withholds only the copy it keeps: the attempt's cassette, whose
+    later requests carry it, and the run's record and compiled script."""
+    removed: list[str] = []
+    try:
+        for name in (f"{EXPLORE}.yaml", "qa/.aqa", "qa/.compiled"):
+            path = attempt / name
+            if path.is_dir():
+                shutil.rmtree(path)
+            elif path.exists():
+                path.unlink()
+            else:
+                continue
+            removed.append(name)
+    except OSError:
+        # The receipt is still written; the failure is its own category.
+        state.finalization_failures.append("scrub")
+    return removed
+
+
 def finish(
     name: str,
     attempt: Path,
@@ -352,6 +640,7 @@ def finish(
     model: RoutedModel,
 ) -> None:
     """Attempt a priced receipt even when other evidence could not be saved."""
+    scrubbed = scrub(attempt, state) if name == EXPLORE and capture.withheld else []
     state.costs, mismatch = accounted(capture.responses, state.calls, model)
     unpriced = [
         index
@@ -366,6 +655,12 @@ def finish(
         or not all(response["request_id"] for response in capture.responses)
     ):
         state.outcome = "rejected"
+    if state.explored is not None and state.explored["outcome"] == "no_response":
+        state.outcome = "provider_error"
+    if capture.allowance is not None and capture.allowance.refused:
+        state.outcome = "spend_refused"
+    if capture.allowance is not None and capture.allowance.overrun:
+        state.outcome = "overrun"
     if capture.withheld:
         state.outcome = capture.withheld
     if unpriced and capture.withheld != "credential":
@@ -383,6 +678,10 @@ def finish(
         "responses": capture.responses,
         "unpriced_responses": unpriced,
         "no_response": not capture.responses,
+        "withheld": capture.withheld,
+        "scrubbed": scrubbed,
+        "explore": state.explored,
+        "spend": None if capture.allowance is None else capture.allowance.receipt(),
     }
     try:
         (attempt / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
@@ -444,16 +743,19 @@ def capture_attempt(
     state = AttemptState()
     config = load_config(spec.path.parent / "config.yaml")
     model = resolve_roles(config, vendored())["navigator"].model
+    if name == EXPLORE:
+        exploring(vcr, capture, Allowance(model, RUN_USD, round_left(attempt)))
     call_completed = capture_completed = completed = False
     try:
-        with warnings.catch_warnings():
+        with warnings.catch_warnings(), quiet():
             warnings.simplefilter("error")
             try:
                 try:
                     with vcr.use_cassette(f"{name}.yaml"):
                         try:
-                            routed, accepted = asyncio.run(ask(name, router, spec))
-                            state.calls = routed.calls
+                            state.calls, accepted, state.explored = asyncio.run(
+                                answered(name, router, spec)
+                            )
                             state.outcome = "accepted" if accepted else "rejected"
                             call_completed = True
                         finally:
@@ -493,6 +795,14 @@ def pilot(spec_id: str, root: Path) -> Spec:
     return load_spec(root / f"{spec_id}.spec.md", load_config(root / "config.yaml"))
 
 
+def fixture(root: Path) -> Spec:
+    """The shop spec with its reset hook under the spec root `root`, which
+    explores the executor's fixture app as `test_explore_confirm` does."""
+    return shop_spec(
+        configured(root, FIXTURE_CONFIG), FIXTURE_CONFIG, "/page/shop", RESET
+    )
+
+
 def record(
     name: str, attempt: Path, *, library: Path = CASSETTES
 ) -> tuple[CostRecord, ...]:
@@ -505,6 +815,8 @@ def record(
     attempt.mkdir(parents=True)
     if name.startswith("plan_"):
         spec = pilot(name.removeprefix("plan_"), attempt / "qa")
+    elif name == EXPLORE:
+        spec = fixture(attempt / "qa")
     else:
         spec = checkout(attempt / "qa")
     config = load_config(spec.path.parent / "config.yaml")
@@ -512,7 +824,9 @@ def record(
         config = config.model_copy(
             update={"roles": {"navigator": ModelRole(effort="high")}}
         )
-    router = ModelRouter.from_config(config, AnthropicClient)
+    router = ModelRouter.from_config(
+        config, retryless if name == EXPLORE else AnthropicClient
+    )
     role = resolve_roles(config, vendored())["navigator"]
     intent = {
         "case": name,
