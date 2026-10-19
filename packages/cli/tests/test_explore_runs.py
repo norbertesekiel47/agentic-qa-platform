@@ -502,6 +502,11 @@ def test_a_block_with_an_unresolved_side_effect_intent_exits_6_and_says_non_resu
     assert first.endswith(f"run record: {record_in(root)}, non-resumable")
 
 
+# What a failed launch said, which the diagnostic must not repeat: Playwright's
+# own launch errors carry advice to turn the sandbox off.
+ADVICE = "fake raw launch advice 4u49"
+
+
 @pytest.mark.parametrize(
     "kind", [PlaywrightError, KeyError, ValueError, OSError, ProcessLookupError]
 )
@@ -509,7 +514,7 @@ def test_each_launch_failure_exits_10_naming_the_host_fix(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: type[Exception]
 ) -> None:
     async def failing(*_: object, **__: object) -> None:
-        raise kind("raw launch advice, chromiumSandbox: false")
+        raise kind(ADVICE)
 
     monkeypatch.setattr(BrowserType, "launch", failing)
     spec = shop(tmp_path / "qa")
@@ -522,7 +527,7 @@ def test_each_launch_failure_exits_10_naming_the_host_fix(
     assert HOST_FIXES.get(sys.platform, OTHER_FIX) in result.stderr
     assert f"({kind.__name__})" in result.stderr
     assert "Traceback" not in result.output
-    assert "chromiumSandbox: false" not in result.output
+    assert ADVICE not in result.output
 
 
 def test_no_response_while_planning_exits_11(
