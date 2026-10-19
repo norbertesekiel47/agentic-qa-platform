@@ -58,7 +58,11 @@ from aqa_runner import egress, executor, navigator, probes, reasons
 from aqa_runner.anthropic_client import ProviderError
 from aqa_runner.binding import UnregisteredEngineError
 from aqa_runner.bound_secrets import BoundSecret, bound_secrets
-from aqa_runner.browser_session import BrowserSession, open_browser_session
+from aqa_runner.browser_session import (
+    BrowserSession,
+    launched_browser,
+    prepared_session,
+)
 from aqa_runner.coverage_plan import Planned, judge, make_plan
 from aqa_runner.egress import EgressGate, egress_policy
 from aqa_runner.egress_proxy import EgressProxy, PhaseTraffic
@@ -572,13 +576,15 @@ async def _confirming(
     """Within the minutes budget, reset the app, when the spec has a hook,
     then open a phase and replay `script` with every locator in a fresh
     browser, into the record's `confirmation` part, with no model: the
-    confirmation's phase, None when it never began. Replay ends the phase
-    however it leaves, so its traffic is the proxy's to give."""
+    confirmation's phase, None when it never began. The browser closes
+    after the budget's span has ended, as the attempt's does. Replay ends
+    the phase however it leaves, and this ends it when the launch fails
+    before replay, so its traffic is the proxy's to give."""
     began: RunRecord | None = None
     result: executor.RunResult | None = None
     limit = timeout_at(run.deadline)
     try:
-        async with limit:
+        async with AsyncExitStack() as browser, limit:
             if not await _reset(run) or interrupted():
                 return None
             try:
@@ -588,10 +594,17 @@ async def _confirming(
                 return None
             await proxy.begin_phase()
             began = part
+            try:
+                launched = await browser.enter_async_context(
+                    launched_browser(run.playwright.chromium)
+                )
+            except BaseException:
+                await proxy.end_phase()
+                raise
             result = await executor.replay(
                 script,
                 executor.RunSetup(run.spec, run.config, run.start, part),
-                chromium=run.playwright.chromium,
+                chromium=launched,
                 proxy=proxy,
                 gate=run.gate,
                 every_locator=True,
@@ -661,37 +674,40 @@ async def _phase(
     session: BrowserSession | None = None
     attempt: Attempt | None = None
     limit = timeout_at(run.deadline)
-    # Once its session has opened, the browser closes after the budget's
-    # span has ended, so the budget never cancels that close and never
-    # takes the place of an error the phase raised as it closes.
-    async with AsyncExitStack() as browser:
-        try:
-            async with limit:
-                if await _reset(run) and (offered := await _offered(run, explorable)):
-                    await register_identity_engine(run.playwright)
-                    session = await browser.enter_async_context(
-                        open_browser_session(
-                            run.playwright.chromium,
-                            egress=proxy,
-                            settings=effective_browser(run.spec, run.config),
-                            redactor=run.redactor,
-                        )
+    # Once Chromium has launched, the browser closes after the budget's span
+    # has ended, so the budget never cancels that close and never takes the
+    # place of an error the phase raised as it closes; and that error
+    # reaches the close before it becomes a stop (#204).
+    try:
+        async with AsyncExitStack() as browser, limit:
+            if await _reset(run) and (offered := await _offered(run, explorable)):
+                await register_identity_engine(run.playwright)
+                launched = await browser.enter_async_context(
+                    launched_browser(run.playwright.chromium)
+                )
+                session = await browser.enter_async_context(
+                    prepared_session(
+                        launched,
+                        egress=proxy,
+                        settings=effective_browser(run.spec, run.config),
+                        redactor=run.redactor,
                     )
-                    if session.redactor is not run.redactor:
-                        raise ValueError(
-                            "the browser session must scan with the run's redactor"
-                        )
-                    attempt = _attempt(run, session, explorable, interrupted, offered)
-                    await _started(run, session)
-                    if not run.stops and not interrupted():
-                        await _turns(run, attempt, explorable.plan)
-        except (SandboxUnavailableError, UnregisteredEngineError) as error:
-            # The browser isn't as the run requires: launched, or prepared.
-            run.stopped("no_sandbox", str(error))
-        except TimeoutError:
-            if not limit.expired():
-                raise  # not the minutes budget's own
-            run.stopped("gave_up", _MINUTES)
+                )
+                if session.redactor is not run.redactor:
+                    raise ValueError(
+                        "the browser session must scan with the run's redactor"
+                    )
+                attempt = _attempt(run, session, explorable, interrupted, offered)
+                await _started(run, session)
+                if not run.stops and not interrupted():
+                    await _turns(run, attempt, explorable.plan)
+    except (SandboxUnavailableError, UnregisteredEngineError) as error:
+        # The browser isn't as the run requires: launched, or prepared.
+        run.stopped("no_sandbox", str(error))
+    except TimeoutError:
+        if not limit.expired():
+            raise  # not the minutes budget's own
+        run.stopped("gave_up", _MINUTES)
     checks = (
         dict.fromkeys(planned_checks(explorable.plan))
         if attempt is None

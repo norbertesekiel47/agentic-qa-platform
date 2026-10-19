@@ -2,12 +2,18 @@
 makes (#53 P15b; ADR-0024's #53 P15b amendment): a record that doesn't scan
 with the run's redactor, checks kept when the minutes budget runs out, a
 browser whose selector engines were never registered, blocks and events
-together with other stops, and a journal poisoned mid-turn. Real Chromium
-against the executor's fixture app, with a scripted model."""
+together with other stops, and a journal poisoned mid-turn. A session that
+can't be prepared after the sandbox check exits 10, in the attempt and in
+the confirmation, whatever the budget or the driver does at the close, and
+a Ctrl-C mid-turn with the driver gone stays the interrupt (#204). Real
+Chromium against the executor's fixture app, with a scripted model."""
 
 import asyncio
+import functools
 import json
+import os
 import re
+import signal
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextlib import suppress
 from decimal import Decimal
@@ -18,8 +24,9 @@ import pytest
 from aqa_core.config import ProjectConfig
 from aqa_runner import explore
 from aqa_runner.binding import register_binding_engine
-from aqa_runner.browser_session import open_browser_session
+from aqa_runner.browser_session import prepared_session
 from aqa_runner.chat_client import Reply
+from aqa_runner.egress_proxy import EgressProxy, PhaseTraffic
 from aqa_runner.explore import Run
 from aqa_runner.explore_result import ExploreEnd, present
 from aqa_runner.locator_generation import TargetUses
@@ -37,9 +44,16 @@ from packages.runner.tests.explore_graph_fixtures import (
     Scripted,
 )
 from packages.runner.tests.secret_fixtures import FAKE_VALUE
+from packages.runner.tests.test_explore_confirm import (
+    PATH,
+    UNCOUNTED_PHASE,
+    compiled_file,
+    confirming,
+)
 from packages.runner.tests.test_explore_graph import (
     ACCOUNT,
     ASSERT_NOW,
+    CLEAN_PHASE,
     SECRETS,
     UNWRITTEN,
     deadlines,
@@ -47,6 +61,13 @@ from packages.runner.tests.test_explore_graph import (
     explored,
     files,
     written,
+)
+from packages.runner.tests.test_explore_preflight import planned
+from packages.runner.tests.test_session_failures import (
+    UNPREPARED,
+    drivers,
+    exiting_after_the_check,
+    interrupt,
 )
 
 
@@ -205,9 +226,9 @@ def test_a_refused_session_stays_refused_when_the_minutes_budget_runs_out_as_it_
     overtaking(monkeypatch, deadlines(monkeypatch))
 
     def unscanned(*args: Any, **kwargs: Any) -> Any:
-        return open_browser_session(*args, **(kwargs | {"redactor": Redactor([])}))
+        return prepared_session(*args, **(kwargs | {"redactor": Redactor([])}))
 
-    monkeypatch.setattr(explore, "open_browser_session", unscanned)
+    monkeypatch.setattr(explore, "prepared_session", unscanned)
 
     with pytest.raises(
         ValueError, match=r"^the browser session must scan with the run's redactor$"
@@ -233,6 +254,138 @@ def test_an_unregistered_engine_exits_10_when_the_minutes_budget_runs_out_as_the
         ),
         "a1: never bound",
     ]
+
+
+def test_chromium_exiting_after_its_sandbox_check_exits_10(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exiting_after_the_check(monkeypatch)
+
+    run = explored(app, tmp_path, Scripted())
+
+    assert (run.outcome, run.exit_code) == ("no_sandbox", 10)
+    assert written(run)["reasons"] == [UNPREPARED, "a1: never bound"]
+    assert files(run) == ["explore.json"]
+    assert app.paths() == []
+
+
+def test_chromium_exiting_after_its_check_exits_10_when_the_budget_runs_out_as_it_closes(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exiting_after_the_check(monkeypatch)
+    overtaking(monkeypatch, deadlines(monkeypatch))
+
+    run = explored(app, tmp_path, Scripted())
+
+    assert (run.outcome, run.exit_code) == ("no_sandbox", 10)
+    assert written(run)["reasons"] == [UNPREPARED, "a1: never bound"]
+
+
+def test_chromium_exiting_after_its_check_exits_10_when_its_close_finds_the_driver_gone(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = drivers(monkeypatch)
+    exiting_after_the_check(monkeypatch)
+    close = Browser.close
+
+    async def gone(browser: Browser, *, reason: str | None = None) -> None:
+        # Once its Chromium has been killed, the driver no longer exits on
+        # SIGINT, so it is killed.
+        started[0].kill()
+        assert await started[0].wait() == -signal.SIGKILL
+        await close(browser, reason=reason)
+
+    monkeypatch.setattr(Browser, "close", gone)
+
+    run = explored(app, tmp_path, Scripted())
+
+    assert (run.outcome, run.exit_code) == ("no_sandbox", 10)
+    assert written(run)["reasons"] == [UNPREPARED, "a1: never bound"]
+    assert files(run) == ["explore.json"]
+
+
+def test_a_confirmation_whose_chromium_exits_after_its_check_exits_10_when_the_budget_runs_out_as_it_closes(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exiting_after_the_check(monkeypatch, from_launch=2)
+    overtaking(monkeypatch, deadlines(monkeypatch))
+
+    run = confirming(app, tmp_path, Scripted(planned(), *PATH))
+
+    assert (run.outcome, run.exit_code) == ("no_sandbox", 10)
+    document = written(run)
+    assert document["reasons"] == [UNPREPARED]
+    assert document["phases"] == [CLEAN_PHASE, UNCOUNTED_PHASE]
+    assert (document["published"], document["confirmation"]) == (None, None)
+    assert files(run) == [
+        "attempt-1/steps.jsonl",
+        "costs.jsonl",
+        "explore.json",
+        "plan.json",
+        "turns/1.json",
+        "turns/2.json",
+        "turns/3.json",
+        "turns/4.json",
+    ]
+    assert not compiled_file(tmp_path).parent.exists()
+
+
+def test_a_confirmation_whose_chromium_exits_after_its_check_exits_10_when_the_budget_runs_out_as_its_phase_ends(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exiting_after_the_check(monkeypatch, from_launch=2)
+    limits = deadlines(monkeypatch)
+    end = EgressProxy.end_phase
+
+    async def overtaken(proxy: EgressProxy) -> PhaseTraffic:
+        # Inside the confirmation's span only: the attempt's ends after its own.
+        with suppress(RuntimeError):
+            limits[-1].reschedule(asyncio.get_running_loop().time())
+        return await end(proxy)
+
+    monkeypatch.setattr(EgressProxy, "end_phase", overtaken)
+
+    run = confirming(app, tmp_path, Scripted(planned(), *PATH))
+
+    assert (run.outcome, run.exit_code) == ("no_sandbox", 10)
+    assert written(run)["reasons"] == [UNPREPARED]
+
+
+def test_ctrl_c_mid_turn_with_the_driver_gone_is_a_keyboard_interrupt(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A terminal's Ctrl-C, as two signals: the driver's, then the
+    runner's own, which `asyncio.run`'s handler turns into a cancellation
+    of its main task and, once that has unwound, a `KeyboardInterrupt`."""
+    started = drivers(monkeypatch)
+
+    async def interrupted(_messages: Sequence[BaseMessage]) -> Reply:
+        # No signal is sent unless asyncio.run's own handler would take it,
+        # for the run's task, which is still running.
+        handler = signal.getsignal(signal.SIGINT)
+        assert isinstance(handler, functools.partial)
+        assert isinstance(getattr(handler.func, "__self__", None), asyncio.Runner)
+        assert getattr(handler.func, "__name__", None) == "_on_sigint"
+        [main] = handler.keywords.values()
+        assert list(handler.keywords) == ["main_task"]
+        assert isinstance(main, asyncio.Task)
+        assert not main.done()
+        coroutine = main.get_coro()
+        assert coroutine is not None
+        assert coroutine.__qualname__ == "explored.<locals>.scenario"
+        await interrupt(started[0])
+        os.kill(os.getpid(), signal.SIGINT)
+        await asyncio.sleep(60)
+        pytest.fail("the interrupt never came")
+
+    with pytest.raises(KeyboardInterrupt):
+        explored(app, tmp_path, Scripted(interrupted))
+
+    [run] = (tmp_path / "qa" / ".aqa" / "runs").iterdir()
+    left = sorted(
+        str(path.relative_to(run)) for path in run.rglob("*") if path.is_file()
+    )
+    assert left == ["attempt-1/steps.jsonl"]
 
 
 def test_explore_json_that_cannot_be_written_ends_the_run_15(

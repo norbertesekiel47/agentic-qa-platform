@@ -31,11 +31,16 @@ from aqa_core.compiled import (
 from aqa_core.config import ProjectConfig
 from aqa_core.project import SpecError, contract_problems, path_on_origin, start_url
 from aqa_core.spec import Spec, secret_references
-from playwright.async_api import BrowserType, ElementHandle, Error
+from playwright.async_api import Browser, BrowserType, ElementHandle, Error
 
 from aqa_runner import probes, reasons
 from aqa_runner.bound_secrets import BoundSecret, bound_secrets
-from aqa_runner.browser_session import BrowserSession, one_key, open_browser_session
+from aqa_runner.browser_session import (
+    BrowserSession,
+    one_key,
+    open_browser_session,
+    prepared_session,
+)
 from aqa_runner.document_origins import (
     DocumentChangedError,
     PolicyEvent,
@@ -164,7 +169,7 @@ async def replay(
     script: CompiledScript,
     setup: RunSetup,
     *,
-    chromium: BrowserType,
+    chromium: BrowserType | Browser,
     proxy: EgressProxy,
     gate: EgressGate,
     every_locator: bool = False,
@@ -174,18 +179,24 @@ async def replay(
     With `every_locator`, every target resolves from all its locators at
     each use (`aqa_runner.locators.resolve_every`), as a confirmation does.
     The session uses `script.browser`, never the project's or the spec's
-    settings (ADR-0025). It needs the proxy's phase open, as the browser's
-    launch does, and ends it however it leaves, once its browser has
-    closed: a refusal before the launch, a failed launch, a journal that
-    takes no more lines and a cancellation included, so the proxy keeps the
-    phase's traffic (`EgressProxy.ended_traffic`). Only then does it read
-    the run's egress blocks and infrastructure events.
+    settings (ADR-0025), in a fresh browser launched from `chromium`, or in
+    `chromium` itself: a browser its caller launched through
+    `launched_browser` and closes after this returns or raises. It needs
+    the proxy's phase open, as the browser's launch does, and ends it
+    however it leaves: a refusal before the session, a failed launch, a
+    journal that takes no more lines and a cancellation included, so the
+    proxy keeps the phase's traffic (`EgressProxy.ended_traffic`). On a
+    return, the session's context, and a browser of its own, have closed
+    before the phase ends; only then does it read the run's egress blocks
+    and infrastructure events. When it raises, a browser of its own has
+    closed before the phase ends, and a caller's browser takes the
+    session's context when it closes.
 
     Before accepting steps or binding secrets, the script must be compiled
     from the spec as it is (its `spec_hash`) and agree with the project's
     subject contracts. A stale script or a mismatch raises `SpecError`.
 
-    Before the browser starts, it binds the test secrets the spec references
+    Before its session is prepared, it binds the test secrets the spec references
     (`aqa_runner.bound_secrets.bound_secrets`): a missing value raises
     `MissingSecretError`, Playwright's protocol logging `SecretLoggedError`,
     and a binding the run doesn't allow `SpecError`. A bound value's
@@ -237,11 +248,12 @@ async def _replayed(
     gate: EgressGate,
     every_locator: bool,
     *,
-    chromium: BrowserType,
+    chromium: BrowserType | Browser,
     proxy: EgressProxy,
 ) -> _Replayed:
-    """Admit `script` for `setup`, then run it in a browser session that
-    has closed when this returns or raises."""
+    """Admit `script` for `setup`, then run it in a browser session whose
+    context has closed when this returns, and whose browser has when it
+    raises, unless its caller launched it."""
     runnable, checks, bound, redactor = _admitted(script, setup)
     setup = replace(setup, record=setup.record.redacting(redactor))
     run = _Replay(
@@ -264,8 +276,14 @@ async def _replayed(
     )
     record = setup.record
     steps: list[StepResult] = []
-    async with open_browser_session(
-        chromium, egress=proxy, settings=script.browser, redactor=redactor
+    async with (
+        prepared_session(
+            chromium, egress=proxy, settings=script.browser, redactor=redactor
+        )
+        if isinstance(chromium, Browser)
+        else open_browser_session(
+            chromium, egress=proxy, settings=script.browser, redactor=redactor
+        )
     ) as session:
         session.limit_waits(
             action_seconds=setup.config.budgets.resolve_seconds,

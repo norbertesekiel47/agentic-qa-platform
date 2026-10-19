@@ -33,6 +33,10 @@ from packages.runner.tests.executor_fixtures import (
     for_spec,
     serving_app,
 )
+from packages.runner.tests.test_session_failures import (
+    UNPREPARED,
+    exiting_after_the_check,
+)
 
 BASIS = "network: POST /write/save"
 SAVE = [
@@ -173,6 +177,19 @@ def test_a_replay_whose_launch_fails_ends_its_phase(app: App, tmp_path: Path) ->
     left = replayed(app, tmp_path, shop(SAVE), chromium=chromium)
 
     assert isinstance(left.outcome, SandboxUnavailableError)
+    assert left.traffic == PhaseTraffic(0, 0)
+    assert app.paths() == []
+
+
+def test_a_replay_whose_chromium_exits_after_its_check_ends_its_phase(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exiting_after_the_check(monkeypatch)
+
+    left = replayed(app, tmp_path, shop(SAVE))
+
+    assert isinstance(left.outcome, SandboxUnavailableError)
+    assert left.outcome.args == (UNPREPARED,)
     assert left.traffic == PhaseTraffic(0, 0)
     assert app.paths() == []
 
