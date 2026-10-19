@@ -192,8 +192,7 @@ class ProbeOption:
 @dataclass(frozen=True)
 class Offered:
     """What an attempt's probes offer: each option by its ref, o1, o2, ...,
-    and each probe whose response holds more under paths too long to
-    offer."""
+    and each probe whose response holds more under paths too long to offer."""
 
     options: Mapping[str, ProbeOption] = field(default_factory=dict)
     cut: tuple[str, ...] = ()
@@ -217,10 +216,10 @@ def probe_listing(offered: Offered, redactor: Redactor) -> Redacted | None:
 @dataclass(frozen=True)
 class Turn:
     """What a request adds to the prefix. The log, notes, results and parts
-    come from graph state; the snapshot is this turn's observation and the
-    probes the attempt's options, neither of which enters graph state, so
-    each is still the `Redacted` text its scan gave. `parts` is what the last
-    turn's describe_parts listed, if any."""
+    come from graph state; the snapshot is this turn's observation, which
+    never enters graph state, so it is still the `Redacted` text the session
+    gave. `parts` is what the last turn's describe_parts listed, if any, and
+    `probes` the attempt's `probe_listing`, which never enters it either."""
 
     log: tuple[str, ...]
     notes: str

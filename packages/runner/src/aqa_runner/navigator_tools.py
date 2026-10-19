@@ -121,9 +121,8 @@ class Finished:
 
 @dataclass(frozen=True)
 class _Bound:
-    """A planned check's binding: what it reads, a target or a probe's JSON
-    path, or None for a check that reads neither, and its last evaluation in
-    the attempt."""
+    """A planned check's binding: the target or probe JSON path it reads, or
+    None for a check that reads neither, and its last evaluation in the attempt."""
 
     reads: Target | ProbePath | None
     result: AssertionResult
@@ -155,13 +154,13 @@ class Attempt:
     run's start origin and frozen plan, each planned meaning's contract
     (`contracts_by_meaning`), the secrets it binds and its `budget`, the
     run's `resolve_seconds`, the spec, project config and egress gate its
-    checks are evaluated and compiled with, `interrupted`, whether the run
-    has an egress block or an infrastructure event, and what the probes its
-    checks read offer it (`offered`). It keeps its completed actions by step
-    number, as compiling takes them (`ExploredPath`), its last observation,
-    and each planned check's binding: what it reads and its last
-    evaluation. A run whose admission couldn't keep its secrets
-    is `ValueError`, before any use of the browser."""
+    checks are evaluated and compiled with, and `interrupted`, whether the
+    run has an egress block or an infrastructure event. It keeps its completed
+    actions by step number, as compiling takes them (`ExploredPath`), its
+    last observation, and each planned check's binding: what it reads
+    and its last evaluation. A run whose admission couldn't keep its secrets
+    is `ValueError`, before any use of the browser. `offered` is what the
+    probes its checks read offer it (#53 P20)."""
 
     session: BrowserSession
     record: RunRecord
