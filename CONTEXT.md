@@ -83,6 +83,10 @@ _Avoid_: using "ref" for a locator or a target
 An element inside an element ref's element that the snapshot gives no ref of its own, such as the count inside a favorite button's name. Describing the ref's element lists up to twelve, each under a ref such as `p1.2` that serves only the agent's next call; a check binds a part as it binds the element of an element ref, through its subject contract.
 _Avoid_: "part" alone for a contract's part selector or a run record's part (its phase directory)
 
+**Probe option**:
+One value in a probe's response that a `probe_equals` check reading that probe may bind while exploring: its JSON path, under a ref such as `o1`, never the value. Exploring reads each probe its checks read once, before the browser opens, and lists every option in the request's `<probes>` block; compiling turns the option a check bound into its `json_path`.
+_Avoid_: "option" alone for a `select` element's option
+
 **Binding**:
 The link between a target's meaning and the locators that currently find it. A binding either resolves or doesn't; heals repair bindings, never meanings.
 
