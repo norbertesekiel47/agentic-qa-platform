@@ -196,7 +196,8 @@ async def replay(
     from the spec as it is (its `spec_hash`) and agree with the project's
     subject contracts. A stale script or a mismatch raises `SpecError`.
 
-    Before its session is prepared, it binds the test secrets the spec references
+    Before its session is prepared, so after a caller's launch but before
+    its own, it binds the test secrets the spec references
     (`aqa_runner.bound_secrets.bound_secrets`): a missing value raises
     `MissingSecretError`, Playwright's protocol logging `SecretLoggedError`,
     and a binding the run doesn't allow `SpecError`. A bound value's
