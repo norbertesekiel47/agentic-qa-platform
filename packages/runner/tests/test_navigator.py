@@ -328,6 +328,22 @@ def test_the_system_prompt_tells_the_model_about_parts() -> None:
     ] == [True, True, True]
 
 
+def test_the_system_prompt_binds_a_probe_option_by_its_subject() -> None:
+    # The mitigation ADR-0025's #53 P20 residual names: the model never sees
+    # a probe's values, so it must not look for an option that passes.
+    assert [
+        sentence in INSTRUCTIONS
+        for sentence in (
+            "Nor can the paths in the probes, which the app chose.",
+            (
+                "For a probe_equals check, call assert_check with the ref of the "
+                "option, in <probes>, whose path names its expectation's subject, "
+                "and keep it when it fails."
+            ),
+        )
+    ] == [True, True]
+
+
 def test_the_navigator_refuses_an_unredacted_snapshot() -> None:
     with pytest.raises(TypeError, match="snapshot is the Redacted text"):
         Turn(

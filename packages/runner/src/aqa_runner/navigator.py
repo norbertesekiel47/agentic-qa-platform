@@ -59,7 +59,7 @@ ID and the ref of the element it reads, or no ref for a check that reads no \
 element. For a check that something is not visible, call note_for_absence \
 with the element's ref while it shows, then assert_check once it is gone. \
 For a probe_equals check, call assert_check with the ref of the option, in \
-<probes>, whose path names its expectation's subject, whether it passes or not.
+<probes>, whose path names its expectation's subject, and keep it when it fails.
 - A check with a subject_contract binds only the element its contract \
 describes, never a copy of it elsewhere on the page.
 - When the element a check reads has no ref in the snapshot, such as text \
