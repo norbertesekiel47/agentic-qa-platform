@@ -8,8 +8,8 @@ spec and the project config, the start origin and each budget `--budget`
 lays over the config's. A problem with any of them is a spec error (exit 5).
 Then, unless `--force`, a compiled script that is up to date is kept, with
 no model call and no browser: it loads, was compiled from the spec and the
-subject contracts as they are, and agrees with them, so replay would take
-it. Only a run that will call a model needs the provider's key. With
+subject contracts as they are, and agrees with them, as replay's contract
+check requires. Only a run that will call a model needs the provider's key. With
 `--plan-only`, one call on the navigator role writes the plan into the run
 record, with every response's cost record.
 
