@@ -1,6 +1,6 @@
 # Architecture — Agentic QA Platform
 
-Last updated: 2026-10-08 (hosted compute: one Lambda MicroVM per run, ADR-0032; a navigator reply the model didn't finish runs nothing, #53); 2026-10-07 (each step's evidence in the local run record, #50 B; step intents and completions in the local run record, #46; the browser session's document-origin checks, #44; the local run record under the spec root, #41; the browser session, #36; the sandbox check, #35; M1 design decisions, ADR-0024–0026). Decisions referenced as ADR-NNNN live in [`ADRs/`](ADRs/).
+Last updated: 2026-10-18 (a `probe_equals` check binds an option its probe offered, #53 P20); 2026-10-08 (hosted compute: one Lambda MicroVM per run, ADR-0032; a navigator reply the model didn't finish runs nothing, #53); 2026-10-07 (each step's evidence in the local run record, #50 B; step intents and completions in the local run record, #46; the browser session's document-origin checks, #44; the local run record under the spec root, #41; the browser session, #36; the sandbox check, #35; M1 design decisions, ADR-0024–0026). Decisions referenced as ADR-NNNN live in [`ADRs/`](ADRs/).
 
 ## 1. System context
 
@@ -119,7 +119,7 @@ A checkpoint preserves graph state, not the browser. Resuming therefore requires
 | `screenshot(region?)` | Visual observation for verification (hybrid perception, M2; M1's navigator reads the accessibility tree only) |
 | `vision_click(x, y)` | Vision fallback, only when the tree lacks a usable ref (M2) |
 | `describe_parts(ref)` | Explore: list the parts of the element ref, the elements inside it that the snapshot gives no ref of their own (up to twelve, four deep), each under a ref such as `p1.2` that serves only the next call, in a `<parts>` block of the next request. Dispatches nothing (ADR-0025's and ADR-0024's #53 P19 amendments) |
-| `assert_check(check_id, ref)`, `note_for_absence(check_id, ref)` | Explore: bind a coverage-plan check, named by its ID (`a1`, `a2`, ... in plan order), to the element ref it reads, or to a part's ref from the last `describe_parts`, or to none for a check that reads no element, and evaluate it; a `not_visible` check first notes its element while it shows. Compiles directly into the script |
+| `assert_check(check_id, ref)`, `note_for_absence(check_id, ref)` | Explore: bind a coverage-plan check, named by its ID (`a1`, `a2`, ... in plan order), to the element ref it reads, or to a part's ref from the last `describe_parts`, a `probe_equals` check to the ref of an option, such as `o1`, its probe offered in the `<probes>` block, or to none for a check that reads no element, and evaluate it; a `not_visible` check first notes its element while it shows. Compiles directly into the script |
 | `restart()` | Explore: start a new attempt, allowed only under the reset rule in §3.3 (ADR-0024) |
 | `finish(steps)` | Explore: name the log's step numbers that form the path. Heal: a structured verdict (Pydantic-validated) with evidence refs |
 
