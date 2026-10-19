@@ -773,7 +773,7 @@ The test-only named-case recorder (the #41 B1 amendments) gains `explore_fixture
 
 - One explore is many paid calls: the plan, its one retry, and up to `actions_per_attempt` turns. The SDK's two automatic retries (LAB_NOTES, 2026-10-02) multiply a failing call's spend. The maintainer set the ceilings for the recording: $0.20 a run, and $0.699946 for the round, the $1.00 pre-approval less the program's USD 0.300054 spent so far.
 - Where a bound can sit: around the client, which sees messages but not the bytes sent; or in VCR's request filter, which runs on the exact wire request before the real send (vcrpy 8.3.0: `_vcr_request` filters through `can_play_response_for` before `real_handle_async_request`) and again at `Cassette.append`. How to bound a request's input: Anthropic's token-counting endpoint, a provider call per request that can't be proven offline and must be kept out of the cassette; or the body's bytes plus a headroom.
-- Codex's delta review of the plan found bytes plus a headroom an estimate, not an established worst case (its F1), the ledger open to malformed amounts (N2), and the stop rules declaring success before checking the recorder's exit (N1).
+- Three gaps the plan's adversarial review found: bytes plus a headroom is an estimate, not an established worst case; a ledger read from earlier receipts must refuse amounts that aren't money; and an `accepted` receipt is written before promotion, so it can stand beside a failed promotion and the recorder's exit 1.
 
 ### Decision
 
