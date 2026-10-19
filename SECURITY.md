@@ -45,7 +45,7 @@ The agent reads arbitrary page content. A malicious or compromised page may say 
    - The coverage plan is written from the spec alone, before the browser opens, and is frozen for the run, so page content never decides what "done" means.
    - Retries may change bindings and paths, never the plan.
    - The confirmation replay re-checks every assertion with no model involved.
-   - A `probe_equals` check's option is chosen by its JSON path's key names, which the app wrote, with no subject contract: a check that failed can be bound again to an option that passes, and the confirmation can't tell (ADR-0025's #53 P20 amendment, residual).
+   - A `probe_equals` check's option is chosen by its JSON path's key names, which the app wrote, with no subject contract. Once an evaluation of the check doesn't pass, it binds no other option, but the option it binds first, or one it moves to while every evaluation passed, can be a decoy that passes, and the confirmation can't tell (ADR-0025's #213 amendment, residual).
 6. **Fixtures:** `tests/fixtures/pages/injection/` contains hostile pages (hidden text, fake system messages, instructions in alt text, instructions to "update the test"). The suite asserts that verdicts and patches are unaffected.
    - M1 ships the pages aimed at exploring: task hijack, fake success through a visible decoy, binding to a decoy after a failed confirmation, and attempts to steer navigation, documents or secrets outside their limits.
    - M2 adds the pages aimed at healing.
