@@ -549,12 +549,13 @@ def test_a_turn_with_no_probe_options_sends_no_probes_block(prefix: Prefix) -> N
 def test_a_probe_whose_long_paths_were_left_out_says_so_naming_no_key() -> None:
     offered = Offered(
         {"o1": ProbeOption("count", "$.count"), "o2": ProbeOption("other", "$.n")},
-        cut=("count",),
+        cut=("count", "other"),
     )
 
     assert probe_listing(offered, NO_SECRETS) == (
         "o1 count $.count\no2 other $.n\n"
-        "count: values under paths over 128 characters aren't offered"
+        "count: values under paths over 128 characters aren't offered\n"
+        "other: values under paths over 128 characters aren't offered"
     )
 
 
