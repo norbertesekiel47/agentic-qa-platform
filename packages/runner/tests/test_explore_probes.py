@@ -537,3 +537,46 @@ def test_admission_refuses_a_probe_whose_query_spells_a_bound_value(
     assert value not in str(refused.value)
     assert not (tmp_path / "qa" / ".aqa").exists()
     assert (client.requests, app.paths()) == ([], [])
+
+
+def test_a_failed_probe_check_is_refused_another_option_and_publishes_nothing(
+    app: App, tmp_path: Path
+) -> None:
+    app.probe_bodies["count"] = [b'{"count": 3, "other": 2}']
+    client = Scripted(planned(COUNTED), check("o1"), check("o2"), FINISH)
+    budget = ProjectConfig.model_validate({"budgets": {"actions_per_attempt": 3}})
+
+    run = probed(app, tmp_path, client, COUNT, config=budget)
+
+    assert blocks(client, "results") == [
+        "",
+        "a1 is bound, and on this page it is failed",
+        (
+            "assert_check did not run: a1 didn't pass on o1, so it keeps o1 for the "
+            "rest of this attempt"
+        ),
+    ]
+    assert (run.outcome, run.exit_code, written(run)["reasons"]) == (
+        "gave_up",
+        3,
+        ["the attempt took all 3 of its turns", "a1: failed"],
+    )
+    assert not (tmp_path / "qa" / ".compiled").exists()
+    # The capture, o1's binding's two reads, finish's two; o2's none.
+    assert app.probe_reads == {"count": 5}
+
+
+def test_an_option_bound_first_publishes_its_path(app: App, tmp_path: Path) -> None:
+    app.probe_bodies["count"] = [b'{"count": 3, "other": 2}']
+    client = Scripted(planned(COUNTED), check("o2"), FINISH)
+
+    run = probed(app, tmp_path, client, RESET + COUNT)
+
+    assert (run.outcome, run.exit_code, written(run)["published"]) == (
+        "compiled",
+        0,
+        "confirmed",
+    )
+    assert [
+        each.model_dump().get("json_path") for each in published(tmp_path).assertions
+    ] == ["$.other"]

@@ -160,7 +160,8 @@ class Attempt:
     last observation, and each planned check's binding: what it reads
     and its last evaluation. A run whose admission couldn't keep its secrets
     is `ValueError`, before any use of the browser. `offered` is what the
-    probes its checks read offer it (#53 P20)."""
+    probes its checks read offer it (#53 P20), and `_pinned` each
+    `probe_equals` check's path once an evaluation there didn't pass (#213)."""
 
     session: BrowserSession
     record: RunRecord
@@ -178,6 +179,7 @@ class Attempt:
     observation: Redacted | None = field(init=False, default=None)
     _uses: dict[str, TargetUses] = field(init=False, default_factory=dict)
     _bound: dict[str, _Bound] = field(init=False, default_factory=dict)
+    _pinned: dict[str, ProbePath] = field(init=False, default_factory=dict)
     parts: Parts = field(init=False, default_factory=Parts)
 
     def __post_init__(self) -> None:
@@ -307,7 +309,8 @@ class Attempt:
         names, through its meaning's targets (`uses`), a `probe_equals`
         check to the option it names (`_option`), or a check to none, then
         evaluate it once on the page now. A binding is kept whatever its
-        outcome; a refusal binds nothing and changes no earlier binding."""
+        outcome; a refusal binds nothing and changes no earlier binding. A
+        `probe_equals` check that didn't pass binds no other option (#213)."""
         if problem := self._unrunnable("assert_check", call):
             return self._said(problem)
         _, check = planned_checks(self.plan)[call.check_id]
@@ -496,8 +499,9 @@ class Attempt:
 
     def _option(self, call: AssertCheck, check: PlannedCheck) -> ProbePath | str:
         """The JSON path of the option `call.ref` names, or why it can't bind
-        `check`: it isn't one of the check's probe's options, or its path
-        holds a bound value, which no compiled script may."""
+        `check`: it isn't one of the check's probe's options, its path
+        holds a bound value, which no compiled script may, or the check
+        didn't pass on another option, which it keeps (#213)."""
         option = self.offered.options.get(call.ref or "")
         if option is None:
             return (
@@ -511,6 +515,17 @@ class Attempt:
             )
         if self.session.redactor.finds(option.json_path):
             return f"{call.ref}'s path holds a test secret's value, so no check can read it"
+        pinned = self._pinned.get(call.check_id)
+        if pinned is not None and pinned.json_path != option.json_path:
+            (ref,) = (
+                ref
+                for ref, each in self.offered.options.items()
+                if (each.probe, each.json_path) == (check.probe, pinned.json_path)
+            )
+            return (
+                f"{call.check_id} didn't pass on {ref}, so it keeps {ref} for the rest "
+                "of this attempt"
+            )
         return ProbePath(option.json_path)
 
     async def _target(self, call: AssertCheck, check: PlannedCheck) -> Target | None:
@@ -542,7 +557,8 @@ class Attempt:
     ) -> tuple[AssertionResult, ...]:
         """Evaluate each binding's check once on the page now, in plan order,
         with every locator of its target, as the confirmation does
-        (`evaluate_each`), and keep the binding with its result."""
+        (`evaluate_each`), and keep the binding with its result, and a
+        probe path whose result isn't a pass as its check's for good."""
         plan = planned_checks(self.plan)
         ordered = [check_id for check_id in plan if check_id in bindings]
         targets = {
@@ -575,7 +591,10 @@ class Attempt:
             ),
         )
         for result in results:
-            self._bound[result.id] = _Bound(bindings[result.id], result)
+            read = bindings[result.id]
+            self._bound[result.id] = _Bound(read, result)
+            if isinstance(read, ProbePath) and result.outcome != "pass":
+                self._pinned[result.id] = read
         return results
 
 
