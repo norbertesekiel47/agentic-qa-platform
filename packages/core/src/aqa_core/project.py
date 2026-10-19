@@ -597,7 +597,7 @@ def with_budgets(config: ProjectConfig, overrides: Sequence[str]) -> ProjectConf
         else:
             try:
                 given[name] = json.loads(value)
-            except ValueError:  # checked as text, as a quoted YAML value is
+            except ValueError, RecursionError:  # not JSON, or nested past its stack
                 given[name] = value
     if problems:
         raise SpecError(list(dict.fromkeys(problems)))

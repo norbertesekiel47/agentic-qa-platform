@@ -9,15 +9,18 @@ The runner's explore and the browser driver are stand-ins here unless a test
 says otherwise; no browser, no provider."""
 
 import dataclasses
+import errno
 import json
 import re
 from collections.abc import Iterator
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import langsmith
 import pytest
+import typer.core
+import typer.main
 import typer.testing
 from aqa_cli import explore as explore_module
 from aqa_cli.main import app as aqa
@@ -551,12 +554,20 @@ def test_a_fallback_whose_join_spells_a_value_keeps_its_status_line(
     assert not scan.finds(result.output)
 
 
+@pytest.mark.parametrize("when", ["found", "loaded"])
 def test_a_compiled_script_that_cannot_be_read_exits_15_before_any_model_call(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, when: str
 ) -> None:
     spec = shop(tmp_path / "qa")
     target = kept(spec)
-    target.chmod(0)
+    if when == "loaded":
+        # Found readable, then unreadable when it is loaded.
+        def unreadable(*_: object) -> NoReturn:
+            raise PermissionError(errno.EACCES, SENTINEL)
+
+        monkeypatch.setattr(explore_module, "load_compiled", unreadable)
+    else:
+        target.chmod(0)
     client = Scripted()
     try:
         result = unstarted(monkeypatch, [str(spec)], client)
@@ -607,6 +618,58 @@ def test_an_up_to_date_check_binds_no_test_secret(
         0,
         f"up to date shop: {target}\n",
         "",
+    )
+
+
+@pytest.mark.parametrize("value", [None, ""], ids=["unset", "empty"])
+def test_no_provider_key_stops_an_explore_before_any_model_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str | None
+) -> None:
+    if value is None:
+        monkeypatch.delenv("ANTHROPIC_API_KEY")
+    else:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", value)
+    client = Scripted()
+
+    result = unstarted(monkeypatch, [str(shop(tmp_path / "qa"))], client)
+
+    assert (result.exit_code, result.stdout) == (5, "")
+    assert result.stderr == (
+        "spec_error shop: nothing was explored\n"
+        "  ANTHROPIC_API_KEY: not set: the plan's model is Anthropic's\n"
+    )
+    assert client.models == []
+
+
+def test_a_protocol_log_with_a_bound_secret_exits_12_before_any_model_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "fake-pass-4u49")
+    monkeypatch.setenv("DEBUG", "pw:protocol")
+    spec = shop(tmp_path / "qa", preconditions=ACCOUNT, config=SECRETS)
+    client = Scripted()
+
+    result = unstarted(monkeypatch, [str(spec)], client)
+
+    assert result.exit_code == 12, result.output
+    assert result.stdout == ""
+    assert result.stderr.startswith("secret_unusable shop: nothing was explored\n  ")
+    assert "DEBUG" in result.stderr
+    assert copies_found("fake-pass-4u49", texts=[result.stderr]) == []
+    assert client.models == []
+
+
+def test_a_run_document_whose_reasons_are_not_text_is_a_runner_defect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    done = ended("gave_up", 3, reasons="the model refused to write the plan")
+
+    result, _ = invoke(monkeypatch, shop(tmp_path / "qa"), done, Driver())
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, TypeError)
+    assert (
+        str(result.exception) == "a run's document holds its reasons as a list of text"
     )
 
 
@@ -695,10 +758,21 @@ def test_api_md_lists_every_explore_option() -> None:
     text = API.read_text()
     block = text[text.index("aqa explore <spec>") :]
     block = block[: block.index("```")]
-    for option in ("--url", "--plan-only", "--force", "--budget <name>=<value>"):
-        assert option in block
+    group = typer.main.get_command(aqa)
+    assert isinstance(group, typer.core.TyperGroup)
+    options = [
+        name
+        for param in group.commands["explore"].params
+        for name in param.opts
+        if name.startswith("--")
+    ]
+    assert options == ["--url", "--plan-only", "--force", "--budget"]
+    for option in options:
+        assert f"[{option}" in block
+    [budget] = [line for line in block.splitlines() if "[--budget" in line]
+    assert "[--budget <name>=<value>]..." in budget
     for name in Budgets.model_fields:
-        assert name in block
+        assert re.search(rf"\b{name}\b", budget), name
     assert re.search(r"--confirm-repeat\b.*\(planned, #56\)", block)
     assert (
         "--confirm-repeat"
@@ -745,6 +819,10 @@ GIVE = (
             ["model_usd=Infinity"],
             "  --budget: model_usd: Input should be a finite number",
         ),
+        (
+            ["minutes=" + "[" * 200_000],
+            "  --budget: minutes: Input should be a valid number",
+        ),
     ],
     ids=[
         "malformed",
@@ -756,6 +834,7 @@ GIVE = (
         "zero",
         "fraction",
         "infinite",
+        "nested-past-the-stack",
     ],
 )
 def test_a_budget_diagnostic_names_the_budget_and_the_rule_never_what_was_given(
