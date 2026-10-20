@@ -9,21 +9,27 @@ import json
 import os
 import re
 import signal
-import socket
 import subprocess
 import sys
+import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 from aqa_runner.sandbox import HOST_FIXES, LINUX_FIX, OTHER_FIX
 
+from packages.runner.tests.egress_fixtures import unused_port
 from packages.runner.tests.executor_fixtures import serving_app
 from packages.runner.tests.explore_graph_fixtures import PLAN
 
 FAULTS = Path(__file__).parent / "console_faults"
 KEY = "fake-key-for-tests"
+# A start origin no case reaches: each stops before a page loads.
+START = "http://127.0.0.1:9"
 # Words of the faults' causes, never printed: Playwright's advice (ADR-0026).
 CAUSE = ("chromiumSandbox: false", "fake-cause-4u49")  # ADR-0026
 # The driver the command started, stopped and reaped before it exited.
@@ -62,20 +68,15 @@ def shop(root: Path, *, account: str = "", config: str = "{}\n") -> Path:
     return path
 
 
-def unanswered() -> str:
-    """A loopback URL nothing listens on, so no model call leaves the host."""
-    with socket.socket() as held:
-        held.bind(("127.0.0.1", 0))
-        return f"http://127.0.0.1:{held.getsockname()[1]}"
-
-
 def environment(
     tmp_path: Path, fault: str, *, wait: str | None = None, **more: str
 ) -> dict[str, str]:
     """The child's whole environment, built rather than inherited, so no
-    provider key, cloud credential or test secret of this process reaches
-    it. Where Playwright's browsers are is passed on, when this process
-    says, so a real launch finds Chromium."""
+    provider key, cloud credential or test secret in this process's
+    environment reaches it, and a model call goes to a loopback port nothing
+    listens on. HOME stays, for Playwright's browser cache, and where
+    Playwright's browsers are is passed on when this process says, so a
+    real launch finds Chromium."""
     request = {
         "events": str(tmp_path / "events"),
         "plan": PLAN.model_dump(mode="json"),
@@ -83,6 +84,7 @@ def environment(
         "wait": wait,
     }
     browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    provider = f"http://127.0.0.1:{unused_port()}"
     return {
         "PATH": os.environ["PATH"],
         "HOME": os.environ["HOME"],
@@ -91,7 +93,8 @@ def environment(
         "PYTHONPATH": str(FAULTS),
         "AQA_CONSOLE_FAULT": json.dumps(request),
         "ANTHROPIC_API_KEY": KEY,
-        "ANTHROPIC_API_URL": unanswered(),
+        "ANTHROPIC_API_URL": provider,
+        "ANTHROPIC_BASE_URL": provider,
         **({"PLAYWRIGHT_BROWSERS_PATH": browsers} if browsers else {}),
         **more,
     }
@@ -102,11 +105,9 @@ def events(tmp_path: Path) -> list[str]:
     return noted.read_text().splitlines() if noted.exists() else []
 
 
-def explored(
-    aqa: str, tmp_path: Path, spec: Path, environ: dict[str, str], url: str
-) -> Child:
+def explored(aqa: str, tmp_path: Path, spec: Path, environ: dict[str, str]) -> Child:
     done = subprocess.run(
-        [aqa, "explore", str(spec), "--url", url],
+        [aqa, "explore", str(spec), "--url", START],
         capture_output=True,
         text=True,
         timeout=120,
@@ -120,7 +121,7 @@ def faulted(aqa: str, tmp_path: Path, fault: str, **more: str) -> Child:
     """The shop spec explored by a child with `fault`, which must fire."""
     spec = shop(tmp_path / "qa")
     environ = environment(tmp_path, fault, **more)
-    child = explored(aqa, tmp_path, spec, environ, "http://127.0.0.1:9")
+    child = explored(aqa, tmp_path, spec, environ)
     if f"fired {fault}" not in child.events:
         raise AssertionError(
             f"the {fault} fault never fired: events {child.events}, "
@@ -184,7 +185,7 @@ def test_a_real_missing_browser_exits_10(aqa: str, tmp_path: Path) -> None:
     spec = shop(tmp_path / "qa")
     environ = environment(tmp_path, "none", PLAYWRIGHT_BROWSERS_PATH=str(browsers))
 
-    child = explored(aqa, tmp_path, spec, environ, "http://127.0.0.1:9")
+    child = explored(aqa, tmp_path, spec, environ)
 
     assert child.events == ["armed none by aqa", "planned", STOPPED]
     assert child.returncode == 10, child.stderr
@@ -193,11 +194,40 @@ def test_a_real_missing_browser_exits_10(aqa: str, tmp_path: Path) -> None:
     assert re.fullmatch(no_sandbox(tmp_path, why), child.stderr), child.stderr
 
 
+class Unanswered(BaseHTTPRequestHandler):
+    """Keeps each request's line and closes with no response."""
+
+    seen: list[str]
+
+    def do_POST(self) -> None:
+        self.seen.append(self.requestline)
+        self.close_connection = True
+
+
+@contextmanager
+def unanswering() -> Iterator[tuple[str, list[str]]]:
+    """A loopback provider that never answers: its URL, and each request
+    line it was sent."""
+    seen: list[str] = []
+    handler = type("Handler", (Unanswered,), {"seen": seen})
+    with ThreadingHTTPServer(("127.0.0.1", 0), handler) as server:
+        serving = threading.Thread(target=server.serve_forever)
+        serving.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_address[1]}", seen
+        finally:
+            server.shutdown()
+            serving.join()
+
+
 def test_the_harness_fails_closed_without_its_fault(aqa: str, tmp_path: Path) -> None:
-    with pytest.raises(AssertionError) as raised:
-        faulted(aqa, tmp_path, "KeyError", PYTHONPATH="")
+    with unanswering() as (url, seen), pytest.raises(AssertionError) as raised:
+        faulted(aqa, tmp_path, "KeyError", PYTHONPATH="", ANTHROPIC_API_URL=url)
 
     assert str(raised.value) == "the KeyError fault never fired: events [], exit 11"
+    # The unscripted plan call reached the URL the test built: one try and
+    # the SDK's two retries (anthropic_client.py).
+    assert seen == ["POST /v1/messages HTTP/1.1"] * 3
 
 
 def test_the_child_environment_holds_no_provider_key(
@@ -208,7 +238,7 @@ def test_the_child_environment_holds_no_provider_key(
     spec = shop(tmp_path / "qa")
     environ = environment(tmp_path, "environment", PLAYWRIGHT_NODEJS_PATH=NO_NODE)
 
-    child = explored(aqa, tmp_path, spec, environ, "http://127.0.0.1:9")
+    child = explored(aqa, tmp_path, spec, environ)
 
     noted, key, armed = child.events
     names = set(noted.removeprefix("environment ").split())
@@ -244,7 +274,7 @@ def test_a_start_failure_through_the_console_script_exits_13_with_its_one_line(
         )
         more = {"AQA_SECRET_TEST_DRIVER": "driver"} if bound else {}
         environ = environment(tmp_path, "none", PLAYWRIGHT_NODEJS_PATH=NO_NODE, **more)
-        child = explored(aqa, tmp_path, spec, environ, "http://127.0.0.1:9")
+        child = explored(aqa, tmp_path, spec, environ)
         assert child.events == ["armed none by aqa"]
         said = (
             "the rest is withheld, since it would spell a bound value"

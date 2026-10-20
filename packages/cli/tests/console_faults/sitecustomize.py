@@ -5,7 +5,9 @@ production code has no fault flag. AQA_CONSOLE_FAULT holds the test's
 request as JSON: `events`, the file each step is noted in as it happens;
 `plan`, the coverage plan the navigator's model answers the plan call with;
 `fault`, a name in FAULTS; and `wait`, "plan" or "turn" for the call that
-never answers, so the test can signal the child there."""
+never answers, so the test can signal the child there. Python goes on
+without a sitecustomize that raises, so the tests read the noted events,
+never the exit status alone, to know a fault fired."""
 
 import asyncio
 import atexit
