@@ -21,7 +21,8 @@ each stop with its exit code (API.md §7):
    one (14), then, in the record's `confirmation` part (15 when it can't be
    made), in a phase of its own, the path replayed with every locator in a
    fresh browser and no model (`executor.replay`), which ends that phase
-   however it leaves (10, 15, 3, 14).
+   when it returns; otherwise the phase ends once the browser has closed
+   (10, 15, 3, 14).
 3. Read the egress blocks and the infrastructure events once, after the
    last phase's end. With the proxy closed, publish the path when nothing
    stopped the run, confirmed when its confirmation passed, under the
