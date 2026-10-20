@@ -195,7 +195,7 @@ def test_a_real_missing_browser_exits_10(aqa: str, tmp_path: Path) -> None:
 
 
 class Unanswered(BaseHTTPRequestHandler):
-    """Keeps each request's line and closes with no response."""
+    """Keeps each POST's request line and closes with no response."""
 
     seen: list[str]
 
@@ -206,8 +206,8 @@ class Unanswered(BaseHTTPRequestHandler):
 
 @contextmanager
 def unanswering() -> Iterator[tuple[str, list[str]]]:
-    """A loopback provider that never answers: its URL, and each request
-    line it was sent."""
+    """A loopback provider that never answers a POST: its URL, and each
+    POST's request line."""
     seen: list[str] = []
     handler = type("Handler", (Unanswered,), {"seen": seen})
     with ThreadingHTTPServer(("127.0.0.1", 0), handler) as server:
