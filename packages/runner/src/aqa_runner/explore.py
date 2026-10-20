@@ -33,7 +33,7 @@ each stop with its exit code (API.md §7):
 
 from asyncio import get_running_loop, timeout_at
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from pathlib import Path
@@ -504,8 +504,8 @@ async def _attempted(run: Run, explorable: Explorable) -> ExploreEnd:
 
         checks, events = await _phase(run, explorable, proxy, interrupted)
         # The browser has closed. Ending the phase joins every connection,
-        # and replay ends the confirmation's, so nothing records a block or
-        # an event after the snapshot below.
+        # and the confirmation's has ended once `_confirming` returns, so
+        # nothing records a block or an event after the snapshot below.
         traffic = await proxy.end_phase()
         _uncertain(run, traffic)
         script = _publishable(run, interrupted)
@@ -578,8 +578,8 @@ async def _confirming(
     browser, into the record's `confirmation` part, with no model: the
     confirmation's phase, None when it never began. The browser closes
     after the budget's span has ended, as the attempt's does. Replay ends
-    the phase however it leaves, and this ends it when the launch fails
-    before replay, so its traffic is the proxy's to give."""
+    the phase when it returns; otherwise this ends it once the browser has
+    closed, outside the span, so its traffic is the proxy's to give."""
     began: RunRecord | None = None
     result: executor.RunResult | None = None
     limit = timeout_at(run.deadline)
@@ -594,13 +594,9 @@ async def _confirming(
                 return None
             await proxy.begin_phase()
             began = part
-            try:
-                launched = await browser.enter_async_context(
-                    launched_browser(run.playwright.chromium)
-                )
-            except BaseException:
-                await proxy.end_phase()
-                raise
+            launched = await browser.enter_async_context(
+                launched_browser(run.playwright.chromium)
+            )
             result = await executor.replay(
                 script,
                 executor.RunSetup(run.spec, run.config, run.start, part),
@@ -621,6 +617,13 @@ async def _confirming(
             raise  # the phase's listener, which propagates as the attempt's does
         # A journal line the record couldn't take: nothing more may go.
         run.stopped("record_error", UNWRITTEN)
+    finally:
+        if began is not None and result is None:
+            # Replay didn't return, so the phase is this function's to end,
+            # once the browser that held its context has closed; unless
+            # replay's own end had ended it as a cancellation reached it.
+            with suppress(RuntimeError):
+                await proxy.end_phase()
     if began is None:
         return None
     traffic = proxy.ended_traffic()

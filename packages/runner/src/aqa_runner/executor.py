@@ -182,15 +182,16 @@ async def replay(
     settings (ADR-0025), in a fresh browser launched from `chromium`, or in
     `chromium` itself: a browser its caller launched through
     `launched_browser` and closes after this returns or raises. It needs
-    the proxy's phase open, as the browser's launch does, and ends it
-    however it leaves: a refusal before the session, a failed launch, a
-    journal that takes no more lines and a cancellation included, so the
-    proxy keeps the phase's traffic (`EgressProxy.ended_traffic`). On a
-    return, the session's context, and a browser of its own, have closed
-    before the phase ends; only then does it read the run's egress blocks
-    and infrastructure events. When it raises, a browser of its own has
-    closed before the phase ends, and a caller's browser takes the
-    session's context when it closes.
+    the proxy's phase open, as the browser's launch does. With a browser
+    of its own it ends the phase however it leaves, once that browser has
+    closed: a refusal before the session, a failed launch, a journal that
+    takes no more lines and a cancellation included, so the proxy keeps the
+    phase's traffic (`EgressProxy.ended_traffic`). With a caller's browser
+    it ends the phase when it returns, once the session's context has
+    closed, and when it raises leaves that end to its caller, since the
+    context is still live until that browser closes: ending the phase frees
+    the listener's port (#204). Only once the phase has ended does it read
+    the run's egress blocks and infrastructure events.
 
     Before accepting steps or binding secrets, the script must be compiled
     from the spec as it is (its `spec_hash`) and agree with the project's
@@ -216,6 +217,8 @@ async def replay(
             script, setup, gate, every_locator, chromium=chromium, proxy=proxy
         )
     except BaseException:
+        if isinstance(chromium, Browser):
+            raise  # the session's context is live until the caller's close
         # The failure to report: a phase the caller left unopened, or that
         # another task is ending, never replaces it.
         with suppress(RuntimeError):

@@ -4,9 +4,11 @@ with the run's redactor, checks kept when the minutes budget runs out, a
 browser whose selector engines were never registered, blocks and events
 together with other stops, and a journal poisoned mid-turn. A session that
 can't be prepared after the sandbox check exits 10, in the attempt and in
-the confirmation, whatever the budget or the driver does at the close, and
-a Ctrl-C mid-turn with the driver gone stays the interrupt (#204). Real
-Chromium against the executor's fixture app, with a scripted model."""
+the confirmation, whatever the budget or the driver does at the close, a
+Ctrl-C mid-turn with the driver gone stays the interrupt, and the
+confirmation's phase ends once its browser has closed or, on a return, its
+context (#204). Real Chromium against the executor's fixture app, with a
+scripted model."""
 
 import asyncio
 import functools
@@ -22,7 +24,7 @@ from typing import Any
 
 import pytest
 from aqa_core.config import ProjectConfig
-from aqa_runner import explore
+from aqa_runner import explore, sandbox
 from aqa_runner.binding import register_binding_engine
 from aqa_runner.browser_session import prepared_session
 from aqa_runner.chat_client import Reply
@@ -34,8 +36,14 @@ from aqa_runner.redaction import Redactor
 from langchain_core.messages import BaseMessage
 from playwright.async_api import Browser, Playwright
 
+from packages.runner.tests.document_fixtures import until
 from packages.runner.tests.egress_fixtures import gate
-from packages.runner.tests.executor_fixtures import App, read_steps, serving_app
+from packages.runner.tests.executor_fixtures import (
+    PAGES,
+    App,
+    read_steps,
+    serving_app,
+)
 from packages.runner.tests.explore_graph_fixtures import (
     CLICK,
     FILL,
@@ -45,10 +53,13 @@ from packages.runner.tests.explore_graph_fixtures import (
 )
 from packages.runner.tests.secret_fixtures import FAKE_VALUE
 from packages.runner.tests.test_explore_confirm import (
+    CONFIRMATION_PHASE,
+    HELD_SAVE,
     PATH,
     UNCOUNTED_PHASE,
     compiled_file,
     confirming,
+    resets,
 )
 from packages.runner.tests.test_explore_graph import (
     ACCOUNT,
@@ -349,6 +360,91 @@ def test_a_confirmation_whose_chromium_exits_after_its_check_exits_10_when_the_b
 
     assert (run.outcome, run.exit_code) == ("no_sandbox", 10)
     assert written(run)["reasons"] == [UNPREPARED]
+
+
+def browsers_at_each_end(monkeypatch: pytest.MonkeyPatch) -> list[tuple[bool, int]]:
+    """At each phase's end, whether the run's latest browser was still
+    connected, and how many contexts it held."""
+    launched: list[Browser] = []
+    seen: list[tuple[bool, int]] = []
+    launch = sandbox.launch
+    end = EgressProxy.end_phase
+
+    async def launching(chromium: Any) -> Browser:
+        launched.append(await launch(chromium))
+        return launched[-1]
+
+    async def ending(proxy: EgressProxy) -> PhaseTraffic:
+        seen.append((launched[-1].is_connected(), len(launched[-1].contexts)))
+        return await end(proxy)
+
+    monkeypatch.setattr("aqa_runner.browser_session.launch", launching)
+    monkeypatch.setattr(EgressProxy, "end_phase", ending)
+    return seen
+
+
+def test_a_confirmation_that_raises_mid_dispatch_ends_its_phase_once_its_browser_has_closed(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ends = browsers_at_each_end(monkeypatch)
+    limits = deadlines(monkeypatch)
+    expiry: list[asyncio.Task[None]] = []
+
+    async def expire() -> None:
+        await until(lambda: "/held/save" in app.paths())
+        limits[-1].reschedule(asyncio.get_running_loop().time())
+
+    def held() -> None:
+        monkeypatch.setitem(PAGES, "shop", HELD_SAVE)
+        expiry.append(asyncio.get_running_loop().create_task(expire()))
+
+    resets(monkeypatch, held)
+
+    run = confirming(app, tmp_path, Scripted(planned(), *PATH))
+
+    assert (run.outcome, run.exit_code) == ("non_resumable", 4)
+    phases = [CLEAN_PHASE, UNCOUNTED_PHASE | {"plain_uncertain": 1}]
+    assert written(run)["phases"] == phases
+    # A live context would name the listener's port after it was freed.
+    assert ends == [(False, 0), (False, 0)]
+
+
+def test_a_confirmation_that_returns_ends_its_phase_once_with_its_context_closed(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ends = browsers_at_each_end(monkeypatch)
+
+    run = confirming(app, tmp_path, Scripted(planned(), *PATH))
+
+    assert (run.outcome, run.exit_code) == ("compiled", 0)
+    assert written(run)["phases"] == [CLEAN_PHASE, CONFIRMATION_PHASE]
+    assert ends == [(False, 0), (True, 0)]
+
+
+def test_a_confirmation_whose_budget_runs_out_once_replay_has_ended_its_phase_exits_3(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    limits = deadlines(monkeypatch)
+    end = EgressProxy.end_phase
+
+    async def overtaken(proxy: EgressProxy) -> PhaseTraffic:
+        # As a join cancelled once its phase has ended re-raises. The
+        # attempt's phase ends after its span, where the deadline can't move.
+        traffic = await end(proxy)
+        with suppress(RuntimeError):
+            limits[-1].reschedule(asyncio.get_running_loop().time())
+        await asyncio.sleep(0)
+        return traffic
+
+    monkeypatch.setattr(EgressProxy, "end_phase", overtaken)
+
+    run = confirming(app, tmp_path, Scripted(planned(), *PATH))
+
+    assert (run.outcome, run.exit_code) == ("gave_up", 3)
+    document = written(run)
+    assert document["reasons"] == ["the minutes budget ran out"]
+    assert document["phases"] == [CLEAN_PHASE, UNCOUNTED_PHASE]
+    assert (document["published"], document["confirmation"]) == (None, None)
 
 
 def test_ctrl_c_mid_turn_with_the_driver_gone_is_a_keyboard_interrupt(

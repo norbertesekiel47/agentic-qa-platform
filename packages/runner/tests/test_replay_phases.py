@@ -1,12 +1,14 @@
 """Replay ends its egress proxy's phase however it leaves, a refusal
 before the launch included (ADR-0024's #53 P16 amendment): once its
 browser has closed, so the proxy keeps that phase's traffic for
-`EgressProxy.ended_traffic` and no caller ends it twice. Real Chromium on
-the fixture app's shop page; no model."""
+`EgressProxy.ended_traffic` and no caller ends it twice. In a browser its
+caller launched, it ends the phase on a return and leaves it to that caller
+on a raise (#204). Real Chromium on the fixture app's shop page; no model."""
 
 import asyncio
 import errno
 import os
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -16,6 +18,7 @@ import pytest
 from aqa_core.compiled import CompiledScript
 from aqa_core.config import ProjectConfig
 from aqa_core.project import SpecError
+from aqa_runner.browser_session import launched_browser
 from aqa_runner.egress_proxy import EgressProxy, PhaseTraffic
 from aqa_runner.executor import RunResult, RunSetup, replay
 from aqa_runner.locator_generation import register_identity_engine
@@ -139,6 +142,62 @@ def replayed(
     return asyncio.run(bounded())
 
 
+@dataclass(frozen=True)
+class LeftInItsCallersBrowser:
+    """How a replay in its caller's browser left: what it returned or
+    raised, whether that browser was still connected and how many contexts
+    it held, whether replay ended the phase, and the phase's traffic."""
+
+    outcome: RunResult | BaseException
+    connected: bool
+    contexts: int
+    ended_by_replay: bool
+    traffic: PhaseTraffic
+
+
+def replayed_in_its_callers_browser(
+    app: App, tmp_path: Path, script: CompiledScript, *, cancel_at: str | None = None
+) -> LeftInItsCallersBrowser:
+    """Replay `script` in a browser launched as explore's confirmation
+    launches it, cancelling it once the app has seen `cancel_at`. A phase
+    replay leaves open, the caller ends once that browser has closed."""
+    config = ProjectConfig()
+    spec = a_spec(tmp_path, config, start_url="/page/shop")
+    run_gate = gate(allowed=(app.origin,))
+
+    async def scenario() -> LeftInItsCallersBrowser:
+        async with async_playwright() as playwright, EgressProxy(run_gate) as proxy:
+            await register_identity_engine(playwright)
+            async with launched_browser(playwright.chromium) as browser:
+                replaying = asyncio.create_task(
+                    replay(
+                        for_spec(script, spec),
+                        RunSetup(spec, config, app.origin, RunRecord.create(tmp_path)),
+                        chromium=browser,
+                        proxy=proxy,
+                        gate=run_gate,
+                    )
+                )
+                if cancel_at is not None:
+                    await until(lambda: cancel_at in app.paths())
+                    replaying.cancel()
+                (outcome,) = await asyncio.gather(replaying, return_exceptions=True)
+                connected, contexts = browser.is_connected(), len(browser.contexts)
+                ended = None
+                with suppress(RuntimeError):  # the phase is still open
+                    ended = proxy.ended_traffic()
+            traffic = ended if ended is not None else await proxy.end_phase()
+            return LeftInItsCallersBrowser(
+                outcome, connected, contexts, ended is not None, traffic
+            )
+
+    async def bounded() -> LeftInItsCallersBrowser:
+        async with asyncio.timeout(60):
+            return await scenario()
+
+    return asyncio.run(bounded())
+
+
 def shop(steps: list[dict[str, Any]]) -> CompiledScript:
     return compiled(steps, targets=SHOP_TARGETS, assertions=SAVED)
 
@@ -169,6 +228,30 @@ def test_a_replay_cancelled_mid_dispatch_ends_its_phase(
     # The held navigation went upstream and its answer never came back.
     assert left.traffic == PhaseTraffic(plain_uncertain=1, tunnel_uncertain=0)
     assert left.unresolved == (PendingIntent(1, True),)
+
+
+def test_a_replay_in_its_callers_browser_that_returns_ends_its_phase_with_its_context_closed(
+    app: App, tmp_path: Path
+) -> None:
+    left = replayed_in_its_callers_browser(app, tmp_path, shop(SAVE))
+
+    assert isinstance(left.outcome, RunResult)
+    assert left.outcome.outcome == "passed"
+    assert (left.connected, left.contexts, left.ended_by_replay) == (True, 0, True)
+    assert left.traffic == PhaseTraffic(0, 0)
+
+
+def test_a_replay_in_its_callers_browser_that_raises_leaves_its_phase_to_its_caller(
+    app: App, tmp_path: Path
+) -> None:
+    left = replayed_in_its_callers_browser(
+        app, tmp_path, shop(HELD), cancel_at="/held/x"
+    )
+
+    assert isinstance(left.outcome, asyncio.CancelledError)
+    # The session's context is still live until the browser closes.
+    assert (left.connected, left.contexts, left.ended_by_replay) == (True, 1, False)
+    assert left.traffic == PhaseTraffic(plain_uncertain=1, tunnel_uncertain=0)
 
 
 def test_a_replay_whose_launch_fails_ends_its_phase(app: App, tmp_path: Path) -> None:
