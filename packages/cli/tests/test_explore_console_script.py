@@ -30,6 +30,7 @@ CAUSE = ("chromiumSandbox: false", "fake-cause-4u49")  # ADR-0026
 STOPPED = "driver at exit: 0"
 # A driver that can't be spawned: Playwright's node, at a path that isn't.
 NO_NODE = "/nonexistent/fake-cause-4u49/node"
+NO_DRIVER = "the browser driver couldn't start, so nothing was explored"
 ACCOUNT = (
     "  account: { email: reader@example.test, password: { secret: TEST_DRIVER } }\n"
 )
@@ -133,7 +134,7 @@ def record(tmp_path: Path) -> Path:
     return run
 
 
-def stopped(tmp_path: Path, why: str) -> str:
+def no_sandbox(tmp_path: Path, why: str) -> str:
     """The stderr of a run its browser's launch stopped: its line, our
     message alone, and the plan's check it never bound."""
     run = re.escape(str(record(tmp_path)))
@@ -170,7 +171,7 @@ def test_each_launch_failure_through_the_console_script_exits_10_naming_the_host
     ]
     assert child.returncode == 10, child.stderr
     assert child.stdout == ""
-    assert re.fullmatch(stopped(tmp_path, why), child.stderr), child.stderr
+    assert re.fullmatch(no_sandbox(tmp_path, why), child.stderr), child.stderr
     for text in (child.stdout, child.stderr):
         assert "Traceback" not in text
         assert "direct cause" not in text
@@ -189,7 +190,7 @@ def test_a_real_missing_browser_exits_10(aqa: str, tmp_path: Path) -> None:
     assert child.returncode == 10, child.stderr
     assert child.stdout == ""
     why = f"Chromium could not be launched or its sandbox checked (Error). {FIX}"
-    assert re.fullmatch(stopped(tmp_path, why), child.stderr), child.stderr
+    assert re.fullmatch(no_sandbox(tmp_path, why), child.stderr), child.stderr
 
 
 def test_the_harness_fails_closed_without_its_fault(aqa: str, tmp_path: Path) -> None:
@@ -216,6 +217,7 @@ def test_the_child_environment_holds_no_provider_key(
     assert names - environ.keys() <= {"LC_CTYPE", "__CF_USER_TEXT_ENCODING"}, names
     assert (key, armed) == ("key fake: True", "armed environment by aqa")
     assert child.returncode == 13, child.stderr
+    assert (child.stdout, child.stderr) == ("", f"unreachable shop: {NO_DRIVER}\n")
 
 
 @pytest.mark.parametrize("case", ["driver", "listener", "withheld"])
@@ -247,7 +249,7 @@ def test_a_start_failure_through_the_console_script_exits_13_with_its_one_line(
         said = (
             "the rest is withheld, since it would spell a bound value"
             if bound
-            else "the browser driver couldn't start, so nothing was explored"
+            else NO_DRIVER
         )
 
     assert child.returncode == 13, child.stderr

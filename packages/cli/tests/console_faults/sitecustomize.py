@@ -104,6 +104,9 @@ def environment() -> None:
     note(f"key fake: {os.environ.get('ANTHROPIC_API_KEY') == FAKE_KEY}")
 
 
+SPAWN = asyncio.create_subprocess_exec
+
+
 async def spawned(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
     """Playwright's driver, as it is spawned, noted at exit with its exit
     status: None while the command never stopped it."""
@@ -113,7 +116,6 @@ async def spawned(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
     return process
 
 
-SPAWN = asyncio.create_subprocess_exec
 FAULTS: dict[str, Callable[[], None]] = {
     "none": lambda: None,
     "environment": environment,
