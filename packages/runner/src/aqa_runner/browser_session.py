@@ -899,7 +899,9 @@ async def open_browser_session(
     and every request through routing and `egress`, the run's egress proxy
     (`prepared_session`), and close the browser, its temporary profile with
     it, when the session ends."""
-    _ = egress.url  # an egress proxy that isn't serving fails before a launch
+    # an egress proxy that isn't serving fails here, before a launch;
+    # prepared_session reads the URL again as it uses it
+    _ = egress.url
     async with (
         launched_browser(chromium) as browser,
         prepared_session(
