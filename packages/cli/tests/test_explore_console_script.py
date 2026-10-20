@@ -1,0 +1,295 @@
+"""`aqa explore` as users run it: the installed console script in a child
+process, with its faults and its model's plan installed by the test-only
+`console_faults/sitecustomize.py` (TESTING.md §1, Console-script children).
+Each test reads the child's exit status, its real stdout and stderr, and the
+events that module noted, so a fault that never fired fails the test (#53
+AC10; ADR-0024, ADR-0026)."""
+
+import json
+import os
+import re
+import signal
+import socket
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+import pytest
+from aqa_runner.sandbox import HOST_FIXES, LINUX_FIX, OTHER_FIX
+
+from packages.runner.tests.executor_fixtures import serving_app
+from packages.runner.tests.explore_graph_fixtures import PLAN
+
+FAULTS = Path(__file__).parent / "console_faults"
+KEY = "fake-key-for-tests"
+# Words of the faults' causes, never printed: Playwright's advice (ADR-0026).
+CAUSE = ("chromiumSandbox: false", "fake-cause-4u49")  # ADR-0026
+# The driver the command started, stopped and reaped before it exited.
+STOPPED = "driver at exit: 0"
+# A driver that can't be spawned: Playwright's node, at a path that isn't.
+NO_NODE = "/nonexistent/fake-cause-4u49/node"
+ACCOUNT = (
+    "  account: { email: reader@example.test, password: { secret: TEST_DRIVER } }\n"
+)
+SECRETS = '{"secrets": {"TEST_DRIVER": {"origins": ["start"], "field": "password"}}}\n'
+
+
+@dataclass(frozen=True)
+class Child:
+    """How a child `aqa` ended: its exit status, what it wrote to its real
+    stdout and stderr, and what its faults module noted, in order."""
+
+    returncode: int
+    stdout: str
+    stderr: str
+    events: list[str]
+
+
+def shop(root: Path, *, account: str = "", config: str = "{}\n") -> Path:
+    """The shop spec (`explore_graph_fixtures.PLAN` covers it) under the
+    spec root `root`, made."""
+    root.mkdir(parents=True)
+    (root / "config.yaml").write_text(config)
+    path = root / "shop.spec.md"
+    path.write_text(
+        "---\nid: shop\ngoal: A shopper saves their name.\n"
+        f"preconditions:\n  start_url: /page/shop\n{account}"
+        "expect:\n  - The shop says the name was saved\n---\n"
+    )
+    return path
+
+
+def unanswered() -> str:
+    """A loopback URL nothing listens on, so no model call leaves the host."""
+    with socket.socket() as held:
+        held.bind(("127.0.0.1", 0))
+        return f"http://127.0.0.1:{held.getsockname()[1]}"
+
+
+def environment(
+    tmp_path: Path, fault: str, *, wait: str | None = None, **more: str
+) -> dict[str, str]:
+    """The child's whole environment, built rather than inherited, so no
+    provider key, cloud credential or test secret of this process reaches
+    it. Where Playwright's browsers are is passed on, when this process
+    says, so a real launch finds Chromium."""
+    request = {
+        "events": str(tmp_path / "events"),
+        "plan": PLAN.model_dump(mode="json"),
+        "fault": fault,
+        "wait": wait,
+    }
+    browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    return {
+        "PATH": os.environ["PATH"],
+        "HOME": os.environ["HOME"],
+        "TMPDIR": str(tmp_path),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": str(FAULTS),
+        "AQA_CONSOLE_FAULT": json.dumps(request),
+        "ANTHROPIC_API_KEY": KEY,
+        "ANTHROPIC_API_URL": unanswered(),
+        **({"PLAYWRIGHT_BROWSERS_PATH": browsers} if browsers else {}),
+        **more,
+    }
+
+
+def events(tmp_path: Path) -> list[str]:
+    noted = tmp_path / "events"
+    return noted.read_text().splitlines() if noted.exists() else []
+
+
+def explored(
+    aqa: str, tmp_path: Path, spec: Path, environ: dict[str, str], url: str
+) -> Child:
+    done = subprocess.run(
+        [aqa, "explore", str(spec), "--url", url],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env=environ,
+    )
+    return Child(done.returncode, done.stdout, done.stderr, events(tmp_path))
+
+
+def faulted(aqa: str, tmp_path: Path, fault: str, **more: str) -> Child:
+    """The shop spec explored by a child with `fault`, which must fire."""
+    spec = shop(tmp_path / "qa")
+    environ = environment(tmp_path, fault, **more)
+    child = explored(aqa, tmp_path, spec, environ, "http://127.0.0.1:9")
+    if f"fired {fault}" not in child.events:
+        raise AssertionError(
+            f"the {fault} fault never fired: events {child.events}, "
+            f"exit {child.returncode}"
+        )
+    return child
+
+
+def record(tmp_path: Path) -> Path:
+    [run] = (tmp_path / "qa" / ".aqa" / "runs").iterdir()
+    return run
+
+
+def stopped(tmp_path: Path, why: str) -> str:
+    """The stderr of a run its browser's launch stopped: its line, our
+    message alone, and the plan's check it never bound."""
+    run = re.escape(str(record(tmp_path)))
+    return (
+        rf"no_sandbox shop: \d+\.\ds, \$0\.003, run record: {run}\n"
+        rf"  {re.escape(why)}\n  a1: never bound\n"
+    )
+
+
+FIX = HOST_FIXES.get(sys.platform, OTHER_FIX)
+LAUNCHES = [
+    (
+        "SandboxUnavailableError",
+        f"Chromium's sandbox can't start on this host. {LINUX_FIX}",
+    ),
+    *(
+        (kind, f"Chromium could not be launched or its sandbox checked ({kind}). {FIX}")
+        for kind in ("Error", "KeyError", "ValueError", "OSError", "ProcessLookupError")
+    ),
+]
+
+
+@pytest.mark.parametrize(("fault", "why"), LAUNCHES, ids=[f for f, _ in LAUNCHES])
+def test_each_launch_failure_through_the_console_script_exits_10_naming_the_host_fix(
+    aqa: str, tmp_path: Path, fault: str, why: str
+) -> None:
+    child = faulted(aqa, tmp_path, fault)
+
+    assert child.events == [
+        f"armed {fault} by aqa",
+        "planned",
+        f"fired {fault}",
+        STOPPED,
+    ]
+    assert child.returncode == 10, child.stderr
+    assert child.stdout == ""
+    assert re.fullmatch(stopped(tmp_path, why), child.stderr), child.stderr
+    for text in (child.stdout, child.stderr):
+        assert "Traceback" not in text
+        assert "direct cause" not in text
+        assert not any(cause in text for cause in CAUSE)
+
+
+def test_a_real_missing_browser_exits_10(aqa: str, tmp_path: Path) -> None:
+    browsers = tmp_path / "browsers"
+    browsers.mkdir()  # empty: no Chromium to launch
+    spec = shop(tmp_path / "qa")
+    environ = environment(tmp_path, "none", PLAYWRIGHT_BROWSERS_PATH=str(browsers))
+
+    child = explored(aqa, tmp_path, spec, environ, "http://127.0.0.1:9")
+
+    assert child.events == ["armed none by aqa", "planned", STOPPED]
+    assert child.returncode == 10, child.stderr
+    assert child.stdout == ""
+    why = f"Chromium could not be launched or its sandbox checked (Error). {FIX}"
+    assert re.fullmatch(stopped(tmp_path, why), child.stderr), child.stderr
+
+
+def test_the_harness_fails_closed_without_its_fault(aqa: str, tmp_path: Path) -> None:
+    with pytest.raises(AssertionError) as raised:
+        faulted(aqa, tmp_path, "KeyError", PYTHONPATH="")
+
+    assert str(raised.value) == "the KeyError fault never fired: events [], exit 11"
+
+
+def test_the_child_environment_holds_no_provider_key(
+    aqa: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("ANTHROPIC_API_KEY", "AWS_SECRET_ACCESS_KEY", "OPENAI_API_KEY"):
+        monkeypatch.setenv(name, "fake-parent-value-4u49")
+    spec = shop(tmp_path / "qa")
+    environ = environment(tmp_path, "environment", PLAYWRIGHT_NODEJS_PATH=NO_NODE)
+
+    child = explored(aqa, tmp_path, spec, environ, "http://127.0.0.1:9")
+
+    noted, key, armed = child.events
+    names = set(noted.removeprefix("environment ").split())
+    assert names.isdisjoint({"AWS_SECRET_ACCESS_KEY", "OPENAI_API_KEY"}), names
+    # Python's C-locale coercion (PEP 538) and macOS add these two themselves.
+    assert names - environ.keys() <= {"LC_CTYPE", "__CF_USER_TEXT_ENCODING"}, names
+    assert (key, armed) == ("key fake: True", "armed environment by aqa")
+    assert child.returncode == 13, child.stderr
+
+
+@pytest.mark.parametrize("case", ["driver", "listener", "withheld"])
+def test_a_start_failure_through_the_console_script_exits_13_with_its_one_line(
+    aqa: str, tmp_path: Path, case: str
+) -> None:
+    if case == "listener":
+        child = faulted(aqa, tmp_path, "listener")
+        assert child.events == [
+            "armed listener by aqa",
+            "planned",
+            "fired listener",
+            STOPPED,
+        ]
+        said = "the egress listener couldn't start, so nothing was explored"
+    else:
+        # TEST_DRIVER's value, `driver`, is in the driver's line, so the
+        # fixed fallback is written instead.
+        bound = case == "withheld"
+        spec = shop(
+            tmp_path / "qa",
+            account=ACCOUNT if bound else "",
+            config=SECRETS if bound else "{}\n",
+        )
+        more = {"AQA_SECRET_TEST_DRIVER": "driver"} if bound else {}
+        environ = environment(tmp_path, "none", PLAYWRIGHT_NODEJS_PATH=NO_NODE, **more)
+        child = explored(aqa, tmp_path, spec, environ, "http://127.0.0.1:9")
+        assert child.events == ["armed none by aqa"]
+        said = (
+            "the rest is withheld, since it would spell a bound value"
+            if bound
+            else "the browser driver couldn't start, so nothing was explored"
+        )
+
+    assert child.returncode == 13, child.stderr
+    assert child.stdout == ""
+    assert child.stderr == f"unreachable shop: {said}\n"
+
+
+@pytest.mark.parametrize("wait", ["plan", "turn"])
+def test_a_sigint_while_exploring_exits_130_with_its_driver_stopped(
+    aqa: str, tmp_path: Path, wait: str
+) -> None:
+    spec = shop(tmp_path / "qa")
+    environ = environment(tmp_path, "none", wait=wait)
+    with (
+        serving_app() as app,
+        subprocess.Popen(
+            [aqa, "explore", str(spec), "--url", app.origin],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=environ,
+        ) as child,
+    ):
+        try:
+            deadline = time.monotonic() + 60
+            while events(tmp_path)[-1:] != ["waiting"]:
+                assert child.poll() is None, child.communicate()
+                assert time.monotonic() < deadline, "the call never started"
+                time.sleep(0.05)
+            child.send_signal(signal.SIGINT)
+            stdout, stderr = child.communicate(timeout=60)
+        finally:
+            if child.poll() is None:
+                child.kill()  # only this recorded child, never by pattern
+
+    assert child.returncode == 130, stderr
+    assert (stdout, stderr) == ("", "")
+    run = record(tmp_path)
+    assert not (run / "explore.json").exists()
+    if wait == "turn":
+        assert events(tmp_path) == ["armed none by aqa", "planned", "waiting", STOPPED]
+        assert len((run / "costs.jsonl").read_text().splitlines()) == 1
+    else:
+        assert events(tmp_path) == ["armed none by aqa", "waiting", STOPPED]
+        assert not (run / "costs.jsonl").exists()
