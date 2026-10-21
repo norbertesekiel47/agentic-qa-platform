@@ -495,3 +495,51 @@ def test_repeated_keys_are_reported_in_the_order_the_text_writes_them(
         "targets.email_input.locators[0].name",
         "assertions[4].pattern",
     ]
+
+
+RELOAD_CONDITION = {"id": "c1", "condition": "checked after a reload", "kind": "reload"}
+
+
+def reload_required(*steps: dict[str, Any], kind: str = "reload") -> str:
+    """The example requiring a reload condition, with `steps` added."""
+
+    def change(script: dict[str, Any]) -> None:
+        script["coverage"]["requires"] = [RELOAD_CONDITION | {"kind": kind}]
+        script["steps"][0]["satisfies"] = ["c1"]
+        script["steps"].extend(steps)
+
+    return edited(change)
+
+
+def test_only_a_reload_step_meets_a_reload_condition(tmp_path: Path) -> None:
+    found = problems(tmp_path, reload_required(), DECLARES_TEST_PASSWORD)
+
+    assert found == (
+        (
+            "steps[0].satisfies[0]: 'c1' is a reload condition, which only a "
+            "reload step meets"
+        ),
+    )
+    reloaded = {
+        "seq": 10,
+        "action": "reload",
+        "side_effect": False,
+        "satisfies": ["c1"],
+    }
+    text = edited(
+        lambda s: (
+            s["coverage"].update(requires=[RELOAD_CONDITION]),
+            s["steps"].append(reloaded),
+        )
+    )
+    script = load_compiled(write(tmp_path, text), DECLARES_TEST_PASSWORD)
+    assert [(step.action, step.satisfies) for step in script.steps][-1] == (
+        "reload",
+        ("c1",),
+    )
+
+
+def test_a_condition_kind_this_reader_does_not_know_is_refused(tmp_path: Path) -> None:
+    found = problems(tmp_path, reload_required(kind="refresh"), DECLARES_TEST_PASSWORD)
+
+    assert found == ("coverage.requires[0].kind: Input should be 'reload'",)

@@ -292,6 +292,28 @@ def test_plan_hash_escapes_non_ascii_as_spec_hash_does() -> None:
     )
 
 
+def test_a_required_conditions_kind_is_reload_or_left_out() -> None:
+    typed = plan(
+        requires=[{"id": "c1", "condition": "after a reload", "kind": "reload"}]
+    )
+    canonical = (
+        '{"expectations":[{"checks":[{"check":"visible_unoccluded",'
+        '"target_meaning":"the payment step\'s submit button"}],'
+        '"claim":"visible and not covered","expect_index":0,'
+        '"subject":"the payment step\'s submit button"}],'
+        '"requires":[{"condition":"after a reload","id":"c1","kind":"reload"}]}'
+    )
+
+    assert (
+        plan_hash(typed) == "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    )
+    with pytest.raises(ValidationError) as error:
+        plan(requires=[{"id": "c1", "condition": "after a reload", "kind": "refresh"}])
+    assert [detail["loc"] for detail in error.value.errors()] == [
+        ("requires", 0, "kind")
+    ]
+
+
 # Each changes one thing the plan_hash covers: a subject, a claim, a check, an
 # unsupported expectation's reason and need, and a required condition.
 CHANGES: dict[str, dict[str, Any]] = {

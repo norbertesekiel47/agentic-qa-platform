@@ -20,6 +20,7 @@ from aqa_core.compiled import (
     FillSecret,
     NotVisible,
     ProbeEqualsBaseline,
+    Reload,
     Select,
     TextInTarget,
     VisibleUnoccluded,
@@ -419,8 +420,11 @@ def _defined_twice(where: str, field: str, values: Sequence[object]) -> Iterator
 
 def _step_names(script: CompiledScript, config: ProjectConfig) -> Iterator[str]:
     """Names the steps use that nothing defines: a target, a secret the
-    project config doesn't declare, or a required condition."""
-    conditions = {condition.id for condition in script.coverage.requires}
+    project config doesn't declare, or a required condition, and a reload
+    condition a step other than a reload claims to meet."""
+    conditions = {
+        condition.id: condition.kind for condition in script.coverage.requires
+    }
     for index, step in enumerate(script.steps):
         where = f"steps[{index}]"
         match step:
@@ -441,6 +445,11 @@ def _step_names(script: CompiledScript, config: ProjectConfig) -> Iterator[str]:
                 yield (
                     f"{where}.satisfies[{position}]: {condition!r} names no "
                     "condition in coverage.requires"
+                )
+            elif conditions[condition] == "reload" and not isinstance(step, Reload):
+                yield (
+                    f"{where}.satisfies[{position}]: {condition!r} is a reload "
+                    "condition, which only a reload step meets"
                 )
 
 
