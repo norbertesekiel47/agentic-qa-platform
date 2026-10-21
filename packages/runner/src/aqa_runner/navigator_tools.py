@@ -406,7 +406,12 @@ class Attempt:
                 self.spec,
                 self.config,
                 self.plan,
-                ExploredPath(self.steps, call.steps, bound),
+                ExploredPath(
+                    self.steps,
+                    call.steps,
+                    bound,
+                    tuple((each.condition, each.step) for each in call.satisfies),
+                ),
                 by,
             )
         except CompileError as error:

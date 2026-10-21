@@ -33,11 +33,13 @@ from aqa_runner.navigator import (
     Click,
     Decision,
     DescribeParts,
+    Finish,
     Navigate,
     NoteForAbsence,
     Offered,
     Prefix,
     ProbeOption,
+    Satisfied,
     Turn,
     Unrunnable,
     decision,
@@ -799,6 +801,17 @@ def test_assert_check_takes_a_null_ref_for_a_check_that_reads_no_element() -> No
     taken = decision(calling("assert_check", check_id="a2", ref=None))
 
     assert taken.call == AssertCheck(check_id="a2", ref=None)
+
+
+def test_finish_names_the_step_that_meets_each_condition() -> None:
+    met = {"condition": "c1", "step": 2}
+
+    assert decision(calling("finish", steps=[1, 2], satisfies=[met])).call == Finish(
+        steps=(1, 2), satisfies=(Satisfied(condition="c1", step=2),)
+    )
+    assert decision(calling("finish", steps=[1])).call == Finish(
+        steps=(1,), satisfies=()
+    )
 
 
 def test_a_parts_ref_goes_in_the_ref_slot() -> None:
