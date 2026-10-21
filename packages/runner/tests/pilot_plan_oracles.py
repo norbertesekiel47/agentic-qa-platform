@@ -323,10 +323,12 @@ def plan_problems(spec_id: str, plan: CoveragePlan) -> tuple[str, ...]:
             Counter(map(check_key, keys)) for keys in (row.required, *row.alternatives)
         ]
     ]
-    conditions = tuple(phrase(condition.condition) for condition in plan.requires)
+    conditions = tuple(
+        (phrase(condition.condition), condition.kind) for condition in plan.requires
+    )
     if spec_id == "favorite-article" and conditions not in (
-        (phrase(RELOAD),),
-        (phrase(RELOAD_RECORDED),),
+        ((phrase(RELOAD), "reload"),),
+        ((phrase(RELOAD_RECORDED), "reload"),),
     ):
         problems.extend(
             f"{spec_id}/{index}: reload condition differs" for index in range(len(rows))
