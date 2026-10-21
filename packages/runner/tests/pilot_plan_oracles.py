@@ -257,6 +257,10 @@ SPEC_FINGERPRINTS = {
 # The tag-list phrase "the list of tags of the article on the article page"
 # was accepted 2026-10-07 after an independent review (#161): an article page
 # renders one tag list, the article's own, and the phrase carries no tag text.
+# The favorite toggle phrase and the favorite plan's condition "checked after
+# reloading the article page" were accepted 2026-10-21 after an independent
+# review (#55): "toggle" names the button's function and asserts no value, and
+# the condition's `kind: reload` still requires the reload that ends the path.
 ALIASES = {
     "the article title heading at the top of the article page": "article banner title heading",
     "the author name on the most recently posted comment under the article": "new comment card author link",
@@ -269,6 +273,7 @@ ALIASES = {
     "the list of tags of the article on the article page": "article tag list",
     "the prompt in the comments area where the comment form would be": PROMPT,
     "the favorite button for the article": "article banner favorite button",
+    "the favorite toggle button for the article": "article banner favorite button",
     "the favorites count on the article's favorite button": "article banner favorites count",
     "the author name in the article's byline on the article page": "article banner author link",
     "the list of comments under the article": "article comment list",
@@ -329,6 +334,7 @@ def plan_problems(spec_id: str, plan: CoveragePlan) -> tuple[str, ...]:
     if spec_id == "favorite-article" and conditions not in (
         ((phrase(RELOAD), "reload"),),
         ((phrase(RELOAD_RECORDED), "reload"),),
+        ((phrase("checked after reloading the article page"), "reload"),),
     ):
         problems.extend(
             f"{spec_id}/{index}: reload condition differs" for index in range(len(rows))
