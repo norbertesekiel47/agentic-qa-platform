@@ -67,7 +67,9 @@ inside a button, call describe_parts with the ref of the element around it. \
 A part's ref, such as p1.2, serves only your next call, as the ref of \
 assert_check or note_for_absence.
 - When every check passes, call finish with the step numbers, from the log, \
-of the path to the final page. Leave out detours.
+of the path to the final page. Leave out detours. For each condition the \
+plan requires, such as c1, name in satisfies the step of that path that \
+meets it. Only a reload step meets a condition of kind reload.
 - Write short notes for your next turn as your reply's text: what you \
 learned, and what you will do next.
 """
@@ -342,8 +344,14 @@ class NoteForAbsence(StrictModel):
     ref: StrictStr
 
 
+class Satisfied(StrictModel):
+    condition: StrictStr
+    step: StrictInt
+
+
 class Finish(StrictModel):
     steps: ListOf[StrictInt]
+    satisfies: ListOf[Satisfied] = ()
 
 
 type Call = (
@@ -398,7 +406,8 @@ TOOLS: Mapping[str, tuple[type[Call], str]] = {
         Finish,
         (
             "End the attempt: steps are the log's step numbers of the path to "
-            "the final page, in order."
+            "the final page, in order, and satisfies names, for each condition "
+            "the plan requires, the step among them that meets it."
         ),
     ),
 }
