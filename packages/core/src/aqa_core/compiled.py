@@ -29,6 +29,7 @@ from pydantic import (
     StrictInt,
     StrictStr,
     Tag,
+    WithJsonSchema,
     model_validator,
 )
 
@@ -573,11 +574,20 @@ class ExpectationCoverage(StrictModel):
     assertions: Annotated[DistinctListOf[NonEmpty], AtLeastOne]
 
 
+# The kinds of required condition whose step compiling can check (#55). A
+# lone Literal reaches the provider's strict format as a description, never
+# a constraint, so the schema spells it as an enum.
+ConditionKind = Annotated[
+    Literal["reload"], WithJsonSchema({"type": "string", "enum": ["reload"]})
+]
+
+
 class RequiredCondition(StrictModel):
     """A condition the goal or an expectation needs, such as a reload."""
 
     id: NonEmpty
     condition: NonEmpty
+    kind: ConditionKind | None = None
 
 
 class Coverage(StrictModel):

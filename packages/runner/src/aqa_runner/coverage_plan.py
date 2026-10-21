@@ -96,7 +96,9 @@ some of its words.
 or the order of items.
 - requires lists the conditions the goal or the expectations need before \
 the checks run, each with an id ("c1", "c2", ...), such as "checked after \
-reloading the order page". Leave it empty when there are none.
+reloading the order page". A condition met by reloading the page before \
+the checks has kind reload; leave kind out of any other. Leave it empty when \
+there are none.
 """
 
 

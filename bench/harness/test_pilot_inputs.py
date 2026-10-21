@@ -228,6 +228,18 @@ class PilotInputTests(unittest.TestCase):
         self.save()
         self.assertEqual(self.memory().script.steps[1].satisfies, ("loaded",))
 
+    def test_a_reload_condition_needs_a_reload_step_to_meet_it(self) -> None:
+        required = [{"id": "c1", "condition": "after a reload", "kind": "reload"}]
+        self.data["coverage"]["requires"] = required
+        self.data["steps"][0]["satisfies"] = ["c1"]
+        self.save()
+        self.refuses(self.load, "invalid compiled input")
+        del self.data["steps"][0]["satisfies"]
+        self.data["steps"].append(RELOAD | {"satisfies": ["c1"]})
+        self.save()
+        [admitted] = self.load()
+        self.assertEqual(admitted.script.steps[1].satisfies, ("c1",))
+
     def test_press_requires_one_key(self) -> None:
         press = {"seq": 1, "action": "press", "side_effect": False}
         self.data["steps"] = [press | {"key": "a+b"}]
