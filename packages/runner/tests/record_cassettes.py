@@ -86,6 +86,9 @@ SECRET_FORMATS = cast(
 # USD 0.300054 already spent.
 RUN_USD = Decimal("0.20")
 ROUND_USD = Decimal("0.699946")
+# The plan cases' round (#55): the six plan cassettes, each request
+# reserving its worst case as the explore case's do.
+PLANS_ROUND_USD = Decimal("0.17")
 # Input tokens a request may use beyond its body's bytes: the tool and
 # output-format preambles and the framing, which the body doesn't spell.
 HEADROOM_TOKENS = 1024
@@ -226,14 +229,14 @@ def retryless(model: RoutedModel, effort: Effort | None) -> AnthropicClient:
     return client
 
 
-def round_left(attempt: Path) -> Decimal:
-    """What the round has left: ROUND_USD less what each earlier attempt
+def round_left(attempt: Path, limit: Decimal) -> Decimal:
+    """What the round has left: `limit` less what each earlier attempt
     beside `attempt` spent, as its receipt says."""
     spent = Decimal(0)
     for earlier in sorted(attempt.parent.iterdir()):
         if earlier != attempt and earlier.is_dir():
             spent += earlier_spend(earlier)
-    return ROUND_USD - spent
+    return limit - spent
 
 
 def earlier_spend(earlier: Path) -> Decimal:
@@ -503,6 +506,15 @@ def plan_case(name: str) -> bool:
     return name == "coverage_plan" or name.startswith("plan_")
 
 
+def round_limit(name: str) -> Decimal | None:
+    """The round limit of a case recorded within the spend bound, with the
+    SDK's retries off: the explore case's and the plan cases'. The other
+    cases keep the SDK's retries and no bound."""
+    if name == EXPLORE:
+        return ROUND_USD
+    return PLANS_ROUND_USD if plan_case(name) else None
+
+
 def answers_expected(name: str, calls: tuple[CostRecord, ...]) -> int:
     """One answer per case. A plan case holds two when its plan couldn't be
     used and make_plan asked once more: two answers, both `ok` (ADR-0024's
@@ -751,8 +763,8 @@ def capture_attempt(
     state = AttemptState()
     config = load_config(spec.path.parent / "config.yaml")
     model = resolve_roles(config, vendored())["navigator"].model
-    if name == EXPLORE:
-        admitting(vcr, capture, Allowance(model, RUN_USD, round_left(attempt)))
+    if (limit := round_limit(name)) is not None:
+        admitting(vcr, capture, Allowance(model, RUN_USD, round_left(attempt, limit)))
     call_completed = capture_completed = completed = False
     try:
         with warnings.catch_warnings(), quiet():
@@ -833,7 +845,7 @@ def record(
             update={"roles": {"navigator": ModelRole(effort="high")}}
         )
     router = ModelRouter.from_config(
-        config, retryless if name == EXPLORE else AnthropicClient
+        config, AnthropicClient if round_limit(name) is None else retryless
     )
     role = resolve_roles(config, vendored())["navigator"]
     intent = {
