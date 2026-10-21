@@ -106,19 +106,13 @@ def assertion_for(
 
 
 def unsupported_features(plan: CoveragePlan) -> tuple[str, ...]:
-    """A line for each baseline probe check and each required condition in
-    `plan`, which exploring can't compile yet (ADR-0024's D35): explore
-    refuses such a plan before the browser opens."""
-    return (
-        *(
-            f"{check_id} (expect[{index}], {check.check}): exploring can't compile a {check.check} check yet"
-            for check_id, (index, check) in planned_checks(plan).items()
-            if check.check == "probe_equals_baseline"
-        ),
-        *(
-            f'requires {condition.id} ("{condition.condition}"): exploring can\'t keep a required condition in the path yet'
-            for condition in plan.requires
-        ),
+    """A line for each baseline probe check in `plan`, which exploring can't
+    compile yet (ADR-0024's D35): explore refuses such a plan before the
+    browser opens."""
+    return tuple(
+        f"{check_id} (expect[{index}], {check.check}): exploring can't compile a {check.check} check yet"
+        for check_id, (index, check) in planned_checks(plan).items()
+        if check.check == "probe_equals_baseline"
     )
 
 
@@ -184,12 +178,15 @@ class PathStep:
 @dataclass(frozen=True)
 class ExploredPath:
     """What one attempt explored: its steps by the number it gave each, the
-    numbers `finish` kept, and each planned check it bound, by ID, to the
-    target or probe JSON path the check reads, or to None when it reads neither."""
+    numbers `finish` kept, each planned check it bound, by ID, to the target
+    or probe JSON path the check reads, or to None when it reads neither, and
+    each required condition `finish` says a step meets, with that step's
+    number."""
 
     steps: Mapping[int, PathStep]
     kept: Sequence[int]
     bound: Mapping[str, Target | ProbePath | None]
+    satisfies: Collection[tuple[str, int]] = ()
 
 
 class Provenance(StrictModel):
@@ -219,16 +216,19 @@ def _steps(
     contracts: Mapping[str, Contract | None],
     names: dict[Target, str],
     secrets: Collection[str],
+    *,
+    marks: Mapping[int, tuple[str, ...]],
 ) -> tuple[list[Step], list[str]]:
-    """The kept steps, `taken`, compiled in order, and what's wrong with them.
-    A secret the spec doesn't bind has no binding at replay (`secrets`)."""
+    """The kept steps, `taken`, compiled in order, each with the conditions
+    it meets (`marks`), and what's wrong with them. A secret the spec
+    doesn't bind has no binding at replay (`secrets`)."""
     steps: list[Step] = []
     problems: list[str] = []
     for seq, number in enumerate(taken, start=1):
         step = path.steps[number]
         if step.target is not None and not _carries(step.target, contracts):
             problems.append(f"step {number}: {_NOT_ITS_CONTRACT}")
-        compiled = _step(number, step, seq, names)
+        compiled = _step(number, step, seq, names, marks[number])
         if isinstance(compiled, str):
             problems.append(compiled)
         elif isinstance(compiled, FillSecret) and compiled.secret not in secrets:
@@ -239,11 +239,16 @@ def _steps(
 
 
 def _step(
-    number: int, step: PathStep, seq: int, names: dict[Target, str]
+    number: int,
+    step: PathStep,
+    seq: int,
+    names: dict[Target, str],
+    satisfies: tuple[str, ...],
 ) -> Step | str:
-    """Step `number` of the attempt compiled as step `seq`, or the problem with
-    it, which names only a known action, a listed field or a kind of mistake,
-    never a value: pydantic's messages quote their input."""
+    """Step `number` of the attempt compiled as step `seq`, meeting the
+    conditions `satisfies`, or the problem with it, which names only a known
+    action, a listed field or a kind of mistake, never a value: pydantic's
+    messages quote their input."""
     if owned := sorted(_COMPILER_FIELDS & step.fields.keys()):
         return f"step {number}: sets {owned[0]}, which compiling owns"
     fields: dict[str, object] = {
@@ -251,6 +256,7 @@ def _step(
         "seq": seq,
         "side_effect": True,
         "side_effect_basis": _BASIS,
+        "satisfies": satisfies,
     }
     if step.target is not None:
         fields["target"] = _named(names, step.target)
@@ -275,6 +281,43 @@ def _invalid(error: str, loc: tuple[int | str, ...]) -> str:
     if error == "extra_forbidden":
         return f"a {kind} step takes no {field}"
     return f"its {field} isn't valid for a {kind} step"
+
+
+def _conditions(
+    plan: CoveragePlan, path: ExploredPath, taken: Sequence[int]
+) -> tuple[dict[int, tuple[str, ...]], list[str]]:
+    """Each kept step's conditions, in plan order, and what's wrong with what
+    `finish` said of them: a condition the plan doesn't require, a step it
+    doesn't keep, a step that isn't a reload for a reload condition, and a
+    required condition no kept step meets (DATA_MODEL §7, `requires`)."""
+    kinds = {condition.id: condition.kind for condition in plan.requires}
+    said = sorted(set(path.satisfies))
+    problems = (
+        ["finish names a condition the plan doesn't require"]
+        if any(condition not in kinds for condition, _ in said)
+        else []
+    )
+    met: set[tuple[str, int]] = set()
+    for condition, number in said:
+        if condition in kinds and number not in path.kept:
+            problems.append(
+                f"requires {condition}: finish says step {number} meets it, but doesn't keep step {number}"
+            )
+        elif condition in kinds and number in taken:
+            action = path.steps[number].fields.get("action")
+            if kinds[condition] == "reload" and action != "reload":
+                problems.append(
+                    f"requires {condition}: finish says step {number} meets it, but {condition} needs a reload and step {number} isn't one"
+                )
+            else:
+                met.add((condition, number))
+    marks = {n: tuple(c for c in kinds if (c, n) in met) for n in taken}
+    problems.extend(
+        f'requires {condition.id} ("{condition.condition}"): finish keeps no step that meets it'
+        for condition in plan.requires
+        if not any(condition.id == each for each, _ in met)
+    )
+    return marks, problems
 
 
 def _binding_problem(
@@ -362,7 +405,10 @@ def compile_script(
     kept = sorted(set(path.kept))
     taken = [number for number in kept if number in path.steps]
     names: dict[Target, str] = {}
-    steps, step_problems = _steps(path, taken, contracts, names, spec.secret_bindings)
+    marks, condition_problems = _conditions(plan, path, taken)
+    steps, step_problems = _steps(
+        path, taken, contracts, names, spec.secret_bindings, marks=marks
+    )
     assertions, check_problems = _assertions(plan, path, contracts, names, bool(taken))
     problems = [
         *plan_problems,
@@ -373,6 +419,7 @@ def compile_script(
             if number not in path.steps
         ),
         *step_problems,
+        *condition_problems,
         *check_problems,
     ]
     if problems:

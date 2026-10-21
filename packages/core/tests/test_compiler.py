@@ -127,7 +127,7 @@ def test_assertion_for_gives_the_assertion_a_bound_check_is_evaluated_as() -> No
     )
 
 
-def test_unsupported_features_name_each_probe_check_and_condition() -> None:
+def test_unsupported_features_name_each_baseline_probe_check_and_no_condition() -> None:
     probing = plan(
         expectation(0, URL),
         expectation(1, PROBED, BASELINE),
@@ -138,10 +138,6 @@ def test_unsupported_features_name_each_probe_check_and_condition() -> None:
         (
             "a3 (expect[1], probe_equals_baseline): exploring can't compile a "
             "probe_equals_baseline check yet"
-        ),
-        (
-            'requires c1 ("checked after a reload"): exploring can\'t keep a required '
-            "condition in the path yet"
         ),
     )
     assert unsupported_features(PLAN) == ()
@@ -657,10 +653,7 @@ def test_a_required_condition_fails_by_name_until_the_path_can_satisfy_it(
     reload = {"id": "c1", "condition": "checked after a reload"}
 
     assert problems(tmp_path, planned=plan(*EXPECTATIONS, requires=(reload,))) == (
-        (
-            'requires c1 ("checked after a reload"): exploring can\'t keep a required '
-            "condition in the path yet"
-        ),
+        'requires c1 ("checked after a reload"): finish keeps no step that meets it',
     )
 
 
