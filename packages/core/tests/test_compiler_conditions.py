@@ -126,3 +126,12 @@ def test_a_condition_the_plan_does_not_require_fails_without_its_name(
     assert problems(tmp_path, (("c1", 3), ("fake-c9", 3))) == (
         "finish names a condition the plan doesn't require",
     )
+
+
+def test_a_condition_said_of_a_step_the_attempt_never_took_fails_once_by_name(
+    tmp_path: Path,
+) -> None:
+    assert problems(tmp_path, (("c1", 12),), kept=(*KEPT, 12)) == (
+        "finish names step 12, which the attempt never took",
+        MISSING,
+    )

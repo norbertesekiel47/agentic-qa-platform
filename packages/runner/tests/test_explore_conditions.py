@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from aqa_core.compiled import RequiredCondition
 from aqa_core.coverage_plan import CoveragePlan
 from langchain_core.messages import BaseMessage
 
@@ -190,3 +191,25 @@ def test_detours_outside_the_named_path_are_not_in_the_compiled_script(
     assert kept(tmp_path) == RELOADED
     targets = published(tmp_path).targets.values()
     assert {target.semantic for target in targets} == {BUTTON}
+
+
+def test_each_condition_finish_names_reaches_the_published_script(
+    app: App, tmp_path: Path
+) -> None:
+    favorited = RequiredCondition(
+        id="c2", condition="checked once the article is favorited"
+    )
+    plan = PLAN.model_copy(update={"requires": (*PLAN.requires, favorited)})
+    met = [{"condition": "c1", "step": 2}, {"condition": "c2", "step": 1}]
+    client = Scripted(
+        planned(plan),
+        FAVORITE,
+        RELOAD,
+        ASSERT,
+        calling("finish", {"steps": [1, 2], "satisfies": met}),
+    )
+
+    run = explored(app, tmp_path, client)
+
+    assert (run.outcome, run.exit_code) == ("compiled", 0)
+    assert kept(tmp_path) == [("click", ("c2",)), ("reload", ("c1",))]
