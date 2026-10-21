@@ -145,6 +145,7 @@ def favorite() -> CoveragePlan:
                 RequiredCondition(
                     id="reload",
                     condition="Reload the article after favoriting and before checking the button and count",
+                    kind="reload",
                 ),
             )
         }
@@ -886,7 +887,9 @@ def test_the_favorite_reload_condition_has_one_reviewed_wording() -> None:
     plan = favorite()
     wording = "checked after reloading the article page, so the favorite has persisted"
     reworded = plan.model_copy(
-        update={"requires": (RequiredCondition(id="c1", condition=wording),)}
+        update={
+            "requires": (RequiredCondition(id="c1", condition=wording, kind="reload"),)
+        }
     )
     assert plan_problems("favorite-article", reworded) == ()
     other = plan.model_copy(
@@ -907,3 +910,20 @@ def test_every_reviewed_alias_names_a_role_some_row_requires() -> None:
         for check in keys
     }
     assert set(ALIASES.values()) <= roles
+
+
+def test_the_favorite_reload_condition_is_of_kind_reload() -> None:
+    untyped = favorite().model_copy(
+        update={
+            "requires": tuple(
+                condition.model_copy(update={"kind": None})
+                for condition in favorite().requires
+            )
+        }
+    )
+
+    assert plan_problems("favorite-article", favorite()) == ()
+    assert plan_problems("favorite-article", untyped) == (
+        "favorite-article/0: reload condition differs",
+        "favorite-article/1: reload condition differs",
+    )
