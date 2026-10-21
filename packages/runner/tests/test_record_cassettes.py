@@ -48,7 +48,7 @@ def test_recording_keeps_costs_before_a_plan_is_rejected(
     library.mkdir()
     previous = library / "coverage_plan.yaml"
     previous.write_text("previous cassette\n")
-    attempt = tmp_path / "attempt"
+    attempt = tmp_path / "round" / "attempt"
 
     with pytest.raises(ValueError, match="rejected"):
         record("coverage_plan", attempt, library=library)
@@ -76,7 +76,7 @@ def capture_paths(
         library = tmp_path / "library"
         library.mkdir()
         (library / "coverage_plan.yaml").write_text("previous cassette\n")
-        return tmp_path / "attempt", library
+        return tmp_path / "round" / "attempt", library
 
     return prepare
 
@@ -175,10 +175,10 @@ def test_recording_accounts_for_an_sdk_retry_response_with_usage(
     monkeypatch.delenv("ANTHROPIC_API_URL", raising=False)
     library = tmp_path / "library"
     library.mkdir()
-    attempt = tmp_path / "attempt"
+    attempt = tmp_path / "round" / "attempt"
     try:
         with pytest.raises(ValueError, match="rejected"):
-            record("coverage_plan", attempt, library=library)
+            record("tools", attempt, library=library)
     finally:
         server.shutdown()
         server.server_close()
@@ -189,7 +189,7 @@ def test_recording_accounts_for_an_sdk_retry_response_with_usage(
         CostRecord.model_validate_json(json.dumps(value))
         for value in receipt["cost_records"]
     ]
-    assert not (library / "coverage_plan.yaml").exists()
+    assert not (library / "tools.yaml").exists()
     assert [str(cost.cost_usd) for cost in costs] == ["0.000048", "0.000048"]
     assert [cost.status for cost in costs] == ["invalid", "ok"]
     receipt = json.loads((attempt / "receipt.json").read_text())
@@ -245,7 +245,7 @@ def test_success_without_a_request_id_is_not_promoted(
     monkeypatch.setenv("ANTHROPIC_API_KEY", RECORDING_KEY)
     monkeypatch.setenv("ANTHROPIC_BASE_URL", endpoint.url)
     monkeypatch.delenv("ANTHROPIC_API_URL", raising=False)
-    attempt = tmp_path / "attempt"
+    attempt = tmp_path / "round" / "attempt"
     with pytest.raises(ValueError, match="rejected"):
         record("coverage_plan", attempt, library=tmp_path)
     assert not (tmp_path / "coverage_plan.yaml").exists()
@@ -279,7 +279,7 @@ def test_a_missing_key_does_not_create_an_attempt_or_replace_a_cassette(
 ) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     with pytest.raises(ValueError, match="needs ANTHROPIC_API_KEY"):
-        record("coverage_plan", tmp_path / "attempt", library=tmp_path)
+        record("coverage_plan", tmp_path / "round" / "attempt", library=tmp_path)
     assert list(tmp_path.iterdir()) == []
 
 
@@ -303,7 +303,7 @@ def wire_capture(
             "plain_with_effort",
         ):
             (library / f"{case}.yaml").write_text("previous cassette\n")
-        return tmp_path / "attempt", library
+        return tmp_path / "round" / "attempt", library
 
     return prepare
 
@@ -735,14 +735,14 @@ def test_every_retry_response_is_priced_after_later_formatting_failure(
         return routed, accepted
 
     monkeypatch.setattr(recorder, "ask", ask)
-    attempt = tmp_path / "attempt"
+    attempt = tmp_path / "round" / "attempt"
     library = tmp_path / "library"
     library.mkdir()
-    old = library / "coverage_plan.yaml"
+    old = library / "tools.yaml"
     old.write_text("previous cassette\n")
     try:
         with pytest.raises(ValueError, match="rejected"):
-            record("coverage_plan", attempt, library=library)
+            record("tools", attempt, library=library)
     finally:
         server.shutdown()
         server.server_close()
@@ -821,7 +821,7 @@ def late_capture(
     library = tmp_path / "library"
     library.mkdir()
     (library / "coverage_plan.yaml").write_text("previous cassette\n")
-    return tmp_path / "attempt", library, endpoint
+    return tmp_path / "round" / "attempt", library, endpoint
 
 
 def interrupt_value(kind: str) -> BaseException:

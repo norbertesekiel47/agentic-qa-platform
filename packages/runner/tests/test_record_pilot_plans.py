@@ -1,6 +1,8 @@
 import hashlib
 import json
+import threading
 from collections.abc import Callable
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
@@ -74,7 +76,7 @@ def answering(
         monkeypatch.delenv("ANTHROPIC_API_URL", raising=False)
         library = tmp_path / "library"
         library.mkdir()
-        return tmp_path / "attempt", library
+        return tmp_path / "round" / "attempt", library
 
     return prepare
 
@@ -229,3 +231,91 @@ def test_only_a_plan_cases_two_ok_answers_are_its_retry() -> None:
         answers_expected("plan_post-comment", (refused, ok)),
         answers_expected("structured_output", (ok, ok)),
     ] == [2, 1, 1]
+
+
+def test_a_pilot_case_past_the_plans_round_is_refused_before_it_is_sent(
+    monkeypatch: pytest.MonkeyPatch, serve: Callable[..., Endpoint], tmp_path: Path
+) -> None:
+    endpoint = serve(json.dumps(HELLO).encode(), {"request-id": "req_fake_01"})
+    monkeypatch.setenv("ANTHROPIC_API_KEY", RECORDING_KEY)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", endpoint.url)
+    monkeypatch.delenv("ANTHROPIC_API_URL", raising=False)
+    library = tmp_path / "library"
+    library.mkdir()
+    earlier = tmp_path / "round" / "000"
+    earlier.mkdir(parents=True)
+    spend = {"spent_usd": "0.15", "overrun": False}
+    (earlier / "receipt.json").write_text(json.dumps({"spend": spend}))
+    attempt = tmp_path / "round" / "001"
+
+    with pytest.raises(ValueError, match="spend_refused"):
+        record("plan_favorite-article", attempt, library=library)
+
+    assert endpoint.requests == []
+    assert json.loads((attempt / "receipt.json").read_text())["spend"] == {
+        "run_usd": "0.20",
+        "round_left_usd": "0.02",
+        "spent_usd": "0",
+        "refused": True,
+        "overrun": False,
+    }
+
+
+def test_a_pilot_case_is_sent_once_with_the_sdks_retries_off(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # An overloaded answer, then one the SDK's retry would have taken.
+    answers = [
+        (
+            529,
+            {"type": "error", "error": {"type": "overloaded_error", "message": "fake"}},
+        ),
+        (
+            200,
+            HELLO
+            | {
+                "content": [
+                    {"type": "text", "text": EXAMPLES["login"].model_dump_json()}
+                ]
+            },
+        ),
+    ]
+    sent: list[bytes] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            sent.append(self.rfile.read(int(self.headers["Content-Length"])))
+            status, body = answers.pop(0)
+            payload = json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("request-id", f"req_fake_{status}")
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return None
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", RECORDING_KEY)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.delenv("ANTHROPIC_API_URL", raising=False)
+    library = tmp_path / "library"
+    library.mkdir()
+    attempt = tmp_path / "round" / "001"
+    try:
+        with pytest.raises(ValueError, match="missing_usage"):
+            record("plan_login", attempt, library=library)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+    assert len(sent) == 1
+    receipt = json.loads((attempt / "receipt.json").read_text())
+    assert receipt["spend"]["refused"] is False
+    assert receipt["spend"]["round_left_usd"] == "0.17"
+    assert not (library / "plan_login.yaml").exists()
