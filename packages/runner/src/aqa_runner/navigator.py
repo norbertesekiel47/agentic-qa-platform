@@ -69,7 +69,7 @@ assert_check or note_for_absence.
 - When every check passes, call finish with the step numbers, from the log, \
 of the path to the final page. Leave out detours. For each condition the \
 plan requires, such as c1, name in satisfies the step of that path that \
-meets it. Only a reload step meets a condition of kind reload.
+meets it. Only a reload that ends the path meets a condition of kind reload.
 - Write short notes for your next turn as your reply's text: what you \
 learned, and what you will do next.
 """
