@@ -873,7 +873,7 @@ The coverage plan's `requires` lists the conditions its checks need, such as the
 
 ### Consequences and limits
 
-- **Residuals** (SECURITY §4 item 5): which step meets an untyped condition is the model's claim, and the page a reload lands on isn't checked. Where a reload falls is checked: it must end the path. The published script names the step for review.
+- **Residuals** (SECURITY §4 item 5): which step meets an untyped condition is the model's claim, and neither the page a reload lands on nor what the app keeps in the browser across it (local storage, say) is checked. Where a reload falls is checked: it must end the path. The published script names the step for review.
 - The pilot oracle's favorite rule now needs the reviewed phrase and `kind: reload` (the #41 B2a amendment's rule, made stricter).
 - Until the six cassettes re-record, the 21 tests that replay them fail: a staging state, never a landing one. The round runs after the maintainer's yes, in its own commit, which adds its receipts here. Its estimate from the pinned price map is USD 0.080670, or 0.094298 when post-comment again needs its correction; the bound caps it at USD 0.17.
 - No dependency or paid resource. Tests: `packages/core/tests/test_compiler_conditions.py`; `packages/runner/tests/test_explore_conditions.py` (real Chromium, a scripted model, a page that updates optimistically); `test_load_compiled.py`, `test_coverage_plan.py` (core), `test_navigator.py`, `test_pilot_plan_oracles.py`, `test_record_pilot_plans.py` and `bench/harness/test_pilot_inputs.py`.
