@@ -2,11 +2,11 @@
 selects (#55; ADR-0024's "Path selection and attempts"): `finish` names the
 step that meets each condition, a path that drops the reload, names
 another step for it, or takes a step after it, is refused as a tool error
-the attempt survives, and
-the published script carries `satisfies` on the reload. Real Chromium
-against a page whose favorite button changes at the click, before the app
-has kept anything, as Conduit's does; the favorite is kept, as a cookie the
-page sets, only once the app accepted the write. A scripted model."""
+the attempt survives, and the published script carries `satisfies` on the
+reload. Real Chromium against a page whose favorite button changes at the
+click, before the app has kept anything, as Conduit's does; the favorite is
+kept, as a cookie the page sets, only once the app accepted the write. A
+scripted model."""
 
 import re
 from collections.abc import Iterator, Sequence
