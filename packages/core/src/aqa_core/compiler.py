@@ -299,11 +299,13 @@ def _conditions(
     )
     met: set[tuple[str, int]] = set()
     for condition, number in said:
-        if condition in kinds and number not in path.kept:
+        if condition not in kinds:
+            continue
+        if number not in path.kept:
             problems.append(
                 f"requires {condition}: finish says step {number} meets it, but doesn't keep step {number}"
             )
-        elif condition in kinds and number in taken:
+        elif number in taken:
             action = path.steps[number].fields.get("action")
             if kinds[condition] == "reload" and action != "reload":
                 problems.append(
@@ -311,7 +313,10 @@ def _conditions(
                 )
             else:
                 met.add((condition, number))
-    marks = {n: tuple(c for c in kinds if (c, n) in met) for n in taken}
+    marks = {
+        number: tuple(condition for condition in kinds if (condition, number) in met)
+        for number in taken
+    }
     problems.extend(
         f'requires {condition.id} ("{condition.condition}"): finish keeps no step that meets it'
         for condition in plan.requires

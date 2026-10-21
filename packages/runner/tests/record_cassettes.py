@@ -122,11 +122,12 @@ class Reservation:
 
 @dataclass
 class Allowance:
-    """The explore recording's spend bound. Before a request leaves the
-    process it reserves its worst case at the price map's list prices, and
-    is refused if that would take the run past `run_usd` or the round past
-    `round_usd`. A response settles at its usage's price; one without usage,
-    or a request that got none, keeps its worst case."""
+    """A recording's spend bound, the explore case's and the plan cases'
+    (`round_limit`). Before a request leaves the process it reserves its
+    worst case at the price map's list prices, and is refused if that would
+    take the run past `run_usd` or the round past `round_usd`. A response
+    settles at its usage's price; one without usage, or a request that got
+    none, keeps its worst case."""
 
     model: RoutedModel
     run_usd: Decimal
