@@ -288,8 +288,9 @@ def _conditions(
 ) -> tuple[dict[int, tuple[str, ...]], list[str]]:
     """Each kept step's conditions, in plan order, and what's wrong with what
     `finish` said of them: a condition the plan doesn't require, a step it
-    doesn't keep, a step that isn't a reload for a reload condition, and a
-    required condition no kept step meets (DATA_MODEL §7, `requires`)."""
+    doesn't keep, a step other than the reload that ends the path for a
+    reload condition, and a required condition no kept step meets
+    (DATA_MODEL §7, `requires`)."""
     kinds = {condition.id: condition.kind for condition in plan.requires}
     said = sorted(set(path.satisfies))
     problems = (
@@ -310,6 +311,10 @@ def _conditions(
             if kinds[condition] == "reload" and action != "reload":
                 problems.append(
                     f"requires {condition}: finish says step {number} meets it, but {condition} needs a reload and step {number} isn't one"
+                )
+            elif kinds[condition] == "reload" and number != taken[-1]:
+                problems.append(
+                    f"requires {condition}: finish says step {number} meets it, but {condition} needs the reload that ends the path, and step {number} doesn't end it"
                 )
             else:
                 met.add((condition, number))

@@ -517,7 +517,7 @@ def test_only_a_reload_step_meets_a_reload_condition(tmp_path: Path) -> None:
     assert found == (
         (
             "steps[0].satisfies[0]: 'c1' is a reload condition, which only a "
-            "reload step meets"
+            "reload that ends the steps meets"
         ),
     )
     reloaded = {
@@ -536,6 +536,23 @@ def test_only_a_reload_step_meets_a_reload_condition(tmp_path: Path) -> None:
     assert [(step.action, step.satisfies) for step in script.steps][-1] == (
         "reload",
         ("c1",),
+    )
+
+
+def test_a_reload_a_step_follows_meets_no_reload_condition(tmp_path: Path) -> None:
+    reloaded = {"seq": 5, "action": "reload", "side_effect": False, "satisfies": ["c1"]}
+    text = edited(
+        lambda s: (
+            s["coverage"].update(requires=[RELOAD_CONDITION]),
+            s["steps"].insert(4, reloaded),
+        )
+    )
+
+    assert problems(tmp_path, text, DECLARES_TEST_PASSWORD) == (
+        (
+            "steps[4].satisfies[0]: 'c1' is a reload condition, which only a "
+            "reload that ends the steps meets"
+        ),
     )
 
 

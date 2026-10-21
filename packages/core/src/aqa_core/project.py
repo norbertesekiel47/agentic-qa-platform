@@ -421,7 +421,8 @@ def _defined_twice(where: str, field: str, values: Sequence[object]) -> Iterator
 def _step_names(script: CompiledScript, config: ProjectConfig) -> Iterator[str]:
     """Names the steps use that nothing defines: a target, a secret the
     project config doesn't declare, or a required condition, and a reload
-    condition a step other than a reload claims to meet."""
+    condition a step other than the reload that ends the steps claims to
+    meet."""
     conditions = {
         condition.id: condition.kind for condition in script.coverage.requires
     }
@@ -446,10 +447,12 @@ def _step_names(script: CompiledScript, config: ProjectConfig) -> Iterator[str]:
                     f"{where}.satisfies[{position}]: {condition!r} names no "
                     "condition in coverage.requires"
                 )
-            elif conditions[condition] == "reload" and not isinstance(step, Reload):
+            elif conditions[condition] == "reload" and (
+                not isinstance(step, Reload) or index != len(script.steps) - 1
+            ):
                 yield (
                     f"{where}.satisfies[{position}]: {condition!r} is a reload "
-                    "condition, which only a reload step meets"
+                    "condition, which only a reload that ends the steps meets"
                 )
 
 

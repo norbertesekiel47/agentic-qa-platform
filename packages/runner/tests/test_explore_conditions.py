@@ -1,7 +1,8 @@
 """Keeping the coverage plan's required conditions in the path explore
 selects (#55; ADR-0024's "Path selection and attempts"): `finish` names the
-step that meets each condition, a path that drops the reload, or names
-another step for it, is refused as a tool error the attempt survives, and
+step that meets each condition, a path that drops the reload, names
+another step for it, or takes a step after it, is refused as a tool error
+the attempt survives, and
 the published script carries `satisfies` on the reload. Real Chromium
 against a page whose favorite button changes at the click, before the app
 has kept anything, as Conduit's does; the favorite is kept, as a cookie the
@@ -151,6 +152,30 @@ def test_a_path_that_drops_the_reload_and_marks_the_click_is_refused_naming_both
     )
     assert (run.outcome, run.exit_code) == ("compiled", 0)
     assert kept(tmp_path) == RELOADED
+
+
+def test_a_path_whose_reload_a_click_follows_is_refused_naming_the_step_and_a_later_finish_keeps_it(
+    app: App, tmp_path: Path
+) -> None:
+    client = Scripted(
+        planned(PLAN),
+        RELOAD,
+        FAVORITE,
+        ASSERT,
+        finish(1, 2, met=1),
+        RELOAD,
+        finish(2, 3, met=3),
+    )
+
+    run = explored(app, tmp_path, client)
+
+    assert (run.outcome, run.exit_code) == ("compiled", 0)
+    assert kept(tmp_path) == RELOADED
+    assert results(client.requests[5]) == (
+        "finish compiled nothing: requires c1: finish says step 1 meets it, but c1 "
+        "needs the reload that ends the path, and step 1 doesn't end it; requires "
+        f'c1 ("{CONDITION}"): finish keeps no step that meets it'
+    )
 
 
 def test_a_reload_finish_names_but_leaves_out_is_refused_naming_the_step(
