@@ -280,6 +280,12 @@ SPEC_FINGERPRINTS = {
 # apart, and the header binds "Sign in" to /login and "Sign up" to /register
 # (bench/apps/conduit/frontend/src/app/core/layout/header.component.html,
 # lines 14 and 18).
+# The last two phrases, post-comment's and publish-article's, were accepted
+# 2026-10-22 after an independent review (#55's round). The comment-author
+# phrase names the same element as the reviewed "most recently posted"
+# phrase (the newest comment card's name link). The byline phrase is
+# page-level as the policy above allows, bound to the banner copy by #53.
+# Neither carries the link's text.
 ALIASES = {
     "the article title heading at the top of the article page": "article banner title heading",
     "the author name on the most recently posted comment under the article": "new comment card author link",
@@ -313,6 +319,8 @@ ALIASES = {
     "the publication date in the article banner's meta section": "article banner publication date",
     "the article body content area": "article body",
     "the list of tags belonging to the article": "article tag list",
+    "the author name on the newly posted comment under the article": "new comment card author link",
+    "the author name link in the article's byline on the article page": "article banner author link",
 }
 # The favorite plan's reload condition, as recorded (an alias of RELOAD).
 RELOAD_RECORDED = (
