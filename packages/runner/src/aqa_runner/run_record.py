@@ -38,8 +38,21 @@ STEPS = "steps.jsonl"
 # line each (#53).
 COSTS = "costs.jsonl"
 
-# The parts an explored run keeps its phases in, each a record of its own.
-PARTS = ("attempt-1", "confirmation")
+
+def phase_parts(attempt: int) -> tuple[str, str]:
+    """The parts attempt number `attempt` of an explored run keeps its two
+    phases in, each a record of its own: `attempt-<n>`, then its
+    confirmation's, `confirmation` for the first attempt and
+    `confirmation-<n>` after (#56)."""
+    confirmation = "confirmation" if attempt == 1 else f"confirmation-{attempt}"
+    return f"attempt-{attempt}", confirmation
+
+
+def _is_part(name: str) -> bool:
+    number = name.rpartition("-")[2]
+    numbered = number.isascii() and number.isdigit() and not number.startswith("0")
+    return name in phase_parts(int(number) if numbered else 1)
+
 
 # What a caller checks a journal line or a document with before it is
 # written: whatever it raises leaves the file as it was. What it raises
@@ -167,9 +180,9 @@ class RunRecord:
 
     def part(self, name: str) -> Self:
         """A part of this run (#53): a record in the new directory `name`,
-        one of `PARTS`, with this record's `run_id` and scan. The directory
-        is made here and only once; a link in its place is refused."""
-        if name not in PARTS:
+        a name `phase_parts` gives, with this record's `run_id` and scan. The
+        directory is made here and only once; a link in its place is refused."""
+        if not _is_part(name):
             raise ValueError(f"{name!r} isn't a part of a run record")
         place = self._place(name)
         place.mkdir()
