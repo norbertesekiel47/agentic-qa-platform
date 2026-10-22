@@ -35,7 +35,7 @@ from aqa_runner.egress_proxy import EgressBlocks, PhaseTraffic
 from aqa_runner.evaluation import AssertionResult
 from aqa_runner.executor import RunResult, StepResult
 from aqa_runner.redaction import Redacted, Redactor
-from aqa_runner.run_record import PARTS, PendingIntent, RunRecord
+from aqa_runner.run_record import PendingIntent, RunRecord, phase_parts
 
 # How an explore run that opened its egress proxy ends, with its exit code
 # (API.md §7). The order is the precedence, `final_outcome` taking the first
@@ -115,12 +115,14 @@ class ExploreEnd:
     infrastructure events as the last phase's end left them, which supersede
     what replay read; each planned check by ID with its last evaluation in
     the attempt, None while never bound; every cause the graph stopped on;
-    and whether it published a compiled script, confirmed or not.
+    whether it published a compiled script, confirmed or not; and each
+    phase before the last attempt's, in run order (#56), so `attempt` and
+    `confirmation` are the last attempt's.
 
     A phase whose record isn't this record's part of its name, made from
     this record, so holding the intents this record's run left unresolved
     there, and scanning with its redactor, is refused (`ValueError`), and
-    so is a confirmation result of another run. Whether this record is the
+    so is a confirmation's result of another run. Whether this record is the
     run's own, scanning with the redactor its session opens with, is its
     maker's to check: no session is here."""
 
@@ -132,6 +134,7 @@ class ExploreEnd:
     checks: Mapping[str, AssertionResult | None]
     stops: tuple[Stop, ...]
     published: Published | None
+    earlier: tuple[Phase, ...] = ()
 
     def __post_init__(self) -> None:
         for part, phase in _phases(self):
@@ -145,9 +148,9 @@ class ExploreEnd:
                     f"{part} isn't a part made from this run's record, scanning "
                     "with its redactor"
                 )
-        replayed = self.confirmation.result if self.confirmation else None
-        if replayed is not None and replayed.run_id != self.record.run_id:
-            raise ValueError("the confirmation's result is another run's")
+            replayed = phase.result if isinstance(phase, Confirmation) else None
+            if replayed is not None and replayed.run_id != self.record.run_id:
+                raise ValueError(f"the {part}'s result is another run's")
 
 
 def final_outcome(end: ExploreEnd) -> Outcome:
@@ -187,7 +190,7 @@ def present(end: ExploreEnd) -> dict[str, object]:
         "exit_code": EXIT_CODES[outcome],
         "withheld": withheld,
         "published": end.published,
-        "reasons": list(_reasons(end, replayed)),
+        "reasons": list(_reasons(end)),
         "non_resumable": [
             {"part": part, "seq": intent.seq}
             for part, intent in _unresolved(end)
@@ -217,11 +220,16 @@ def present(end: ExploreEnd) -> dict[str, object]:
 
 
 def _phases(end: ExploreEnd) -> list[tuple[str, Phase]]:
-    attempt, confirmation = PARTS
-    phases: list[tuple[str, Phase]] = [(attempt, end.attempt)]
-    if end.confirmation is not None:
-        phases.append((confirmation, end.confirmation))
-    return phases
+    """Each phase of the run in order, with the part its place names: the
+    n-th attempt's `attempt-<n>`, and the confirmation after it its own."""
+    last = () if end.confirmation is None else (end.confirmation,)
+    named: list[tuple[str, Phase]] = []
+    attempt = 0
+    for phase in (*end.earlier, end.attempt, *last):
+        confirming = isinstance(phase, Confirmation)
+        attempt += not confirming
+        named.append((phase_parts(attempt)[confirming], phase))
+    return named
 
 
 def _unresolved(end: ExploreEnd) -> list[tuple[str, PendingIntent]]:
@@ -298,11 +306,11 @@ def _rescanned(reason: str | None, redactor: Redactor) -> Redacted | None:
     return None if reason is None else redactor.redact(reason)
 
 
-def _reasons(end: ExploreEnd, replayed: RunResult | None) -> Iterator[Redacted]:
+def _reasons(end: ExploreEnd) -> Iterator[Redacted]:
     """Why the run ended as it did, in the executor's outcome words:
     each stop's reason, scanned again; each planned check that never passed
-    in the attempt; and each step, assertion and invariant of the
-    confirmation that didn't. Each assembly is scanned whole, so a value
+    in the last attempt; and each step, assertion and invariant of each
+    confirmation that didn't, under its part. Each assembly is scanned whole, so a value
     spanning a join is found, as `redaction.error_text` scans its own."""
     scan = end.record.redactor.redact
     yield from (scan(stop.reason) for stop in end.stops)
@@ -311,20 +319,21 @@ def _reasons(end: ExploreEnd, replayed: RunResult | None) -> Iterator[Redacted]:
             yield scan(f"{check}: never bound")
         elif result.outcome != "pass":
             yield scan(f"{check}: {assertion_words(result)}")
-    if replayed is not None:
-        yield from map(scan, _confirmation_words(replayed))
+    for part, phase in _phases(end):
+        if isinstance(phase, Confirmation) and phase.result is not None:
+            yield from map(scan, _confirmation_words(phase.result, part))
 
 
-def _confirmation_words(replayed: RunResult) -> Iterator[str]:
+def _confirmation_words(replayed: RunResult, part: str) -> Iterator[str]:
     for step in replayed.steps:
         if step.outcome != "completed":
-            yield f"confirmation step {step.seq}: {_step_words(step)}"
+            yield f"{part} step {step.seq}: {_step_words(step)}"
     for assertion in replayed.assertions:
         if assertion.outcome != "pass":
-            yield f"confirmation {assertion.id}: {assertion_words(assertion)}"
+            yield f"{part} {assertion.id}: {assertion_words(assertion)}"
     for invariant in replayed.invariants:
         if invariant.outcome == "violated":
-            yield f"confirmation invariant {invariant.name}: violated"
+            yield f"{part} invariant {invariant.name}: violated"
 
 
 def assertion_words(result: AssertionResult) -> str:

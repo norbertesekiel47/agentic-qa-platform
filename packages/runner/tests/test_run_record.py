@@ -492,7 +492,7 @@ def test_a_part_whose_directory_is_a_link_is_refused(tmp_path: Path) -> None:
     assert list(elsewhere.iterdir()) == []
 
 
-@pytest.mark.parametrize("name", ["attempt-2", "../attempt-1", "evidence", ""])
+@pytest.mark.parametrize("name", ["confirmation-1", "../attempt-1", "evidence", ""])
 def test_a_part_is_made_once_and_only_under_its_names(
     tmp_path: Path, name: str
 ) -> None:

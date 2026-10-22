@@ -104,10 +104,10 @@ from aqa_runner.publication import (
 from aqa_runner.redaction import Redactor
 from aqa_runner.reset import ResetFailedError, reset
 from aqa_runner.run_record import (
-    PARTS,
     RefusedWriteError,
     RunRecord,
     UnrecordedCostError,
+    phase_parts,
     require_clean,
 )
 from aqa_runner.sandbox import SandboxUnavailableError
@@ -339,7 +339,7 @@ def _made(
     except ValueError as error:  # a .aqa or .aqa/runs that is a link
         raise _linked(str(error), redactor) from None
     try:
-        attempt = record.part(PARTS[0])
+        attempt = record.part(phase_parts(1)[0])
     except OSError, ValueError:  # in a directory just made: no spec's link
         return _unmade(record, _UNMADE)
     if attempt.redactor is not redactor or not record.shares_journals(attempt):
@@ -589,7 +589,7 @@ async def _confirming(
             if not await _reset(run) or interrupted():
                 return None
             try:
-                part = run.record.part(PARTS[1])
+                part = run.record.part(phase_parts(1)[1])
             except OSError, ValueError:  # in a directory just made: no spec's link
                 run.stopped("record_error", UNWRITTEN)
                 return None
