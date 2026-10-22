@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 from aqa_core.config import ProjectConfig
-from aqa_runner import explore
+from aqa_runner import explore, settling
 from aqa_runner.egress_proxy import EgressProxy, PhaseTraffic
 from aqa_runner.explore import Explored
 from aqa_runner.model_router import ModelRouter
@@ -32,7 +32,12 @@ from packages.runner.tests.test_explore_graph import (
     written,
 )
 from packages.runner.tests.test_explore_preflight import planned
-from packages.runner.tests.test_navigator_side_effects import LATER, ON_A_PAGE, WROTE
+from packages.runner.tests.test_navigator_side_effects import (
+    BUSY,
+    LATER,
+    ON_A_PAGE,
+    WROTE,
+)
 
 # What the run says when a confirmation with no reset hook before it saw a
 # possible side effect that the attempt didn't.
@@ -49,14 +54,20 @@ CHECK = calling("assert_check", {"check_id": "a1", "ref": None})
 # confirmation's replay reads it.
 AGAIN = """fetch('/probe/visits').then((r) => r.json())
     .then((b) => b.count > 0 && fetch('/write/again', {method: 'POST'}))"""
+# Probe reads that make the page busy only once it has been read before.
+RESTLESS_AGAIN = """fetch('/probe/visits').then((r) => r.json())
+    .then((b) => b.count > 0 && setInterval(() => {
+        document.title = String(Date.now()); }, 100))"""
 # A start page whose load writes; a button that writes only when clicked a
-# second time; and a start page whose load does only the second time.
+# second time; a start page whose load does only the second time; and a
+# button that keeps the page busy only when clicked a second time.
 PAGES_HERE = {
     "writes": """<a href="/page/form">Form</a><script>
         fetch("/write/load", {method: "POST"});
     </script>""",
     "again": f"""<button onclick="{AGAIN}">Look</button>""",
     "again-start": f"""<a href="/page/form">Form</a><script>{AGAIN}</script>""",
+    "restless-again": f"""<button onclick="{RESTLESS_AGAIN}">Look</button>""",
 }
 
 
@@ -197,6 +208,19 @@ def test_each_kept_step_gets_its_own_confirmation_run_past_a_detour(
 
     assert (run.outcome, written(run)["published"]) == ("compiled", "confirmed")
     assert flags(tmp_path) == [(True, LATER), (True, WROTE), (False, None)]
+    assert written(run)["reasons"] == [REPEATED]
+
+
+def test_a_step_only_the_confirmation_kept_busy_warns_though_the_start_stayed_quiet(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settling, "SETTLE_SECONDS", 2)
+    look = tool("click", lambda m: {"ref": ref(m, "button", "Look"), "meaning": "look"})
+
+    run = explored(app, tmp_path, "/page/restless-again", look, CHECK, agreed([1]))
+
+    assert (run.outcome, written(run)["published"]) == ("compiled", "confirmed")
+    assert flags(tmp_path) == [(True, BUSY)]
     assert written(run)["reasons"] == [REPEATED]
 
 

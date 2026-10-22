@@ -25,6 +25,7 @@ from aqa_core.compiler import (
     Provenance,
     assertion_for,
     compile_script,
+    kept_steps,
     side_effect_basis,
 )
 from aqa_core.config import ProjectConfig
@@ -471,11 +472,9 @@ class Attempt:
                 for seen, run in each
             )
 
-        seqs = {number: seq for seq, number in enumerate(sorted(set(path.kept)), 1)}
         steps = {
-            number: replace(step, observed=runs(number, seqs[number]))
-            for number, step in path.steps.items()
-            if number in seqs
+            number: replace(path.steps[number], observed=runs(number, seq))
+            for seq, number in enumerate(kept_steps(path), 1)
         }
         script = compile_script(
             self.spec, self.config, self.plan, replace(path, steps=steps), by

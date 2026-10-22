@@ -459,7 +459,7 @@ async def _attempted(run: Run, explorable: Explorable) -> ExploreEnd:
             intended = "unconfirmed"
         elif script is not None:
             confirmation = await _confirming(run, proxy, script, interrupted)
-            if (replayed := _passed(run, confirmation)) is not None:
+            if (replayed := _passing(run, confirmation)) is not None:
                 # Its runs can only raise a flag; one raised with no reset
                 # before them says the replay may have changed the app.
                 start = _infer_flags(run, replayed.steps)
@@ -601,7 +601,7 @@ async def _confirming(
     return Confirmation(began, traffic, total, result)
 
 
-def _passed(run: Run, confirmation: Confirmation | None) -> executor.RunResult | None:
+def _passing(run: Run, confirmation: Confirmation | None) -> executor.RunResult | None:
     """The confirmation's replay when it passed with no stop held."""
     replayed = None if confirmation is None else confirmation.result
     passed = replayed is not None and replayed.outcome == "passed" and not run.stops

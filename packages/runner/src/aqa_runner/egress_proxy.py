@@ -69,7 +69,7 @@ MAX_HOST = 253
 
 # The methods that are no write (ADR-0025, `side_effect`), as sent: fetch
 # sends `patch` as written, a write.
-READS = frozenset({b"GET", b"HEAD", b"OPTIONS"})
+_READS = frozenset({b"GET", b"HEAD", b"OPTIONS"})
 
 
 def named_host(host: str) -> str:
@@ -402,7 +402,7 @@ class EgressProxy:
             ):
                 request = await browser.next()
                 if isinstance(request, h11.Request):
-                    if request.method not in READS:
+                    if request.method not in _READS:
                         for heard in phase.watchers:
                             heard(request.method)
                     exchange.tunnel = request.method == b"CONNECT"

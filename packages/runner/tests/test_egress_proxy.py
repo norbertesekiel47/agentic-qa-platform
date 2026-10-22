@@ -15,9 +15,11 @@ from aqa_runner.egress_proxy import (
     BlockedAttempt,
     EgressBlocks,
     EgressProxy,
+    PhaseTraffic,
     RefusedHost,
 )
 
+from packages.runner.tests.document_fixtures import until
 from packages.runner.tests.egress_fixtures import (
     Seen,
     connect,
@@ -764,3 +766,23 @@ def test_watching_between_phases_is_refused_and_a_new_phase_starts_unwatched() -
         return first, second
 
     assert asyncio.run(scenario()) == ([b"POST"], [b"PUT"])
+
+
+def test_watching_a_phase_as_it_ends_is_refused() -> None:
+    async def scenario() -> PhaseTraffic:
+        async with raw_upstream() as silent:
+            start = f"http://127.0.0.1:{silent.port}"
+            async with EgressProxy(gate(allowed=(start,))) as proxy:
+                # A request the upstream never answers keeps the phase ending.
+                _, writer = await proxy_client(proxy)
+                writer.write(get(f"{start}/"))
+                await until(lambda: b"\r\n\r\n" in silent.received)
+                ending = asyncio.create_task(proxy.end_phase())
+                await asyncio.sleep(0)
+                with pytest.raises(RuntimeError, match="between phases"):
+                    proxy.watch(lambda _: None)
+                traffic = await ending
+                writer.close()
+                return traffic
+
+    assert asyncio.run(scenario()) == PhaseTraffic(1, 0)
