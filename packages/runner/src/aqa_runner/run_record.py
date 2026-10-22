@@ -49,6 +49,9 @@ def phase_parts(attempt: int) -> tuple[str, str]:
 
 
 def _is_part(name: str) -> bool:
+    """Whether `name` is a part `phase_parts` gives for an attempt numbered
+    from 1 and written in ASCII digits with no leading zero, so `attempt-0`
+    is refused and `int` never reads another spelling of a number."""
     number = name.rpartition("-")[2]
     numbered = number.isascii() and number.isdigit() and not number.startswith("0")
     return name in phase_parts(int(number) if numbered else 1)
