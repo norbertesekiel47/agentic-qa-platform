@@ -482,6 +482,10 @@ Each was recorded with the named recorder (TESTING §4) under a scratch cap that
   - publish-article/0: the unanchored path pattern above, beside the title check.
 
   Each holds REVIEW's establishing check plus an extra or looser URL check. Closing them would take a fourth prompt round, which would resample all five pilots, or an oracle rule the maintainer declined.
+
+  **read-article/5 closed (maintainer, 2026-10-22; #55's round review).** #55's re-record holds only the comment-text check on the comment list, the reviewed key REVIEW kept when it dropped the author check (#31: "reader's comment" is the subject, so a replay doesn't re-check it). Its `OPEN_ROWS` entry is removed, and the whole-plan oracle enforces the row.
+
+  **read-article/6 opened (maintainer, 2026-10-22; #55's round).** #55's re-record checks the prompt with `(?i)sign in.*or.*sign up.*comments`, which the maintainer accepted as the row's fourth key (`PROMPT_WITH_OR_COMMENTS`), on the target "the prompt in the comments section for signed-out visitors, with sign in and sign up links". That target names the labels its check asserts, so it gets no alias: an alias's phrase carries no label (`ALIASES`; ADR-0025). make_plan's circular-target rule (`_why_circular`, above) refuses the same target under two of the row's accepted keys, `PROMPT_WITH_JOINER` and `PROMPT_WITHOUT_JOINER`; the recorded pattern doesn't match it only because the target has neither "or" between the labels nor "comments" after them. Its `OPEN_ROWS` entry pins exactly the recorded check. The plan-prompt follow-up weighed before #58 is where it gets fixed. Three residuals remain: read-article/0, read-article/6 and publish-article/0.
 - **Consequences:** a plan that can't be used costs at most one more plan call, and explore names why it can't be used. The pilot cassettes for post-comment and publish-article pair with the source SHAs above. post-comment's holds two interactions. Before planning a fix for a refused row, repair its named defect alone in an offline probe (LAB_NOTES, 2026-10-07).
 
 ## Amendment (2026-10-08): an interrupted plan call keeps its charges (#161)
