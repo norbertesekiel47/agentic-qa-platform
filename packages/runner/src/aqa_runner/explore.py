@@ -639,7 +639,7 @@ async def _phase(
                         "the browser session must scan with the run's redactor"
                     )
                 attempt = _attempt(run, session, explorable, interrupted, offered)
-                await _started(run, session)
+                await _started(run, attempt)
                 if not run.stops and not interrupted():
                     await _turns(run, attempt, explorable.plan)
     except (SandboxUnavailableError, UnregisteredEngineError) as error:
@@ -749,21 +749,20 @@ def _attempt(
     )
 
 
-async def _started(run: Run, session: BrowserSession) -> None:
+async def _started(run: Run, attempt: Attempt) -> None:
     """Load the start URL as step 0, no side-effect step (DATA_MODEL §7),
-    as replay does."""
+    as replay does, through the attempt, whose first observation is its
+    evidence."""
     path = run.spec.frontmatter.preconditions.start_url
     try:
-        step = await executor.dispatched(
-            session,
-            run.attempt,
+        step = await attempt.dispatch(
             executor.Dispatch(
                 0,
                 {"action": "navigate", "url": path},
                 False,
                 executor.NAVIGATION_SECONDS,
             ),
-            lambda: session.navigate(start_url(run.spec, run.start)),
+            lambda: attempt.session.navigate(start_url(run.spec, run.start)),
         )
     except OSError:
         # A journal line the record couldn't take: nothing more may go.
