@@ -13,7 +13,7 @@ each stop with its exit code (API.md §7):
    turns (`explore_turns`). Between the reset and the engines, each probe a
    `probe_equals` check reads is read once for its options (3 for none).
 2. Close the browser and end the phase (14 for uncertain traffic), then
-   infer the flags (ADR-0025's #54 amendment). When the
+   infer the flags from its evidence (ADR-0025's #54 amendment). When the
    attempt compiled a path and nothing stopped or interrupted it, drop
    every locator that spells a bound value (3 for a target left with
    none). A path with a side-effect step, or a start URL whose load may
@@ -452,7 +452,7 @@ async def _attempted(run: Run, explorable: Explorable) -> ExploreEnd:
         # nothing records a block or an event after the snapshot below, and
         # no write reaches the app.
         traffic = await proxy.end_phase()
-        start = _inferred(run)
+        start = _infer_flags(run)
         _uncertain(run, traffic)
         script = _publishable(run, interrupted)
         if script is not None and _unconfirmable(run.spec, script, start):
@@ -462,7 +462,7 @@ async def _attempted(run: Run, explorable: Explorable) -> ExploreEnd:
             if (replayed := _passed(run, confirmation)) is not None:
                 # Its runs can only raise a flag; one raised with no reset
                 # before them says the replay may have changed the app.
-                start = _inferred(run, replayed.steps)
+                start = _infer_flags(run, replayed.steps)
                 script = _publishable(run, interrupted)
                 repeated = script is not None and _unconfirmable(
                     run.spec, script, start
@@ -515,7 +515,9 @@ def _publishable(run: Run, interrupted: Callable[[], bool]) -> CompiledScript | 
     return run.script.model_copy(update={"targets": targets})
 
 
-def _inferred(run: Run, confirmation: Sequence[executor.StepResult] = ()) -> str | None:
+def _infer_flags(
+    run: Run, confirmation: Sequence[executor.StepResult] = ()
+) -> str | None:
     """Infer the flags of the script the attempt's `finish` compiled, from
     every run of its steps, the confirmation's included when given, into
     `run.script` (`Attempt.inferred`); why its start may change the app,

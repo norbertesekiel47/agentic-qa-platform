@@ -458,21 +458,18 @@ class Attempt:
         path, by = self._compiled
         windows = self.session.windows()
         replayed = {step.seq: step for step in confirmation}
-        theirs = [step.window for step in confirmation if step.window is not None]
+        # A passing replay completed every step, and only a step opens a
+        # window after its first, unheard one: its steps' windows are all.
+        theirs = tuple(step.window for step in confirmation if step.window is not None)
 
         def runs(number: int, seq: int) -> tuple[Observed | None, ...]:
-            ours = self._results.get(number)
-            seen = [
-                None if ours is None else observed(windows, ours.window, ours.settled)
-            ]
+            each = [(windows, self._results.get(number))]
             if confirmation:
-                again = replayed.get(seq)
-                seen.append(
-                    None
-                    if again is None
-                    else observed(theirs, again.window, again.settled)
-                )
-            return tuple(seen)
+                each.append((theirs, replayed.get(seq)))
+            return tuple(
+                None if run is None else observed(seen, run.window, run.settled)
+                for seen, run in each
+            )
 
         seqs = {number: seq for seq, number in enumerate(sorted(set(path.kept)), 1)}
         steps = {

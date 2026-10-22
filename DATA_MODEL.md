@@ -248,6 +248,8 @@ Free-form notes for humans. The agent never reads the body; anything that affect
 }
 ```
 
+The format takes any basis text, as the example's show. Explore writes each in fixed words, such as `network: a write request` (*Inference* below; ADR-0025's #54 amendment).
+
 ### Compilation rules
 - **Every expectation maps to ≥ 1 assertion** (`expect_index`). If the compiler can't produce a check that actually establishes an expectation, compilation **fails and names it** — it never substitutes a weaker proxy (e.g., "no confirmation heading" is not accepted as "no order created"). The author either adds a probe/observable or rewrites the expectation as the UI condition it really is.
 - **Coverage plan first (ADR-0024).** Explore writes the plan from the spec alone, before the browser opens, and keeps it frozen for the run (`aqa_core.coverage_plan`).
