@@ -751,8 +751,8 @@ def _attempt(
 
 async def _started(run: Run, attempt: Attempt) -> None:
     """Load the start URL as step 0, no side-effect step (DATA_MODEL §7),
-    as replay does, through the attempt, whose first observation is its
-    evidence."""
+    as replay does, but through `Attempt.dispatch`, so step 0 owes its
+    evidence to the first observation."""
     path = run.spec.frontmatter.preconditions.start_url
     try:
         step = await attempt.dispatch(

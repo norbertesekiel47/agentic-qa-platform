@@ -281,9 +281,9 @@ async def _request(
 
 async def _evidenced(context: Turning, observation: Redacted | None) -> Stop | None:
     """Save the evidence of the step before `observation`
-    (`Attempt.keep_evidence`); the stop it makes when the record can't
-    take it: the disk refused a file, or a link holds a place in its path,
-    which the record refuses (`ValueError`)."""
+    (`Attempt.keep_evidence`), or the stop it makes when the record can't
+    take it: a file the disk refused (`OSError`), or a link in its path
+    (`ValueError` from `RunRecord._place`)."""
     try:
         await context.attempt.keep_evidence(observation)
     except OSError, ValueError:
