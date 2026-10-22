@@ -69,7 +69,11 @@ assert_check or note_for_absence.
 - When every check passes, call finish with the step numbers, from the log, \
 of the path to the final page. Leave out detours. For each condition the \
 plan requires, such as c1, name in satisfies the step of that path that \
-meets it. Only a reload that ends the path meets a condition of kind reload.
+meets it. Only a reload that ends the path meets a condition of kind reload. \
+In changes_nothing, list the steps of the path that change nothing the app \
+keeps, such as going to a page or typing into a field, and 0, the load of \
+the spec's start URL, when it changes nothing either; leave out any that may \
+create, change or delete anything, such as submitting a form.
 - Write short notes for your next turn as your reply's text: what you \
 learned, and what you will do next.
 """
@@ -352,6 +356,9 @@ class Satisfied(StrictModel):
 class Finish(StrictModel):
     steps: ListOf[StrictInt]
     satisfies: ListOf[Satisfied] = ()
+    # Left out, the model agrees on no step, the start's load (0) included:
+    # each stays a side-effect step.
+    changes_nothing: ListOf[StrictInt] = ()
 
 
 type Call = (
@@ -406,8 +413,10 @@ TOOLS: Mapping[str, tuple[type[Call], str]] = {
         Finish,
         (
             "End the attempt: steps are the log's step numbers of the path to "
-            "the final page, in order, and satisfies names, for each condition "
-            "the plan requires, the step among them that meets it."
+            "the final page, in order; satisfies names, for each condition the "
+            "plan requires, the step among them that meets it; and "
+            "changes_nothing lists those of them, and 0 for the start URL's "
+            "load, that change nothing the app keeps."
         ),
     ),
 }

@@ -12,17 +12,20 @@ each stop with its exit code (API.md §7):
    unless something stopped or interrupted the run, take the navigator's
    turns (`explore_turns`). Between the reset and the engines, each probe a
    `probe_equals` check reads is read once for its options (3 for none).
-2. Close the browser and end the phase (14 for uncertain traffic). When the
+2. Close the browser and end the phase (14 for uncertain traffic), then
+   infer the flags (ADR-0025's #54 amendment). When the
    attempt compiled a path and nothing stopped or interrupted it, drop
    every locator that spells a bound value (3 for a target left with
-   none). A path with a side-effect step whose spec has no reset hook is
-   published unconfirmed, never replayed (AGENTS.md §6). Any other is
+   none). A path with a side-effect step, or a start URL whose load may
+   change the app, whose spec has no reset hook is published unconfirmed,
+   never replayed (AGENTS.md §6). Any other is
    confirmed within the minutes budget: the reset hook, when the spec has
    one (14), then, in the record's `confirmation` part (15 when it can't be
    made), in a phase of its own, the path replayed with every locator in a
    fresh browser and no model (`executor.replay`), which ends that phase
    when it returns; otherwise the phase ends once the browser has closed
-   (10, 15, 3, 14).
+   (10, 15, 3, 14). Once it passed, its runs can raise a flag, and one
+   raised with no reset before them is the run's warning.
 3. Read the egress blocks and the infrastructure events once, after the
    last phase's end. With the proxy closed, publish the path when nothing
    stopped the run, confirmed when its confirmation passed, under the
@@ -33,7 +36,7 @@ each stop with its exit code (API.md §7):
    opened."""
 
 from asyncio import get_running_loop, timeout_at
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
@@ -143,8 +146,8 @@ class Explored:
     """How the run ended: its outcome and exit code; its last document,
     `plan.json` or `explore.json`, as written or as the record couldn't take it, whose
     `outcome` and `reasons` say why; its record, None when none could be
-    made; what its model calls cost; the script its attempt compiled, as
-    `finish` compiled it (unconfirmed, every locator kept), when it compiled
+    made; what its model calls cost; the script its attempt compiled, its
+    flags inferred (unconfirmed, every locator kept), when it compiled
     one, which `explore` returns only when it spells no bound value; and
     whether the run's `egress.json` was written."""
 
@@ -175,8 +178,9 @@ class Run:
     router; the Playwright whose Chromium it browses with; the minutes
     budget's deadline, on the event loop's clock; the egress gate; and
     where it publishes, as it found the compiled file at its start. Its
-    spend is recorded in its record, and it keeps each stop it made and
-    the script `finish` compiled."""
+    spend is recorded in its record, and it keeps each stop it made, the
+    attempt whose `finish` compiled, and that script once its flags are
+    inferred (ADR-0025's #54 amendment)."""
 
     spec: Spec
     config: ProjectConfig
@@ -193,6 +197,7 @@ class Run:
     spending: Spending = field(init=False)
     stops: list[Stop] = field(init=False, default_factory=list)
     script: CompiledScript | None = field(init=False, default=None)
+    attempted: Attempt | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         budget = Decimal(str(self.config.budgets.model_usd))
@@ -432,6 +437,7 @@ async def _attempted(run: Run, explorable: Explorable) -> ExploreEnd:
     expected = run.config.egress.expected_blocked
     confirmation: Confirmation | None = None
     intended: Published | None = None
+    repeated = False
     async with EgressProxy(run.gate) as proxy:
 
         def interrupted() -> bool:
@@ -443,15 +449,25 @@ async def _attempted(run: Run, explorable: Explorable) -> ExploreEnd:
         checks, events = await _phase(run, explorable, proxy, interrupted)
         # The browser has closed. Ending the phase joins every connection,
         # and the confirmation's has ended once `_confirming` returns, so
-        # nothing records a block or an event after the snapshot below.
+        # nothing records a block or an event after the snapshot below, and
+        # no write reaches the app.
         traffic = await proxy.end_phase()
+        start = _inferred(run)
         _uncertain(run, traffic)
         script = _publishable(run, interrupted)
-        if script is not None and _unconfirmable(run.spec, script):
+        if script is not None and _unconfirmable(run.spec, script, start):
             intended = "unconfirmed"
         elif script is not None:
             confirmation = await _confirming(run, proxy, script, interrupted)
-            intended = "confirmed" if _passed(run, confirmation) else None
+            if (replayed := _passed(run, confirmation)) is not None:
+                # Its runs can only raise a flag; one raised with no reset
+                # before them says the replay may have changed the app.
+                start = _inferred(run, replayed.steps)
+                script = _publishable(run, interrupted)
+                repeated = script is not None and _unconfirmable(
+                    run.spec, script, start
+                )
+                intended = "confirmed"
         blocks = proxy.egress_blocks(expected)
     published = None
     if script is not None and intended is not None:
@@ -465,6 +481,7 @@ async def _attempted(run: Run, explorable: Explorable) -> ExploreEnd:
         checks=checks,
         stops=tuple(run.stops),
         published=published,
+        repeated=repeated,
     )
 
 
@@ -498,11 +515,23 @@ def _publishable(run: Run, interrupted: Callable[[], bool]) -> CompiledScript | 
     return run.script.model_copy(update={"targets": targets})
 
 
-def _unconfirmable(spec: Spec, script: CompiledScript) -> bool:
-    """Whether confirming `script` would repeat a side-effect step with no
-    reset before it, which no replay may (AGENTS.md §6)."""
+def _inferred(run: Run, confirmation: Sequence[executor.StepResult] = ()) -> str | None:
+    """Infer the flags of the script the attempt's `finish` compiled, from
+    every run of its steps, the confirmation's included when given, into
+    `run.script` (`Attempt.inferred`); why its start may change the app,
+    None when nothing says so. Only once the phases have ended."""
+    inferred = None if run.attempted is None else run.attempted.inferred(confirmation)
+    run.script = None if inferred is None else inferred.script
+    return None if inferred is None else inferred.start
+
+
+def _unconfirmable(spec: Spec, script: CompiledScript, start: str | None) -> bool:
+    """Whether confirming `script` would repeat, with no reset before it,
+    which no replay may (AGENTS.md §6), a side-effect step or a start URL
+    whose load may change the app (`start`, why)."""
     hook = spec.frontmatter.preconditions.reset
-    return hook is None and any(step.side_effect for step in script.steps)
+    effect = start is not None or any(step.side_effect for step in script.steps)
+    return hook is None and effect
 
 
 async def _confirming(
@@ -570,10 +599,11 @@ async def _confirming(
     return Confirmation(began, traffic, total, result)
 
 
-def _passed(run: Run, confirmation: Confirmation | None) -> bool:
-    """Whether the confirmation replayed and passed with no stop held."""
+def _passed(run: Run, confirmation: Confirmation | None) -> executor.RunResult | None:
+    """The confirmation's replay when it passed with no stop held."""
     replayed = None if confirmation is None else confirmation.result
-    return replayed is not None and replayed.outcome == "passed" and not run.stops
+    passed = replayed is not None and replayed.outcome == "passed" and not run.stops
+    return replayed if passed else None
 
 
 async def _published(
@@ -752,7 +782,8 @@ def _attempt(
 async def _started(run: Run, attempt: Attempt) -> None:
     """Load the start URL as step 0, no side-effect step (DATA_MODEL §7),
     as replay does, but through `Attempt.dispatch`, so step 0 owes its
-    evidence to the first observation."""
+    evidence to the first observation and keeps its window for inferring the
+    flags."""
     path = run.spec.frontmatter.preconditions.start_url
     try:
         step = await attempt.dispatch(
@@ -786,7 +817,8 @@ async def _turns(run: Run, attempt: Attempt, plan: CoveragePlan) -> None:
         run.stops,
     )
     await take_turns(turning)
-    run.script = turning.script
+    if turning.script is not None:
+        run.attempted = attempt
 
 
 def _ended(run: Run, end: ExploreEnd) -> Explored:

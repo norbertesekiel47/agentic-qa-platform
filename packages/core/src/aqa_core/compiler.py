@@ -9,7 +9,7 @@ locators, which the attempt and the page chose."""
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import AwareDatetime, TypeAdapter, ValidationError
 
@@ -45,9 +45,17 @@ from aqa_core.spec import Spec
 
 _ASSERTION: Final[TypeAdapter[Assertion]] = TypeAdapter(Assertion)
 _STEP: Final[TypeAdapter[Step]] = TypeAdapter(Step)
-# Until #54 infers the flag from evidence, every compiled step is a
-# side-effect step (ADR-0025: false needs positive evidence).
+# Why a step may change the app, one per condition it fails (ADR-0025's #54
+# amendment): fixed words, never what the page or the model chose.
 _BASIS: Final = "no positive evidence that the step changes nothing"
+_BUSY: Final = "settle: the page was still busy when settling's wait ran out"
+_WROTE: Final = "network: a write request"
+_LATER: Final = "network: a write request came later, which it may have caused"
+_TUNNEL: Final = (
+    "network: an encrypted or WebSocket connection was open, which the egress "
+    "proxy can't read"
+)
+_DISAGREED: Final = "model: finish didn't list it in changes_nothing"
 # The step fields a problem may name: the ones the actions take, and the
 # ones compiling owns. Any other key came from the caller and is never shown.
 _ACTION_FIELDS: Final = frozenset({"url", "value", "secret", "option", "key", "target"})
@@ -164,29 +172,67 @@ def contracts_by_meaning(
 
 
 @dataclass(frozen=True)
+class Observed:
+    """What one run of a step showed, from its dispatch until its phase ended
+    (ADR-0025's #54 amendment): how its settling ended; whether the egress
+    proxy read a write request, any method but GET, HEAD or OPTIONS, in the
+    step's own window, or in a later one, which the step may have caused;
+    and whether a tunnel (https or a WebSocket) was open from its dispatch
+    on, through which the proxy can't rule out a write or a message."""
+
+    settled: Literal["idle", "timeout"]
+    wrote: bool
+    wrote_later: bool
+    tunnelled: bool
+
+
+def side_effect_basis(
+    observed: Sequence[Observed | None], *, agreed: bool
+) -> str | None:
+    """Why a step may change the app, from what each run of it showed and
+    whether the model `agreed` it changes nothing; None, `side_effect:
+    false`, only when it ran, every run showed positive evidence (None is a
+    run that showed none) and the model agreed (ADR-0025)."""
+    if not observed or None in observed:
+        return _BASIS
+    runs = [run for run in observed if run is not None]
+    against = (
+        (_BUSY, any(run.settled == "timeout" for run in runs)),
+        (_WROTE, any(run.wrote for run in runs)),
+        (_LATER, any(run.wrote_later for run in runs)),
+        (_TUNNEL, any(run.tunnelled for run in runs)),
+        (_DISAGREED, not agreed),
+    )
+    return "; ".join(why for why, holds in against if holds) or None
+
+
+@dataclass(frozen=True)
 class PathStep:
-    """An action the attempt dispatched, and the target its element got.
-    `fields` are `action` and the action's own field (`url`, `value`,
-    `secret`, `option` or `key`; a reload and a click have none), never what
-    compiling owns: `seq`, `target`, `side_effect`, `side_effect_basis` and
-    `satisfies` (DATA_MODEL §7)."""
+    """An action the attempt dispatched, the target its element got, and what
+    each run of it showed, none while unobserved. `fields` are `action` and
+    the action's own field (`url`, `value`, `secret`, `option` or `key`; a
+    reload and a click have none), never what compiling owns: `seq`,
+    `target`, `side_effect`, `side_effect_basis` and `satisfies`
+    (DATA_MODEL §7)."""
 
     fields: Mapping[str, str]
     target: Target | None = None
+    observed: tuple[Observed | None, ...] = ()
 
 
 @dataclass(frozen=True)
 class ExploredPath:
     """What one attempt explored: its steps by the number it gave each, the
     numbers `finish` kept, each planned check it bound, by ID, to the target
-    or probe JSON path the check reads, or to None when it reads neither, and
+    or probe JSON path the check reads, or to None when it reads neither,
     each required condition `finish` says a step meets, with that step's
-    number."""
+    number, and the numbers `finish` said change nothing."""
 
     steps: Mapping[int, PathStep]
     kept: Sequence[int]
     bound: Mapping[str, Target | ProbePath | None]
     satisfies: Collection[tuple[str, int]] = ()
+    changes_nothing: Collection[int] = ()
 
 
 class Provenance(StrictModel):
@@ -228,7 +274,8 @@ def _steps(
         step = path.steps[number]
         if step.target is not None and not _carries(step.target, contracts):
             problems.append(f"step {number}: {_NOT_ITS_CONTRACT}")
-        compiled = _step(number, step, seq, names, marks[number])
+        agreed = number in path.changes_nothing
+        compiled = _step(number, step, seq, names, marks[number], agreed=agreed)
         if isinstance(compiled, str):
             problems.append(compiled)
         elif isinstance(compiled, FillSecret) and compiled.secret not in secrets:
@@ -244,18 +291,22 @@ def _step(
     seq: int,
     names: dict[Target, str],
     satisfies: tuple[str, ...],
+    *,
+    agreed: bool,
 ) -> Step | str:
     """Step `number` of the attempt compiled as step `seq`, meeting the
-    conditions `satisfies`, or the problem with it, which names only a known
-    action, a listed field or a kind of mistake, never a value: pydantic's
-    messages quote their input."""
+    conditions `satisfies`, its flag from what was observed and whether the
+    model `agreed`, or the problem with it, which names only a known action,
+    a listed field or a kind of mistake, never a value: pydantic's messages
+    quote their input."""
     if owned := sorted(_COMPILER_FIELDS & step.fields.keys()):
         return f"step {number}: sets {owned[0]}, which compiling owns"
+    basis = side_effect_basis(step.observed, agreed=agreed)
     fields: dict[str, object] = {
         **step.fields,
         "seq": seq,
-        "side_effect": True,
-        "side_effect_basis": _BASIS,
+        "side_effect": basis is not None,
+        "side_effect_basis": basis,
         "satisfies": satisfies,
     }
     if step.target is not None:

@@ -5,11 +5,12 @@ that arrives before the next action counts against the step")."""
 import asyncio
 import time
 import weakref
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
 from aqa_core.compiled import NetworkNone, NetworkSeen
+from aqa_core.compiler import Observed
 from playwright.async_api import ConsoleMessage, Error, Page, Request, Response
 
 from aqa_runner import network
@@ -87,13 +88,21 @@ class Window:
     """A settle window: the requests the page sends from one action until the
     next. `requests` and `responses` each keep the first `RECORD_LIMIT` and
     count all. `open` holds request identities, streams aside. `changed_at`
-    is when one last started or ended (`time.monotonic`). No field retains
-    a live Playwright object."""
+    is when one last started or ended (`time.monotonic`). `heard`: whether
+    the egress proxy's phase told the session of every write request from
+    the window's opening on; `wrote`, whether it read one meanwhile, any
+    method but GET, HEAD or OPTIONS, from any page or worker; `tunnelled`,
+    whether a tunnel (https or a WebSocket), whose requests and messages it
+    can't read, had opened by then (ADR-0025's #54 amendment). No field
+    retains a live Playwright object."""
 
     requests: Records[PageRequest] = field(default_factory=Records[PageRequest])
     responses: Records[Exchange] = field(default_factory=Records[Exchange])
     open: set[int] = field(default_factory=set[int])
     changed_at: float = field(default_factory=time.monotonic)
+    heard: bool = False
+    wrote: bool = False
+    tunnelled: bool = False
 
 
 @dataclass(frozen=True)
@@ -168,6 +177,10 @@ class Traffic:
         self._sent: weakref.WeakKeyDictionary[
             Request, tuple[PageRequest, PageRequest]
         ] = weakref.WeakKeyDictionary()
+        # Set once the egress proxy's phase tells this session of each write
+        # (`BrowserSession.watch`); sticky, as a tunnel stays open.
+        self.heard = False
+        self._tunnelled = False
         self._window = self.next_window()
         # https://playwright.dev/python/docs/api/class-page#page-event-request
         page.on("request", self._started)
@@ -177,9 +190,18 @@ class Traffic:
         # https://playwright.dev/python/docs/api/class-page#page-event-console
         page.on("console", self._logged)
 
+    def proxied(self, method: bytes) -> None:
+        """A write request the egress proxy read, `method` as sent, which joins
+        the window of the latest action, as the page's own requests do. A
+        CONNECT opens a tunnel, and every window from then on is tunnelled."""
+        if method == b"CONNECT":
+            self._tunnelled = self._window.tunnelled = True
+        else:
+            self._window.wrote = True
+
     def next_window(self) -> Window:
         """A new window, which every request from now on joins."""
-        self._window = Window()
+        self._window = Window(heard=self.heard, tunnelled=self._tunnelled)
         self.windows.append(self._window)
         self._kept_requests[self._window] = []
         self._console[self._window] = Records()
@@ -311,6 +333,29 @@ async def _size(request: Request) -> int | None:
         return (await request.sizes())["responseBodySize"]
     except Error:
         return None
+
+
+def observed(
+    windows: Sequence[Window], window: Window | None, settled: Settled | None
+) -> Observed | None:
+    """What `windows`, a session's in order, show of the step whose window is
+    `window` and whose settling ended `settled`: its own write, a write in
+    any later window, which it may have caused, since the only point no
+    earlier step can still act is the fresh browser, and an open tunnel.
+    None, no positive evidence, for a step with no window or settling, or
+    when the proxy's phase didn't tell its session of every write from the
+    step on (ADR-0025's #54 amendment)."""
+    if window is None or settled is None or window not in windows:
+        return None
+    since = windows[windows.index(window) :]
+    if not all(each.heard for each in since):
+        return None
+    return Observed(
+        settled,
+        wrote=window.wrote,
+        wrote_later=any(each.wrote for each in since[1:]),
+        tunnelled=any(each.tunnelled for each in since),
+    )
 
 
 async def settle(window: Window, dom_changed: Callable[[], Awaitable[bool]]) -> Settled:

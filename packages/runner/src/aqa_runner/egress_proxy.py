@@ -67,6 +67,10 @@ KEPT_ATTEMPTS = 1000
 # §2.3.4, written out).
 MAX_HOST = 253
 
+# The methods that are no write (ADR-0025, `side_effect`), as sent: fetch
+# sends `patch` as written, a write.
+READS = frozenset({b"GET", b"HEAD", b"OPTIONS"})
+
 
 def named_host(host: str) -> str:
     """`host` as a run's record names a refused host: itself when an origin
@@ -195,6 +199,8 @@ class _Phase:
     plain_uncertain: int = 0
     tunnel_uncertain: int = 0
     ending: bool = False
+    # Told of each write the phase reads, before it goes on (`watch`).
+    watchers: list[Callable[[bytes], None]] = field(default_factory=list)
 
     def classify(self, exchange: _Exchange) -> None:
         if exchange.sent and exchange.tunnel:
@@ -274,6 +280,17 @@ class EgressProxy:
             raise RuntimeError("the egress proxy has no open phase to end")
         await self._end(phase, None, None, None)
         return PhaseTraffic(phase.plain_uncertain, phase.tunnel_uncertain)
+
+    def watch(self, on_write: Callable[[bytes], None]) -> None:
+        """Tell `on_write` the method of each write request the open phase
+        reads from the browser, any method but GET, HEAD or OPTIONS, a
+        CONNECT included, before it is forwarded or refused, until the phase
+        has ended: the browser's only way out hears what Playwright's page
+        events miss (ADR-0025's #54 amendment). A later phase starts
+        unwatched."""
+        if self._phase is None or self._phase.ending:
+            raise RuntimeError("the egress proxy is between phases")
+        self._phase.watchers.append(on_write)
 
     def ended_traffic(self) -> PhaseTraffic:
         """What the last phase opened left uncertain, once it has ended,
@@ -385,6 +402,9 @@ class EgressProxy:
             ):
                 request = await browser.next()
                 if isinstance(request, h11.Request):
+                    if request.method not in READS:
+                        for heard in phase.watchers:
+                            heard(request.method)
                     exchange.tunnel = request.method == b"CONNECT"
                     serve = self._tunnel if exchange.tunnel else self._forward
                     await serve(request, browser, exchange)

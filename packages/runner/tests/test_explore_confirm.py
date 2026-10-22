@@ -325,7 +325,9 @@ ASSERT_NOW = tool(
 def test_a_zero_step_path_without_a_reset_hook_confirms_with_no_reset(
     app: App, tmp_path: Path
 ) -> None:
-    client = Scripted(planned(UNSAVED), ASSERT_NOW, calling("finish", {"steps": []}))
+    # The model lists the start's load, step 0, as changing nothing (#54).
+    finish = calling("finish", {"steps": [], "changes_nothing": [0]})
+    client = Scripted(planned(UNSAVED), ASSERT_NOW, finish)
 
     run = confirming(app, tmp_path, client, preconditions="")
 
