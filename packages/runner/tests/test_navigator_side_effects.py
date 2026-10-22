@@ -228,6 +228,25 @@ def test_a_write_finding_the_element_causes_counts_against_its_step(
     assert ("POST", "/write/scrolled") in app.seen
 
 
+def test_only_the_window_just_before_counts_not_every_earlier_one(
+    app: App, tmp_path: Path
+) -> None:
+    async def scenario(attempt: Attempt) -> Attempt:
+        quiet = Navigate(path="/page/form")
+        await acted(attempt, save, quiet, quiet, quiet)
+        return await finished(attempt, [1, 2, 3, 4], [1, 2, 3, 4])
+
+    attempt = on_app(app, tmp_path, scenario, plan=ON_A_PAGE)
+
+    # Step 2 follows the write's window; step 3 is two windows after it.
+    assert inferred(attempt) == [
+        (True, WROTE),
+        (True, WROTE),
+        (False, None),
+        (False, None),
+    ]
+
+
 def test_a_write_delayed_past_the_next_kept_action_counts_against_both(
     app: App, tmp_path: Path
 ) -> None:
