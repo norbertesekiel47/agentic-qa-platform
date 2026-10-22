@@ -195,14 +195,18 @@ def test_a_write_the_confirmation_sees_raises_the_flag_and_the_run_warns(
     assert [step.side_effect for step in run.script.steps] == [True]
 
 
+@pytest.mark.parametrize(
+    "kept", [[2, 3, 4], [4, 3, 3, 2]], ids=["in-order", "as-listed"]
+)
 def test_each_kept_step_gets_its_own_confirmation_run_past_a_detour(
-    app: App, tmp_path: Path
+    app: App, tmp_path: Path, kept: list[int]
 ) -> None:
     # Step 1 is a detour finish leaves out, so the kept steps 2, 3 and 4
-    # replay as 1, 2 and 3; only the look writes, and only when replayed.
+    # replay as 1, 2 and 3, however the model lists them; only the look
+    # writes, and only when replayed.
     look = tool("click", lambda m: {"ref": ref(m, "button", "Look"), "meaning": "look"})
     to_look = calling("navigate", {"path": "/page/again"})
-    moves = [TO_FORM, to_look, look, TO_FORM, CHECK, agreed([2, 3, 4])]
+    moves = [TO_FORM, to_look, look, TO_FORM, CHECK, agreed(kept)]
 
     run = explored(app, tmp_path, "/page/start", *moves)
 
