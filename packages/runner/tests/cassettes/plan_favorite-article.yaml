@@ -31,7 +31,8 @@ interactions:
       None}\"}},\"additionalProperties\":false,\"required\":[\"expect_index\",\"subject\",\"claim\"]},\"RequiredCondition\":{\"type\":\"object\",\"description\":\"A
       condition the goal or an expectation needs, such as a reload.\",\"title\":\"RequiredCondition\",\"properties\":{\"id\":{\"type\":\"string\",\"title\":\"Id\",\"description\":\"{minLength:
       1}\"},\"condition\":{\"type\":\"string\",\"title\":\"Condition\",\"description\":\"{minLength:
-      1}\"}},\"additionalProperties\":false,\"required\":[\"id\",\"condition\"]},\"Unsupported\":{\"type\":\"object\",\"description\":\"Why
+      1}\"},\"kind\":{\"anyOf\":[{\"type\":\"string\",\"enum\":[\"reload\"]},{\"type\":\"null\"}],\"title\":\"Kind\",\"description\":\"{default:
+      None}\"}},\"additionalProperties\":false,\"required\":[\"id\",\"condition\"]},\"Unsupported\":{\"type\":\"object\",\"description\":\"Why
       no M1 check can establish an expectation's claim, and the M2 check\\nit needs,
       if one would.\",\"title\":\"Unsupported\",\"properties\":{\"reason\":{\"type\":\"string\",\"title\":\"Reason\",\"description\":\"{minLength:
       1}\"},\"needs\":{\"anyOf\":[{\"type\":\"string\",\"enum\":[\"pixel_diff\",\"contrast_min\",\"model_verify\"]},{\"type\":\"null\"}],\"title\":\"Needs\",\"description\":\"{default:
@@ -94,8 +95,9 @@ interactions:
       only some of its words.\\n- Assert nothing the spec can't tell you, such as
       a generated part of a URL or the order of items.\\n- requires lists the conditions
       the goal or the expectations need before the checks run, each with an id (\\\"c1\\\",
-      \\\"c2\\\", ...), such as \\\"checked after reloading the order page\\\". Leave
-      it empty when there are none.\\n\"}"
+      \\\"c2\\\", ...), such as \\\"checked after reloading the order page\\\". A
+      condition met by reloading the page before the checks has kind reload; leave
+      kind out of any other. Leave it empty when there are none.\\n\"}"
     headers:
       anthropic-version:
       - '2023-06-01'
@@ -105,19 +107,19 @@ interactions:
     uri: https://api.anthropic.com/v1/messages
   response:
     body:
-      string: '{"model":"claude-sonnet-5-5","id":"msg_011CfkKi2qA5PbP264xqFSF9","type":"message","role":"assistant","content":[{"type":"text","text":"{\"expectations\":[{\"expect_index\":0,\"subject\":\"the
+      string: '{"model":"claude-sonnet-5-5","id":"msg_011CgEjsGLv9SaPXf794eeFZ","type":"message","role":"assistant","content":[{"type":"text","text":"{\"expectations\":[{\"expect_index\":0,\"subject\":\"the
         favorite button on the article page\",\"claim\":\"The favorite button''s label
-        reads \\\"Unfavorite Article\\\" after the reload\",\"checks\":[{\"check\":\"text_in_target\",\"target_meaning\":\"the
-        favorite button for the article\",\"text\":\"Unfavorite Article\"}]},{\"expect_index\":1,\"subject\":\"the
-        article''s favorites count\",\"claim\":\"The article''s favorites count shows
-        1 after the reload\",\"checks\":[{\"check\":\"text_in_target\",\"target_meaning\":\"the
+        reads \\\"Unfavorite Article\\\"\",\"checks\":[{\"check\":\"text_in_target\",\"target_meaning\":\"the
+        favorite toggle button for the article\",\"text\":\"Unfavorite Article\"}]},{\"expect_index\":1,\"subject\":\"the
+        article''s favorites count\",\"claim\":\"The favorites count shown for the
+        article is 1\",\"checks\":[{\"check\":\"text_in_target\",\"target_meaning\":\"the
         favorites count on the article''s favorite button\",\"text\":\"1\"}]}],\"requires\":[{\"id\":\"c1\",\"condition\":\"checked
-        after reloading the article page, so the favorite has persisted\"}]}"}],"container":null,"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":4030,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":237,"output_tokens_details":{"thinking_tokens":0},"service_tier":"standard","inference_geo":"global"},"diagnostics":null}'
+        after reloading the article page\",\"kind\":\"reload\"}]}"}],"container":null,"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":4149,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":230,"output_tokens_details":{"thinking_tokens":0},"service_tier":"standard","inference_geo":"global","speed":"standard"},"diagnostics":null}'
     headers:
       content-type:
       - application/json
       request-id:
-      - req_011CfkKi2W4xiJVx8LFT3zGK
+      - req_011CgEjsFFgXx6migvhs3TwP
     status:
       code: 200
       message: OK
