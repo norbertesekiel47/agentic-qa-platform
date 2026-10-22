@@ -176,7 +176,8 @@ class Observed:
     """What one run of a step showed, from its dispatch until its phase ended
     (ADR-0025's #54 amendment): how its settling ended; whether the egress
     proxy read a write request, any method but GET, HEAD or OPTIONS, in the
-    step's own window, or in a later one, which the step may have caused;
+    step's own window, the one before it (finding its element), or a later
+    one, which the step may have caused;
     and whether a tunnel (https or a WebSocket) was open from its dispatch
     on, through which the proxy can't rule out a write or a message."""
 

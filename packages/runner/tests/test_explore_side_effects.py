@@ -59,9 +59,14 @@ RESTLESS_AGAIN = """fetch('/probe/visits').then((r) => r.json())
     .then((b) => b.count > 0 && setInterval(() => {
         document.title = String(Date.now()); }, 100))"""
 # A start page whose load writes; a button that writes only when clicked a
-# second time; a start page whose load does only the second time; and a
-# button that keeps the page busy only when clicked a second time.
+# second time; a start page whose load does only the second time; a button
+# that keeps the page busy only when clicked a second time; and a button
+# 4,000 px down whose page scroll handler writes only the second time the
+# page is read.
 PAGES_HERE = {
+    "again-far": f"""<div style="height: 4000px">Top</div><button>Far</button><script>
+        addEventListener("scroll", () => {{{AGAIN}}}, {{once: true}});
+    </script>""",
     "writes": """<a href="/page/form">Form</a><script>
         fetch("/write/load", {method: "POST"});
     </script>""",
@@ -153,8 +158,8 @@ def test_a_start_url_whose_load_writes_keeps_the_path_unconfirmed_with_no_reset_
     run = explored(app, tmp_path, "/page/writes", *moved(path))
 
     assert (run.outcome, written(run)["published"]) == ("compiled", "unconfirmed")
-    # The step after the start's write is no side-effect step of its own.
-    assert flags(tmp_path) == [(False, None)] * len(path)
+    # The step after the start's write finds its element in that write's window.
+    assert flags(tmp_path) == [(True, WROTE)] * len(path)
     assert "confirmation/steps.jsonl" not in files(run)
     assert app.paths().count("/write/load") == 1
 
@@ -195,6 +200,21 @@ def test_a_write_the_confirmation_sees_raises_the_flag_and_the_run_warns(
     assert [step.side_effect for step in run.script.steps] == [True]
 
 
+def test_a_write_the_confirmation_causes_finding_a_steps_element_raises_its_flag(
+    app: App, tmp_path: Path
+) -> None:
+    # The replay's look scrolls the off-screen button into view before the
+    # click's window opens, and only then does the page write.
+    far = tool("click", lambda m: {"ref": ref(m, "button", "Far"), "meaning": "far"})
+
+    run = explored(app, tmp_path, "/page/again-far", far, CHECK, agreed([1]))
+
+    assert (run.outcome, written(run)["published"]) == ("compiled", "confirmed")
+    assert flags(tmp_path) == [(True, WROTE)]
+    assert written(run)["reasons"] == [REPEATED]
+    assert app.paths().count("/write/again") == 1
+
+
 @pytest.mark.parametrize(
     "kept", [[2, 3, 4], [4, 3, 3, 2]], ids=["in-order", "as-listed"]
 )
@@ -211,7 +231,7 @@ def test_each_kept_step_gets_its_own_confirmation_run_past_a_detour(
     run = explored(app, tmp_path, "/page/start", *moves)
 
     assert (run.outcome, written(run)["published"]) == ("compiled", "confirmed")
-    assert flags(tmp_path) == [(True, LATER), (True, WROTE), (False, None)]
+    assert flags(tmp_path) == [(True, LATER), (True, WROTE), (True, WROTE)]
     assert written(run)["reasons"] == [REPEATED]
 
 

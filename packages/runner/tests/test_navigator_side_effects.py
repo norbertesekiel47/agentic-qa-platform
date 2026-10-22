@@ -59,10 +59,14 @@ ON_A_PAGE = CoveragePlan.model_validate(
 )
 # A form posted into a popup that never commits (the app answers 204), so no
 # page event reports it (measured, v1's probe); a write to the app under
-# another name; a page that keeps changing once clicked; and a write that
-# waits on a stream, which never holds a window open, until the test lets
-# the app answer it.
+# another name; a page that keeps changing once clicked; a write that waits
+# on a stream, which never holds a window open, until the test lets the app
+# answer it; and a button 4,000 px down whose page scroll handler writes once.
 PAGES_HERE = {
+    "far": """<div style="height: 4000px">Top</div><button>Far</button><script>
+        addEventListener("scroll", () => fetch("/write/scrolled", {method: "POST"}),
+            {once: true});
+    </script>""",
     "popup": """<form method="post" target="_blank" action="/write/popup">
         <button>Send</button></form>""",
     "elsewhere": """<button onclick="fetch(location.origin.replace('127.0.0.1',
@@ -209,7 +213,19 @@ def test_a_write_that_arrives_just_before_the_next_action_is_its_steps(
 
     attempt = on_app(app, tmp_path, scenario, plan=ON_A_PAGE, page="/page/late")
 
-    assert inferred(attempt) == [(True, WROTE), (False, None)]
+    assert inferred(attempt) == [(True, WROTE), (True, WROTE)]
+
+
+def test_a_write_finding_the_element_causes_counts_against_its_step(
+    app: App, tmp_path: Path
+) -> None:
+    # Resolution scrolls the off-screen button into view, before the click's
+    # window opens, and the page's scroll handler writes.
+    def far(attempt: Attempt) -> Action:
+        return Click(ref=ref(attempt, "button", "Far"), meaning="the far button")
+
+    assert run(app, tmp_path, far, agreed=[1], page="/page/far") == [(True, WROTE)]
+    assert ("POST", "/write/scrolled") in app.seen
 
 
 def test_a_write_delayed_past_the_next_kept_action_counts_against_both(
