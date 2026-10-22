@@ -51,6 +51,7 @@ from packages.runner.tests.explore_graph_fixtures import (
     Move,
     Scripted,
     calling,
+    planned,
     ref,
     tool,
 )
@@ -76,7 +77,6 @@ from packages.runner.tests.test_explore_graph import (
     shop_spec,
     written,
 )
-from packages.runner.tests.test_explore_preflight import planned
 from packages.runner.tests.test_navigator_checks import ARTICLE, BUTTON_ROW, FAVORITE
 
 RESET = "  reset: { http: POST /write/reset }\n"

@@ -29,7 +29,7 @@ from aqa_runner.run_record import RunRecord
 from packages.runner.tests.document_fixtures import until
 from packages.runner.tests.egress_fixtures import get
 from packages.runner.tests.executor_fixtures import PAGES, SHOPS, App, serving_app
-from packages.runner.tests.explore_graph_fixtures import FILL, Scripted, tool
+from packages.runner.tests.explore_graph_fixtures import FILL, Scripted, planned, tool
 from packages.runner.tests.secret_fixtures import FAKE_VALUE, copies_found
 from packages.runner.tests.test_executor_runs import while_closing
 from packages.runner.tests.test_explore_confirm import (
@@ -51,7 +51,6 @@ from packages.runner.tests.test_explore_graph import (
     proxies,
     written,
 )
-from packages.runner.tests.test_explore_preflight import planned
 
 
 @pytest.fixture

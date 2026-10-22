@@ -32,6 +32,7 @@ from packages.runner.tests.explore_graph_fixtures import (
     Scripted,
     answer,
     calling,
+    planned,
 )
 from packages.runner.tests.secret_fixtures import copies_found
 from packages.runner.tests.test_explore_confirm import published
@@ -42,7 +43,6 @@ from packages.runner.tests.test_explore_graph import (
     shop_spec,
     written,
 )
-from packages.runner.tests.test_explore_preflight import planned
 
 RESET = "  reset: { http: POST /write/reset }\n"
 COUNT = '  probes: { count: "GET /probe/count" }\n'
