@@ -152,7 +152,8 @@ def test_evidence_capture_leaves_every_model_visible_request_byte_identical(
     assert sent(on) == sent(off)
     assert on.offered == off.offered
     assert on_looks == off_looks
-    assert len(on_looks) == (5 if case == "retried" else 0)
+    # The retried case's one changed look was taken again, in both runs.
+    assert len(on_looks) == (len(on.requests) + 1 if case == "retried" else 0)
     # The control: one run saved each step's evidence, the other none.
     assert sorted({name.split("/")[0] for name in evidence(saved.record)}) == [
         "0",
