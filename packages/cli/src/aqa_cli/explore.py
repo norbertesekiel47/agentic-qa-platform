@@ -115,9 +115,10 @@ _WITHHELD: Final = (
 # (`PipeTransport.run`), raised as a bare Exception, with no class of its own.
 _CLOSED_EARLY: Final = ("Connection closed while reading from the driver",)
 _UNCONFIRMED: Final = (
-    "warning: {path} is unconfirmed: its path has side-effect steps and the "
-    "spec has no reset hook, so no replay confirmed it (AGENTS.md §6). Declare "
-    "a reset hook, and explore it again"
+    "warning: {path} is unconfirmed: its path has side-effect steps, or "
+    "loading its start URL may change the app, and the spec has no reset hook, "
+    "so no replay confirmed it (AGENTS.md §6). Declare a reset hook, and "
+    "explore it again"
 )
 
 # Characters that would move the cursor, recolour the terminal or reorder text

@@ -12,18 +12,20 @@ after it. Every text a tool returns is fixed words, plan text and
 lists, which the page chose and `navigator_parts` scans."""
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 
 from aqa_core.compiled import CompiledScript, Locator, Target
 from aqa_core.compiler import (
     CompileError,
     ExploredPath,
+    Observed,
     PathStep,
     ProbePath,
     Provenance,
     assertion_for,
     compile_script,
+    side_effect_basis,
 )
 from aqa_core.config import ProjectConfig
 from aqa_core.coverage_plan import CoveragePlan, PlannedCheck, planned_checks
@@ -67,7 +69,7 @@ from aqa_runner.reasons import UnansweredError
 from aqa_runner.redaction import Redacted
 from aqa_runner.run_record import RunRecord
 from aqa_runner.secret_fields import SecretRefusedError
-from aqa_runner.settling import Window
+from aqa_runner.settling import Window, observed
 
 # The navigator's actions, the calls an attempt runs.
 type Action = Navigate | Reload | Click | Fill | FillSecret | Select | Press
@@ -118,6 +120,17 @@ class Finished:
 
     script: CompiledScript | None
     text: Redacted
+
+
+@dataclass(frozen=True)
+class Inferred:
+    """The script `finish` compiled, each step's flag inferred from every run
+    of it, and why its start, step 0, may change the app: None when every
+    run of it showed positive evidence that it doesn't and `finish` listed
+    0 in `changes_nothing` (ADR-0025's #54 amendment)."""
+
+    script: CompiledScript
+    start: str | None
 
 
 @dataclass(frozen=True)
@@ -180,6 +193,12 @@ class Attempt:
     interrupted: Callable[[], bool]
     offered: Offered = field(default_factory=Offered)
     steps: dict[int, PathStep] = field(init=False, default_factory=dict)
+    # Each completed dispatch's result, step 0's included, whose window goes
+    # on filling until the next action, read when the flags are inferred.
+    _results: dict[int, executor.StepResult] = field(init=False, default_factory=dict)
+    # The path and provenance the last `finish` compiled, compiled again
+    # with the evidence once it is complete (`inferred`).
+    _compiled: tuple[ExploredPath, Provenance] | None = field(init=False, default=None)
     observation: Redacted | None = field(init=False, default=None)
     _uses: dict[str, TargetUses] = field(init=False, default_factory=dict)
     _bound: dict[str, _Bound] = field(init=False, default_factory=dict)
@@ -295,15 +314,18 @@ class Attempt:
         self, dispatch: executor.Dispatch, act: Callable[[], Awaitable[Window]]
     ) -> executor.StepResult:
         """Dispatch a step in the attempt's record as replay does
-        (`executor.dispatched`). One whose intent is on disk owes its
-        evidence to the next observation (`keep_evidence`): one that
+        (`executor.dispatched`), step 0 included. One whose intent is on disk
+        owes its evidence to the next observation (`keep_evidence`): one that
         completed, or one that failed once dispatched or whose completion
         line the record refused, whose intent then has no completion, which
         ends the attempt (`ended`). A completion line the disk couldn't take
-        raises, as in replay, and leaves nothing owed."""
+        raises, as in replay, and leaves nothing owed. A completed one's
+        result is kept for inferring the flags (`inferred`)."""
         step = await executor.dispatched(self.session, self.record, dispatch, act)
         if step.outcome == "completed" or self.ended:
             self._unseen = step
+        if step.outcome == "completed":
+            self._results[step.seq] = step
         return step
 
     async def keep_evidence(self, observation: Redacted | None) -> None:
@@ -401,28 +423,68 @@ class Attempt:
             if result.outcome != "pass"
         ]
         problems = [f"on this page {'; '.join(failing)}"] if failing else []
+        path = ExploredPath(
+            dict(self.steps),
+            call.steps,
+            bound,
+            tuple((each.condition, each.step) for each in call.satisfies),
+            changes_nothing=call.changes_nothing,
+        )
         try:
-            script = compile_script(
-                self.spec,
-                self.config,
-                self.plan,
-                ExploredPath(
-                    self.steps,
-                    call.steps,
-                    bound,
-                    tuple((each.condition, each.step) for each in call.satisfies),
-                ),
-                by,
-            )
+            script = compile_script(self.spec, self.config, self.plan, path, by)
         except CompileError as error:
             problems.extend(error.problems)
         if problems:
             text = "; ".join(problems)
             return Finished(None, self._said(f"finish compiled nothing: {text}"))
+        self._compiled = path, by
         return Finished(
             script,
             self._said("finish compiled the path, and every check passes on this page"),
         )
+
+    def inferred(
+        self, confirmation: Sequence[executor.StepResult] = ()
+    ) -> Inferred | None:
+        """The script `finish` compiled, None when it compiled none, with each
+        step's flag inferred from what the attempt's windows show now and,
+        given its replay's steps, the confirmation's (ADR-0025's #54
+        amendment). Only once the browser has closed and the egress phase has
+        ended, the confirmation's too, can no write still reach the app, so
+        only then are the flags final; `finish`'s own script, which saw no
+        evidence, has every step a side-effect step."""
+        if self._compiled is None:
+            return None
+        path, by = self._compiled
+        windows = self.session.windows()
+        replayed = {step.seq: step for step in confirmation}
+        theirs = [step.window for step in confirmation if step.window is not None]
+
+        def runs(number: int, seq: int) -> tuple[Observed | None, ...]:
+            ours = self._results.get(number)
+            seen = [
+                None if ours is None else observed(windows, ours.window, ours.settled)
+            ]
+            if confirmation:
+                again = replayed.get(seq)
+                seen.append(
+                    None
+                    if again is None
+                    else observed(theirs, again.window, again.settled)
+                )
+            return tuple(seen)
+
+        seqs = {number: seq for seq, number in enumerate(sorted(set(path.kept)), 1)}
+        steps = {
+            number: replace(step, observed=runs(number, seqs[number]))
+            for number, step in path.steps.items()
+            if number in seqs
+        }
+        script = compile_script(
+            self.spec, self.config, self.plan, replace(path, steps=steps), by
+        )
+        start = side_effect_basis(runs(0, 0), agreed=0 in path.changes_nothing)
+        return Inferred(script, start)
 
     async def observe(self) -> Redacted:
         """The page's snapshot, kept as the observation: taken again while
