@@ -18,6 +18,7 @@ directories above its own and writes through no link below it (ADR-0026's
 
 import json
 import os
+import re
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import suppress
@@ -49,12 +50,10 @@ def phase_parts(attempt: int) -> tuple[str, str]:
 
 
 def _is_part(name: str) -> bool:
-    """Whether `name` is a part `phase_parts` gives for an attempt numbered
-    from 1 and written in ASCII digits with no leading zero, so `attempt-0`
-    is refused and `int` never reads another spelling of a number."""
-    number = name.rpartition("-")[2]
-    numbered = number.isascii() and number.isdigit() and not number.startswith("0")
-    return name in phase_parts(int(number) if numbered else 1)
+    """Whether `name` is a part `phase_parts` gives: attempt 1's, or the
+    attempt its last number names, written as `phase_parts` writes one."""
+    numbered = re.fullmatch(r".*-([1-9][0-9]*)", name)
+    return name in phase_parts(int(numbered[1]) if numbered else 1)
 
 
 # What a caller checks a journal line or a document with before it is
