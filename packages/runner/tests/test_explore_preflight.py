@@ -32,7 +32,7 @@ from aqa_runner.model_router import ModelCallError, ModelRouter
 from aqa_runner.navigator_tools import Attempt
 from aqa_runner.redaction import Redactor
 from aqa_runner.run_record import RunRecord
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from playwright.async_api import async_playwright
 
 from packages.runner.tests.executor_fixtures import App, serving_app
@@ -43,9 +43,9 @@ from packages.runner.tests.explore_graph_fixtures import (
     PLAN,
     REFUSED,
     STATUS,
-    USAGE,
     Move,
     Scripted,
+    planned,
 )
 from packages.runner.tests.navigator_fixtures import evidence_of, fail_fsync
 from packages.runner.tests.secret_fixtures import FAKE_VALUE
@@ -71,17 +71,6 @@ SHOP = (
     "expect:\n"
     "  - The shop says the name was saved\n"
 )
-
-
-def planned(plan: CoveragePlan | None = PLAN) -> Reply:
-    """The plan call's answer: `plan`, parsed, at the usual usage."""
-    return Reply(
-        message=AIMessage(content="the plan"),
-        usage=USAGE,
-        refused=False,
-        complete=True,
-        parsed=plan,
-    )
 
 
 @pytest.fixture

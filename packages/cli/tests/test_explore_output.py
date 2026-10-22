@@ -43,9 +43,8 @@ from packages.cli.tests.test_explore_runs import (
     unlaunched,
     unstarted,
 )
-from packages.runner.tests.explore_graph_fixtures import REFUSED, Scripted
+from packages.runner.tests.explore_graph_fixtures import REFUSED, Scripted, planned
 from packages.runner.tests.secret_fixtures import copies_found
-from packages.runner.tests.test_explore_preflight import planned
 
 START = "http://127.0.0.1:4100"
 SENTINEL = "fake-os-detail-sentinel-4u49"

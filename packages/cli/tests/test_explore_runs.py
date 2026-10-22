@@ -46,6 +46,7 @@ from packages.runner.tests.explore_graph_fixtures import (
     REFUSED,
     Move,
     Scripted,
+    planned,
     ref,
     tool,
 )
@@ -58,7 +59,6 @@ from packages.runner.tests.test_explore_graph import (
     deadlines,
     paying_until_expired,
 )
-from packages.runner.tests.test_explore_preflight import planned
 
 KEY = "fake-key-for-tests"
 # The start origin a spec root's config gives, where nothing listens.

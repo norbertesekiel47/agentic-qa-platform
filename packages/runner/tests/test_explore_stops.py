@@ -50,6 +50,7 @@ from packages.runner.tests.explore_graph_fixtures import (
     NO_RESPONSE,
     REFUSED,
     Scripted,
+    planned,
 )
 from packages.runner.tests.navigator_fixtures import evidence_of
 from packages.runner.tests.secret_fixtures import FAKE_VALUE
@@ -74,7 +75,6 @@ from packages.runner.tests.test_explore_graph import (
     files,
     written,
 )
-from packages.runner.tests.test_explore_preflight import planned
 from packages.runner.tests.test_session_failures import (
     UNPREPARED,
     drivers,

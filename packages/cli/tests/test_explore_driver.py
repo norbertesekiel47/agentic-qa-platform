@@ -38,8 +38,7 @@ from packages.cli.tests.test_explore_output import (
     signed_in,
 )
 from packages.cli.tests.test_explore_runs import KEY, explore, record_in, shop
-from packages.runner.tests.explore_graph_fixtures import Scripted
-from packages.runner.tests.test_explore_preflight import planned
+from packages.runner.tests.explore_graph_fixtures import Scripted, planned
 
 NO_DRIVER = (
     "unreachable shop: the browser driver couldn't start, so nothing was explored\n"

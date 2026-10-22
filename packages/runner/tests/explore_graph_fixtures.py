@@ -116,6 +116,17 @@ def calling(name: str, args: dict[str, object]) -> Reply:
     )
 
 
+def planned(plan: CoveragePlan | None = PLAN) -> Reply:
+    """The plan call's answer: `plan`, parsed, at the usual usage."""
+    return Reply(
+        message=AIMessage(content="the plan"),
+        usage=USAGE,
+        refused=False,
+        complete=True,
+        parsed=plan,
+    )
+
+
 def tool(
     name: str, args: Callable[[Sequence[BaseMessage]], dict[str, object]]
 ) -> Callable[[Sequence[BaseMessage]], Reply]:
