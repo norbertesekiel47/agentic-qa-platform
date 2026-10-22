@@ -164,8 +164,8 @@ class Attempt:
     probes its checks read offer it (#53 P20), and `_pinned` each
     `probe_equals` check's path once an evaluation there didn't pass (#213).
     Each step it dispatches, the start's included, owes its evidence to the
-    next observation (`keep_evidence`), the one the next request carries
-    (ADR-0024's #53 P22 amendment)."""
+    next observation (`keep_evidence`), the one the next request is built
+    from (ADR-0024's #53 P22 amendment)."""
 
     session: BrowserSession
     record: RunRecord
@@ -297,8 +297,10 @@ class Attempt:
         """Dispatch a step in the attempt's record as replay does
         (`executor.dispatched`). One whose intent is on disk owes its
         evidence to the next observation (`keep_evidence`): one that
-        completed, or one that failed once dispatched, whose intent then
-        has no completion, which ends the attempt (`ended`)."""
+        completed, or one that failed once dispatched or whose completion
+        line the record refused, whose intent then has no completion, which
+        ends the attempt (`ended`). A completion line the disk couldn't take
+        raises, as in replay, and leaves nothing owed."""
         step = await executor.dispatched(self.session, self.record, dispatch, act)
         if step.outcome == "completed" or self.ended:
             self._unseen = step
@@ -307,8 +309,8 @@ class Attempt:
     async def keep_evidence(self, observation: Redacted | None) -> None:
         """Save the evidence of the step dispatched since the last
         observation, if one was, with `observation`: the snapshot the next
-        request carries, or None when the page couldn't be looked at or no
-        request follows. A file the record refuses for what it holds is left
+        request is built from, or None when the page couldn't be looked at
+        or no request follows. A file the record refuses for what it holds is left
         out; one the disk or a link refuses raises (`aqa_runner.evidence`)."""
         step, self._unseen = self._unseen, None
         if step is not None:
