@@ -293,18 +293,25 @@ def test_a_session_its_phase_never_told_of_writes_gives_no_positive_evidence(
     assert flags == [(True, BASIS)]
 
 
-# Buttons that open a WebSocket to the page's server, and send a Blob on it,
-# which Playwright 1.63 never reports as sent (measured, v1's probe).
+# A button that changes nothing, and buttons that open a WebSocket to the
+# page's server and send a Blob on it, which Playwright 1.63 never reports
+# as sent (measured, v1's probe).
 SOCKET_BUTTONS = """() => document.body.innerHTML = `
+    <button onclick="document.title = 'marked'">Mark</button>
     <button onclick="window.s = new WebSocket(
         location.origin.replace('http', 'ws') + '/socket')">Open</button>
     <button onclick="window.s.send(new Blob(['only']))">Send</button>`"""
 
 
-def test_a_websocket_keeps_every_step_from_its_opening_true(tmp_path: Path) -> None:
+def test_a_websocket_keeps_its_steps_and_every_earlier_one_true(
+    tmp_path: Path,
+) -> None:
     async def scenario(attempt: Attempt) -> Attempt:
         await attempt.session.page.evaluate(SOCKET_BUTTONS)
         await attempt.observe()
+
+        def marked(at: Attempt) -> Action:
+            return Click(ref=ref(at, "button", "Mark"), meaning="the mark button")
 
         def opened(at: Attempt) -> Action:
             return Click(ref=ref(at, "button", "Open"), meaning="the open button")
@@ -312,8 +319,8 @@ def test_a_websocket_keeps_every_step_from_its_opening_true(tmp_path: Path) -> N
         def sent(at: Attempt) -> Action:
             return Click(ref=ref(at, "button", "Send"), meaning="the send button")
 
-        await acted(attempt, opened, sent)
-        return await finished(attempt, [1, 2], [1, 2])
+        await acted(attempt, marked, opened, sent)
+        return await finished(attempt, [1, 2, 3], [1, 2, 3])
 
     async def served() -> tuple[Attempt, list[str]]:
         async with socket_server() as server:
@@ -330,5 +337,6 @@ def test_a_websocket_keeps_every_step_from_its_opening_true(tmp_path: Path) -> N
 
     attempt, received = asyncio.run(served())
 
-    assert inferred(attempt) == [(True, TUNNEL), (True, TUNNEL)]
+    # The mark came first, and its effects may open the socket.
+    assert inferred(attempt) == [(True, TUNNEL)] * 3
     assert received == ["binary"]

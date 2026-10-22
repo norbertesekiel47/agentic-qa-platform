@@ -285,6 +285,12 @@ def _steps(
     return steps, problems
 
 
+def kept_steps(path: ExploredPath) -> list[int]:
+    """The numbers of the steps `finish` kept that the attempt took, each
+    once, in the attempt's order: the script's steps 1, 2, ..."""
+    return [number for number in sorted(set(path.kept)) if number in path.steps]
+
+
 def _step(
     number: int,
     step: PathStep,
@@ -464,7 +470,7 @@ def compile_script(
     spec_id = spec.frontmatter.id
     contracts, meaning_problems = _contracts(plan, subject_contracts(config, spec_id))
     kept = sorted(set(path.kept))
-    taken = [number for number in kept if number in path.steps]
+    taken = kept_steps(path)
     names: dict[Target, str] = {}
     marks, condition_problems = _conditions(plan, path, taken)
     steps, step_problems = _steps(

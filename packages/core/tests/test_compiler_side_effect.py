@@ -101,14 +101,24 @@ def test_a_step_a_run_of_which_showed_nothing_stays_true_whatever_finish_says(
     assert flags(tmp_path, {1: navigate(*observed)}, (1,), (1,)) == [(True, BASIS)]
 
 
-def test_a_second_run_that_wrote_raises_the_flag_the_first_left_false(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("again", "basis"),
+    [
+        (Observed("timeout", False, False, False), BUSY),
+        (WRITING, WROTE),
+        (Observed("idle", False, True, False), LATER),
+        (Observed("idle", False, False, True), TUNNEL),
+    ],
+    ids=["settle", "write", "later-write", "tunnel"],
+)
+def test_a_second_run_that_fails_a_condition_raises_the_flag_the_first_left_false(
+    tmp_path: Path, again: Observed, basis: str
 ) -> None:
     assert flags(tmp_path / "twice", {1: navigate(CLEAN, CLEAN)}, (1,), (1,)) == [
         (False, None)
     ]
-    assert flags(tmp_path / "again", {1: navigate(CLEAN, WRITING)}, (1,), (1,)) == [
-        (True, WROTE)
+    assert flags(tmp_path / "again", {1: navigate(CLEAN, again)}, (1,), (1,)) == [
+        (True, basis)
     ]
 
 
