@@ -2,11 +2,12 @@
 graph whose state is plain data, checkpointed in memory; the attempt, the
 router and the run's spend ride in its context, never in state.
 
-Each turn takes the page's one observation, builds one fresh request
-(`navigator.navigator_request`) and runs at most the reply's first tool
-call. Each priced response is on disk in `costs.jsonl` before the next call,
-and each request sent leaves `turns/<n>.json`, whatever came back, unless
-its cost line isn't on disk or the call is cancelled."""
+Each turn takes the page's one observation, which is also the evidence of
+the step dispatched before it (ADR-0024's #53 P22 amendment), builds one
+fresh request (`navigator.navigator_request`) and runs at most the reply's
+first tool call. Each priced response is on disk in `costs.jsonl` before
+the next call, and each request sent leaves `turns/<n>.json`, whatever came
+back, unless its cost line isn't on disk or the call is cancelled."""
 
 import json
 from collections.abc import Callable, Sequence
@@ -183,6 +184,9 @@ async def take_turns(context: Turning) -> None:
             },
             context=context,
         )
+        # The step no request followed keeps its logs, with no snapshot.
+        if (stop := await _evidenced(context, None)) is not None:
+            context.stops.append(stop)
     finally:
         # However the turns stop, a finish, a stop, an error or a
         # cancellation, the parts they hold go with their handles.
@@ -210,10 +214,12 @@ async def _taken(context: Turning, state: Turns) -> Turns | Stop | None:
     attempt = context.attempt
     if (stop := _spent(context, state["turn"])) is not None:
         return stop
-    messages = await _request(context, state)
-    if attempt.interrupted():
-        # Its observation's included: no call is made.
-        return None
+    messages, seen = await _request(context, state)
+    unsaved = await _evidenced(context, seen)
+    if unsaved is not None or attempt.interrupted():
+        # Its observation's included, or its evidence wasn't saved: no call
+        # is made.
+        return unsaved
     priced = len(context.spending.calls)
     reply = await _called(context, messages)
     if isinstance(reply, Stop):
@@ -250,24 +256,39 @@ def _spent(context: Turning, taken: int) -> Stop | None:
     return None
 
 
-async def _request(context: Turning, state: Turns) -> list[BaseMessage]:
+async def _request(
+    context: Turning, state: Turns
+) -> tuple[list[BaseMessage], Redacted | None]:
     """This turn's request, with the page's one observation, or none and
-    why, when the page couldn't be looked at."""
+    why, when the page couldn't be looked at; and that observation, if any."""
     looked: tuple[str, ...] = ()
+    seen: Redacted | None = None
     try:
-        snapshot = await context.attempt.observe()
+        seen = await context.attempt.observe()
     except (PolicyEventError, DocumentChangedError, UnansweredError, Error) as error:
         why = reasons.reason(error, context.redactor)
-        snapshot, looked = context.said(""), (f"the page couldn't be looked at: {why}",)
+        looked = (f"the page couldn't be looked at: {why}",)
     turn = Turn(
         log=tuple(state["log"]),
         notes=state["notes"],
         results=(*state["results"], *looked),
-        snapshot=snapshot,
+        snapshot=context.said("") if seen is None else seen,
         parts=state["parts"],
         probes=probe_listing(context.attempt.offered, context.redactor),
     )
-    return navigator_request(context.prefix, turn, redactor=context.redactor)
+    return navigator_request(context.prefix, turn, redactor=context.redactor), seen
+
+
+async def _evidenced(context: Turning, observation: Redacted | None) -> Stop | None:
+    """Save the evidence of the step before `observation`
+    (`Attempt.keep_evidence`); the stop it makes when the record can't
+    take it: the disk refused a file, or a link holds a place in its path,
+    which the record refuses (`ValueError`)."""
+    try:
+        await context.attempt.keep_evidence(observation)
+    except OSError, ValueError:
+        return Stop("record_error", context.said(UNWRITTEN))
+    return None
 
 
 async def _called(context: Turning, messages: list[BaseMessage]) -> _Reply | Stop:

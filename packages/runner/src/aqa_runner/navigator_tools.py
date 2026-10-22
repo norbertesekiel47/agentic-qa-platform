@@ -38,6 +38,7 @@ from aqa_runner.browser_session import BrowserSession, RefError, one_key
 from aqa_runner.document_origins import DocumentChangedError, PolicyEventError
 from aqa_runner.egress import EgressGate
 from aqa_runner.evaluation import AssertionResult, Evaluation, evaluate_each
+from aqa_runner.evidence import capture_evidence
 from aqa_runner.explore_result import assertion_words
 from aqa_runner.locator_generation import (
     LocatorError,
@@ -161,7 +162,10 @@ class Attempt:
     and its last evaluation. A run whose admission couldn't keep its secrets
     is `ValueError`, before any use of the browser. `offered` is what the
     probes its checks read offer it (#53 P20), and `_pinned` each
-    `probe_equals` check's path once an evaluation there didn't pass (#213)."""
+    `probe_equals` check's path once an evaluation there didn't pass (#213).
+    Each step it dispatches, the start's included, owes its evidence to the
+    next observation (`keep_evidence`), the one the next request carries
+    (ADR-0024's #53 P22 amendment)."""
 
     session: BrowserSession
     record: RunRecord
@@ -181,6 +185,7 @@ class Attempt:
     _bound: dict[str, _Bound] = field(init=False, default_factory=dict)
     _pinned: dict[str, ProbePath] = field(init=False, default_factory=dict)
     parts: Parts = field(init=False, default_factory=Parts)
+    _unseen: executor.StepResult | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         redactor = self.session.redactor
@@ -262,9 +267,7 @@ class Attempt:
             if isinstance(call, Navigate | Reload)
             else self.budget
         )
-        step = await executor.dispatched(
-            self.session,
-            self.record,
+        step = await self.dispatch(
             executor.Dispatch(
                 seq, fields, True, wait, None if target is None else target.semantic
             ),
@@ -287,6 +290,29 @@ class Attempt:
                 ),
             )
         return self._refused(f"{tool} did not run: {step.error}")
+
+    async def dispatch(
+        self, dispatch: executor.Dispatch, act: Callable[[], Awaitable[Window]]
+    ) -> executor.StepResult:
+        """Dispatch a step in the attempt's record as replay does
+        (`executor.dispatched`). One whose intent is on disk, completed or
+        not, owes its evidence to the next observation (`keep_evidence`)."""
+        step = await executor.dispatched(self.session, self.record, dispatch, act)
+        if step.outcome == "completed" or self.ended:
+            self._unseen = step
+        return step
+
+    async def keep_evidence(self, observation: Redacted | None) -> None:
+        """Save the evidence of the step dispatched since the last
+        observation, if one was, with `observation`: the snapshot the next
+        request carries, or None when the page couldn't be looked at or no
+        request follows. A file the record refuses for what it holds is left
+        out; one the disk or a link refuses raises (`aqa_runner.evidence`)."""
+        step, self._unseen = self._unseen, None
+        if step is not None:
+            await capture_evidence(
+                self.record, self.session, step.seq, step.window, observation
+            )
 
     async def describe(self, call: DescribeParts) -> Described:
         """`describe_parts`: list the parts of the element `call.ref` names
