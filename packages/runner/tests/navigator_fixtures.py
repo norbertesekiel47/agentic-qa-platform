@@ -179,6 +179,13 @@ def journal(attempt: Attempt) -> list[dict[str, Any]]:
     return read_steps(attempt.record.path)
 
 
+def evidence_of(*seqs: int) -> list[str]:
+    """The evidence files of the attempt's steps `seqs`, by their paths in
+    the run's record, step by step and each step's sorted (#53 P22)."""
+    names = ("a11y_snapshot.yaml", "console_log.json", "network_log.json")
+    return [f"attempt-1/evidence/{seq}/{name}" for seq in seqs for name in names]
+
+
 def fail_fsync(monkeypatch: pytest.MonkeyPatch, at: int = 0) -> list[int]:
     """Make the `at`-th fsync from now raise EIO; return the calls seen."""
     calls: list[int] = []

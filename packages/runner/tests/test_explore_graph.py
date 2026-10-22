@@ -55,6 +55,7 @@ from packages.runner.tests.explore_graph_fixtures import (
     ref,
     tool,
 )
+from packages.runner.tests.navigator_fixtures import evidence_of
 from packages.runner.tests.secret_fixtures import FAKE_VALUE
 from packages.runner.tests.test_executor_runs import while_closing
 from packages.runner.tests.test_navigator_checks import ARTICLE, BUTTON_ROW, FAVORITE
@@ -265,6 +266,7 @@ def test_a_finished_attempt_finalizes_with_its_script_in_memory(
         "confirmation": None,
     }
     assert files(run) == [
+        *evidence_of(0, 1, 2),
         "attempt-1/steps.jsonl",
         "costs.jsonl",
         "explore.json",

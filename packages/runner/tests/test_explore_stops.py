@@ -51,6 +51,7 @@ from packages.runner.tests.explore_graph_fixtures import (
     REFUSED,
     Scripted,
 )
+from packages.runner.tests.navigator_fixtures import evidence_of
 from packages.runner.tests.secret_fixtures import FAKE_VALUE
 from packages.runner.tests.test_explore_confirm import (
     CONFIRMATION_PHASE,
@@ -141,6 +142,7 @@ def test_the_minutes_budget_keeps_each_evaluated_checks_result(
     assert written(run)["reasons"] == ["the minutes budget ran out", "a1: failed"]
     # The cancelled call left no record of its turn.
     assert files(run) == [
+        *evidence_of(0),
         "attempt-1/steps.jsonl",
         "costs.jsonl",
         "explore.json",
@@ -162,6 +164,7 @@ def test_a_block_with_the_minutes_budget_run_out_exits_6(
     assert (run.outcome, run.exit_code) == ("egress_blocked", 6)
     assert written(run)["reasons"] == ["the minutes budget ran out", "a1: never bound"]
     assert files(run) == [
+        *evidence_of(0),
         "attempt-1/steps.jsonl",
         "egress.json",
         "explore.json",
@@ -208,6 +211,7 @@ def test_a_browser_whose_selector_engines_were_never_registered_exits_10(
         (line["seq"], line["state"]) for line in read_steps(run.record / "attempt-1")
     ] == [(0, "intent"), (0, "completed")]
     assert files(run) == [
+        *evidence_of(0),
         "attempt-1/steps.jsonl",
         "costs.jsonl",
         "explore.json",
@@ -329,6 +333,7 @@ def test_a_confirmation_whose_chromium_exits_after_its_check_exits_10_when_the_b
     assert document["phases"] == [CLEAN_PHASE, UNCOUNTED_PHASE]
     assert (document["published"], document["confirmation"]) == (None, None)
     assert files(run) == [
+        *evidence_of(0, 1, 2),
         "attempt-1/steps.jsonl",
         "costs.jsonl",
         "explore.json",
@@ -481,7 +486,7 @@ def test_ctrl_c_mid_turn_with_the_driver_gone_is_a_keyboard_interrupt(
     left = sorted(
         str(path.relative_to(run)) for path in run.rglob("*") if path.is_file()
     )
-    assert left == ["attempt-1/steps.jsonl"]
+    assert left == [*evidence_of(0), "attempt-1/steps.jsonl"]
 
 
 def test_explore_json_that_cannot_be_written_ends_the_run_15(
@@ -535,7 +540,12 @@ def test_a_document_that_spells_a_bound_value_is_refused_never_redacted_into_pla
         UNWRITTEN,
         "a1: never bound",
     ]
-    assert files(run) == ["attempt-1/steps.jsonl", "costs.jsonl", "turns/1.json"]
+    assert files(run) == [
+        *evidence_of(0),
+        "attempt-1/steps.jsonl",
+        "costs.jsonl",
+        "turns/1.json",
+    ]
 
 
 def test_a_timeout_that_isnt_the_minutes_budgets_own_propagates(
@@ -586,6 +596,7 @@ def test_a_block_with_no_model_response_exits_6(app: App, tmp_path: Path) -> Non
         "a1: never bound",
     ]
     assert files(run) == [
+        *evidence_of(0),
         "attempt-1/steps.jsonl",
         "egress.json",
         "explore.json",
