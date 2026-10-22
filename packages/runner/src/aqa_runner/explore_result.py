@@ -148,8 +148,8 @@ class ExploreEnd:
                     f"{part} isn't a part made from this run's record, scanning "
                     "with its redactor"
                 )
-            replayed = phase.result if isinstance(phase, Confirmation) else None
-            if replayed is not None and replayed.run_id != self.record.run_id:
+        for part, replayed in _replays(self):
+            if replayed.run_id != self.record.run_id:
                 raise ValueError(f"the {part}'s result is another run's")
 
 
@@ -226,10 +226,20 @@ def _phases(end: ExploreEnd) -> list[tuple[str, Phase]]:
     named: list[tuple[str, Phase]] = []
     attempt = 0
     for phase in (*end.earlier, end.attempt, *last):
-        confirming = isinstance(phase, Confirmation)
-        attempt += not confirming
-        named.append((phase_parts(attempt)[confirming], phase))
+        if isinstance(phase, Confirmation):
+            named.append((phase_parts(attempt)[1], phase))
+        else:
+            attempt += 1
+            named.append((phase_parts(attempt)[0], phase))
     return named
+
+
+def _replays(end: ExploreEnd) -> Iterator[tuple[str, RunResult]]:
+    """Each confirmation's replay result in run order, by part: none for a
+    confirmation whose replay raised."""
+    for part, phase in _phases(end):
+        if isinstance(phase, Confirmation) and phase.result is not None:
+            yield part, phase.result
 
 
 def _unresolved(end: ExploreEnd) -> list[tuple[str, PendingIntent]]:
@@ -320,9 +330,8 @@ def _reasons(end: ExploreEnd) -> Iterator[Redacted]:
             yield scan(f"{check}: never bound")
         elif result.outcome != "pass":
             yield scan(f"{check}: {assertion_words(result)}")
-    for part, phase in _phases(end):
-        if isinstance(phase, Confirmation) and phase.result is not None:
-            yield from map(scan, _confirmation_words(phase.result, part))
+    for part, replayed in _replays(end):
+        yield from map(scan, _confirmation_words(replayed, part))
 
 
 def _confirmation_words(replayed: RunResult, part: str) -> Iterator[str]:
