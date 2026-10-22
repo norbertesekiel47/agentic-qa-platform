@@ -295,8 +295,10 @@ class Attempt:
         self, dispatch: executor.Dispatch, act: Callable[[], Awaitable[Window]]
     ) -> executor.StepResult:
         """Dispatch a step in the attempt's record as replay does
-        (`executor.dispatched`). One whose intent is on disk, completed or
-        not, owes its evidence to the next observation (`keep_evidence`)."""
+        (`executor.dispatched`). One whose intent is on disk owes its
+        evidence to the next observation (`keep_evidence`): one that
+        completed, or one that failed once dispatched, whose intent then
+        has no completion, which ends the attempt (`ended`)."""
         step = await executor.dispatched(self.session, self.record, dispatch, act)
         if step.outcome == "completed" or self.ended:
             self._unseen = step
