@@ -113,7 +113,7 @@ One execution of one spec version in one mode (explore, strict or verified), whe
 The mode for a spec that has no compiled script yet: the agent drives the browser until every expectation's planned checks pass, then compiles the path it took and proves it with a confirmation replay.
 
 **Confirmation replay**:
-The strict replay that ends every explore run: in a fresh browser, after the spec's reset hook if it declares one, the newly compiled script must pass every assertion and every invariant the spec keeps enabled before it is written. A script whose path has side-effect steps but whose spec has no reset hook is written without one, marked unconfirmed, unless the person running explore allows the repeat.
+The strict replay that ends every explore run: in a fresh browser, after the spec's reset hook if it declares one, the newly compiled script must pass every assertion and every invariant the spec keeps enabled before it is written. A script whose path has side-effect steps, or whose start URL's load may change the app, but whose spec has no reset hook is written without one, marked unconfirmed, unless the person running explore allows the repeat.
 _Avoid_: verification run, since "verified" names a replay mode
 
 **Replay**:
