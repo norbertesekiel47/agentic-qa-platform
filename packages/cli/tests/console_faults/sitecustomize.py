@@ -5,7 +5,7 @@ production code has no fault flag. AQA_CONSOLE_FAULT holds the test's
 request as JSON: `events`, the file each step is noted in as it happens;
 `plan`, the coverage plan the navigator's model answers the plan call with;
 `fault`, a name in FAULTS; and `wait`, "plan" or "turn" for the call that
-never answers, so the test can signal the child there. Python goes on
+waits unanswered, so the test can signal the child there. Python goes on
 without a sitecustomize that raises, so the tests read the noted events,
 never the exit status alone, to know a fault fired."""
 
@@ -36,6 +36,10 @@ REQUEST = json.loads(os.environ["AQA_CONSOLE_FAULT"])
 CAUSE = "fake-cause-4u49: relaunch with chromiumSandbox: false"  # ADR-0026
 FAKE_KEY = "fake-key-for-tests"
 USAGE = Usage(input_tokens=1000, cached_input_tokens=0, output_tokens=100)
+# The test signals within a poll of `waiting`. A child whose test died first
+# (a killed pytest never runs its cleanup, and the child leads a session of its
+# own) ends after this many seconds, and its driver then closes Chromium.
+UNSIGNALLED = 60
 
 
 def note(event: str) -> None:
@@ -63,8 +67,8 @@ class Model:
         if REQUEST["wait"] != call:
             raise AssertionError(f"the test scripted no {call} call")
         note("waiting")
-        await asyncio.Event().wait()
-        raise AssertionError("an event nobody sets was set")
+        await asyncio.sleep(UNSIGNALLED)
+        raise AssertionError(f"no signal came in {UNSIGNALLED} s")
 
 
 def raising(name: str, error: BaseException) -> Callable[..., Any]:
