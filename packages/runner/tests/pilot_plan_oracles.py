@@ -73,6 +73,15 @@ def row(
 #   Sign up", "Sign in" alone and "to add comments on this article" alone, so
 #   it admits no REVIEW proxy; it needs both links' words, in order, then
 #   "comment". Scoped to the signed-out comment prompt.
+# - read-article/6, fourth key `(?i)sign in.*or.*sign up.*comments`, accepted
+#   by the maintainer 2026-10-22 (#55's round): strictly stronger than
+#   PROMPT_WITH_COMMENT, accepted 2026-10-05. Every text it matches matches
+#   that key too, and it also needs "or" between the links' words and
+#   "comments" after them, so it passes no prompt the oracle didn't already
+#   pass. Like the other keys it leaves "to add" unchecked, and it refuses
+#   REVIEW's rejected proxies ("to add comments on this article" alone, or
+#   "Sign in" alone). Its "or" also matches inside "for", as
+#   PROMPT_WITH_JOINER's comment says. Scoped to the signed-out comment prompt.
 LOGIN_ROOT_KEY = r"^https?://[^/]+/?(?:[?#].*)?$"
 LOGIN_ROOT_FRAGMENT_KEY = r"^https?://[^/]+/?(#/?)?$"
 PROMPT = "signed-out comment prompt"
@@ -80,6 +89,7 @@ PROMPT = "signed-out comment prompt"
 PROMPT_WITH_JOINER = r"(?i)sign in.*(or|and).*sign up|sign up.*(or|and).*sign in"
 PROMPT_WITHOUT_JOINER = r"(?i)sign in.*sign up|sign up.*sign in"
 PROMPT_WITH_COMMENT = r"(?i)sign in.*sign up.*comment"
+PROMPT_WITH_OR_COMMENTS = r"(?i)sign in.*or.*sign up.*comments"
 
 
 ROWS = {
@@ -188,6 +198,7 @@ ROWS = {
                     PROMPT_WITH_JOINER,
                     PROMPT_WITHOUT_JOINER,
                     PROMPT_WITH_COMMENT,
+                    PROMPT_WITH_OR_COMMENTS,
                 )
             ),
         ),
@@ -261,6 +272,14 @@ SPEC_FINGERPRINTS = {
 # reloading the article page" were accepted 2026-10-21 after an independent
 # review (#55): "toggle" names the button's function and asserts no value, and
 # the condition's `kind: reload` still requires the reload that ends the path.
+# The last ten phrases, login's six and read-article's four, were accepted
+# 2026-10-22 after an independent review (#55's round): each names its role's
+# element by what it does or where it sits, and asserts no text. The sign-in
+# and registration pairing rests on meaning, not wording: both login/3 checks
+# are `not_visible` with no text, so the oracle can't tell the swapped pairing
+# apart, and the header binds "Sign in" to /login and "Sign up" to /register
+# (bench/apps/conduit/frontend/src/app/core/layout/header.component.html,
+# lines 14 and 18).
 ALIASES = {
     "the article title heading at the top of the article page": "article banner title heading",
     "the author name on the most recently posted comment under the article": "new comment card author link",
@@ -284,6 +303,16 @@ ALIASES = {
     "the header navigation link that leads to the new article editor": "header new-article link",
     "the header navigation link that leads to the user's settings page": "header settings link",
     "the header navigation link that leads to the signed-in user's profile page": "header current-user profile link",
+    "the list of feed tabs on the home page": "feed tabs",
+    "the header link that opens the editor for writing a post": "header new-article link",
+    "the header link to the account preferences page": "header settings link",
+    "the header link to the signed-in user's profile": "header current-user profile link",
+    "the header link to the sign-in page": "header sign-in link",
+    "the header link to the registration page": "header sign-up link",
+    "the author name link in the article banner's meta section": "article banner author link",
+    "the publication date in the article banner's meta section": "article banner publication date",
+    "the article body content area": "article body",
+    "the list of tags belonging to the article": "article tag list",
 }
 # The favorite plan's reload condition, as recorded (an alias of RELOAD).
 RELOAD_RECORDED = (

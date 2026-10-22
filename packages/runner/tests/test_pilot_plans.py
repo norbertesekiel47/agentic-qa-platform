@@ -35,7 +35,6 @@ Cassette = Callable[..., AbstractContextManager[Recording]]
 # oracle.
 TITLE = "the article title heading at the top of the article page"
 ANY_ARTICLE = PlannedCheck(check="url_matches", pattern="(?i)/article/")
-COMMENTS = "the list of comments under the article"
 OPEN_ROWS: dict[tuple[str, int], tuple[PlannedCheck, ...]] = {
     ("read-article", 0): (
         ANY_ARTICLE,
@@ -43,13 +42,12 @@ OPEN_ROWS: dict[tuple[str, int], tuple[PlannedCheck, ...]] = {
             check="text_in_target", target_meaning=TITLE, text="Testing without flakes"
         ),
     ),
-    ("read-article", 5): (
+    ("read-article", 6): (
         PlannedCheck(
             check="text_in_target",
-            target_meaning=COMMENTS,
-            text="Deterministic data helped us most.",
+            target_meaning="the prompt in the comments section for signed-out visitors, with sign in and sign up links",
+            pattern="(?i)sign in.*or.*sign up.*comments",
         ),
-        PlannedCheck(check="text_in_target", target_meaning=COMMENTS, text="reader"),
     ),
     ("publish-article", 0): (
         PlannedCheck(check="url_matches", pattern="(?i)/article/benchmarks-we-trust-"),

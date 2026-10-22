@@ -23,6 +23,7 @@ from packages.runner.tests.pilot_plan_oracles import (
     PROMPT,
     PROMPT_WITH_COMMENT,
     PROMPT_WITH_JOINER,
+    PROMPT_WITH_OR_COMMENTS,
     PROMPT_WITHOUT_JOINER,
     ROWS,
     phrase,
@@ -814,6 +815,27 @@ def test_the_third_prompt_pattern_is_scoped_to_the_prompt() -> None:
     assert plan_problems("read-article", plan) == (
         "read-article/6: establishing checks differ",
     )
+
+
+def test_read_article_accepts_the_fourth_prompt_pattern_on_the_prompt_only() -> None:
+    on_prompt = replace_checks(article(), 6, [prompt_pattern(PROMPT_WITH_OR_COMMENTS)])
+    on_header = replace_checks(
+        article(), 6, [prompt_pattern(PROMPT_WITH_OR_COMMENTS, "header nav")]
+    )
+    samples = (
+        "Sign in or sign up to add comments on this article.",
+        "Sign in Sign up to add comments on this article.",
+        "Sign in",
+        "to add comments on this article",
+    )
+
+    assert plan_problems("read-article", on_prompt) == ()
+    assert plan_problems("read-article", on_header) == (
+        "read-article/6: establishing checks differ",
+    )
+    assert [
+        asyncio.run(url_matches(PROMPT_WITH_OR_COMMENTS, sample)) for sample in samples
+    ] == [True, False, False, False]
 
 
 @pytest.mark.parametrize(
