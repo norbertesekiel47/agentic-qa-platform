@@ -287,9 +287,13 @@ def test_a_start_failure_through_the_console_script_exits_13_with_its_one_line(
     assert child.stderr == f"unreachable shop: {said}\n"
 
 
+# A terminal's Ctrl-C reaches the whole foreground process group, Playwright's
+# driver included (`group`); `cli` signals the CLI's process alone. The child
+# leads a session of its own, so the group is only the processes it started.
+@pytest.mark.parametrize("to", ["cli", "group"])
 @pytest.mark.parametrize("wait", ["plan", "turn"])
 def test_a_sigint_while_exploring_exits_130_with_its_driver_stopped(
-    aqa: str, tmp_path: Path, wait: str
+    aqa: str, tmp_path: Path, wait: str, to: str
 ) -> None:
     spec = shop(tmp_path / "qa")
     environ = environment(tmp_path, "none", wait=wait)
@@ -301,6 +305,7 @@ def test_a_sigint_while_exploring_exits_130_with_its_driver_stopped(
             stderr=subprocess.PIPE,
             text=True,
             env=environ,
+            start_new_session=True,
         ) as child,
     ):
         try:
@@ -309,7 +314,10 @@ def test_a_sigint_while_exploring_exits_130_with_its_driver_stopped(
                 assert child.poll() is None, child.communicate()
                 assert time.monotonic() < deadline, "the call never started"
                 time.sleep(0.05)
-            child.send_signal(signal.SIGINT)
+            if to == "group":
+                os.killpg(child.pid, signal.SIGINT)
+            else:
+                child.send_signal(signal.SIGINT)
             stdout, stderr = child.communicate(timeout=60)
         finally:
             if child.poll() is None:
@@ -319,9 +327,12 @@ def test_a_sigint_while_exploring_exits_130_with_its_driver_stopped(
     assert (stdout, stderr) == ("", "")
     run = record(tmp_path)
     assert not (run / "explore.json").exists()
+    # A driver that launched a browser closes it and exits 130 on a SIGINT
+    # of its own (Playwright's handleSIGINT); with none yet, it ignores one.
+    driver = "driver at exit: 130" if (to, wait) == ("group", "turn") else STOPPED
     if wait == "turn":
-        assert events(tmp_path) == ["armed none by aqa", "planned", "waiting", STOPPED]
+        assert events(tmp_path) == ["armed none by aqa", "planned", "waiting", driver]
         assert len((run / "costs.jsonl").read_text().splitlines()) == 1
     else:
-        assert events(tmp_path) == ["armed none by aqa", "waiting", STOPPED]
+        assert events(tmp_path) == ["armed none by aqa", "waiting", driver]
         assert not (run / "costs.jsonl").exists()
