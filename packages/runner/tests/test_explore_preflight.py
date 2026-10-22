@@ -47,7 +47,7 @@ from packages.runner.tests.explore_graph_fixtures import (
     Move,
     Scripted,
 )
-from packages.runner.tests.navigator_fixtures import fail_fsync
+from packages.runner.tests.navigator_fixtures import evidence_of, fail_fsync
 from packages.runner.tests.secret_fixtures import FAKE_VALUE
 from packages.runner.tests.test_explore_graph import (
     ACCOUNT,
@@ -159,6 +159,7 @@ def test_a_scripted_explore_of_the_shop_spec_compiles_in_memory(
         "costs": 1,
     }
     assert files(run) == [
+        *evidence_of(0, 1, 2),
         "attempt-1/steps.jsonl",
         "costs.jsonl",
         "explore.json",
@@ -946,6 +947,7 @@ def test_a_run_document_that_spells_a_bound_value_is_never_shown(
     assert (run.outcome, run.exit_code) == ("record_error", 15)
     assert run.document == {"outcome": "record_error", "reasons": [UNSHOWN]}
     assert files(run) == [
+        *evidence_of(0),
         "attempt-1/steps.jsonl",
         "costs.jsonl",
         "plan.json",
