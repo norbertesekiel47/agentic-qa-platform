@@ -310,8 +310,9 @@ def _reasons(end: ExploreEnd) -> Iterator[Redacted]:
     """Why the run ended as it did, in the executor's outcome words:
     each stop's reason, scanned again; each planned check that never passed
     in the last attempt; and each step, assertion and invariant of each
-    confirmation that didn't, under its part. Each assembly is scanned whole, so a value
-    spanning a join is found, as `redaction.error_text` scans its own."""
+    confirmation that didn't, under its part. Each assembly is scanned
+    whole, so a value spanning a join is found, as `redaction.error_text`
+    scans its own."""
     scan = end.record.redactor.redact
     yield from (scan(stop.reason) for stop in end.stops)
     for check, result in end.checks.items():
