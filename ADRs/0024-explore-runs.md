@@ -881,3 +881,18 @@ The coverage plan's `requires` lists the conditions its checks need, such as the
 - The pilot oracle's favorite rule now needs the reviewed phrase and `kind: reload` (the #41 B2a amendment's rule, made stricter).
 - Until the six cassettes re-record, the 21 tests that replay them fail: a staging state, never a landing one. The round runs after the maintainer's yes, in its own commit, which adds its receipts here. Its estimate from the pinned price map is USD 0.080670, or 0.094298 when post-comment again needs its correction; the bound caps it at USD 0.17.
 - No dependency or paid resource. Tests: `packages/core/tests/test_compiler_conditions.py`; `packages/runner/tests/test_explore_conditions.py` (real Chromium, a scripted model, a page that updates optimistically); `test_load_compiled.py`, `test_coverage_plan.py` (core), `test_navigator.py`, `test_pilot_plan_oracles.py`, `test_record_pilot_plans.py` and `bench/harness/test_pilot_inputs.py`.
+
+### The round's receipts (recorded 2026-10-22)
+Each case once, with the named recorder, under the round limit USD 0.17. Model `claude-sonnet-5-5`, the pinned price map `ae6b762`, no cached input. Every outcome is `accepted`, with no refused and no overrun spend. Sources: 6738975 for 001, d3493f3 for 002-004 (it differs from 6738975 only in the oracle module), 71a9109 for 005-006.
+
+| Case | Attempt | Outcome | Request ID | Tokens in / out | USD |
+|---|---|---|---|---|---|
+| plan_favorite-article | 001 | accepted | `req_011CgEjsFFgXx6migvhs3TwP` | 4149 / 230 | 0.010598 |
+| coverage_plan | 002 | accepted | `req_011CgErRHukgyb95s3if4xp1` | 4113 / 200 | 0.010226 |
+| plan_login, first answer | 003 | accepted | `req_011CgErT3dpeS8zLvfnpzxZE` | 4233 / 1097 | 0.019436 |
+| plan_login, correction | 003 | accepted | `req_011CgErTf8WnyvJHCEUwZSKe` | 5026 / 919 | 0.019242 |
+| plan_read-article | 004 | accepted | `req_011CgEsYjj67Vt3zqLsf4C43` | 4276 / 736 | 0.015912 |
+| plan_post-comment | 005 | accepted | `req_011CgH9di1fUBpJYiKCH4q2k` | 4262 / 391 | 0.012434 |
+| plan_publish-article | 006 | accepted | `req_011CgH9fbezERyDkpeSevWdy` | 4369 / 541 | 0.014148 |
+
+The round cost USD 0.101996 across seven responses, against the estimate of USD 0.080670 to 0.094298 (login's correction, which the estimate did not count, added USD 0.019242). The program's remainder is USD 0.597950 of 0.699946. Cases 003 to 006 failed the oracle on target phrasing alone and were cleared by reviewed aliases (the maintainer's decisions of 2026-10-22), read-article/6 opened as a residual, and no case was attempted twice.
