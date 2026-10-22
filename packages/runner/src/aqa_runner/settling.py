@@ -340,19 +340,23 @@ def observed(
 ) -> Observed | None:
     """What `windows`, a session's in order, show of the step whose window is
     `window` and whose settling ended `settled`: its own write, a write in
-    any later window, which it may have caused, since the only point no
+    the window before it, which finding its element may have caused, a write
+    in any later window, which it may have caused, since the only point no
     earlier step can still act is the fresh browser, and an open tunnel.
     None, no positive evidence, for a step with no window or settling, or
     when the proxy's phase didn't tell its session of every write from the
     step on (ADR-0025's #54 amendment)."""
     if window is None or settled is None or window not in windows:
         return None
-    since = windows[windows.index(window) :]
+    at = windows.index(window)
+    since = windows[at:]
     if not all(each.heard for each in since):
         return None
+    # Finding the step's element ran in the window before its own, and can
+    # write (scrolling it into view), so a write there counts too.
     return Observed(
         settled,
-        wrote=window.wrote,
+        wrote=window.wrote or (at > 0 and windows[at - 1].wrote),
         wrote_later=any(each.wrote for each in since[1:]),
         tunnelled=any(each.tunnelled for each in since),
     )
