@@ -32,7 +32,7 @@ from packages.runner.tests.test_explore_graph import (
     written,
 )
 from packages.runner.tests.test_explore_preflight import planned
-from packages.runner.tests.test_navigator_side_effects import ON_A_PAGE, WROTE
+from packages.runner.tests.test_navigator_side_effects import LATER, ON_A_PAGE, WROTE
 
 # What the run says when a confirmation with no reset hook before it saw a
 # possible side effect that the attempt didn't.
@@ -182,6 +182,22 @@ def test_a_write_the_confirmation_sees_raises_the_flag_and_the_run_warns(
     assert app.paths().count("/write/again") == 1
     assert run.script is not None
     assert [step.side_effect for step in run.script.steps] == [True]
+
+
+def test_each_kept_step_gets_its_own_confirmation_run_past_a_detour(
+    app: App, tmp_path: Path
+) -> None:
+    # Step 1 is a detour finish leaves out, so the kept steps 2, 3 and 4
+    # replay as 1, 2 and 3; only the look writes, and only when replayed.
+    look = tool("click", lambda m: {"ref": ref(m, "button", "Look"), "meaning": "look"})
+    to_look = calling("navigate", {"path": "/page/again"})
+    moves = [TO_FORM, to_look, look, TO_FORM, CHECK, agreed([2, 3, 4])]
+
+    run = explored(app, tmp_path, "/page/start", *moves)
+
+    assert (run.outcome, written(run)["published"]) == ("compiled", "confirmed")
+    assert flags(tmp_path) == [(True, LATER), (True, WROTE), (False, None)]
+    assert written(run)["reasons"] == [REPEATED]
 
 
 def test_a_start_whose_load_writes_only_on_the_confirmation_warns(
