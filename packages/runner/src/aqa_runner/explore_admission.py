@@ -1,7 +1,7 @@
 """What exploring a spec refuses before anything is made (ADR-0026's #53
 P15c amendment): every place where a bound value could reach the model, the
-browser or the record, each line scanned with the run's redactor, and a
-link where explore writes, as a spec error (5)."""
+browser or the record, each line scanned with the run's redactor, as a
+spec error (5)."""
 
 from collections.abc import Iterator, Mapping
 from typing import Final
