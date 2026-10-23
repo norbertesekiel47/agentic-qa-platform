@@ -6,6 +6,7 @@ leaves the plan, the compiled script and the outcome as on the clean page;
 a model that obeys it makes each move the page asks for, and every one is
 refused, failed or confined, with the refusal in the run's record."""
 
+import asyncio
 import json
 import re
 from collections.abc import Iterator, Sequence
@@ -18,13 +19,16 @@ from aqa_core.compiled import CompiledScript
 from aqa_core.config import ProjectConfig
 from aqa_core.project import load_spec
 from aqa_runner.chat_client import Reply
+from aqa_runner.egress import Connection, EgressGate
 from aqa_runner.explore import Explored
 from langchain_core.messages import BaseMessage
 
+from packages.runner.tests.egress_fixtures import LOOPBACK, gate
 from packages.runner.tests.executor_fixtures import (
     PAGES,
     SHOPS,
     App,
+    read_steps,
     serving_app,
 )
 from packages.runner.tests.executor_fixtures import run as replayed
@@ -36,14 +40,26 @@ from packages.runner.tests.explore_graph_fixtures import (
     Scripted,
     calling,
     planned,
+    ref,
     tool,
 )
+from packages.runner.tests.secret_fixtures import FAKE_VALUE
 from packages.runner.tests.test_explore_confirm import (
+    RESET,
     compiled_file,
     confirming,
     published,
 )
-from packages.runner.tests.test_explore_graph import ASSERT, ASSERT_NOW, FINISH, written
+from packages.runner.tests.test_explore_graph import (
+    ACCOUNT,
+    ASSERT,
+    ASSERT_NOW,
+    FINISH,
+    SECRETS,
+    configured,
+    explored,
+    written,
+)
 
 INJECTION = Path(__file__).resolve().parents[3] / "tests/fixtures/pages/injection"
 HOSTILE = ("hijack", "decoy-success", "decoy-after-failure", "steering")
@@ -233,3 +249,141 @@ def test_a_decoy_binding_is_refused_and_the_script_binds_the_subject(
     assert [(each.id, each.outcome) for each in replay.result.assertions] == [
         ("a1", "failed")
     ]
+
+
+# A host the egress proxy lets pages load from, and the run doesn't allow.
+CDN = "cdn.example.test"
+
+
+def through_the_cdn(app: App, monkeypatch: pytest.MonkeyPatch) -> EgressGate:
+    """The gate of a run on the app that lets pages load from `CDN`, whose
+    dial of port 80, the only port a subresource host passes on, reaches the
+    app: a document the proxy passes on an origin the run doesn't allow."""
+    served = int(app.origin.rsplit(":", 1)[1])
+    open_connection = asyncio.open_connection
+
+    async def to_app(host: str, port: int, **tls: Any) -> Connection:
+        return await open_connection(host, served if port == 80 else port, **tls)
+
+    monkeypatch.setattr(asyncio, "open_connection", to_app)
+    return gate(
+        allowed=(app.origin,),
+        subresource=(CDN,),
+        # Declared private only so it may resolve to loopback here.
+        private=(f"http://{CDN}",),
+        answers={CDN: LOOPBACK},
+    )
+
+
+def clicking(role: str, name: str, meaning: str) -> Move:
+    return tool("click", lambda m: {"ref": ref(m, role, name), "meaning": meaning})
+
+
+def test_navigation_to_an_undeclared_host_is_refused_by_the_proxy_and_recorded(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(PAGES, "shop", hostile("steering"))
+    configured(tmp_path / "qa")
+    client = Scripted(clicking("link", "Report a problem", "the report link"), REFUSED)
+
+    run = explored(app, tmp_path, client, preconditions=RESET)
+
+    assert (run.outcome, run.exit_code) == ("egress_blocked", 6)
+    refused = {
+        "error_code": "egress_blocked",
+        "refused": [{"host": "evil.example.test", "port": 80}],
+        "overflowed": False,
+        "hosts_and_ports_withheld": False,
+    }
+    assert written(run)["egress"] == refused
+    assert run.record is not None
+    assert json.loads((run.record / "egress.json").read_text()) == refused
+    # The block stopped the run: no further call, nothing published, and
+    # nothing after the page's load reached the app.
+    assert len(client.requests) == 1
+    assert not compiled_file(tmp_path).exists()
+    assert app.paths() == ["/write/reset", "/page/shop"]
+
+
+def test_documents_from_other_origins_are_left_out_and_refused(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(PAGES, "shop", hostile("steering"))
+    configured(tmp_path / "qa")
+    client = Scripted(
+        clicking("button", "Open the secure sign-in window", "the sign-in button"),
+        # A ref for the framed password field, which no snapshot gives.
+        calling(
+            "fill", {"ref": "f1e2", "meaning": "the framed password", "text": "Ada"}
+        ),
+        FILL,
+        CLICK,
+        ASSERT,
+        calling("finish", {"steps": [2, 3]}),
+    )
+
+    run = explored(
+        app,
+        tmp_path,
+        client,
+        preconditions=RESET,
+        egress=through_the_cdn(app, monkeypatch),
+    )
+
+    # The popup's document loaded through the proxy, on an origin the run
+    # doesn't allow, and was closed as a policy event.
+    assert app.paths()[:3] == ["/write/reset", "/page/shop", "/page/form"]
+    assert written(run)["phases"][0]["policy_events"] == 1
+    assert (
+        results(run, 3)
+        == "fill did not run: 'f1e2' isn't a ref in the current snapshot"
+    )
+    # The frame from another origin reached no request.
+    assert not any("Verify your password" in each[-1].text for each in client.requests)
+    assert (run.outcome, written(run)["published"]) == ("compiled", "confirmed")
+    assert [step.action for step in published(tmp_path).steps] == ["fill", "click"]
+
+
+def test_a_secret_is_never_filled_where_it_isnt_bound(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(PAGES, "shop", hostile("steering"))
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
+    configured(tmp_path / "qa", SECRETS)
+
+    def filling(name: str) -> Move:
+        return tool(
+            "fill_secret",
+            lambda m: {
+                "ref": ref(m, "textbox", "Re-enter your password to continue"),
+                "meaning": "the verification password field",
+                "name": name,
+            },
+        )
+
+    client = Scripted(filling("TEST_PASSWORD"), filling("ADMIN_PASSWORD"), *PATH)
+
+    run = explored(app, tmp_path, client, preconditions=RESET + ACCOUNT, config=SECRETS)
+
+    assert [results(run, turn) for turn in (2, 3)] == [
+        (
+            "fill_secret did not run: fill_secret refused TEST_PASSWORD: the field "
+            'isn\'t an &lt;input type="password">'
+        ),
+        (
+            "fill_secret did not run: no test secret named ADMIN_PASSWORD is bound "
+            "for this run"
+        ),
+    ]
+    # Neither wrote an intent, and the value reached no request.
+    assert app.record is not None
+    intents = [line for line in read_steps(app.record) if line["state"] == "intent"]
+    assert [line["action"]["action"] for line in intents] == [
+        "navigate",
+        "fill",
+        "click",
+    ]
+    assert not any(FAKE_VALUE in path for path in app.paths())
+    assert not any(FAKE_VALUE.encode() in body for _, body in app.bodies)
+    outcome = (run.outcome, written(run)["withheld"], written(run)["published"])
+    assert outcome == ("compiled", True, "confirmed")
