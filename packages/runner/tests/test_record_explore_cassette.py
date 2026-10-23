@@ -298,7 +298,7 @@ def test_every_explore_interaction_is_priced_once(
     assert kept["unpriced_responses"] == []
     assert kept["spend"] == {
         "run_usd": "0.20",
-        "round_left_usd": "0.699946",
+        "round_left_usd": "0.597950",
         "spent_usd": "0.000360",
         "refused": False,
         "overrun": False,
@@ -332,7 +332,7 @@ def test_the_bound_admits_a_request_whose_worst_case_reaches_its_limit_exactly(
 
     assert bound.receipt() == {
         "run_usd": limit,
-        "round_left_usd": "0.699946",
+        "round_left_usd": "0.597950",
         "spent_usd": "0.043108" if admitted else "0",
         "refused": not admitted,
         "overrun": False,
@@ -409,7 +409,7 @@ def test_a_request_past_the_runs_limit_is_refused_before_it_is_sent(
     ]
     assert kept["spend"] == {
         "run_usd": "0.20",
-        "round_left_usd": "0.699946",
+        "round_left_usd": "0.597950",
         "spent_usd": "0.14706",
         "refused": True,
         "overrun": False,
@@ -418,7 +418,7 @@ def test_a_request_past_the_runs_limit_is_refused_before_it_is_sent(
 
 
 EARLIER = {
-    "spent": "0.66",
+    "spent": "0.56",
     "nothing": "0",
     "no_overrun_field": "0",
     "unknown": None,
@@ -450,7 +450,7 @@ def test_a_request_past_the_rounds_limit_is_refused_before_it_is_sent(
         record(EXPLORE, attempt, library=library)
         assert (len(stand_in.sent), receipt(attempt)["spend"]["round_left_usd"]) == (
             5,
-            "0.699946",
+            "0.597950",
         )
         return
     refusal = {
@@ -466,7 +466,7 @@ def test_a_request_past_the_rounds_limit_is_refused_before_it_is_sent(
     if earlier == "spent":
         assert receipt(attempt)["spend"] == {
             "run_usd": "0.20",
-            "round_left_usd": "0.039946",
+            "round_left_usd": "0.037950",
             "spent_usd": "0",
             "refused": True,
             "overrun": False,
@@ -512,7 +512,7 @@ def test_an_overloaded_or_unanswered_request_is_sent_once(
         [],
         {
             "run_usd": "0.20",
-            "round_left_usd": "0.699946",
+            "round_left_usd": "0.597950",
             "spent_usd": str(worst / 1_000_000),
             "refused": False,
             "overrun": False,
