@@ -8,7 +8,6 @@ unless the shards' records say so.
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -16,6 +15,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 CHECK = REPO / ".github/scripts/check_shards.py"
@@ -248,22 +248,29 @@ def test_the_records_rewrite_the_durations_table(tmp_path: Path) -> None:
 # --- the workflow ----------------------------------------------------------------
 
 
-def python_job() -> str:
-    """The lines of ci.yml's job named `python`, a required check."""
-    jobs = (REPO / ".github/workflows/ci.yml").read_text().split("\njobs:\n", 1)[1]
-    return next(
-        job
-        for job in re.split(r"^  (?=\S)", jobs, flags=re.MULTILINE)
-        if re.search(r"^    name: python$", job, flags=re.MULTILINE)
-    )
-
-
 def test_python_fails_rather_than_skips_when_a_shard_does() -> None:
     # A skipped required check passes. So python always runs, downloads the
     # records only when every shard passed, and the check fails without them.
-    job = python_job()
+    # A continue-on-error on the shards or on the check would let it pass.
+    jobs = yaml.safe_load((REPO / ".github/workflows/ci.yml").read_text())["jobs"]
+    tests, python = jobs["tests"], jobs["python"]
+    steps = python["steps"]
+    download = next(
+        step
+        for step in steps
+        if step.get("uses", "").startswith("actions/download-artifact@")
+    )
+    check = next(
+        step
+        for step in steps
+        if step.get("run") == "python .github/scripts/check_shards.py shards"
+    )
 
-    assert re.search(r"^    needs: tests$", job, flags=re.MULTILINE)
-    assert re.search(r"^    if: always\(\)$", job, flags=re.MULTILINE)
-    assert "if: needs.tests.result == 'success'" in job
-    assert "run: python .github/scripts/check_shards.py shards" in job
+    assert python["name"] == "python"
+    assert python["needs"] == "tests"
+    assert python["if"] == "always()"
+    assert download["if"] == "needs.tests.result == 'success'"
+    assert "if" not in check
+    assert "continue-on-error" not in check
+    assert "continue-on-error" not in tests
+    assert not [step for step in tests["steps"] if "continue-on-error" in step]
