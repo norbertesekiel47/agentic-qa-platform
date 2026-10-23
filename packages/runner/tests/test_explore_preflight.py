@@ -26,7 +26,7 @@ from aqa_runner.bound_secrets import (
     bound_secrets,
 )
 from aqa_runner.chat_client import Reply
-from aqa_runner.explore import Explorable, Explored, Run, explore
+from aqa_runner.explore import Drivers, Explorable, Explored, Run, explore
 from aqa_runner.explore_result import ExploreEnd, present
 from aqa_runner.model_router import ModelCallError, ModelRouter
 from aqa_runner.navigator_tools import Attempt
@@ -112,8 +112,7 @@ def exploring(
                 config,
                 root,
                 app.origin,
-                router=ModelRouter.from_config(config, client),
-                playwright=playwright,
+                Drivers(ModelRouter.from_config(config, client), playwright),
             )
 
     return asyncio.run(scenario())

@@ -153,8 +153,8 @@ aqa init                          # scaffold qa/config.yaml + example spec
 aqa explore <spec> [--url <url>]  # coverage plan → exploration → confirmation replay → qa/.compiled/<spec id>.json (ADR-0024)
             [--plan-only]         #   write the coverage plan to the run record and stop (no browser)
             [--force]             #   explore again when the compiled script is up to date
-            [--budget <name>=<value>]...  # lay a budget over config.yaml's for this run, once per name: attempts, actions_per_attempt, model_usd, minutes, resolve_seconds; M1 makes one attempt whatever attempts says (#56 adds more)
-            [--confirm-repeat]    #   (planned, #56) allow one confirmation that repeats side effects when the spec has no reset hook
+            [--budget <name>=<value>]...  # lay a budget over config.yaml's for this run, once per name: attempts, actions_per_attempt, model_usd, minutes, resolve_seconds; without a reset hook, explore makes one attempt whatever attempts says
+            [--confirm-repeat]    #   allow one confirmation that repeats side effects when the spec has no reset hook
 aqa replay  [<spec>...] --url     # strict replay (default), no LLM; --mode verified for model-assisted visual checks
 aqa run     [<spec>...] --url     # replay; heal on drift; write proposals locally
 aqa heal    <spec> --url          # force a heal pass from the first failing step

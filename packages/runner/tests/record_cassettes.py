@@ -35,7 +35,7 @@ from aqa_runner.anthropic_client import (
     ProviderError,
 )
 from aqa_runner.coverage_plan import make_plan
-from aqa_runner.explore import Ended, explore
+from aqa_runner.explore import Drivers, Ended, explore
 from aqa_runner.model_router import ModelCallError, ModelRouter, Routed
 from aqa_runner.run_record import COSTS
 from langchain_core.messages import AIMessage, HumanMessage
@@ -574,7 +574,7 @@ async def explored(
     with serving_app() as app:
         async with async_playwright() as playwright:
             run = await explore(
-                spec, config, root, app.origin, router=router, playwright=playwright
+                spec, config, root, app.origin, Drivers(router, playwright)
             )
     costs = None if run.record is None else run.record / COSTS
     lines = costs.read_text().splitlines() if costs and costs.is_file() else []

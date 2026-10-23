@@ -54,7 +54,7 @@ from aqa_runner.bound_secrets import (
 )
 from aqa_runner.coverage_plan import judge, make_plan
 from aqa_runner.egress_proxy import ListenerUnavailableError
-from aqa_runner.explore import Explored
+from aqa_runner.explore import Drivers, Explored
 from aqa_runner.explore import explore as explore_spec
 from aqa_runner.model_router import ModelCallError, ModelRouter
 from aqa_runner.publication import publication
@@ -117,8 +117,9 @@ _CLOSED_EARLY: Final = ("Connection closed while reading from the driver",)
 _UNCONFIRMED: Final = (
     "warning: {path} is unconfirmed: its path has side-effect steps, or "
     "loading its start URL may change the app, and the spec has no reset hook, "
-    "so no replay confirmed it (AGENTS.md §6). Declare a reset hook, and "
-    "explore it again"
+    "so no replay confirmed it (AGENTS.md §6). Declare a reset hook and "
+    "explore it again, or explore it again with --confirm-repeat to let one "
+    "confirmation repeat its side effects"
 )
 
 # Characters that would move the cursor, recolour the terminal or reorder text
@@ -292,6 +293,7 @@ def explore(
     spec_path: Annotated[
         Path, typer.Argument(metavar="SPEC", help="The spec file to explore.")
     ],
+    *,
     url: Annotated[
         str | None,
         typer.Option(
@@ -325,6 +327,16 @@ def explore(
             ),
         ),
     ] = None,
+    confirm_repeat: Annotated[
+        bool,
+        typer.Option(
+            "--confirm-repeat",
+            help=(
+                "When the spec has no reset hook, let one confirmation replay "
+                "repeat the path's side effects."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Explore a spec: plan its checks, explore the app in a sandboxed
     browser, confirm the path with a replay that calls no model, and write
@@ -332,12 +344,18 @@ def explore(
     HTTPS or a WebSocket exits 14: the egress proxy can't see whether a
     tunnel's requests were answered."""
     if not plan_only:
-        _explore(spec_path, url, force=force, budgets=budget or ())
+        _explore(
+            spec_path,
+            url,
+            force=force,
+            budgets=budget or (),
+            confirm_repeat=confirm_repeat,
+        )
         return
-    if force or budget:
+    if force or budget or confirm_repeat:
         raise typer.BadParameter(
             "only for exploring, not with --plan-only",
-            param_hint="'--force', '--budget'",
+            param_hint="'--force', '--budget', '--confirm-repeat'",
         )
     _plan(spec_path, url)
 
@@ -430,7 +448,12 @@ def _plan(spec_path: Path, url: str | None) -> None:
 
 
 def _explore(
-    spec_path: Path, url: str | None, *, force: bool, budgets: Sequence[str]
+    spec_path: Path,
+    url: str | None,
+    *,
+    force: bool,
+    budgets: Sequence[str],
+    confirm_repeat: bool,
 ) -> None:
     """Explore the spec at `spec_path`, unless its compiled script is up to
     date and not `force`, and say how it ended (module docstring)."""
@@ -453,7 +476,9 @@ def _explore(
     try:
         router = _router(config)
         scan = Redactor(bound_secrets(spec, start).values())
-        explored = asyncio.run(_explored(spec, config, root, start, router))
+        explored = asyncio.run(
+            _explored(spec, config, root, start, router, confirm_repeat=confirm_repeat)
+        )
     except SpecError as error:
         why = "nothing was explored"
         _stop("spec_error", spec_id, why, error.problems, scan=scan)
@@ -498,7 +523,13 @@ def _kept(root: Path, spec: Spec, config: ProjectConfig) -> CompiledScript | Non
 
 
 async def _explored(
-    spec: Spec, config: ProjectConfig, root: Path, start: str, router: ModelRouter
+    spec: Spec,
+    config: ProjectConfig,
+    root: Path,
+    start: str,
+    router: ModelRouter,
+    *,
+    confirm_repeat: bool,
 ) -> Explored:
     """Explore with Playwright's driver, started in this frame's own task,
     which is cancelled and joined if still pending, and its driver stopped
@@ -509,7 +540,12 @@ async def _explored(
     try:
         playwright = await _driver(starting)
         return await explore_spec(
-            spec, config, root, start, router=router, playwright=playwright
+            spec,
+            config,
+            root,
+            start,
+            Drivers(router, playwright),
+            confirm_repeat=confirm_repeat,
         )
     except ListenerUnavailableError:
         raise _UnstartedError(_NO_LISTENER) from None

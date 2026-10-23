@@ -29,8 +29,10 @@ each stop with its exit code (API.md §7):
    A failed confirmation, or a `restart` the turns ran, starts the next
    attempt in its own part (#56, `_again`, 15 when it can't be made),
    after its reset, while attempts are left and the spec has a hook;
-   without one the run stops (3). A failed confirmation, with the page it
-   left, leads each request of the next attempt. A
+   without one the run stops (3). With no hook, `--confirm-repeat` lets
+   one confirmation repeat the path's side effects. A failed
+   confirmation, with the page it left, leads each request of the next
+   attempt. A
    pass of a script whose confirmation failed before is flaky, and
    publishes nothing (3).
 3. Read the egress blocks and the infrastructure events once, after the
@@ -188,8 +190,8 @@ class Run:
     the egress gate; and where it publishes, as it found the compiled file
     at its start. Its spend is recorded in its record, and it keeps each
     stop it made, the attempt whose `finish` compiled, that script once its
-    flags are inferred (ADR-0025's #54 amendment), and its attempts so far
-    (#56)."""
+    flags are inferred (ADR-0025's #54 amendment), and its attempts so far;
+    `repeat` is `--confirm-repeat` (#56)."""
 
     spec: Spec
     config: ProjectConfig
@@ -203,6 +205,7 @@ class Run:
     deadline: float
     gate: EgressGate
     publication: Publication
+    repeat: bool = False
     spending: Spending = field(init=False)
     stops: list[Stop] = field(init=False, default_factory=list)
     script: CompiledScript | None = field(init=False, default=None)
@@ -213,7 +216,9 @@ class Run:
         budget = Decimal(str(self.config.budgets.model_usd))
         self.spending = Spending(self.record, budget)
         hook = self.spec.frontmatter.preconditions.reset
-        self.attempts = Attempts(self.config.budgets.attempts, hook is not None)
+        self.attempts = Attempts(
+            self.config.budgets.attempts, hook is not None, self.repeat
+        )
 
     def stopped(self, outcome: Stoppage, why: str) -> None:
         """Keep a stop, its text scanned with the run's redactor."""
@@ -225,19 +230,30 @@ class Run:
         return sum((call.cost_usd for call in self.spending.calls), Decimal(0))
 
 
+@dataclass(frozen=True)
+class Drivers:
+    """What a run calls out to: the model router, and the Playwright whose
+    Chromium it browses with, which it never starts."""
+
+    router: ModelRouter
+    playwright: Playwright
+
+
 async def explore(
     spec: Spec,
     config: ProjectConfig,
     root: Path,
     start: str,
+    drivers: Drivers,
     *,
-    router: ModelRouter,
-    playwright: Playwright,
+    confirm_repeat: bool = False,
 ) -> Explored:
     """Explore `spec` (`config`, spec root `root`) from the start origin `start`
-    with `router` and `playwright`: bind and admit (12, 5), read the compiled
-    file and make the record (5, 15), plan (3, 5, 11, 15; `plan.json`), then
-    `run_attempt`, checking what it returns."""
+    with `drivers`: bind and admit (12, 5), read the compiled file and make
+    the record (5, 15), plan (3, 5, 11, 15; `plan.json`), then `run_attempt`,
+    checking what it returns. `confirm_repeat`, the person's
+    `--confirm-repeat`, lets one confirmation repeat side effects when the
+    spec has no reset hook (AGENTS.md §6)."""
     secrets = bound_secrets(spec, start)
     redactor = Redactor(secrets.values())
     admit(spec, config, secrets, redactor)
@@ -253,11 +269,12 @@ async def explore(
         record,
         attempt,
         secrets,
-        router,
-        playwright,
+        drivers.router,
+        drivers.playwright,
         get_running_loop().time() + config.budgets.minutes * 60,
         EgressGate(egress_policy(spec, config, start)),
         at,
+        confirm_repeat,
     )
     planned = await _planned(run)
     if isinstance(planned, Explored):
@@ -516,9 +533,9 @@ async def _tried(
 ) -> _Tried:
     """One attempt in the run's attempt part, and its confirmation when its
     path may be confirmed: unconfirmed, a path that would repeat a side
-    effect with no reset before it (AGENTS.md §6); confirmed, one whose
-    confirmation passed, unless an earlier one of the same script failed
-    (flaky)."""
+    effect with no reset before it and no `--confirm-repeat` left (AGENTS.md
+    §6); confirmed, one whose confirmation passed, unless an earlier one of
+    the same script failed (flaky)."""
     run.attempted = None
     checks, events = await _phase(run, explorable, proxy, interrupted)
     # The browser has closed. Ending the phase joins every connection, and
@@ -532,7 +549,8 @@ async def _tried(
     script = _publishable(run, interrupted)
     if script is None:
         return _Tried(checks, phase)
-    if _unconfirmable(run.spec, script, start):
+    repeats = _unconfirmable(run.spec, script, start)
+    if repeats and not run.attempts.authorizes_repeat():
         return _Tried(checks, phase, script=script, intended="unconfirmed")
     confirmation = await _confirming(run, proxy, script, interrupted)
     if (replayed := _passing(run, confirmation)) is None:
@@ -543,10 +561,12 @@ async def _tried(
         run.stopped("gave_up", FLAKY)
         return _Tried(checks, phase, confirmation)
     # Its runs can only raise a flag; one raised with no reset before them
-    # says the replay may have changed the app.
+    # says the replay may have changed the app, unless the person running
+    # explore authorized the repeat it would report.
     start = _infer_flags(run, replayed.steps)
     script = _publishable(run, interrupted)
-    repeated = script is not None and _unconfirmable(run.spec, script, start)
+    unconfirmable = script is not None and _unconfirmable(run.spec, script, start)
+    repeated = unconfirmable and not repeats
     return _Tried(checks, phase, confirmation, script, "confirmed", repeated)
 
 

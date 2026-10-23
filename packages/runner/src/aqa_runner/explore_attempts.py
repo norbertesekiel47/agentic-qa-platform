@@ -1,7 +1,8 @@
 """An explore run's attempts (#56; ADR-0024's Reset hook, Path selection and
 attempts, and Confirmation replay): how many it may make, whether a restart
-or a new attempt may start, what a failed confirmation leaves the next
-attempt, and when a pass is flaky.
+or a new attempt may start, whether `--confirm-repeat` lets a confirmation
+repeat side effects, what a failed confirmation leaves the next attempt,
+and when a pass is flaky.
 
 A new attempt loads the start URL again, which may change the app as an
 action may, so without a reset hook no new attempt starts: every attempt
@@ -50,7 +51,8 @@ def replayed_as(script: CompiledScript) -> str:
 @dataclass
 class Attempts:
     """The run's attempts so far: its budget, whether the spec has a reset
-    hook, how many attempts it made, how many turn records it wrote,
+    hook, whether `--confirm-repeat` may still let one confirmation repeat
+    side effects with no reset, how many attempts it made, how many turn records it wrote,
     whether the current attempt's turns ended in a restart, the scripts
     whose confirmation failed, each `probe_equals` check's pinned
     path (#213, carried by check ID), and what the next attempt reads of
@@ -58,6 +60,7 @@ class Attempts:
 
     budget: int
     resets: bool
+    repeat: bool = False
     made: int = 1
     taken: int = 0
     restarted: bool = False
@@ -79,6 +82,12 @@ class Attempts:
             return f"restart did not run: {UNRESET}"
         self.restarted = True
         return _RESTARTED
+
+    def authorizes_repeat(self) -> bool:
+        """Whether `--confirm-repeat` lets this confirmation repeat side
+        effects with no reset; it lets one."""
+        repeat, self.repeat = self.repeat, False
+        return repeat
 
     def failed_with(
         self, script: CompiledScript, replayed: RunResult, redactor: Redactor
