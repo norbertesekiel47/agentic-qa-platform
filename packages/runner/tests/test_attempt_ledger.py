@@ -1,9 +1,10 @@
-"""What makes two confirmations' scripts identical (#56): normalized
-structural identity, `replayed_as`. When and by which models a script was
-compiled, whether it was confirmed and its steps' flags don't count;
-everything else does, a target's meaning included."""
+"""The pieces of explore's attempts (#56): what makes two confirmations'
+scripts identical, normalized structural identity (`replayed_as`): when and
+by which models a script was compiled, whether it was confirmed and its
+steps' flags don't count, everything else does, a target's meaning
+included; and the restart rule."""
 
-from aqa_runner.explore_attempts import replayed_as
+from aqa_runner.explore_attempts import UNRESET, Attempts, replayed_as
 
 from packages.runner.tests.executor_fixtures import shop_script
 
@@ -46,3 +47,18 @@ def test_a_changed_meaning_is_not_identical() -> None:
 
     assert renamed.steps == script.steps
     assert replayed_as(renamed) != replayed_as(script)
+
+
+def test_a_restart_needs_a_reset_hook_and_an_attempt_left() -> None:
+    unreset = Attempts(3, resets=False)
+    reset = Attempts(3, resets=True)
+    last = Attempts(1, resets=True)
+
+    assert [each.restart() for each in (unreset, reset, last)] == [
+        f"restart did not run: {UNRESET}",
+        "this attempt has ended, and a new one starts",
+        "restart did not run: this is the run's last attempt",
+    ]
+    assert [each.restarted for each in (unreset, reset, last)] == [False, True, False]
+    reset.began()
+    assert (reset.made, reset.restarted) == (2, False)

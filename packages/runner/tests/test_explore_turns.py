@@ -259,7 +259,8 @@ def test_each_turn_sends_one_fresh_request_with_one_snapshot(
     ] == [False] * 6
     tools = "navigate reload click fill fill_secret select press describe_parts assert_check"
     assert (
-        client.offered == [((*tools.split(), "note_for_absence", "finish"), None)] * 4
+        client.offered
+        == [((*tools.split(), "note_for_absence", "finish", "restart"), None)] * 4
     )
 
 

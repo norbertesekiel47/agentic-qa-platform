@@ -636,7 +636,14 @@ def test_the_navigator_refuses_unredacted_probes() -> None:
 # The tools, as the Anthropic adapter sends them.
 
 ACTIONS = ["navigate", "reload", "click", "fill", "fill_secret", "select", "press"]
-TOOL_NAMES = [*ACTIONS, "describe_parts", "assert_check", "note_for_absence", "finish"]
+TOOL_NAMES = [
+    *ACTIONS,
+    "describe_parts",
+    "assert_check",
+    "note_for_absence",
+    "finish",
+    "restart",
+]
 
 # What Anthropic's strict tool use accepts in a schema ("JSON Schema
 # limitations", platform.claude.com/docs/en/build-with-claude/structured-outputs):

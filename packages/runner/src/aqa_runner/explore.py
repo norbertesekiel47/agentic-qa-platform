@@ -26,10 +26,11 @@ each stop with its exit code (API.md §7):
    when it returns; otherwise the phase ends once the browser has closed
    (10, 15, 3, 14). Once it passed, its runs can raise a flag, and one
    raised with no reset before them is the run's warning.
-   A failed confirmation starts the next attempt in its own part (#56,
-   `_again`, 15 when it can't be made), after its reset, while attempts
-   are left and the spec has a hook; without one the run stops (3). Its
-   failure, with the page it left, leads each request of the next. A
+   A failed confirmation, or a `restart` the turns ran, starts the next
+   attempt in its own part (#56, `_again`, 15 when it can't be made),
+   after its reset, while attempts are left and the spec has a hook;
+   without one the run stops (3). A failed confirmation, with the page it
+   left, leads each request of the next attempt. A
    pass of a script whose confirmation failed before is flaky, and
    publishes nothing (3).
 3. Read the egress blocks and the infrastructure events once, after the
@@ -486,7 +487,7 @@ async def _attempted(run: Run, explorable: Explorable) -> ExploreEnd:
             # `tried`'s until another attempt takes its place.
             earlier.extend(tried.phases)
             run.attempt = part
-            run.attempts.made += 1
+            run.attempts.began()
             await proxy.begin_phase()
             tried = await _tried(run, explorable, proxy, interrupted)
         blocks = proxy.egress_blocks(expected)
@@ -550,11 +551,13 @@ async def _tried(
 
 
 def _again(run: Run, tried: _Tried, interrupted: Callable[[], bool]) -> bool:
-    """Whether a new attempt starts after `tried`: its confirmation failed,
-    with nothing stopping or interrupting the run, no intent of its left
-    unresolved, whatever its flag, an attempt left, and a reset hook
-    (`explore_attempts`)."""
-    if run.stops or interrupted() or tried.confirmation is None:
+    """Whether a new attempt starts after `tried`: it restarted, or its
+    confirmation failed, with nothing stopping or interrupting the run, no
+    intent of its left unresolved, whatever its flag, an attempt left, and
+    a reset hook (`explore_attempts`)."""
+    if run.stops or interrupted():
+        return False
+    if not run.attempts.restarted and tried.confirmation is None:
         return False
     if any(phase.record.unresolved() for phase in tried.phases):
         return False

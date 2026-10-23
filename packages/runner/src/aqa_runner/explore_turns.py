@@ -39,6 +39,7 @@ from aqa_runner.navigator import (
     Finish,
     NoteForAbsence,
     Prefix,
+    Restart,
     Turn,
     Unrunnable,
     decision,
@@ -150,9 +151,9 @@ class Turning:
     turns: int
     stops: list[Stop]
     script: CompiledScript | None = None
-    # The run's attempts (#56): what each request carries of a failed
-    # confirmation, and the turn records' numbers, which go on across
-    # attempts. One attempt by default.
+    # The run's attempts (#56): whether a restart may run, what each
+    # request carries of a failed confirmation, and the turn records'
+    # numbers, which go on across attempts. One attempt by default.
     attempts: Attempts = field(default_factory=lambda: Attempts(1, resets=False))
 
     @property
@@ -246,7 +247,10 @@ async def _taken(context: Turning, state: Turns) -> Turns | Stop | None:
         notes=chosen.notes,
         results=results,
         parts=parts,
-        done=context.script is not None or attempt.ended or attempt.interrupted(),
+        done=context.script is not None
+        or context.attempts.restarted
+        or attempt.ended
+        or attempt.interrupted(),
     )
 
 
@@ -387,6 +391,8 @@ async def _ran(
     elif isinstance(call, Finish):
         finished = await attempt.finish(call, _by(context))
         context.script, text = finished.script, finished.text
+    elif isinstance(call, Restart):
+        text = context.said(context.attempts.restart())
     else:
         acted = await attempt.act(call)
         text, logged = acted.text, _line(call, acted.step)

@@ -1,9 +1,9 @@
 """A `probe_equals` check that didn't pass keeps its option across attempts
-(#56, after #213; relay 142): a failed confirmation's non-passing probe
-check pins the next attempt by check ID and probe path, the next attempt
-names the option by its fresh ref, and a path its probe no longer offers
-unlocks nothing. Real Chromium against the executor's fixture app, with a
-scripted model."""
+(#56, after #213; relay 142): a restart and a failed confirmation's
+non-passing probe check carry the pin by check ID and probe path, the next
+attempt names the option by its fresh ref, and a path its probe no longer
+offers unlocks nothing. Real Chromium against the executor's fixture app,
+with a scripted model."""
 
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -13,7 +13,7 @@ from aqa_core.config import ProjectConfig
 
 from packages.runner.tests.executor_fixtures import App, serving_app
 from packages.runner.tests.explore_graph_fixtures import Scripted, planned
-from packages.runner.tests.test_explore_attempts import before_resets
+from packages.runner.tests.test_explore_attempts import RESTART, before_resets
 from packages.runner.tests.test_explore_graph import written
 from packages.runner.tests.test_explore_probes import (
     COUNT,
@@ -64,6 +64,23 @@ def app() -> Iterator[App]:
 def serving(app: App, body: bytes) -> Callable[[], object]:
     """Before a reset: the count probe answers `body` from then on."""
     return lambda: app.probe_bodies.__setitem__("count", [body])
+
+
+def test_a_restart_keeps_the_pin_under_the_options_fresh_ref(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app.probe_bodies["count"] = [DECOY]
+    before_resets(monkeypatch, {1: serving(app, b'{"other": 2, "count": 3}')})
+    client = Scripted(planned(COUNTED), check("o1"), RESTART, check("o1"), IDLE, IDLE)
+
+    run = probed(app, tmp_path, client, RESET + COUNT, config=TURNS)
+
+    assert blocks(client, "results")[2:4] == ["", keeps("o2")]
+    assert (run.outcome, run.exit_code, written(run)["reasons"]) == (
+        "gave_up",
+        3,
+        ["the attempt took all 3 of its turns", "a1: never bound"],
+    )
 
 
 def test_a_failed_confirmations_probe_check_pins_the_next_attempt(
