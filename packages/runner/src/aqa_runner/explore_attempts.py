@@ -13,7 +13,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Final
 
-from aqa_core.compiled import CompiledScript
+from aqa_core.compiled import CompiledScript, ProbeEquals
+from aqa_core.compiler import ProbePath
 
 from aqa_runner.executor import RunResult
 from aqa_runner.explore_result import feedback
@@ -48,7 +49,8 @@ def replayed_as(script: CompiledScript) -> str:
 class Attempts:
     """The run's attempts so far: its budget, whether the spec has a reset
     hook, how many attempts it made, how many turn records it wrote, the
-    scripts whose confirmation failed, and what the next attempt reads of
+    scripts whose confirmation failed, each `probe_equals` check's pinned
+    path (#213, carried by check ID), and what the next attempt reads of
     the last failed confirmation."""
 
     budget: int
@@ -56,14 +58,20 @@ class Attempts:
     made: int = 1
     taken: int = 0
     failed: set[str] = field(default_factory=set)
+    pinned: dict[str, ProbePath] = field(default_factory=dict)
     feedback: Redacted | None = None
 
     def failed_with(
         self, script: CompiledScript, replayed: RunResult, redactor: Redactor
     ) -> None:
-        """Keep a failed confirmation of `script`: the script, and its
-        feedback."""
+        """Keep a failed confirmation of `script`: the script, each
+        `probe_equals` assertion that didn't pass pinned to its path unless
+        already pinned, and its feedback."""
         self.failed.add(replayed_as(script))
+        passed = {each.id for each in replayed.assertions if each.outcome == "pass"}
+        for assertion in script.assertions:
+            if isinstance(assertion, ProbeEquals) and assertion.id not in passed:
+                self.pinned.setdefault(assertion.id, ProbePath(assertion.json_path))
         self.feedback = feedback(script, replayed, redactor)
 
     def flaky(self, script: CompiledScript) -> bool:
