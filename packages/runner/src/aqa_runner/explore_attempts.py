@@ -10,7 +10,7 @@ a new attempt, its start has always loaded. Nothing here touches a
 browser, model or file."""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final
 
 from aqa_core.compiled import CompiledScript
@@ -23,6 +23,10 @@ UNRESET: Final = (
     "the spec has no reset hook, and this attempt's steps, its start URL's "
     "load included, may have changed the app, so no new attempt may repeat "
     "them (AGENTS.md §6)"
+)
+FLAKY: Final = (
+    "the confirmation failed, then passed with the identical compiled script: "
+    "the spec is flaky, so nothing was published (TESTING §6)"
 )
 
 
@@ -43,17 +47,25 @@ def replayed_as(script: CompiledScript) -> str:
 @dataclass
 class Attempts:
     """The run's attempts so far: its budget, whether the spec has a reset
-    hook, how many attempts it made, how many turn records it wrote, and
-    what the next attempt reads of the last failed confirmation."""
+    hook, how many attempts it made, how many turn records it wrote, the
+    scripts whose confirmation failed, and what the next attempt reads of
+    the last failed confirmation."""
 
     budget: int
     resets: bool
     made: int = 1
     taken: int = 0
+    failed: set[str] = field(default_factory=set)
     feedback: Redacted | None = None
 
     def failed_with(
         self, script: CompiledScript, replayed: RunResult, redactor: Redactor
     ) -> None:
-        """Keep a failed confirmation of `script`: its feedback."""
+        """Keep a failed confirmation of `script`: the script, and its
+        feedback."""
+        self.failed.add(replayed_as(script))
         self.feedback = feedback(script, replayed, redactor)
+
+    def flaky(self, script: CompiledScript) -> bool:
+        """Whether `script`, which just passed, failed an earlier confirmation."""
+        return replayed_as(script) in self.failed

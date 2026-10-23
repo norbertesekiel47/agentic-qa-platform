@@ -29,7 +29,9 @@ each stop with its exit code (API.md §7):
    A failed confirmation starts the next attempt in its own part (#56,
    `_again`, 15 when it can't be made), after its reset, while attempts
    are left and the spec has a hook; without one the run stops (3). Its
-   failure, with the page it left, leads each request of the next.
+   failure, with the page it left, leads each request of the next. A
+   pass of a script whose confirmation failed before is flaky, and
+   publishes nothing (3).
 3. Read the egress blocks and the infrastructure events once, after the
    last phase's end. With the proxy closed, publish the path when nothing
    stopped the run, confirmed when its confirmation passed, under the
@@ -76,7 +78,7 @@ from aqa_runner.egress import EgressGate, egress_policy
 from aqa_runner.egress_proxy import EgressProxy, PhaseTraffic
 from aqa_runner.evaluation import AssertionResult
 from aqa_runner.explore_admission import UNSCANNABLE, admit
-from aqa_runner.explore_attempts import UNRESET, Attempts
+from aqa_runner.explore_attempts import FLAKY, UNRESET, Attempts
 from aqa_runner.explore_result import (
     EXIT_CODES,
     Confirmation,
@@ -513,7 +515,9 @@ async def _tried(
 ) -> _Tried:
     """One attempt in the run's attempt part, and its confirmation when its
     path may be confirmed: unconfirmed, a path that would repeat a side
-    effect with no reset before it (AGENTS.md §6)."""
+    effect with no reset before it (AGENTS.md §6); confirmed, one whose
+    confirmation passed, unless an earlier one of the same script failed
+    (flaky)."""
     run.attempted = None
     checks, events = await _phase(run, explorable, proxy, interrupted)
     # The browser has closed. Ending the phase joins every connection, and
@@ -533,6 +537,9 @@ async def _tried(
     if (replayed := _passing(run, confirmation)) is None:
         if confirmation is not None and confirmation.result is not None:
             run.attempts.failed_with(script, confirmation.result, run.redactor)
+        return _Tried(checks, phase, confirmation)
+    if run.attempts.flaky(script):
+        run.stopped("gave_up", FLAKY)
         return _Tried(checks, phase, confirmation)
     # Its runs can only raise a flag; one raised with no reset before them
     # says the replay may have changed the app.
