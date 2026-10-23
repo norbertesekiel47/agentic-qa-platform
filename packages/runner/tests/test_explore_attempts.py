@@ -26,7 +26,7 @@ from aqa_runner.evaluation import evaluate_each
 from aqa_runner.explore import Explored
 from aqa_runner.model_router import ModelRouter
 from aqa_runner.reset import reset
-from playwright.async_api import async_playwright
+from playwright.async_api import Error, async_playwright
 
 from packages.runner.tests.executor_fixtures import PAGES, SHOP, App, serving_app
 from packages.runner.tests.explore_graph_fixtures import (
@@ -432,6 +432,35 @@ def test_a_failed_authorized_confirmation_starts_no_new_attempt(
         "confirmation a1: failed",
     ]
     assert app.paths() == ["/page/shop", "/did/fill", "/write/save"] * 2
+    assert len(client.requests) == 5
+
+
+def test_with_a_reset_hook_an_unresolved_intent_starts_no_new_attempt(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dispatched = executor.dispatched
+
+    async def failing_the_save(
+        session: Any, record: Any, dispatch: Any, act: Any
+    ) -> Any:
+        if record.path.name == "confirmation" and dispatch.seq == 2:
+            # The click fails once its intent is on disk: its outcome is
+            # unknown, so the save may have run.
+            async def raising() -> Any:
+                raise Error("fake: the page crashed")
+
+            act = raising
+        return await dispatched(session, record, dispatch, act)
+
+    monkeypatch.setattr(executor, "dispatched", failing_the_save)
+    client = Scripted(planned(), *PATH)
+
+    run = exploring(app, tmp_path, client)
+
+    assert (run.outcome, run.exit_code) == ("non_resumable", 4)
+    document = written(run)
+    assert document["non_resumable"] == [{"part": "confirmation", "seq": 2}]
+    assert document["phases"] == [phase("attempt-1"), phase("confirmation")]
     assert len(client.requests) == 5
 
 
