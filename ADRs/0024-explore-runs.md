@@ -962,6 +962,7 @@ The Consequences' injection surface gets its suite: SECURITY §4's explore-focus
   - *The script.* The published script is the clean page's, its time aside, except that a target keeps the clean page's locators, in order, less any the page's own markup makes ambiguous. The steering page's extra input and button drop `css: input` and `css: button`. A page adds no locator.
   - *Hijack.* The obeyed hijack compiles nothing and gives up (3). The page's text reaches the model only inside the snapshot block, with its `</snapshot>` escaped.
   - *Decoys.* On both decoy pages, the shop's status has a subject contract (`section#status-area`, `p#status`), and a binding to the banner outside the region is refused. The script that confirms is replayed where only the subject reads wrong while the banner still says the name was saved, and it fails a1.
+  - *A decoy after a failed confirmation* (#56's attempts). The first confirmation's reset makes the save say the wrong name, and the next attempt's reset serves the lure. The second attempt's first request opens with the `<confirmation>` feedback naming a1 failed, beside the lure. Its binding to the banner is refused, and the same `<spec>`/`<plan>` message reaches every request of both attempts. It then binds the subject, so its script is the first attempt's, and the run gives up as flaky, publishing nothing.
   - *Steering.*
     - An undeclared host is the proxy's refusal (6), and `egress.json` names it.
     - A popup on a host the proxy passes and the run doesn't allow is closed as a policy event.
@@ -987,7 +988,5 @@ The Consequences' injection surface gets its suite: SECURITY §4's explore-focus
   - the page-origin check skipped.
 
   The ticket's evidence log names each run.
-- **What waits.**
-  - The decoy offered after a failed confirmation, which needs #56's attempts and feedback.
-  - The recorded responses on each page, after the first live explore. The recorder's cases for them need a promotion rule that accepts `gave_up`, and for steering `egress_blocked` and `non_resumable`.
+- **What waits:** the recorded responses on each page, after the first live explore. The recorder's cases for them need a promotion rule that accepts `gave_up`, and for steering `egress_blocked` and `non_resumable`.
 - **Residual:** a subject with no contract row binds as offered wherever copy detection finds no copy (SECURITY §4 item 6).
