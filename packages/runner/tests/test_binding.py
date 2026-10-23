@@ -128,6 +128,7 @@ def test_each_reviewed_capture_subject_binds_only_its_banner_part(
         ("display:block;height:0;overflow:hidden", "value"),
         ("display:contents", "value"),
         ("display:contents", "<b>value</b>"),
+        ("display:contents", '<b style="display:none">value</b>'),
         ("opacity:0", "value"),
         ("position:absolute;top:200vh", "value"),
         ("", "value"),
