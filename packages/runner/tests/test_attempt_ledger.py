@@ -10,7 +10,7 @@ from packages.runner.tests.executor_fixtures import shop_script
 
 
 def test_identical_leaves_out_provenance_confirmation_and_flags() -> None:
-    script = shop_script("shop")
+    script = shop_script("shop").model_copy(update={"confirmed": False})
     later = script.model_copy(
         update={
             "compiled_at": script.compiled_at.replace(year=2030),
