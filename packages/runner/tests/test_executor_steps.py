@@ -29,6 +29,7 @@ from playwright.async_api import ElementHandle, async_playwright
 from packages.runner.tests.egress_fixtures import egress_proxy, unused_port
 from packages.runner.tests.executor_fixtures import (
     FORM_TARGETS,
+    PAGES,
     App,
     a_spec,
     by_role,
@@ -510,6 +511,33 @@ def test_an_action_waits_no_longer_than_resolve_seconds(
     assert "Timeout 1000ms exceeded" in (step.error or "")
     assert time.monotonic() - started < 20
     assert result.outcome == "errored"
+
+
+def test_a_key_press_waits_no_longer_than_resolve_seconds(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Playwright doesn't time a key press: the page's handler holds the key
+    # past resolve_seconds and its margin, but well inside NAVIGATION_SECONDS.
+    monkeypatch.setitem(
+        PAGES,
+        "busy-keys",
+        """<p>Keys</p><script>addEventListener("keydown", () => {
+            const end = Date.now() + 4000; while (Date.now() < end);
+        });</script>""",
+    )
+    script = compiled(
+        [{"seq": 1, "action": "press", "key": "Enter", "side_effect": False}]
+    )
+    config = ProjectConfig.model_validate({"budgets": {"resolve_seconds": 1}})
+    spec = a_spec(tmp_path, config, start_url="/page/busy-keys")
+
+    result = run(app, tmp_path, script, config=config, spec=spec).result
+
+    step = result.steps[1]
+    assert (step.outcome, step.error) == (
+        "failed",
+        "the action didn't finish within 2 s",
+    )
 
 
 def test_a_navigation_waits_up_to_its_own_bound_not_resolve_seconds(
