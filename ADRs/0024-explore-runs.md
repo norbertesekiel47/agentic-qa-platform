@@ -936,7 +936,7 @@ The #53 P21a amendment's recorder records `explore_fixture` once from the live m
 
 ### The round's receipts (recorded 2026-10-23)
 
-One attempt, `001`, with the named recorder at source 25b56f4 (this branch on main 52e0d6e). Model `claude-sonnet-5-5`, effort none, the pinned price map `ae6b762`, no cached input. Every response was HTTP 200 and priced `ok`; nothing was withheld, refused or overrun, and no finalization failed.
+One attempt, `001`, with the named recorder at the commit "docs: say how the fixture explore's live cassette is recorded and replayed", the parent of the one that adds the cassette (both based on 52e0d6e). Model `claude-sonnet-5-5`, effort none, the pinned price map `ae6b762`, no cached input. Every response was HTTP 200 and priced `ok`; nothing was withheld, refused or overrun, and no finalization failed.
 
 | Call | Request ID | Tokens in / out | CostRecord (USD) |
 |---|---|---|---|
