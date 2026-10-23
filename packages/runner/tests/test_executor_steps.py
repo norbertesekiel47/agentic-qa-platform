@@ -812,6 +812,40 @@ def test_a_dispatch_refuses_a_record_its_sessions_redactor_doesnt_scan(
     assert acted == ["act"]
 
 
+def test_a_timeout_the_action_raises_itself_is_raised_not_the_steps_failure(
+    app: App, tmp_path: Path
+) -> None:
+    async def scenario() -> RunRecord:
+        record = RunRecord.create(tmp_path)
+        app.record = record.path
+        async with (
+            async_playwright() as playwright,
+            egress_proxy(app.origin) as egress,
+            open_browser_session(
+                playwright.chromium, egress=egress, redactor=Redactor(())
+            ) as session,
+        ):
+
+            async def act() -> Window:
+                raise TimeoutError  # not the step's own limit, which has time left
+
+            step = executor.Dispatch(
+                1, {"action": "navigate", "url": "/page/form"}, True, 30
+            )
+            with pytest.raises(TimeoutError):
+                await executor.dispatched(
+                    session, record.redacting(session.redactor), step, act
+                )
+        return record
+
+    record = asyncio.run(scenario())
+
+    # Its outcome is unknown: an intent, and no completion after it.
+    assert [(line["seq"], line["state"]) for line in read_steps(record.path)] == [
+        (1, "intent")
+    ]
+
+
 def test_a_replay_counts_every_policy_event_beyond_those_it_keeps(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
