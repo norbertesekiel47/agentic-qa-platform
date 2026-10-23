@@ -118,8 +118,8 @@ _UNCONFIRMED: Final = (
     "warning: {path} is unconfirmed: its path has side-effect steps, or "
     "loading its start URL may change the app, and the spec has no reset hook, "
     "so no replay confirmed it (AGENTS.md §6). Declare a reset hook and "
-    "explore it again, or explore it again with --confirm-repeat to let one "
-    "confirmation repeat its side effects"
+    "explore it again, or explore it again with --force --confirm-repeat to let "
+    "one confirmation repeat its side effects"
 )
 
 # Characters that would move the cursor, recolour the terminal or reorder text

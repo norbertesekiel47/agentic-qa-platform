@@ -1,8 +1,9 @@
 """`aqa explore --confirm-repeat` (API.md §7; #56): with no reset hook, the
 person running explore lets one confirmation repeat the path's side effects,
 so the script is confirmed and the save runs twice, once per phase, with no
-warning. Real Chromium against the executor's fixture app with a scripted
-model."""
+warning; and the unconfirmed warning's advice does that for a script it
+already published. Real Chromium against the executor's fixture app with a
+scripted model."""
 
 import re
 from collections.abc import Iterator
@@ -48,3 +49,26 @@ def test_confirm_repeat_confirms_a_spec_with_no_reset_hook_repeating_its_save_on
     assert result.stderr == ""
     assert load_compiled(target, ProjectConfig()).confirmed is True
     assert app.paths() == ["/page/shop", "/did/fill", "/write/save"] * 2
+
+
+def test_the_unconfirmed_warnings_advice_confirms_the_published_script(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "qa"
+    spec = shop(root)
+    first = explore(monkeypatch, on(app, spec), Scripted(planned(), *PATH))
+    advised = re.search(
+        r"explore it again with ((?:--[a-z-]+ )+)to let one", first.stderr
+    )
+    assert advised is not None, first.stderr
+
+    again = explore(
+        monkeypatch, on(app, spec, *advised[1].split()), Scripted(planned(), *PATH)
+    )
+
+    assert again.exit_code == 0, again.output
+    assert again.stderr == ""
+    target = root / ".compiled" / "shop.json"
+    assert load_compiled(target, ProjectConfig()).confirmed is True
+    # The first run's attempt, then the advised run's attempt and confirmation.
+    assert app.paths() == ["/page/shop", "/did/fill", "/write/save"] * 3
