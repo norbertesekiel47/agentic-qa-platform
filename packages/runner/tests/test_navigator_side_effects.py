@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from aqa_core.compiled import RequiredCondition
 from aqa_core.coverage_plan import CoveragePlan
 from aqa_runner import settling
 from aqa_runner.browser_session import BrowserSession
-from aqa_runner.navigator import AssertCheck, Click, Finish, Navigate
+from aqa_runner.navigator import AssertCheck, Click, Finish, Navigate, Satisfied
 from aqa_runner.navigator_tools import Action, Attempt
 
 from packages.core.tests.test_compiler import BY
@@ -375,3 +376,51 @@ def test_a_websocket_keeps_its_steps_and_every_earlier_one_true(
     # The mark came first, and its effects may open the socket.
     assert inferred(attempt) == [(True, TUNNEL)] * 3
     assert received == ["binary"]
+
+
+def test_a_flag_follows_the_kept_steps_own_number_not_its_place_in_the_path(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settling, "SETTLE_SECONDS", 1)
+
+    def start(attempt: Attempt) -> Action:
+        return Click(ref=ref(attempt, "button", "Start"), meaning="the start button")
+
+    async def scenario(attempt: Attempt) -> Attempt:
+        # Step 1 keeps the page busy, but finish drops it; step 2 is quiet.
+        await acted(attempt, start, Navigate(path="/page/form"))
+        return await finished(attempt, [2], [2])
+
+    attempt = on_app(app, tmp_path, scenario, plan=ON_A_PAGE, page="/page/restless")
+
+    assert inferred(attempt) == [(False, None)]
+
+
+def test_a_step_that_changes_nothing_and_meets_a_condition_keeps_both(
+    app: App, tmp_path: Path
+) -> None:
+    plan = ON_A_PAGE.model_copy(
+        update={
+            "requires": (RequiredCondition(id="c1", condition="checked on a page"),)
+        }
+    )
+
+    async def scenario(attempt: Attempt) -> Attempt:
+        await acted(attempt, Navigate(path="/page/form"))
+        await attempt.check(AssertCheck(check_id="a1", ref=None))
+        met = Finish(
+            steps=(1,),
+            satisfies=(Satisfied(condition="c1", step=1),),
+            changes_nothing=(1,),
+        )
+        done = await attempt.finish(met, BY)
+        assert done.script is not None, done.text
+        return attempt
+
+    attempt = on_app(app, tmp_path, scenario, plan=plan, page="/page/start")
+
+    result = attempt.inferred()
+    assert result is not None
+    assert [(step.side_effect, step.satisfies) for step in result.script.steps] == [
+        (False, ("c1",))
+    ]
