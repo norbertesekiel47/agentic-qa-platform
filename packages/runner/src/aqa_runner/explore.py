@@ -26,6 +26,9 @@ each stop with its exit code (API.md §7):
    when it returns; otherwise the phase ends once the browser has closed
    (10, 15, 3, 14). Once it passed, its runs can raise a flag, and one
    raised with no reset before them is the run's warning.
+   A failed confirmation starts the next attempt in its own part (#56,
+   `_again`, 15 when it can't be made), after its reset, while attempts
+   are left and the spec has a hook; without one the run stops (3).
 3. Read the egress blocks and the infrastructure events once, after the
    last phase's end. With the proxy closed, publish the path when nothing
    stopped the run, confirmed when its confirmation passed, under the
@@ -72,6 +75,7 @@ from aqa_runner.egress import EgressGate, egress_policy
 from aqa_runner.egress_proxy import EgressProxy, PhaseTraffic
 from aqa_runner.evaluation import AssertionResult
 from aqa_runner.explore_admission import UNSCANNABLE, admit
+from aqa_runner.explore_attempts import UNRESET, Attempts
 from aqa_runner.explore_result import (
     EXIT_CODES,
     Confirmation,
@@ -173,14 +177,15 @@ class Explorable:
 class Run:
     """What one run holds while it explores, made once its record is: the
     redactor binding every test secret the spec references, filled or not,
-    the authority every scan of the run answers to; the record and its
-    `attempt-1` part, made from it; the secrets the attempt may fill; the
-    router; the Playwright whose Chromium it browses with; the minutes
-    budget's deadline, on the event loop's clock; the egress gate; and
-    where it publishes, as it found the compiled file at its start. Its
-    spend is recorded in its record, and it keeps each stop it made, the
-    attempt whose `finish` compiled, and that script once its flags are
-    inferred (ADR-0025's #54 amendment)."""
+    the authority every scan of the run answers to; the record and the part
+    of the attempt it is on, `attempt-1` first, made from it; the secrets
+    the attempt may fill; the router; the Playwright whose Chromium it
+    browses with; the minutes budget's deadline, on the event loop's clock;
+    the egress gate; and where it publishes, as it found the compiled file
+    at its start. Its spend is recorded in its record, and it keeps each
+    stop it made, the attempt whose `finish` compiled, that script once its
+    flags are inferred (ADR-0025's #54 amendment), and its attempts so far
+    (#56)."""
 
     spec: Spec
     config: ProjectConfig
@@ -198,10 +203,13 @@ class Run:
     stops: list[Stop] = field(init=False, default_factory=list)
     script: CompiledScript | None = field(init=False, default=None)
     attempted: Attempt | None = field(init=False, default=None)
+    attempts: Attempts = field(init=False)
 
     def __post_init__(self) -> None:
         budget = Decimal(str(self.config.budgets.model_usd))
         self.spending = Spending(self.record, budget)
+        hook = self.spec.frontmatter.preconditions.reset
+        self.attempts = Attempts(self.config.budgets.attempts, hook is not None)
 
     def stopped(self, outcome: Stoppage, why: str) -> None:
         """Keep a stop, its text scanned with the run's redactor."""
@@ -424,20 +432,38 @@ def _unplanned(run: Run, plan: CoveragePlan | None, stop: _Unplanned) -> Explore
 
 
 async def run_attempt(run: Run, explorable: Explorable) -> Explored:
-    """Run the attempt's phase by `explorable`, then the confirmation's,
-    from the egress proxy's opening to its end, publish, and say how the
-    run ended (module docstring)."""
+    """Run the attempts by `explorable`, each attempt's phase, then its
+    confirmation's, from the egress proxy's opening to its end, publish, and
+    say how the run ended (module docstring)."""
     return _ended(run, await _attempted(run, explorable))
 
 
-async def _attempted(run: Run, explorable: Explorable) -> ExploreEnd:
-    """The attempt's phase and, for a path it may publish, the
-    confirmation's, from the egress proxy's opening to its end; then the
-    path published, if it may be."""
-    expected = run.config.egress.expected_blocked
+@dataclass(frozen=True)
+class _Tried:
+    """How one attempt ended: each planned check's last evaluation, its
+    phase and its confirmation's, the path it may publish and how, and
+    whether it warns that its confirmation may have changed the app."""
+
+    checks: Mapping[str, AssertionResult | None]
+    phase: Phase
     confirmation: Confirmation | None = None
+    script: CompiledScript | None = None
     intended: Published | None = None
-    repeated = False
+    repeated: bool = False
+
+    @property
+    def phases(self) -> tuple[Phase, ...]:
+        last = () if self.confirmation is None else (self.confirmation,)
+        return (self.phase, *last)
+
+
+async def _attempted(run: Run, explorable: Explorable) -> ExploreEnd:
+    """Each attempt's phase and, for a path it may publish, the
+    confirmation's, from the egress proxy's opening to its end, until one
+    publishes or no new attempt may start (`_again`); then the path
+    published, if it may be."""
+    expected = run.config.egress.expected_blocked
+    earlier: list[Phase] = []
     async with EgressProxy(run.gate) as proxy:
 
         def interrupted() -> bool:
@@ -446,43 +472,88 @@ async def _attempted(run: Run, explorable: Explorable) -> ExploreEnd:
                 or proxy.egress_blocks(expected).blocked
             )
 
-        checks, events = await _phase(run, explorable, proxy, interrupted)
-        # The browser has closed. Ending the phase joins every connection,
-        # and the confirmation's has ended once `_confirming` returns, so
-        # nothing records a block or an event after the snapshot below, and
-        # no write reaches the app.
-        traffic = await proxy.end_phase()
-        start = _infer_flags(run)
-        _uncertain(run, traffic)
-        script = _publishable(run, interrupted)
-        if script is not None and _unconfirmable(run.spec, script, start):
-            intended = "unconfirmed"
-        elif script is not None:
-            confirmation = await _confirming(run, proxy, script, interrupted)
-            if (replayed := _passing(run, confirmation)) is not None:
-                # Its runs can only raise a flag; one raised with no reset
-                # before them says the replay may have changed the app.
-                start = _infer_flags(run, replayed.steps)
-                script = _publishable(run, interrupted)
-                repeated = script is not None and _unconfirmable(
-                    run.spec, script, start
-                )
-                intended = "confirmed"
+        tried = await _tried(run, explorable, proxy, interrupted)
+        while tried.intended is None and _again(run, tried, interrupted):
+            try:
+                part = run.record.part(phase_parts(run.attempts.made + 1)[0])
+            except OSError, ValueError:  # in a directory just made: no spec's link
+                run.stopped("record_error", UNWRITTEN)
+                break
+            # Only once the next part exists: the last attempt's phases stay
+            # `tried`'s until another attempt takes its place.
+            earlier.extend(tried.phases)
+            run.attempt = part
+            run.attempts.made += 1
+            await proxy.begin_phase()
+            tried = await _tried(run, explorable, proxy, interrupted)
         blocks = proxy.egress_blocks(expected)
     published = None
-    if script is not None and intended is not None:
-        published = await _published(run, script, intended)
+    if tried.script is not None and tried.intended is not None:
+        published = await _published(run, tried.script, tried.intended)
     return ExploreEnd(
         run.record,
-        Phase(run.attempt, traffic, events),
-        confirmation=confirmation,
+        tried.phase,
+        confirmation=tried.confirmation,
         blocks=blocks,
         infrastructure_events=tuple(run.gate.infrastructure_events),
-        checks=checks,
+        checks=tried.checks,
         stops=tuple(run.stops),
         published=published,
-        repeated=repeated,
+        earlier=tuple(earlier),
+        repeated=tried.repeated,
     )
+
+
+async def _tried(
+    run: Run,
+    explorable: Explorable,
+    proxy: EgressProxy,
+    interrupted: Callable[[], bool],
+) -> _Tried:
+    """One attempt in the run's attempt part, and its confirmation when its
+    path may be confirmed: unconfirmed, a path that would repeat a side
+    effect with no reset before it (AGENTS.md §6)."""
+    run.attempted = None
+    checks, events = await _phase(run, explorable, proxy, interrupted)
+    # The browser has closed. Ending the phase joins every connection, and
+    # the confirmation's has ended once `_confirming` returns, so nothing
+    # records a block or an event after the snapshot the run ends with, and
+    # no write reaches the app.
+    traffic = await proxy.end_phase()
+    start = _infer_flags(run)
+    _uncertain(run, traffic)
+    phase = Phase(run.attempt, traffic, events)
+    script = _publishable(run, interrupted)
+    if script is None:
+        return _Tried(checks, phase)
+    if _unconfirmable(run.spec, script, start):
+        return _Tried(checks, phase, script=script, intended="unconfirmed")
+    confirmation = await _confirming(run, proxy, script, interrupted)
+    if (replayed := _passing(run, confirmation)) is None:
+        return _Tried(checks, phase, confirmation)
+    # Its runs can only raise a flag; one raised with no reset before them
+    # says the replay may have changed the app.
+    start = _infer_flags(run, replayed.steps)
+    script = _publishable(run, interrupted)
+    repeated = script is not None and _unconfirmable(run.spec, script, start)
+    return _Tried(checks, phase, confirmation, script, "confirmed", repeated)
+
+
+def _again(run: Run, tried: _Tried, interrupted: Callable[[], bool]) -> bool:
+    """Whether a new attempt starts after `tried`: its confirmation failed,
+    with nothing stopping or interrupting the run, no intent of its left
+    unresolved, whatever its flag, an attempt left, and a reset hook
+    (`explore_attempts`)."""
+    if run.stops or interrupted() or tried.confirmation is None:
+        return False
+    if any(phase.record.unresolved() for phase in tried.phases):
+        return False
+    if run.attempts.made >= run.attempts.budget:
+        return False
+    if not run.attempts.resets:
+        run.stopped("gave_up", f"no new attempt started: {UNRESET}")
+        return False
+    return True
 
 
 def _uncertain(run: Run, traffic: PhaseTraffic) -> None:
@@ -557,7 +628,7 @@ async def _confirming(
             if not await _reset(run) or interrupted():
                 return None
             try:
-                part = run.record.part(phase_parts(1)[1])
+                part = run.record.part(phase_parts(run.attempts.made)[1])
             except OSError, ValueError:  # in a directory just made: no spec's link
                 run.stopped("record_error", UNWRITTEN)
                 return None
@@ -654,7 +725,9 @@ async def _phase(
     try:
         async with AsyncExitStack() as browser, limit:
             if await _reset(run) and (offered := await _offered(run, explorable)):
-                await register_identity_engine(run.playwright)
+                if run.attempts.made == 1:
+                    # Once per Playwright: a second registration is refused.
+                    await register_identity_engine(run.playwright)
                 launched = await browser.enter_async_context(
                     launched_browser(run.playwright.chromium)
                 )
@@ -817,6 +890,7 @@ async def _turns(run: Run, attempt: Attempt, plan: CoveragePlan) -> None:
         run.spending,
         run.config.budgets.actions_per_attempt,
         run.stops,
+        attempts=run.attempts,
     )
     await take_turns(turning)
     if turning.script is not None:

@@ -113,6 +113,8 @@ def confirming(
     under the spec root `tmp_path / "qa"`, whose `config.yaml` holds
     `config`, from the app's origin, with `client` as its model."""
     config = config or ProjectConfig()
+    one = config.budgets.model_copy(update={"attempts": 1})  # no new attempt (#56)
+    config = config.model_copy(update={"budgets": one})
     root = configured(tmp_path / "qa", config)
     spec = shop_spec(root, config, page, preconditions)
 
