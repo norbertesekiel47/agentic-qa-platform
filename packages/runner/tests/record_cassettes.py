@@ -22,6 +22,7 @@ from re import Pattern
 from stat import S_ISDIR
 from typing import Any, Literal, TypedDict, cast
 
+import yaml
 from aqa_core.config import Effort, ModelRole, ProjectConfig
 from aqa_core.coverage_plan import uncovered
 from aqa_core.model_costs import CostRecord, Usage, cost_record
@@ -35,7 +36,7 @@ from aqa_runner.anthropic_client import (
     ProviderError,
 )
 from aqa_runner.coverage_plan import make_plan
-from aqa_runner.explore import Drivers, Ended, explore
+from aqa_runner.explore import Drivers, Ended, Explored, explore
 from aqa_runner.model_router import ModelCallError, ModelRouter, Routed
 from aqa_runner.run_record import COSTS
 from langchain_core.messages import AIMessage, HumanMessage
@@ -46,6 +47,8 @@ from vcr.persisters.filesystem import FilesystemPersister
 
 from packages.runner.tests.conftest import CASSETTES, REDIRECTS, _canonical, _vcr
 from packages.runner.tests.executor_fixtures import serving_app
+from packages.runner.tests.injection_fixtures import CASES as INJECTION_CASES
+from packages.runner.tests.injection_fixtures import explored_case
 from packages.runner.tests.test_anthropic_client import (
     CLICK_PROMPT,
     PLAIN_PROMPT,
@@ -59,6 +62,8 @@ from packages.runner.tests.test_explore_graph import configured, shop_spec
 
 ROOT = Path(__file__).resolve().parents[3]
 PILOTS = ROOT / "bench/apps/conduit/qa"
+# The injection pages' explores (#57), by cassette name.
+INJECTED = {case.cassette: case for case in INJECTION_CASES}
 CASES = (
     "coverage_plan",
     "tools",
@@ -70,6 +75,7 @@ CASES = (
     "plan_favorite-article",
     "plan_publish-article",
     "explore_fixture",
+    *INJECTED,
 )
 # The whole explore of the fixture spec: the plan and every turn.
 EXPLORE = "explore_fixture"
@@ -98,9 +104,12 @@ HEADROOM_TOKENS = 1024
 # debug file, its inspector, and its driver's full error output.
 LOUD = ("DEBUGP", "DEBUG", "DEBUG_FILE", "PWDEBUG", "PWDEBUGIMPL")
 # What a withheld explore response can reach under the attempt once the SDK
-# has it: the attempt's cassette, whose later requests carry it, and the
+# has it, past the attempt's cassette, whose later requests carry it: the
 # run's record and compiled script under its spec root.
-SCRUBBED = (f"{EXPLORE}.yaml", "qa/.aqa", "qa/.compiled")
+SCRUBBED = ("qa/.aqa", "qa/.compiled")
+# The injection round's limit (#57), a round of its own; each run's is its
+# case config's model_usd.
+INJECTION_ROUND_USD = Decimal("0.80")
 
 
 class SpendRefusedError(Exception):
@@ -344,9 +353,15 @@ class Capture:
     withheld: str | None = None
     responses: list[dict[str, Any]] = field(default_factory=list)
     previous: float = field(default_factory=time.perf_counter)
+    # While VCR loads the interactions an attempt replays, which a recording
+    # already priced and inspected; and the request hashes it replays.
+    loading: bool = False
+    replayed: frozenset[str] = frozenset()
 
     def response(self, response: dict[str, Any]) -> dict[str, Any]:
         response = self.filter_response(response)
+        if self.loading:
+            return response
         now = time.perf_counter()
         usage = observed_usage(response["body"]["string"])
         if self.allowance is not None:
@@ -431,6 +446,16 @@ class Ending(TypedDict):
     published: Literal["confirmed", "unconfirmed"] | None
 
 
+@dataclass(frozen=True)
+class Reused:
+    """An interaction an injection case replays from the fixture explore's
+    cassette: its request's hash, its response's request ID and usage."""
+
+    request: str
+    request_id: str | None
+    usage: Usage | None
+
+
 @dataclass
 class AttemptState:
     calls: tuple[CostRecord, ...] = ()
@@ -443,6 +468,7 @@ class AttemptState:
     receipt_written: bool = False
     promoting: bool = False
     ending: Ending | None = None
+    reused: list[Reused] = field(default_factory=list)
 
     def remember_interrupt(self, error: BaseException | None) -> None:
         if self.first_interrupt is not None:
@@ -514,6 +540,8 @@ def round_limit(name: str) -> Decimal | None:
     cases keep the SDK's retries and no bound."""
     if name == EXPLORE:
         return ROUND_USD
+    if name in INJECTED:
+        return INJECTION_ROUND_USD
     return PLANS_ROUND_USD if plan_case(name) else None
 
 
@@ -521,8 +549,9 @@ def answers_expected(name: str, calls: tuple[CostRecord, ...]) -> int:
     """One answer per case. A plan case holds two when its plan couldn't be
     used and make_plan asked once more: two answers, both `ok` (ADR-0024's
     #161 amendment). A refusal and its fallback stay rejected. The explore
-    case holds one per priced call: the plan's, its retry's, each turn's."""
-    if name == EXPLORE:
+    case holds one per priced call: the plan's, its retry's, each turn's, and
+    so does an injection case, less those it replayed."""
+    if name == EXPLORE or name in INJECTED:
         return len(calls)
     retried = plan_case(name) and [call.status for call in calls] == ["ok", "ok"]
     return 2 if retried else 1
@@ -576,6 +605,20 @@ async def explored(
             run = await explore(
                 spec, config, root, app.origin, Drivers(router, playwright)
             )
+    costs, ending = ended(run)
+    script = root / ".compiled" / f"{spec.frontmatter.id}.json"
+    confirmed = (
+        run.exit_code == 0
+        and ending["published"] == "confirmed"
+        and script.is_file()
+        and load_compiled(script, config).confirmed
+    )
+    return costs, confirmed, ending
+
+
+def ended(run: Explored) -> tuple[tuple[CostRecord, ...], Ending]:
+    """The run's priced calls, as its own cost lines keep them, and how it
+    ended."""
     costs = None if run.record is None else run.record / COSTS
     lines = costs.read_text().splitlines() if costs and costs.is_file() else []
     said = run.document.get("published")
@@ -588,14 +631,17 @@ async def explored(
         if said == "unconfirmed"
         else None,
     )
-    script = root / ".compiled" / f"{spec.frontmatter.id}.json"
-    confirmed = (
-        run.exit_code == 0
-        and ending["published"] == "confirmed"
-        and script.is_file()
-        and load_compiled(script, config).confirmed
-    )
-    return tuple(map(CostRecord.model_validate_json, lines)), confirmed, ending
+    return tuple(map(CostRecord.model_validate_json, lines)), ending
+
+
+async def explored_injection(
+    name: str, router: ModelRouter, spec: Spec
+) -> tuple[tuple[CostRecord, ...], bool, Ending]:
+    """Explore an injection case's spec on its page (#57): its priced calls,
+    whether it ended as its attack allows, and how it ended."""
+    run, disallowed = await explored_case(INJECTED[name], spec.path.parent, router)
+    costs, ending = ended(run)
+    return costs, disallowed is None, ending
 
 
 async def answered(
@@ -603,6 +649,8 @@ async def answered(
 ) -> tuple[tuple[CostRecord, ...], bool, Ending | None]:
     if name == EXPLORE:
         return await explored(router, spec)
+    if name in INJECTED:
+        return await explored_injection(name, router, spec)
     routed, accepted = await ask(name, router, spec)
     return routed.calls, accepted, None
 
@@ -613,11 +661,15 @@ def admitting(vcr: Any, capture: Capture, allowance: Allowance) -> None:
     structured output, a turn's as notes and tool calls. VCR filters a
     request before sending it and again just before keeping its response
     (vcrpy 8.3.0, `_vcr_request` and `Cassette.append`), and explore makes
-    its calls one at a time."""
+    its calls one at a time. An interaction loaded to replay, or a request
+    that replays one, never leaves, so it holds nothing: explore asks for its
+    plan once, and a retry's body differs."""
     kept = vcr.before_record_request
     capture.allowance = allowance
 
     def admitted(request: Any) -> Any:
+        if capture.loading or hashed(request.body) in capture.replayed:
+            return kept(request)
         allowance.admit(request)
         capture.structured = "output_config" in json.loads(request.body)
         return kept(request)
@@ -625,13 +677,13 @@ def admitting(vcr: Any, capture: Capture, allowance: Allowance) -> None:
     vcr.before_record_request = admitted
 
 
-def scrub(attempt: Path, state: AttemptState) -> list[str]:
-    """Remove what a withheld explore response reached once the SDK had it
-    (SCRUBBED), since VCR withholds only the copy it keeps. Each name is
-    tried whatever happened to the one before."""
+def scrub(attempt: Path, state: AttemptState, case: str) -> list[str]:
+    """Remove what a withheld explore response reached once the SDK had it,
+    the case's cassette and SCRUBBED, since VCR withholds only the copy it
+    keeps. Each name is tried whatever happened to the one before."""
     removed: list[str] = []
     failed = False
-    for name in SCRUBBED:
+    for name in (f"{case}.yaml", *SCRUBBED):
         path = attempt / name
         try:
             # lstat, since is_dir() and exists() read a name they can't look
@@ -661,8 +713,10 @@ def finish(
     model: RoutedModel,
 ) -> None:
     """Attempt a priced receipt even when other evidence could not be saved."""
-    scrubbed = scrub(attempt, state) if name == EXPLORE and capture.withheld else []
-    state.costs, mismatch = accounted(capture.responses, state.calls, model)
+    explores = name == EXPLORE or name in INJECTED
+    scrubbed = scrub(attempt, state, name) if explores and capture.withheld else []
+    fresh = unreused(state.calls, state.reused)
+    state.costs, mismatch = accounted(capture.responses, fresh, model)
     unpriced = [
         index
         for index, response in enumerate(capture.responses)
@@ -672,7 +726,7 @@ def finish(
         state.finalization_failures.append("accounting_error")
         state.outcome = "accounting_error"
     if state.outcome == "accepted" and (
-        len(capture.responses) != answers_expected(name, state.calls)
+        len(capture.responses) != answers_expected(name, fresh)
         or not all(response["request_id"] for response in capture.responses)
     ):
         state.outcome = "rejected"
@@ -704,6 +758,13 @@ def finish(
         "scrubbed": scrubbed,
         "explore": state.ending,
         "spend": None if capture.allowance is None else capture.allowance.receipt(),
+        "reused": [
+            {
+                "request_id": each.request_id,
+                "usage": None if each.usage is None else each.usage.model_dump(),
+            }
+            for each in state.reused
+        ],
     }
     try:
         (attempt / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
@@ -712,6 +773,60 @@ def finish(
         if not state.receipt_written:
             state.remember_interrupt(sys.exception())
             state.finalization_failures.append("receipt_write")
+
+
+def hashed(body: bytes | str | None) -> str:
+    """A request body's prompt hash, as replay matches it."""
+    return hashlib.sha256(_canonical(body).encode()).hexdigest()
+
+
+def unreused(
+    calls: tuple[CostRecord, ...], reused: list[Reused]
+) -> tuple[CostRecord, ...]:
+    """`calls` less one priced call for each response `reused` replayed:
+    the fixture explore's recording paid for those and keeps their receipt."""
+    left = [each.usage for each in reused]
+    fresh: list[CostRecord] = []
+    for call in calls:
+        usage = Usage.model_validate(
+            call.model_dump(
+                include={"input_tokens", "cached_input_tokens", "output_tokens"}
+            )
+        )
+        if usage in left:
+            left.remove(usage)
+        else:
+            fresh.append(call)
+    return tuple(fresh)
+
+
+def preloaded(name: str, attempt: Path, library: Path) -> list[Reused]:
+    """Write the plan interactions of the library's fixture explore cassette
+    as the attempt's cassette, for an injection case to replay: its plan
+    request is the fixture explore's, its account left out (#57). None
+    when the library holds no plan interaction."""
+    source = library / f"{EXPLORE}.yaml"
+    if not source.is_file():
+        return []
+    cassette = yaml.safe_load(source.read_text())
+    plans = [
+        each
+        for each in cassette["interactions"]
+        if "output_config" in json.loads(each["request"]["body"])
+    ]
+    if not plans:
+        return []
+    (attempt / f"{name}.yaml").write_text(
+        yaml.safe_dump(cassette | {"interactions": plans})
+    )
+    return [
+        Reused(
+            hashed(each["request"]["body"]),
+            next(iter(each["response"]["headers"].get("request-id", [])), None),
+            observed_usage(each["response"]["body"]["string"]),
+        )
+        for each in plans
+    ]
 
 
 def persist_capture(
@@ -743,6 +858,30 @@ def persist_capture(
                 state.finalization_failures.append("request_hashes")
 
 
+def bounded(
+    name: str,
+    attempt: Path,
+    library: Path,
+    *,
+    vcr: Any,
+    capture: Capture,
+    config: ProjectConfig,
+) -> tuple[list[Reused], dict[str, Any]]:
+    """Hold `name`'s requests to its spend bound, when it has one; and give
+    the interactions it replays, which the capture neither prices nor
+    inspects (an injection case's plan, from the fixture explore, #57), with
+    how its cassette records past them and drops any not replayed."""
+    reusable = preloaded(name, attempt, library) if name in INJECTED else []
+    capture.replayed = frozenset(each.request for each in reusable)
+    if (limit := round_limit(name)) is not None:
+        model = resolve_roles(config, vendored())["navigator"].model
+        # An injection run's limit is its own config's model_usd (#57).
+        cap = Decimal(str(config.budgets.model_usd)) if name in INJECTED else RUN_USD
+        admitting(vcr, capture, Allowance(model, cap, round_left(attempt, limit)))
+    replaying = {"record_mode": "new_episodes", "drop_unused_requests": True}
+    return reusable, replaying if reusable else {}
+
+
 def capture_attempt(
     name: str,
     attempt: Path,
@@ -765,24 +904,39 @@ def capture_attempt(
     state = AttemptState()
     config = load_config(spec.path.parent / "config.yaml")
     model = resolve_roles(config, vendored())["navigator"].model
-    if (limit := round_limit(name)) is not None:
-        admitting(vcr, capture, Allowance(model, RUN_USD, round_left(attempt, limit)))
+    reusable, replaying = bounded(
+        name, attempt, library, vcr=vcr, capture=capture, config=config
+    )
     call_completed = capture_completed = completed = False
     try:
         with warnings.catch_warnings(), quiet():
             warnings.simplefilter("error")
             try:
                 try:
-                    with vcr.use_cassette(f"{name}.yaml"):
+                    capture.loading = bool(reusable)
+                    with vcr.use_cassette(f"{name}.yaml", **replaying) as cassette:
+                        capture.loading = False
                         try:
                             state.calls, accepted, state.ending = asyncio.run(
                                 answered(name, router, spec)
                             )
-                            state.outcome = "accepted" if accepted else "rejected"
+                            state.outcome = (
+                                "accepted"
+                                if accepted
+                                else "disallowed"
+                                if name in INJECTED
+                                else "rejected"
+                            )
                             call_completed = True
                         finally:
                             if not call_completed:
                                 state.call_failed(sys.exception())
+                            # Loaded first, the replayed interactions lead.
+                            state.reused = [
+                                each
+                                for index, each in enumerate(reusable)
+                                if cassette.play_counts[index]
+                            ]
                     capture_completed = True
                 finally:
                     if not capture_completed:
@@ -839,6 +993,8 @@ def record(
         spec = pilot(name.removeprefix("plan_"), attempt / "qa")
     elif name == EXPLORE:
         spec = fixture(attempt / "qa")
+    elif name in INJECTED:
+        spec = INJECTED[name].spec(attempt / "qa", FIXTURE_CONFIG)
     else:
         spec = checkout(attempt / "qa")
     config = load_config(spec.path.parent / "config.yaml")
