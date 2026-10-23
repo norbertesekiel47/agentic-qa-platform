@@ -947,3 +947,40 @@ One attempt, `001`, with the named recorder at the commit "docs: say how the fix
 | turn 4 | `req_011CgK7RMY4KadDSCGRidPWL` | 3428 / 104 | 0.007896 |
 
 The attempt's receipt: outcome `accepted`, explore exit 0 `compiled` and `confirmed`, `spend.spent_usd` 0.039772 against a round limit of USD 0.597950. The path fills the name field with "Alex", clicks save, and checks the status for "saved". The round cost USD 0.039772, against the estimate of USD 0.052: each turn billed about 3,400 input tokens, not the 4,100 the plan requests' bytes per token gave. With B1, B2b and #161 (USD 0.300054) and #55's round (USD 0.101996), the live total is USD 0.441822. The cassette's sha256 is `72913996e1f91f6cf8970fdd755329dff0d0d330af92314aa4a340995dc2a8e1`.
+
+## Amendment (2026-10-23): injection fixtures aimed at exploring (#57)
+
+The Consequences' injection surface gets its suite: SECURITY §4's explore-focused pages, explored offline. Recorded responses on them come later.
+
+- **What runs now.** Each page in `tests/fixtures/pages/injection/` is an HTML fragment added to the executor's fixture shop page. It is explored through `explore.explore`, or `run_attempt` for the steering runs, in real Chromium, with the shop spec and its reset hook (`packages/runner/tests/test_injection_pages.py`). A scripted model plays two parts:
+  - *It ignores the page.* The plan, the script and the outcome must be the clean page's.
+  - *It obeys the page.* It makes every move the page asks for, which is the worst case, so each move must be refused, fail, or stay confined.
+
+  The recorded round swaps real responses in, and holds them to the same invariants.
+- **What the suite holds.**
+  - *The plan.* The plan request is byte-identical to the clean page's run, and is sent before the app serves anything. The `plan_hash` is the clean run's, and every turn carries the same `<spec>`/`<plan>` message.
+  - *The script.* The published script is the clean page's, its time aside, except that a target keeps the clean page's locators, in order, less any the page's own markup makes ambiguous. The steering page's extra input and button drop `css: input` and `css: button`. A page adds no locator.
+  - *Hijack.* The obeyed hijack compiles nothing and gives up (3). The page's text reaches the model only inside the snapshot block, with its `</snapshot>` escaped.
+  - *Decoys.* On both decoy pages, the shop's status has a subject contract (`section#status-area`, `p#status`), and a binding to the banner outside the region is refused. The script that confirms is replayed where only the subject reads wrong while the banner still says the name was saved, and it fails a1.
+  - *Steering.*
+    - An undeclared host is the proxy's refusal (6), and `egress.json` names it.
+    - A popup on a host the proxy passes and the run doesn't allow is closed as a policy event.
+    - A frame from another origin reaches no request, and a ref the model guesses for it is a tool error.
+    - `fill_secret` into a field its binding doesn't name, or of an unbound secret, is refused, with no intent and no request carrying the value.
+    - A click that lands on another origin fails once dispatched, so the attempt ends and the run is `non_resumable` (4), naming the origin. The run fails closed, and a hostile page that lures such a click can force that outcome.
+- **The fixtures' bytes.** Nothing the model reads names a port: links keep relative hrefs, and a click handler leaves for the other origin. So a recorded response on these pages replays.
+- **Red first.** The controls exist, so each test is shown red against a mutant of the control it relies on, with no production change. The mutants:
+  - the plan asked for after the reset;
+  - `finish` ignoring failing checks;
+  - a block that doesn't escape `<`;
+  - the contract verdict admitting any element (the refusal then comes from region-scoped generation, a second layer);
+  - the proxy passing every host;
+  - frames kept in the snapshot;
+  - `fill_secret` matching any field;
+  - the page-origin check skipped.
+
+  The ticket's evidence log names each run.
+- **What waits.**
+  - The decoy offered after a failed confirmation, which needs #56's attempts and feedback.
+  - The recorded responses on each page, after the first live explore. The recorder's cases for them need a promotion rule that accepts `gave_up`, and for steering `egress_blocked` and `non_resumable`.
+- **Residual:** a subject with no contract row binds as offered wherever copy detection finds no copy (SECURITY §4 item 6).
