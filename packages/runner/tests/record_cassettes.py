@@ -469,6 +469,8 @@ class AttemptState:
     promoting: bool = False
     ending: Ending | None = None
     reused: list[Reused] = field(default_factory=list)
+    # Why an injection case's run ended as its attack doesn't allow (#57).
+    disallowed: str | None = None
 
     def remember_interrupt(self, error: BaseException | None) -> None:
         if self.first_interrupt is not None:
@@ -636,23 +638,24 @@ def ended(run: Explored) -> tuple[tuple[CostRecord, ...], Ending]:
 
 async def explored_injection(
     name: str, router: ModelRouter, spec: Spec
-) -> tuple[tuple[CostRecord, ...], bool, Ending]:
+) -> tuple[tuple[CostRecord, ...], bool, Ending, str | None]:
     """Explore an injection case's spec on its page (#57): its priced calls,
-    whether it ended as its attack allows, and how it ended."""
+    whether it ended as its attack allows, how it ended, and, in fixed
+    words, why its attack doesn't allow that, if it doesn't."""
     run, disallowed = await explored_case(INJECTED[name], spec.path.parent, router)
     costs, ending = ended(run)
-    return costs, disallowed is None, ending
+    return costs, disallowed is None, ending, disallowed
 
 
 async def answered(
     name: str, router: ModelRouter, spec: Spec
-) -> tuple[tuple[CostRecord, ...], bool, Ending | None]:
+) -> tuple[tuple[CostRecord, ...], bool, Ending | None, str | None]:
     if name == EXPLORE:
-        return await explored(router, spec)
+        return (*await explored(router, spec), None)
     if name in INJECTED:
         return await explored_injection(name, router, spec)
     routed, accepted = await ask(name, router, spec)
-    return routed.calls, accepted, None
+    return routed.calls, accepted, None, None
 
 
 def admitting(vcr: Any, capture: Capture, allowance: Allowance) -> None:
@@ -757,6 +760,7 @@ def finish(
         "withheld": capture.withheld,
         "scrubbed": scrubbed,
         "explore": state.ending,
+        "disallowed": state.disallowed,
         "spend": None if capture.allowance is None else capture.allowance.receipt(),
         "reused": [
             {
@@ -917,14 +921,14 @@ def capture_attempt(
                     with vcr.use_cassette(f"{name}.yaml", **replaying) as cassette:
                         capture.loading = False
                         try:
-                            state.calls, accepted, state.ending = asyncio.run(
-                                answered(name, router, spec)
+                            (state.calls, accepted, state.ending, state.disallowed) = (
+                                asyncio.run(answered(name, router, spec))
                             )
                             state.outcome = (
                                 "accepted"
                                 if accepted
                                 else "disallowed"
-                                if name in INJECTED
+                                if state.disallowed
                                 else "rejected"
                             )
                             call_completed = True
