@@ -15,6 +15,10 @@ from typing import Final
 
 from aqa_core.compiled import CompiledScript
 
+from aqa_runner.executor import RunResult
+from aqa_runner.explore_result import feedback
+from aqa_runner.redaction import Redacted, Redactor
+
 UNRESET: Final = (
     "the spec has no reset hook, and this attempt's steps, its start URL's "
     "load included, may have changed the app, so no new attempt may repeat "
@@ -39,9 +43,17 @@ def replayed_as(script: CompiledScript) -> str:
 @dataclass
 class Attempts:
     """The run's attempts so far: its budget, whether the spec has a reset
-    hook, how many attempts it made, and how many turn records it wrote."""
+    hook, how many attempts it made, how many turn records it wrote, and
+    what the next attempt reads of the last failed confirmation."""
 
     budget: int
     resets: bool
     made: int = 1
     taken: int = 0
+    feedback: Redacted | None = None
+
+    def failed_with(
+        self, script: CompiledScript, replayed: RunResult, redactor: Redactor
+    ) -> None:
+        """Keep a failed confirmation of `script`: its feedback."""
+        self.feedback = feedback(script, replayed, redactor)

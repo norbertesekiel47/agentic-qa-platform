@@ -144,6 +144,16 @@ class StepResult:
 
 
 @dataclass(frozen=True)
+class Evidence:
+    """One step's evidence snapshot as a replay returns it: the step's seq,
+    and the page's snapshot as its evidence keeps it, scanned, as plain
+    text, None when none was kept."""
+
+    seq: int
+    snapshot: str | None
+
+
+@dataclass(frozen=True)
 class RunResult:
     """A replay: every step that ran and every assertion, each with its
     outcome, and the run's; the egress gate's infrastructure events, and the
@@ -151,7 +161,9 @@ class RunResult:
     all. Invariants are judged for every run, errored ones included; in a
     run that binds a test secret they keep no text. Egress blocks keep hosts
     and ports in memory: what #53 prints or saves of them is its
-    preflight's."""
+    preflight's. `evidence` is the page a failure shows explore's next
+    attempt (#56): the step's where an enabled invariant first became
+    violated, else the last step's."""
 
     run_id: str
     outcome: RunOutcome
@@ -163,6 +175,7 @@ class RunResult:
     egress_blocks: EgressBlocks
     error_code: ErrorCode | None
     policy_events_total: int
+    evidence: Evidence | None = None
 
 
 async def replay(
@@ -234,7 +247,8 @@ async def replay(
 class _Replayed:
     """What a replay's browser left: its record and redactor, the hosts
     the project config expects blocked, and every step, assertion,
-    invariant and kept policy event, and how many it recorded."""
+    invariant and kept policy event, how many it recorded, and the
+    evidence a failure shows (`RunResult.evidence`)."""
 
     record: RunRecord
     redactor: Redactor
@@ -244,6 +258,7 @@ class _Replayed:
     invariants: tuple[InvariantResult, ...]
     policy_events: tuple[PolicyEvent, ...]
     policy_events_total: int
+    evidence: Evidence
 
 
 async def _replayed(
@@ -304,7 +319,7 @@ async def _replayed(
         # Seq 0 is no compiled step: a compiled script's steps start at 1.
         first = start_url(setup.spec, setup.start)
         path = setup.spec.frontmatter.preconditions.start_url
-        await _keep_with_evidence(
+        evidence = await _keep_with_evidence(
             session,
             run,
             steps,
@@ -317,13 +332,19 @@ async def _replayed(
                 lambda: session.navigate(first),
             ),
         )
+        # A violated invariant's evidence is the page that first showed it,
+        # whatever the path did after; one the final checks first show
+        # keeps the last step's, the page they ran on.
+        violated = _violated(session, setup.spec)
         for step in runnable:
             if steps[-1].outcome != "completed" or interrupted():
                 break
             result = await _run(session, run, step, interrupted)
             if result is None:
                 break
-            await _keep_with_evidence(session, run, steps, result)
+            kept = await _keep_with_evidence(session, run, steps, result)
+            if not violated:
+                evidence, violated = kept, _violated(session, setup.spec)
         if steps[-1].outcome != "completed" or interrupted():
             assertions = tuple(
                 AssertionResult(check.id, "not_evaluated", stopped_at=steps[-1].seq)
@@ -346,7 +367,16 @@ async def _replayed(
         invariants,
         tuple(events.kept),
         events.total,
+        evidence,
     )
+
+
+def _violated(session: BrowserSession, spec: Spec) -> bool:
+    """Whether an invariant `spec` keeps enabled is violated yet."""
+    results = invariant_results(
+        session.invariant_observers.seen, spec.frontmatter.invariants
+    )
+    return any(result.outcome == "violated" for result in results)
 
 
 def _run_result(replayed: _Replayed, proxy: EgressProxy, gate: EgressGate) -> RunResult:
@@ -382,18 +412,20 @@ def _run_result(replayed: _Replayed, proxy: EgressProxy, gate: EgressGate) -> Ru
         blocks,
         "egress_blocked" if blocks.blocked else None,
         replayed.policy_events_total,
+        replayed.evidence,
     )
 
 
 async def _keep_with_evidence(
     session: BrowserSession, run: _Replay, steps: list[StepResult], step: StepResult
-) -> None:
+) -> Evidence:
     """Keep `step`, then save its evidence with the page's snapshot as the
-    step left it."""
+    step left it, and give that snapshot as plain text."""
     steps.append(step)
     budget = run.setup.config.budgets.resolve_seconds
     snapshot = await _observed(session, budget)
     await capture_evidence(run.setup.record, session, step.seq, step.window, snapshot)
+    return Evidence(step.seq, None if snapshot is None else str(snapshot))
 
 
 async def _observed(session: BrowserSession, budget: float) -> Redacted | None:

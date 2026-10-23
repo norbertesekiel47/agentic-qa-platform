@@ -5,7 +5,8 @@
 member is the top-level `egress.json`; the CLI's line reads from that
 document. It is not every way a run's results leave the process: tool
 errors and turn records are `aqa_runner.reasons`', `confirmation/egress.json`
-is replay's, and evidence is `aqa_runner.evidence`'s. It copies an
+is replay's, evidence is `aqa_runner.evidence`'s, and what a failed
+confirmation tells the next attempt is `feedback`'s (#56). It copies an
 allow-list, field by field, never a result object or a reflection of one
 (`dataclasses.asdict`, `vars`, `model_dump`), so a field a result gains
 later stays in memory until this list names it.
@@ -26,9 +27,12 @@ before the egress proxy opens, so they never reach here.
 Neither touches a browser, model, graph, file or clock: a record is read
 for its ID, path, scan and the intents it holds unresolved in memory."""
 
+import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Final, Literal
+
+from aqa_core.compiled import CompiledScript, Navigate, Press, Reload, Step
 
 from aqa_runner.egress import InfrastructureEvent
 from aqa_runner.egress_proxy import EgressBlocks, PhaseTraffic
@@ -368,6 +372,68 @@ def assertion_words(result: AssertionResult) -> str:
     if result.outcome == "not_evaluated":
         return f"not_evaluated: step {result.stopped_at} stopped the run"
     return result.outcome
+
+
+# How much of a failed confirmation's page the next attempt reads, in
+# characters: five of the six pilot pages' snapshots fit whole, the longest
+# 2,628 without refs (#56 plan-v2's snapshot sizes).
+_EVIDENCE: Final = 4000
+# A snapshot's own refs, which name no element of another session's.
+_REF = re.compile(r" ?\[ref=(?:f[0-9]+)?e[0-9]+\]")
+
+
+def feedback(
+    script: CompiledScript, replayed: RunResult, redactor: Redactor
+) -> Redacted:
+    """What the attempts after a failed confirmation read of it, as their
+    `<confirmation>` block (#56): each step replayed, by its number, with
+    what it did and how it ended, then each assertion that didn't pass and
+    each invariant violated, in the executor's outcome words; then the page
+    its evidence names (`RunResult.evidence`), its snapshot without its
+    refs, scanned, then cut to `_EVIDENCE` characters, so no cut leaves part
+    of a value. All of it is scanned again here, and the block's own scan,
+    escape and scan follow (`navigator.navigator_request`)."""
+    steps = {step.seq: step for step in script.steps}
+    lines = [
+        f"step {ran.seq}, {_did(steps.get(ran.seq), script)}: {_step_words(ran)}"
+        for ran in replayed.steps
+    ]
+    lines.extend(
+        f"{assertion.id}: {assertion_words(assertion)}"
+        for assertion in replayed.assertions
+        if assertion.outcome != "pass"
+    )
+    lines.extend(
+        f"invariant {invariant.name}: violated"
+        for invariant in replayed.invariants
+        if invariant.outcome == "violated"
+    )
+    evidence = replayed.evidence
+    seq = replayed.steps[-1].seq if evidence is None else evidence.seq
+    if evidence is None or evidence.snapshot is None:
+        lines.append(f"no snapshot of the page after step {seq} was kept")
+    else:
+        page = redactor.redact(_REF.sub("", evidence.snapshot))
+        lines.append(f"the page after step {seq}, without its refs:")
+        lines.append(page[:_EVIDENCE])
+        if len(page) > _EVIDENCE:
+            lines.append(f"(cut at {_EVIDENCE} characters)")
+    return redactor.redact("\n".join(lines))
+
+
+def _did(step: Step | None, script: CompiledScript) -> str:
+    """What `step` does, by its target's meaning, never a value it types."""
+    match step:
+        case None:
+            return "the start URL"
+        case Navigate(url=url):
+            return f"navigate {url}"
+        case Press(key=key):
+            return f"press {key}"
+        case Reload():
+            return "reload"
+        case _:
+            return f"{step.action} {script.targets[step.target].semantic}"
 
 
 def _step_words(step: StepResult) -> str:
