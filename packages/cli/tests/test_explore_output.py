@@ -841,10 +841,8 @@ def test_api_md_lists_every_explore_option() -> None:
     for name in Budgets.model_fields:
         assert re.search(rf"\b{name}\b", budget), name
     assert "planned" not in block
-    assert (
-        "--confirm-repeat"
-        in typer.testing.CliRunner().invoke(aqa, ["explore", "--help"]).stdout
-    )
+    shown = typer.testing.CliRunner().invoke(aqa, ["explore", "--help"]).stdout
+    assert "--confirm-repeat" in re.sub(r"\x1b\[[0-9;]*m", "", shown)
 
 
 def test_explore_help_states_the_m1_rules() -> None:
