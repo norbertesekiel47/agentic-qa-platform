@@ -16,7 +16,16 @@ from aqa_core.compiler import (
     side_effect_basis,
 )
 
-from packages.core.tests.test_compiler import BOUND, BY, PLAN, demo
+from packages.core.tests.test_compiler import (
+    BOUND,
+    BY,
+    EXPECTATIONS,
+    PLAN,
+    STEPS,
+    demo,
+    plan,
+)
+from packages.core.tests.test_compiler_conditions import ENDS, RELOADED
 
 BASIS = "no positive evidence that the step changes nothing"
 BUSY = "settle: the page was still busy when settling's wait ran out"
@@ -147,3 +156,30 @@ def test_the_start_needs_the_same_evidence_and_the_models_agreement() -> None:
         side_effect_basis((), agreed=True),
         side_effect_basis((CLEAN, WRITING), agreed=True),
     ] == [None, DISAGREED, BASIS, WROTE]
+
+
+@pytest.mark.parametrize(
+    ("listed", "expected"),
+    [
+        ((2,), [(False, ()), (True, ("c1",))]),
+        ((3,), [(True, ()), (False, ("c1",))]),
+    ],
+    ids=["the-click", "the-reload"],
+)
+def test_the_step_that_meets_a_condition_and_the_steps_that_change_nothing_are_told_apart(
+    tmp_path: Path,
+    listed: tuple[int, ...],
+    expected: list[tuple[bool, tuple[str, ...]]],
+) -> None:
+    spec, config = demo(tmp_path)
+    steps = {
+        number: PathStep(step.fields, step.target, observed=(CLEAN,))
+        for number, step in STEPS.items()
+    }
+    path = ExploredPath(steps, ENDS, BOUND, (("c1", 3),), changes_nothing=listed)
+
+    script = compile_script(
+        spec, config, plan(*EXPECTATIONS, requires=(RELOADED,)), path, BY
+    )
+
+    assert [(step.side_effect, step.satisfies) for step in script.steps] == expected

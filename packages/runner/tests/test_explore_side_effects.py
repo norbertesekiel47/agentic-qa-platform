@@ -23,7 +23,13 @@ from playwright.async_api import async_playwright
 
 from packages.runner.tests.document_fixtures import until
 from packages.runner.tests.executor_fixtures import PAGES, App, serving_app
-from packages.runner.tests.explore_graph_fixtures import Scripted, calling, ref, tool
+from packages.runner.tests.explore_graph_fixtures import (
+    Scripted,
+    calling,
+    planned,
+    ref,
+    tool,
+)
 from packages.runner.tests.test_explore_confirm import published
 from packages.runner.tests.test_explore_graph import (
     configured,
@@ -31,7 +37,6 @@ from packages.runner.tests.test_explore_graph import (
     shop_spec,
     written,
 )
-from packages.runner.tests.test_explore_preflight import planned
 from packages.runner.tests.test_navigator_side_effects import (
     BUSY,
     LATER,
