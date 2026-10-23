@@ -150,8 +150,9 @@ class Turning:
     turns: int
     stops: list[Stop]
     script: CompiledScript | None = None
-    # The run's attempts (#56): the turn records' numbers, which go on
-    # across attempts. One attempt by default.
+    # The run's attempts (#56): what each request carries of a failed
+    # confirmation, and the turn records' numbers, which go on across
+    # attempts. One attempt by default.
     attempts: Attempts = field(default_factory=lambda: Attempts(1, resets=False))
 
     @property
@@ -279,6 +280,7 @@ async def _request(
         snapshot=context.said("") if seen is None else seen,
         parts=state["parts"],
         probes=probe_listing(context.attempt.offered, context.redactor),
+        confirmation=context.attempts.feedback,
     )
     return navigator_request(context.prefix, turn, redactor=context.redactor), seen
 
