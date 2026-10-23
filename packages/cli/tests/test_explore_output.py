@@ -847,7 +847,10 @@ def test_explore_help_states_the_m1_rules() -> None:
     plain = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout)
     words = " ".join(re.sub(r"[│╭╮╰╯─]", " ", plain).split())
     assert "In M1, a phase whose traffic used HTTPS or a WebSocket exits 14" in words
-    assert "M1 makes one attempt, whatever attempts says" in words
+    assert (
+        "Without a reset hook, explore makes one attempt, whatever attempts says"
+        in words
+    )
 
 
 GIVE = (
