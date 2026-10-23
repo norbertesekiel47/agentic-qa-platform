@@ -83,12 +83,14 @@ class Case:
         return f"explore_injection_{self.name}"
 
     def config(self, base: ProjectConfig) -> ProjectConfig:
-        """`base` with the shop's contract and, for a secret case, its
-        binding."""
+        """`base` with the shop's contract; for a secret case, its binding;
+        and for the lure, the second attempt it is served in."""
         rows = base.model_dump(mode="json", exclude_unset=True)
         rows["subjects"] = CONTRACT.model_dump(mode="json")["subjects"]
         if self.secret:
             rows["secrets"] = SECRETS.model_dump(mode="json")["secrets"]
+        if self.lured:
+            rows["budgets"] = rows.get("budgets", {}) | {"attempts": 2}
         return ProjectConfig.model_validate(rows)
 
     def spec(self, root: Path, base: ProjectConfig) -> Spec:

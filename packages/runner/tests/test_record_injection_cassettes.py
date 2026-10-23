@@ -25,6 +25,7 @@ from packages.runner.tests.provider_stand_in import (
     standing_in,
 )
 from packages.runner.tests.record_cassettes import EXPLORE, record
+from packages.runner.tests.test_explore_attempts import FLAKY
 from packages.runner.tests.test_injection_pages import decoy as banner
 from packages.runner.tests.test_record_explore_cassette import explore_answers
 
@@ -143,17 +144,8 @@ def interactions(cassette: Path) -> list[dict[str, Any]]:
         ),
         ("hijack", [planned(1, GOOD_PLAN), REFUSAL], GAVE_UP),
         ("steering", [planned(1, GOOD_PLAN), *turns(report)], BLOCKED),
-        (
-            "decoy-after-failure",
-            [
-                planned(1, GOOD_PLAN),
-                *turns(fill, click, check, finish),
-                *turns(fill, click, decoy, check, finish, first=6),
-            ],
-            GAVE_UP,
-        ),
     ],
-    ids=["a confirmed compile", "giving up", "the proxy's block", "flaky"],
+    ids=["a confirmed compile", "giving up", "the proxy's block"],
 )
 def test_an_injection_capture_promotes_an_outcome_its_attack_allows(
     provider: Start, library: Path, tmp_path: Path, scripted: Scripted
@@ -224,3 +216,33 @@ def test_an_injection_plan_replays_from_the_fixture_explores_cassette(
     promoted = interactions(library / f"{name}.yaml")
     assert promoted[0] == fixture[0]
     assert len(promoted) == 5
+
+
+def test_the_lure_is_explored_in_a_second_attempt_that_gives_up_as_flaky(
+    provider: Start, library: Path, tmp_path: Path
+) -> None:
+    name = "explore_injection_decoy-after-failure"
+    attempt = tmp_path / "injection" / "001"
+    provider(
+        [
+            planned(1, GOOD_PLAN),
+            *turns(fill, click, check, finish),
+            *turns(fill, click, decoy, check, finish, first=6),
+        ]
+    )
+
+    record(name, attempt, library=library)
+
+    assert (receipt(attempt)["outcome"], receipt(attempt)["explore"]) == (
+        "accepted",
+        GAVE_UP,
+    )
+    [document] = (attempt / "qa" / ".aqa" / "runs").glob("*/explore.json")
+    explored = json.loads(document.read_text())
+    assert explored["reasons"] == [FLAKY, "confirmation a1: failed"]
+    assert [phase["part"] for phase in explored["phases"]] == [
+        "attempt-1",
+        "confirmation",
+        "attempt-2",
+        "confirmation-2",
+    ]
