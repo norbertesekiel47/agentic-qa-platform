@@ -59,6 +59,13 @@ from packages.runner.tests.test_explore_graph import (
     deadlines,
     paying_until_expired,
 )
+from packages.runner.tests.test_explore_side_effects import (
+    CHECK,
+    PAGES_HERE,
+    REPEATED,
+    agreed,
+)
+from packages.runner.tests.test_navigator_side_effects import ON_A_PAGE
 
 KEY = "fake-key-for-tests"
 # The start origin a spec root's config gives, where nothing listens.
@@ -74,9 +81,9 @@ PATH = (FILL, CLICK, ASSERT, FINISH)
 # How long a run took, as its line gives it.
 SECONDS = r"\d+\.\ds"
 UNCONFIRMED = (
-    "warning: {} is unconfirmed: its path has side-effect steps and the spec has "
-    "no reset hook, so no replay confirmed it (AGENTS.md §6). Declare a reset "
-    "hook, and explore it again\n"
+    "warning: {} is unconfirmed: its path has side-effect steps, or loading its "
+    "start URL may change the app, and the spec has no reset hook, so no replay "
+    "confirmed it (AGENTS.md §6). Declare a reset hook, and explore it again\n"
 )
 AWAY = tool("navigate", lambda _: {"path": "/page/refused-script"})
 SENTINEL = "fake-…-4u49"
@@ -613,6 +620,28 @@ def test_a_side_effect_path_without_a_reset_hook_is_written_unconfirmed_and_warn
     )
     assert result.stderr == UNCONFIRMED.format(target)
     assert load_compiled(target, ProjectConfig()).confirmed is False
+
+
+def test_a_confirmation_that_saw_a_side_effect_with_no_reset_hook_warns(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The start's load writes only when loaded again, as the confirmation does.
+    monkeypatch.setitem(PAGES, "again-start", PAGES_HERE["again-start"])
+    app.probes["visits"] = []
+    root = tmp_path / "qa"
+    spec = shop(root, page="/page/again-start")
+
+    result = explore(
+        monkeypatch, on(app, spec), Scripted(planned(ON_A_PAGE), CHECK, agreed([]))
+    )
+
+    assert result.exit_code == 0, result.output
+    target = root / ".compiled" / "shop.json"
+    assert re.fullmatch(
+        rf"compiled shop: {SECONDS}, \$0\.009, {target}\n", result.stdout
+    )
+    assert result.stderr == f"  {REPEATED}\n"
+    assert load_compiled(target, ProjectConfig()).confirmed is True
 
 
 def test_force_explores_an_up_to_date_script_again(

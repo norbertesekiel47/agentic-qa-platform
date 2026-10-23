@@ -76,6 +76,16 @@ type Stoppage = Literal[
 # Whether a run published its compiled script, confirmed or not.
 type Published = Literal["confirmed", "unconfirmed"]
 
+# The reason a run gives when its confirmation, with no reset hook before
+# it, saw a possible side effect that the attempt didn't (ADR-0025's #54
+# amendment): it may have changed the app as it repeated the path.
+REPEATED: Final = (
+    "warning: the confirmation passed, but with no reset hook before it, it saw "
+    "a possible side effect that the attempt didn't: repeating the path, or "
+    "loading its start URL, may have changed the app (AGENTS.md §6). Declare a "
+    "reset hook, and explore it again"
+)
+
 
 @dataclass(frozen=True)
 class Stop:
@@ -115,8 +125,9 @@ class ExploreEnd:
     infrastructure events as the last phase's end left them, which supersede
     what replay read; each planned check by ID with its last evaluation in
     the attempt, None while never bound; every cause the graph stopped on;
-    whether it published a compiled script, confirmed or not; and each
-    phase before the last attempt's, in run order (#56), so `attempt` and
+    whether it published a compiled script, confirmed or not; whether it
+    warns that its confirmation may have changed the app (`REPEATED`); and
+    each phase before the last attempt's, in run order (#56), so `attempt` and
     `confirmation` are the last attempt's.
 
     A phase whose record isn't this record's part of its name, made from
@@ -135,6 +146,7 @@ class ExploreEnd:
     stops: tuple[Stop, ...]
     published: Published | None
     earlier: tuple[Phase, ...] = ()
+    repeated: bool = False
 
     def __post_init__(self) -> None:
         for part, phase in _phases(self):
@@ -322,9 +334,11 @@ def _reasons(end: ExploreEnd) -> Iterator[Redacted]:
     in the last attempt; and each step, assertion and invariant of each
     confirmation that didn't, under its part. Each assembly is scanned
     whole, so a value spanning a join is found, as `redaction.error_text`
-    scans its own."""
+    scans its own. `REPEATED` follows the stops when it holds."""
     scan = end.record.redactor.redact
     yield from (scan(stop.reason) for stop in end.stops)
+    if end.repeated:
+        yield scan(REPEATED)
     for check, result in end.checks.items():
         if result is None:
             yield scan(f"{check}: never bound")

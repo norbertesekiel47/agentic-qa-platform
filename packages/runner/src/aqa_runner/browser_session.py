@@ -484,6 +484,13 @@ class BrowserSession:
         """Every settle window in this session, starting before navigation."""
         return tuple(self._traffic.windows)
 
+    def watch(self, egress: EgressProxy) -> None:
+        """Hear each write request `egress`'s open phase reads, in the window
+        of the latest action (`aqa_runner.settling.Traffic.proxied`). Only a
+        window opened after this is `heard` (ADR-0025's #54 amendment)."""
+        egress.watch(self._traffic.proxied)
+        self._traffic.heard = True
+
     def console_log(self, window: Window) -> Records[ConsoleEntry]:
         """`window`'s console messages as they stand now
         (`aqa_runner.settling.Traffic.console_log`). It reads what the
@@ -982,5 +989,7 @@ async def prepared_session(
             "Chromium's session couldn't be prepared after its sandbox check "
             f"({type(error).__name__})"
         ) from error
-    yield BrowserSession(page, egress.policy, observers, redactor)
+    session = BrowserSession(page, egress.policy, observers, redactor)
+    session.watch(egress)  # before any window of a step opens
+    yield session
     await context.close()

@@ -814,6 +814,20 @@ def test_finish_names_the_step_that_meets_each_condition() -> None:
     )
 
 
+def test_finish_keeps_satisfies_and_changes_nothing_apart() -> None:
+    met = {"condition": "c1", "step": 2}
+
+    taken = decision(
+        calling("finish", steps=[1, 2], satisfies=[met], changes_nothing=[0, 1])
+    ).call
+
+    assert taken == Finish(
+        steps=(1, 2),
+        satisfies=(Satisfied(condition="c1", step=2),),
+        changes_nothing=(0, 1),
+    )
+
+
 def test_a_parts_ref_goes_in_the_ref_slot() -> None:
     taken = [
         decision(calling("describe_parts", ref="e3")).call,
