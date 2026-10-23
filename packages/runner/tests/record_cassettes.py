@@ -84,9 +84,9 @@ SECRET_FORMATS = cast(
 )
 # The explore recording's spend bound (ADR-0024's #53 P21a amendment): a
 # run's limit, and the round's, the $1.00 pre-approval less the program's
-# USD 0.300054 already spent.
+# USD 0.402050 already spent, #55's round included (the #53 P21b amendment).
 RUN_USD = Decimal("0.20")
-ROUND_USD = Decimal("0.699946")
+ROUND_USD = Decimal("0.597950")
 # The plan cases' round (#55): the six plan cassettes, each request
 # reserving its worst case as the explore case's do.
 PLANS_ROUND_USD = Decimal("0.17")
