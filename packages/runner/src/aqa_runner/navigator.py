@@ -77,6 +77,9 @@ In changes_nothing, list the steps of the path that change nothing the app \
 keeps, such as going to a page or typing into a field, and 0, the load of \
 the spec's start URL, when it changes nothing either; leave out any that may \
 create, change or delete anything, such as submitting a form.
+- To start over, call restart: a new attempt begins at the start URL in a \
+fresh browser, with an empty log. It is refused when no attempt is left or \
+the app can't be reset.
 - Write short notes for your next turn as your reply's text: what you \
 learned, and what you will do next.
 """
@@ -372,6 +375,10 @@ class Finish(StrictModel):
     changes_nothing: ListOf[StrictInt] = ()
 
 
+class Restart(StrictModel):
+    pass
+
+
 type Call = (
     Navigate
     | Reload
@@ -384,6 +391,7 @@ type Call = (
     | AssertCheck
     | NoteForAbsence
     | Finish
+    | Restart
 )
 
 # Each tool by name: its arguments, and what the model reads about it.
@@ -429,6 +437,10 @@ TOOLS: Mapping[str, tuple[type[Call], str]] = {
             "changes_nothing lists those of them, and 0 for the start URL's "
             "load, that change nothing the app keeps."
         ),
+    ),
+    "restart": (
+        Restart,
+        "End this attempt and start a new one at the start URL in a fresh browser.",
     ),
 }
 

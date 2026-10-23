@@ -1,11 +1,12 @@
-"""Attempts and the reset rule (#56; ADR-0024's Reset hook, Path selection
-and attempts, and Confirmation replay): explore runs up to the attempt
-budget, resets before every attempt and every confirmation, starts no new
-attempt without a reset hook, since every attempt's start URL has loaded,
-feeds a failed confirmation's outcome and bounded evidence to the next
-attempt, and gives up as flaky when the identical script fails, then
-passes. Real Chromium against the executor's fixture app, whose `/write/…`
-paths count each write, with a scripted model."""
+"""Attempts, restarts and the reset rule (#56; ADR-0024's Reset hook, Path
+selection and attempts, and Confirmation replay): explore runs up to the
+attempt budget, resets before every attempt and every confirmation, starts
+no new attempt and runs no restart without a reset hook, since every
+attempt's start URL has loaded, feeds a failed confirmation's outcome and
+bounded evidence to the next attempt, and gives up as flaky when the
+identical script fails, then passes. Real Chromium against the executor's
+fixture app, whose `/write/…` paths count each write, with a scripted
+model."""
 
 import asyncio
 import json
@@ -50,6 +51,7 @@ from packages.runner.tests.test_explore_graph import (
     written,
 )
 
+RESTART = calling("restart", {})
 SELECT = tool(
     "select",
     lambda m: {
@@ -101,6 +103,8 @@ ONCE = '<p id="status">Fresh</p>'
 AGAIN = (
     '<p id="status">Visited</p><script>fetch("/write/load", {method: "POST"});</script>'
 )
+# The shop, on a page whose load writes.
+WRITING = PAGES["shop"] + '<script>fetch("/write/load", {method: "POST"});</script>'
 # What a page sets on each load, as a sign-in would.
 SIGNED = '<script>document.cookie = "fake-session=1; path=/";</script>'
 # What the next attempts read of a confirmation of PATH on the wrong shop,
@@ -231,6 +235,10 @@ def phase(part: str) -> dict[str, object]:
     return CLEAN_PHASE | {"part": part}
 
 
+def sent(client: Scripted, request: int) -> str:
+    return client.requests[request][2].text
+
+
 def block(text: str, label: str) -> str:
     found = re.search(rf"<{label}>\n.*?\n</{label}>", text, re.DOTALL)
     assert found is not None, text
@@ -344,6 +352,43 @@ def test_without_a_reset_hook_a_failed_confirmation_starts_no_new_attempt(
     assert len(client.requests) == 3
 
 
+def test_without_a_reset_hook_a_restart_is_refused_once_the_start_has_loaded(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(PAGES, "shop", WRITING)
+    client = Scripted(planned(), RESTART, *PATH)
+
+    run = exploring(app, tmp_path, client, preconditions="")
+
+    assert (run.outcome, run.exit_code) == ("compiled", 0)
+    assert written(run)["published"] == "unconfirmed"
+    assert f"<results>\nrestart did not run: {UNRESET}\n</results>" in sent(client, 2)
+    assert app.paths() == ["/page/shop", "/write/load", "/did/fill", "/write/save"]
+
+
+def test_a_restart_with_a_reset_hook_resets_before_its_fresh_attempt(
+    app: App, tmp_path: Path
+) -> None:
+    client = Scripted(planned(), FILL, CLICK, RESTART, *PATH)
+
+    run = exploring(app, tmp_path, client)
+
+    assert (run.outcome, run.exit_code) == ("compiled", 0)
+    document = written(run)
+    assert document["published"] == "confirmed"
+    assert document["phases"] == [
+        phase("attempt-1"),
+        phase("attempt-2"),
+        phase("confirmation-2"),
+    ]
+    assert "<log>\n\n</log>" in sent(client, 4)
+    assert app.paths() == PASS * 3
+    assert saves_after_resets(app.paths())
+    assert [name for name in files(run) if name.startswith("turns/")] == [
+        f"turns/{n}.json" for n in range(1, 8)
+    ]
+
+
 # The attempt budget.
 
 
@@ -383,6 +428,20 @@ def test_three_failed_confirmations_give_up_with_exit_3(
     ]
     assert app.paths().count("/write/save") == 6
     assert saves_after_resets(app.paths())
+
+
+def test_a_restart_on_the_last_attempt_is_refused(app: App, tmp_path: Path) -> None:
+    config = ProjectConfig.model_validate({"budgets": {"attempts": 1}})
+    client = Scripted(planned(), RESTART, *PATH)
+
+    run = exploring(app, tmp_path, client, config=config)
+
+    assert (run.outcome, run.exit_code) == ("compiled", 0)
+    assert (
+        "<results>\nrestart did not run: this is the run's last attempt\n</results>"
+        in sent(client, 2)
+    )
+    assert written(run)["phases"] == [phase("attempt-1"), phase("confirmation")]
 
 
 def test_a_next_part_that_cant_be_made_keeps_each_phase_once_and_exits_15(

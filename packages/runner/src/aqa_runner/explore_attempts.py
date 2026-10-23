@@ -1,7 +1,7 @@
 """An explore run's attempts (#56; ADR-0024's Reset hook, Path selection and
-attempts, and Confirmation replay): how many it may make, whether a new
-attempt may start, what a failed confirmation leaves the next attempt, and
-when a pass is flaky.
+attempts, and Confirmation replay): how many it may make, whether a restart
+or a new attempt may start, what a failed confirmation leaves the next
+attempt, and when a pass is flaky.
 
 A new attempt loads the start URL again, which may change the app as an
 action may, so without a reset hook no new attempt starts: every attempt
@@ -29,6 +29,8 @@ FLAKY: Final = (
     "the confirmation failed, then passed with the identical compiled script: "
     "the spec is flaky, so nothing was published (TESTING §6)"
 )
+_LAST: Final = "restart did not run: this is the run's last attempt"
+_RESTARTED: Final = "this attempt has ended, and a new one starts"
 
 
 def replayed_as(script: CompiledScript) -> str:
@@ -48,8 +50,9 @@ def replayed_as(script: CompiledScript) -> str:
 @dataclass
 class Attempts:
     """The run's attempts so far: its budget, whether the spec has a reset
-    hook, how many attempts it made, how many turn records it wrote, the
-    scripts whose confirmation failed, each `probe_equals` check's pinned
+    hook, how many attempts it made, how many turn records it wrote,
+    whether the current attempt's turns ended in a restart, the scripts
+    whose confirmation failed, each `probe_equals` check's pinned
     path (#213, carried by check ID), and what the next attempt reads of
     the last failed confirmation."""
 
@@ -57,9 +60,25 @@ class Attempts:
     resets: bool
     made: int = 1
     taken: int = 0
+    restarted: bool = False
     failed: set[str] = field(default_factory=set)
     pinned: dict[str, ProbePath] = field(default_factory=dict)
     feedback: Redacted | None = None
+
+    def began(self) -> None:
+        """Count a new attempt."""
+        self.made += 1
+        self.restarted = False
+
+    def restart(self) -> str:
+        """What a `restart` call did: ended the attempt's turns for a new
+        attempt, or why it didn't, with no attempt left or no reset hook."""
+        if self.made >= self.budget:
+            return _LAST
+        if not self.resets:
+            return f"restart did not run: {UNRESET}"
+        self.restarted = True
+        return _RESTARTED
 
     def failed_with(
         self, script: CompiledScript, replayed: RunResult, redactor: Redactor
