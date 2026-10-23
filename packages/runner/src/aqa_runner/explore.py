@@ -861,6 +861,7 @@ def _attempt(
         gate=run.gate,
         interrupted=interrupted,
         offered=offered,
+        pinned=run.attempts.pinned,
     )
 
 

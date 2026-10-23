@@ -175,8 +175,10 @@ class Attempt:
     last observation, and each planned check's binding: what it reads
     and its last evaluation. A run whose admission couldn't keep its secrets
     is `ValueError`, before any use of the browser. `offered` is what the
-    probes its checks read offer it (#53 P20), and `_pinned` each
-    `probe_equals` check's path once an evaluation there didn't pass (#213).
+    probes its checks read offer it (#53 P20), and `pinned` each
+    `probe_equals` check's path once an evaluation there didn't pass (#213),
+    in this attempt or, carried by check ID, in an earlier one or its
+    confirmation (#56).
     Each step it dispatches, the start's included, owes its evidence to the
     next observation (`keep_evidence`), the one the next request is built
     from (ADR-0024's #53 P22 amendment)."""
@@ -193,6 +195,7 @@ class Attempt:
     gate: EgressGate
     interrupted: Callable[[], bool]
     offered: Offered = field(default_factory=Offered)
+    pinned: dict[str, ProbePath] = field(default_factory=dict)
     steps: dict[int, PathStep] = field(init=False, default_factory=dict)
     # Each completed dispatch's result, step 0's included, whose window goes
     # on filling until the next action, read when the flags are inferred.
@@ -203,7 +206,6 @@ class Attempt:
     observation: Redacted | None = field(init=False, default=None)
     _uses: dict[str, TargetUses] = field(init=False, default_factory=dict)
     _bound: dict[str, _Bound] = field(init=False, default_factory=dict)
-    _pinned: dict[str, ProbePath] = field(init=False, default_factory=dict)
     parts: Parts = field(init=False, default_factory=Parts)
     _unseen: executor.StepResult | None = field(init=False, default=None)
 
@@ -594,7 +596,8 @@ class Attempt:
         """The JSON path of the option `call.ref` names, or why it can't bind
         `check`: it isn't one of the check's probe's options, its path
         holds a bound value, which no compiled script may, or the check
-        didn't pass on another option, which it keeps (#213)."""
+        didn't pass on another option, which it keeps (#213), or on one the
+        probe no longer offers, which leaves it none (#56)."""
         option = self.offered.options.get(call.ref or "")
         if option is None:
             return (
@@ -608,16 +611,21 @@ class Attempt:
             )
         if self.session.redactor.finds(option.json_path):
             return f"{call.ref}'s path holds a test secret's value, so no check can read it"
-        pinned = self._pinned.get(call.check_id)
+        pinned = self.pinned.get(call.check_id)
         if pinned is not None and pinned.json_path != option.json_path:
-            (ref,) = (
+            kept = [
                 ref
                 for ref, each in self.offered.options.items()
                 if (each.probe, each.json_path) == (check.probe, pinned.json_path)
-            )
+            ]
+            if not kept:
+                return (
+                    f"{call.check_id} didn't pass on an option this attempt's probe "
+                    "no longer offers, so it binds no other"
+                )
             return (
-                f"{call.check_id} didn't pass on {ref}, so it keeps {ref} for the rest "
-                "of this attempt"
+                f"{call.check_id} didn't pass on {kept[0]}, so it keeps {kept[0]} for "
+                "the rest of this attempt"
             )
         return ProbePath(option.json_path)
 
@@ -651,7 +659,7 @@ class Attempt:
         """Evaluate each binding's check once on the page now, in plan order,
         with every locator of its target, as the confirmation does
         (`evaluate_each`), and keep the binding with its result. A probe
-        path whose result isn't a pass stays its check's (`_pinned`)."""
+        path whose result isn't a pass stays its check's (`pinned`)."""
         plan = planned_checks(self.plan)
         ordered = [check_id for check_id in plan if check_id in bindings]
         targets = {
@@ -687,7 +695,7 @@ class Attempt:
             read = bindings[result.id]
             self._bound[result.id] = _Bound(read, result)
             if isinstance(read, ProbePath) and result.outcome != "pass":
-                self._pinned[result.id] = read
+                self.pinned[result.id] = read
         return results
 
 
