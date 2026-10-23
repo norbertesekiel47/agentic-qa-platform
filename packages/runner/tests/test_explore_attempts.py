@@ -409,7 +409,7 @@ def test_confirm_repeat_lets_one_confirmation_repeat_the_save_with_no_reset(
     assert app.paths() == ["/page/shop", "/did/fill", "/write/save"] * 2
 
 
-def test_confirm_repeat_authorizes_a_single_confirmation(
+def test_a_failed_authorized_confirmation_starts_no_new_attempt(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     replay = executor.replay
