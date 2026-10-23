@@ -19,10 +19,15 @@ from aqa_core.coverage_plan import CoveragePlan
 from langchain_core.messages import BaseMessage
 
 from packages.runner.tests.executor_fixtures import PAGES, App, serving_app
-from packages.runner.tests.explore_graph_fixtures import Scripted, calling, ref, tool
+from packages.runner.tests.explore_graph_fixtures import (
+    Scripted,
+    calling,
+    planned,
+    ref,
+    tool,
+)
 from packages.runner.tests.test_explore_confirm import confirming, published
 from packages.runner.tests.test_explore_graph import written
-from packages.runner.tests.test_explore_preflight import planned
 
 BUTTON = "the article's favorite button"
 FAVORITE_PAGE = """<main><button id="favorite">Favorite Article</button>
