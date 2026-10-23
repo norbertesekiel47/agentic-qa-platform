@@ -16,11 +16,14 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 
 # The §4 line each action needs, by the start of that line; None for the setup
-# actions, which §4's prerequisites replace. An action missing here fails the
-# test until someone decides what §4 runs for it.
+# actions, which §4's prerequisites replace, and for the artifact actions, which
+# only move the test shards' files to the python job. An action missing here
+# fails the test until someone decides what §4 runs for it.
 ACTIONS: dict[str, str | None] = {
     "actions/checkout": None,
     "actions/setup-python": None,
+    "actions/upload-artifact": None,
+    "actions/download-artifact": None,
     "fallow-rs/fallow": "fallow audit ",
 }
 

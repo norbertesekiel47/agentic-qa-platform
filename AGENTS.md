@@ -74,8 +74,16 @@ uv run mypy                                                                    #
 # branch goes unchecked, while CI, on Linux, checks it (LAB_NOTES, 2026-09-30). The next run checks
 # as CI does; the run above alone checks a macOS host's darwin branches. On Linux they are the same.
 uv run mypy --platform linux                                                   # types: the same files, as Linux
-uv run mypy --strict --no-explicit-package-bases .claude/hooks bench/harness   # types: scripts
+uv run mypy --strict --no-explicit-package-bases .claude/hooks bench/harness .github/scripts conftest.py   # types: scripts
 uv run pytest --cov                                                            # every test, and the coverage floor
+# CI runs the tests in shards and holds the floor on their combined data (ci.yml's tests and python
+# jobs). One shard as CI runs it, with SHARD set to its K/N, such as SHARD=2/6:
+uv run pytest --cov --cov-report= --cov-fail-under=0 --shard "$SHARD" --shard-record shard-record.json   # part of the suite: the floor waits for the combined data
+# The python job's steps, on a run's shards: gh run download RUN --pattern 'shard-*' --dir shards
+python3 .github/scripts/check_shards.py shards                                 # every collected test ran in exactly one shard
+uv run coverage combine shards/*/.coverage                                     # the shards' coverage data, combined
+uv run coverage report                                                         # the coverage floor, on the combined data
+uv run coverage json -q -o - | jq .totals.percent_covered                      # the combined total, to the hundredth
 # With osv-scanner, gitleaks and fallow at the versions .github/workflows/ci.yml pins:
 .github/scripts/audit-lockfile.sh osv-scanner uv.lock bench/harness/checks-requirements.txt   # dependency audit: high or critical advisories, in each lockfile
 gitleaks git --no-banner --redact --verbose .                                  # secret scan: every commit

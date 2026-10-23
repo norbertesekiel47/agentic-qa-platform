@@ -23,5 +23,9 @@ graft/
 .coverage
 .coverage.*
 
+# A CI test shard's record and the shards' downloaded files, when run locally (AGENTS.md §4)
+/shard-record.json
+/shards/
+
 # The spike's local MicroVM zips (spikes/hosted-chromium/package.sh)
 /spikes/hosted-chromium/build/
