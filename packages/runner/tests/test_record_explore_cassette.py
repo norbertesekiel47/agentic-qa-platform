@@ -6,12 +6,9 @@ import json
 import logging
 import os
 import shutil
-import socketserver
 import subprocess
 import sys
-import threading
-from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterator
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,22 +24,23 @@ from aqa_core.spec import Spec
 from packages.runner.tests import record_cassettes as recorder
 from packages.runner.tests.executor_fixtures import PAGES
 from packages.runner.tests.explore_graph_fixtures import PLAN
+from packages.runner.tests.provider_stand_in import (
+    DROPPED,
+    KEY,
+    Answer,
+    Answering,
+    Start,
+    called,
+    planned,
+    standing_in,
+)
 from packages.runner.tests.record_cassettes import EXPLORE, record
 from packages.runner.tests.test_explore_confirm import resets
 from packages.runner.tests.test_explore_graph import configured, shop_spec
 
 pytestmark = pytest.mark.usefixtures("reset_tracing")
 
-# Not a credential, and named so (AGENTS.md rule 9).
-KEY = "fake-key-for-the-explore-recording"
 PREVIOUS = "previous cassette\n"
-HELLO = {
-    "id": "msg_fake",
-    "type": "message",
-    "role": "assistant",
-    "model": "claude-sonnet-5-5",
-    "stop_sequence": None,
-}
 GOOD_PLAN = PLAN.model_dump(mode="json", exclude_none=True)
 # A plan whose expectation names one the spec doesn't have: make_plan asks
 # once more.
@@ -59,36 +57,9 @@ MOVES: tuple[tuple[str, dict[str, Any]], ...] = (
 FIVE_COSTS = ["0.000048", "0.00006", "0.000072", "0.000084", "0.000096"]
 CONFIRMED = {"exit_code": 0, "outcome": "compiled", "published": "confirmed"}
 
-type Answer = tuple[int, bytes]
-# An answer, or one made from the request body it answers.
-type Answering = Answer | Callable[[bytes], Answer]
-# A status that closes the connection without an answer.
-DROPPED = 0
 OVERLOADED = json.dumps(
     {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
 ).encode()
-
-
-def answer(turn: int, content: list[dict[str, Any]], stop: str, **usage: int) -> Answer:
-    """A 200 answer; unless `usage` says otherwise, each turn reports 6 more
-    input tokens than the one before, so no two cost the same."""
-    usage = usage or {"input_tokens": 9 + 6 * turn, "output_tokens": 3}
-    body = HELLO | {"content": content, "stop_reason": stop, "usage": usage}
-    return 200, json.dumps(body).encode()
-
-
-def planned(turn: int, plan: dict[str, Any], **usage: int) -> Answer:
-    return answer(
-        turn, [{"type": "text", "text": json.dumps(plan)}], "end_turn", **usage
-    )
-
-
-def called(turn: int, name: str, args: dict[str, Any], **usage: int) -> Answer:
-    content: list[dict[str, Any]] = [
-        {"type": "text", "text": f"notes before {name}"},
-        {"type": "tool_use", "id": f"toolu_fake_{turn}", "name": name, "input": args},
-    ]
-    return answer(turn, content, "tool_use", **usage)
 
 
 def explore_answers(
@@ -106,68 +77,12 @@ def explore_answers(
     ]
 
 
-@dataclass
-class Provider:
-    """A local stand-in for the provider's API: each request gets the next of
-    its answers, the last one again after it, with a request ID; every body
-    sent is kept."""
-
-    answers: Sequence[Answering]
-    sent: list[bytes] = field(default_factory=list)
-
-
-# `provider(answers)`, the fixture below.
-type Start = Callable[[Sequence[Answering]], Provider]
-
-
 @pytest.fixture
-def provider(
-    monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[Start]:
+def provider(monkeypatch: pytest.MonkeyPatch) -> Iterator[Start]:
     """`provider(answers)` starts a stand-in and points the recorder at it
     with the fake key."""
-    servers: list[socketserver.ThreadingTCPServer] = []
-
-    def start(answers: Sequence[Answering]) -> Provider:
-        stand_in = Provider(answers)
-
-        class Handler(socketserver.StreamRequestHandler):
-            def handle(self) -> None:
-                self.rfile.readline()
-                length = 0
-                while (line := self.rfile.readline().strip()) != b"":
-                    name, _, value = line.decode().partition(":")
-                    if name.lower() == "content-length":
-                        length = int(value)
-                stand_in.sent.append(self.rfile.read(length))
-                count = len(stand_in.sent)
-                entry = stand_in.answers[min(count, len(stand_in.answers)) - 1]
-                status, body = entry(stand_in.sent[-1]) if callable(entry) else entry
-                if status == DROPPED:
-                    return
-                self.wfile.write(
-                    f"HTTP/1.1 {status} {'OK' if status == 200 else 'Overloaded'}\r\n"
-                    "content-type: application/json\r\n"
-                    f"request-id: req_fake_{count:02}\r\n"
-                    f"content-length: {len(body)}\r\nconnection: close\r\n\r\n".encode()
-                    + body
-                )
-
-        server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
-        server.daemon_threads = True
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        servers.append(server)
-        monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
-        monkeypatch.setenv(
-            "ANTHROPIC_BASE_URL", f"http://127.0.0.1:{server.server_address[1]}"
-        )
-        monkeypatch.delenv("ANTHROPIC_API_URL", raising=False)
-        return stand_in
-
-    yield start
-    for server in servers:
-        server.shutdown()
-        server.server_close()
+    with standing_in(monkeypatch) as start:
+        yield start
 
 
 @pytest.fixture
