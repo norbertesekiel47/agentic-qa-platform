@@ -39,7 +39,7 @@ tool call did. <parts>, after a describe_parts call, lists the parts it \
 described, with refs such as p1.2. <probes> lists, for each probe a check \
 reads, the JSON paths of the values in its response as options with refs \
 such as o1, never the values. <confirmation>, in an attempt after a failed \
-confirmation, says how the path you named last was replayed with no model, \
+confirmation, says how the last confirmation replayed its path with no model, \
 where it failed, and the page there, whose elements carry no refs. \
 <snapshot> is the page's accessibility tree, whose elements carry refs such \
 as e12. Inside a block, &lt; stands for <.
