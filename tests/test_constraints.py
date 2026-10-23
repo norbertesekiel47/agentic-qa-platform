@@ -341,6 +341,98 @@ def test_a_branch_never_taken_counts_against_the_floor(tmp_path: Path) -> None:
     assert "Coverage failure" in result.stdout
 
 
+# CI runs the tests in shards and holds the floor on their combined data, with
+# the commands of ci.yml's tests and python jobs (ADR-0029's 2026-10-23
+# amendment). A shard turns pytest-cov's check off: it measures part of the suite.
+COVERAGE = [sys.executable, "-m", "coverage"]
+RCFILE = f"--rcfile={REPO / 'pyproject.toml'}"
+SHARD_COV = [
+    "--cov",
+    f"--cov-config={REPO / 'pyproject.toml'}",
+    "--cov-report=",
+    "--cov-fail-under=0",
+]
+MORE_TESTS = "packages/demo/tests/test_more.py"
+
+
+def more_calls(root: Path, first: int, count: int) -> None:
+    """A second test file, which calls the `count` functions from f`first` on."""
+    calls = "".join(f"    mod.f{i}()\n" for i in range(first, first + count))
+    (root / MORE_TESTS).write_text(
+        f"from demo import mod\n\n\ndef test_more() -> None:\n{calls}"
+    )
+
+
+def coverage_report(root: Path) -> subprocess.CompletedProcess[str]:
+    return run([*COVERAGE, "report", RCFILE], cwd=root)
+
+
+def combined_shards(root: Path) -> subprocess.CompletedProcess[str]:
+    """Each test file of packages/demo run as a CI shard, then `coverage report`
+    on their combined data, as the python job runs it."""
+    data: list[str] = []
+    for shard, tests in enumerate(sorted((root / "packages/demo/tests").glob("*.py"))):
+        result = run(
+            [*PYTEST, *SHARD_COV, str(tests)],
+            cwd=root,
+            PYTHONPATH=str(root / "packages/demo/src"),
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        downloaded = root / f"shards/shard-{shard}/.coverage"
+        downloaded.parent.mkdir(parents=True)
+        (root / ".coverage").rename(downloaded)
+        data.append(str(downloaded))
+    combine = run([*COVERAGE, "combine", RCFILE, *data], cwd=root)
+    assert combine.returncode == 0, combine.stdout + combine.stderr
+    return coverage_report(root)
+
+
+def test_shards_combined_report_what_one_run_reports(tmp_path: Path) -> None:
+    # One shard leaves a branch untaken and measures a subprocess, and no test
+    # imports unimported.py.
+    covered_package(tmp_path, 50, 30)
+    more_calls(tmp_path, 30, 10)
+    demo = tmp_path / "packages/demo"
+    (demo / "src/demo/unimported.py").write_text("def f() -> int:\n    return 0\n")
+    (demo / "src/demo/branchy.py").write_text(
+        "def g(x: bool) -> int:\n    y = 0\n    if x:\n        y = 1\n    return y\n"
+    )
+    (demo / "tests/test_child.py").write_text(
+        "import subprocess\nimport sys\n\nfrom demo import branchy\n\n\n"
+        "def test_child() -> None:\n    branchy.g(True)\n"
+        "    subprocess.run([sys.executable, '-c', 'from demo import mod; mod.f45()'], check=True)\n"
+    )
+    pytest_cov(tmp_path)
+    one_run = coverage_report(tmp_path)
+    (tmp_path / ".coverage").unlink()
+
+    combined = combined_shards(tmp_path)
+
+    assert "TOTAL" in one_run.stdout, one_run.stdout + one_run.stderr
+    assert combined.stdout == one_run.stdout
+
+
+def test_shards_combined_at_the_floor_pass(tmp_path: Path) -> None:
+    floor = threshold("Coverage, overall")
+    covered_package(tmp_path, 50, floor - 60)
+    more_calls(tmp_path, floor - 60, 10)
+
+    result = combined_shards(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_shards_combined_below_the_floor_fail(tmp_path: Path) -> None:
+    floor = threshold("Coverage, overall")
+    covered_package(tmp_path, 50, floor - 60)
+    more_calls(tmp_path, floor - 60, 9)
+
+    result = combined_shards(tmp_path)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "Coverage failure" in result.stdout  # the floor failed it
+
+
 # --- pytest strictness ---------------------------------------------------------------
 
 PLAIN_TEST = "def test_plain() -> None:\n    int('1')\n"
