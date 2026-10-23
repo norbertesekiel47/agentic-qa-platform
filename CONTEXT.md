@@ -155,6 +155,9 @@ The directory a local run writes what it leaves behind to, such as the coverage 
 **Attempt**:
 One pass through a run from step 1, in a fresh browser and after the spec's reset hook if it declares one. The report keeps every attempt.
 
+**Restart**:
+The explore agent's call to end its attempt and start a new one from step 1. It runs only after the spec's reset hook succeeds and while an attempt is left; without a hook it is refused.
+
 **Tool error**:
 What a navigator tool returns when it refused a call before writing its step intent: nothing was dispatched, and the attempt goes on. A failure after the intent ends the attempt instead.
 _Avoid_: failed step
