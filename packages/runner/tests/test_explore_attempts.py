@@ -2,8 +2,9 @@
 and attempts, and Confirmation replay): explore runs up to the attempt
 budget, resets before every attempt and every confirmation, starts no new
 attempt without a reset hook, since every attempt's start URL has loaded,
-and feeds a failed confirmation's outcome and bounded evidence to the next
-attempt. Real Chromium against the executor's fixture app, whose `/write/…`
+feeds a failed confirmation's outcome and bounded evidence to the next
+attempt, and gives up as flaky when the identical script fails, then
+passes. Real Chromium against the executor's fixture app, whose `/write/…`
 paths count each write, with a scripted model."""
 
 import asyncio
@@ -67,6 +68,10 @@ UNRESET = (
     "the spec has no reset hook, and this attempt's steps, its start URL's load "
     "included, may have changed the app, so no new attempt may repeat them "
     "(AGENTS.md §6)"
+)
+FLAKY = (
+    "the confirmation failed, then passed with the identical compiled script: "
+    "the spec is flaky, so nothing was published (TESTING §6)"
 )
 FRESH = CoveragePlan.model_validate(
     {
@@ -515,3 +520,25 @@ def test_an_invariant_first_violated_in_the_final_checks_shows_the_last_page(
         "the page after step 2, without its refs:\n"
     )
     assert shown.endswith("- paragraph: Saved Ada in size S\n</confirmation>")
+
+
+# Flaky.
+
+
+def test_a_fail_then_pass_with_the_identical_script_is_flaky(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    before_resets(monkeypatch, wrong_then_right(monkeypatch))
+    config = ProjectConfig.model_validate({"budgets": {"resolve_seconds": 2}})
+    client = Scripted(planned(), *PATH * 2)
+
+    run = exploring(app, tmp_path, client, config=config)
+
+    assert (run.outcome, run.exit_code) == ("gave_up", 3)
+    document = written(run)
+    assert document["reasons"] == [FLAKY, "confirmation a1: failed"]
+    assert (document["published"], document["confirmation"]["outcome"]) == (
+        None,
+        "passed",
+    )
+    assert not (tmp_path / "qa" / ".compiled").exists()
