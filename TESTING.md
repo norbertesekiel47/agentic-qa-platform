@@ -164,14 +164,15 @@ PR smoke: 8 dev-split cases (≈ 2 min, recorded cassettes). Nightly: full dev s
 
 ## 8. Quality gates (CI)
 
-A change is mergeable only when every gate that runs passes. The jobs are in `.github/workflows/ci.yml` (ADR-0019, ADR-0029) and, for `floor`, `.github/workflows/floor.yml` (ADR-0028 amendment). Each job is a required check on `main`, and a gate with nothing to check yet is left out rather than faked. [AGENTS.md §4](AGENTS.md#4-commands) runs the same gates locally.
+A change is mergeable only when every gate that runs passes. The jobs are in `.github/workflows/ci.yml` (ADR-0019, ADR-0029) and, for `floor`, `.github/workflows/floor.yml` (ADR-0028 amendment). Each job is a required check on `main` except the `tests` shards, which `python` gates, and a gate with nothing to check yet is left out rather than faked. [AGENTS.md §4](AGENTS.md#4-commands) runs the same gates locally.
 
 | Gate | CI job | Runs |
 |---|---|---|
 | `ruff check` · `ruff format --check` | `python` | Now |
-| `mypy --strict`, in two runs: the packages, `spikes` and `tests`, then the scripts in `bench/harness` and `.claude/hooks` | `python` | Now |
-| `pytest --cov`: every test in `packages/`, `spikes/`, `bench/harness/`, `.claude/hooks/` and `tests/`, including CONSTRAINTS.md's threshold checks and the coverage floor | `python` | Now. §1's layers (unit, integration, isolation, checkpointer, continuation, hygiene, egress/secrets, strict-mode) join as their code lands |
-| Browser tests: the sandbox check, the browser session and the spike's trial (#37), then the egress fixtures | `python`, after steps that install Playwright's headless shell, log the runner's AppArmor setting and relax it (ADR-0026) | The sandbox check (#35), the browser session (#36), the trial (#37), and the egress proxy's and runner-side requests' (#42) now. #43's packet-level egress suite joins when it lands |
+| `mypy --strict`, in two runs: the packages, `spikes` and `tests`, then the scripts in `bench/harness`, `.claude/hooks` and `.github/scripts`, and the root `conftest.py` | `python` | Now |
+| `pytest --cov`: every test in `packages/`, `spikes/`, `bench/harness/`, `.claude/hooks/` and `tests/`, including CONSTRAINTS.md's threshold checks, in six shards of whole test files balanced on `.github/shard-durations.json` | `tests`, one job per shard | Now. §1's layers (unit, integration, isolation, checkpointer, continuation, hygiene, egress/secrets, strict-mode) join as their code lands |
+| Each collected test ran in exactly one shard (`.github/scripts/check_shards.py`), and the coverage floor on the shards' combined data | `python`, which needs every shard and runs even when one fails | Now |
+| Browser tests: the sandbox check, the browser session and the spike's trial (#37), then the egress fixtures | `tests`, after steps that install Playwright's headless shell, log the runner's AppArmor setting and relax it (ADR-0026) | The sandbox check (#35), the browser session (#36), the trial (#37), and the egress proxy's and runner-side requests' (#42) now. #43's packet-level egress suite joins when it lands |
 | Dependency audit of `uv.lock` and the checks image's `bench/harness/checks-requirements.txt` (osv-scanner) | `dependency-audit` | Now, and weekly |
 | Guard tests · policy scan | `guardrails` | Now |
 | The floor's moves: `policy_guard.py --diff refs/remotes/origin/main`, whose approval-class findings pass with the maintainer's `floor-change-approved` label (ADR-0028 amendment) | `floor` | Now, on pull requests, and again when a label is added or removed |
