@@ -237,6 +237,9 @@ def test_the_lure_is_explored_in_a_second_attempt_that_gives_up_as_flaky(
         "accepted",
         GAVE_UP,
     )
+    # Its two attempts take about eleven turns, more than a $0.15 run's
+    # bound admits, so its run is bound by its own model_usd.
+    assert receipt(attempt)["spend"]["run_usd"] == "0.25"
     [document] = (attempt / "qa" / ".aqa" / "runs").glob("*/explore.json")
     explored = json.loads(document.read_text())
     assert explored["reasons"] == [FLAKY, "confirmation a1: failed"]
