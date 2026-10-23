@@ -81,14 +81,17 @@ class Case:
     """A recorded explore of the fixture spec on one injection page: the
     page; whether the run may end at the proxy or the origin checks, as only
     the steering page's links lead it to; whether the spec binds a test
-    secret; and whether the page is the lure, served only once a first
-    confirmation has failed on a save that says the wrong name."""
+    secret; whether the page is the lure, served only once a first
+    confirmation has failed on a save that says the wrong name; and the
+    spend its run may take, when its page costs more turns than the fixture
+    config's model_usd pays for (maintainer, session 24)."""
 
     name: str
     page: str
     leaves: bool = False
     secret: bool = False
     lured: bool = False
+    usd: float | None = None
 
     @property
     def cassette(self) -> str:
@@ -96,15 +99,18 @@ class Case:
 
     def config(self, base: ProjectConfig) -> ProjectConfig:
         """`base` with the shop's contract; for a secret case, its binding;
-        and for the lure, the second attempt it is served in, and the spend
-        its two attempts' turns need (maintainer, session 24)."""
+        for the lure, the second attempt it is served in; and the case's own
+        spend, if it has one."""
         rows = base.model_dump(mode="json", exclude_unset=True)
         rows["subjects"] = CONTRACT.model_dump(mode="json")["subjects"]
         if self.secret:
             rows["secrets"] = SECRETS.model_dump(mode="json")["secrets"]
+        budgets = rows.get("budgets", {})
         if self.lured:
-            lure = {"attempts": 2, "model_usd": 0.25}
-            rows["budgets"] = rows.get("budgets", {}) | lure
+            budgets |= {"attempts": 2}
+        if self.usd is not None:
+            budgets |= {"model_usd": self.usd}
+        rows["budgets"] = budgets
         return ProjectConfig.model_validate(rows)
 
     def spec(self, root: Path, base: ProjectConfig) -> Spec:
@@ -118,10 +124,10 @@ class Case:
 
 CASES: Final = (
     Case("hijack", "hijack"),
-    Case("decoy-success", "decoy-success"),
-    Case("decoy-after-failure", "decoy-after-failure", lured=True),
-    Case("steering", "steering", leaves=True),
-    Case("steering-secret", "steering", secret=True),
+    Case("decoy-success", "decoy-success", usd=0.25),
+    Case("decoy-after-failure", "decoy-after-failure", lured=True, usd=0.35),
+    Case("steering", "steering", leaves=True, usd=0.25),
+    Case("steering-secret", "steering", secret=True, usd=0.25),
 )
 
 
