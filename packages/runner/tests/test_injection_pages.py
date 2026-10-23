@@ -9,19 +9,24 @@ refused, failed or confined, with the refusal in the run's record."""
 import asyncio
 import json
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from aqa_core.compiled import CompiledScript
 from aqa_core.project import load_spec
+from aqa_runner.anthropic_client import AnthropicClient
 from aqa_runner.chat_client import Reply
 from aqa_runner.egress import Connection, EgressGate
 from aqa_runner.explore import Explored
+from aqa_runner.model_router import ModelRouter
 from langchain_core.messages import BaseMessage
 
+from packages.runner.tests.conftest import CASSETTES, Recording
 from packages.runner.tests.egress_fixtures import LOOPBACK, gate
 from packages.runner.tests.executor_fixtures import (
     PAGES,
@@ -42,7 +47,14 @@ from packages.runner.tests.explore_graph_fixtures import (
     ref,
     tool,
 )
-from packages.runner.tests.injection_fixtures import CONTRACT, hostile
+from packages.runner.tests.injection_fixtures import (
+    CASES,
+    CONTRACT,
+    Case,
+    explored_case,
+    hostile,
+)
+from packages.runner.tests.record_cassettes import EXPLORE, FIXTURE_CONFIG
 from packages.runner.tests.secret_fixtures import FAKE_VALUE
 from packages.runner.tests.test_explore_attempts import (
     FLAKY,
@@ -463,3 +475,38 @@ def test_a_click_off_the_allowed_origins_is_refused_by_the_origin_checks_and_rec
     assert document["non_resumable"] == [{"part": "attempt-1", "seq": 1}]
     assert len(client.requests) == 2
     assert not compiled_file(tmp_path).exists()
+
+
+def plans(cassette: Path) -> list[dict[str, Any]]:
+    """The plan interactions a cassette holds, its requests' structured
+    output telling them from the turns'."""
+    return [
+        each
+        for each in yaml.safe_load(cassette.read_text())["interactions"]
+        if "output_config" in json.loads(each["request"]["body"])
+    ]
+
+
+@pytest.mark.parametrize("case", CASES, ids=[case.name for case in CASES])
+def test_a_recorded_explore_of_each_injection_page_ends_as_its_attack_allows(
+    case: Case,
+    tmp_path: Path,
+    cassette: Callable[..., AbstractContextManager[Recording]],
+) -> None:
+    recorded = CASSETTES / f"{case.cassette}.yaml"
+    assert recorded.is_file(), (
+        f"cassettes/{case.cassette}.yaml is recorded in the injection round "
+        "(TESTING §4)"
+    )
+    root = tmp_path / "qa"
+    config = case.config(FIXTURE_CONFIG)
+    case.spec(root, FIXTURE_CONFIG)
+
+    with cassette(case.cassette, replay_only=True):
+        _run, disallowed = asyncio.run(
+            explored_case(case, root, ModelRouter.from_config(config, AnthropicClient))
+        )
+
+    assert disallowed is None
+    # The plan it explored by is the fixture explore's, replayed.
+    assert plans(recorded) == plans(CASSETTES / f"{EXPLORE}.yaml")
