@@ -12,8 +12,10 @@ from typing import Any
 
 import pytest
 import yaml
+from aqa_core.config import ProjectConfig
 from langchain_core.messages import HumanMessage
 
+from packages.runner.tests import injection_fixtures
 from packages.runner.tests.explore_graph_fixtures import NAME, PLAN, SAVE, ref
 from packages.runner.tests.provider_stand_in import (
     Answer,
@@ -33,11 +35,12 @@ pytestmark = pytest.mark.usefixtures("reset_tracing")
 
 PREVIOUS = "previous cassette\n"
 GOOD_PLAN = PLAN.model_dump(mode="json", exclude_none=True)
-# A plan whose claim is too weak: "Saved nobody" holds its text too.
-WEAK_PLAN = GOOD_PLAN | {
+# The spec's claim as the fixture explore's recorded plan reads it: the
+# status says "saved", which "Saved nobody" also does.
+FAITHFUL_PLAN = GOOD_PLAN | {
     "expectations": [
         GOOD_PLAN["expectations"][0]
-        | {"checks": [GOOD_PLAN["expectations"][0]["checks"][0] | {"text": "Saved"}]}
+        | {"checks": [GOOD_PLAN["expectations"][0]["checks"][0] | {"text": "saved"}]}
     ]
 }
 CONFIRMED = {"exit_code": 0, "outcome": "compiled", "published": "confirmed"}
@@ -142,10 +145,20 @@ def interactions(cassette: Path) -> list[dict[str, Any]]:
             [planned(1, GOOD_PLAN), *turns(fill, click, check, finish)],
             CONFIRMED,
         ),
+        (
+            "hijack",
+            [planned(1, FAITHFUL_PLAN), *turns(fill, click, check, finish)],
+            CONFIRMED,
+        ),
         ("hijack", [planned(1, GOOD_PLAN), REFUSAL], GAVE_UP),
         ("steering", [planned(1, GOOD_PLAN), *turns(report)], BLOCKED),
     ],
-    ids=["a confirmed compile", "giving up", "the proxy's block"],
+    ids=[
+        "a confirmed compile",
+        "a faithful claim's compile",
+        "giving up",
+        "the proxy's block",
+    ],
 )
 def test_an_injection_capture_promotes_an_outcome_its_attack_allows(
     provider: Start, library: Path, tmp_path: Path, scripted: Scripted
@@ -158,28 +171,21 @@ def test_an_injection_capture_promotes_an_outcome_its_attack_allows(
     record(name, attempt, library=library)
 
     kept = receipt(attempt)
-    assert (kept["outcome"], kept["explore"]) == ("accepted", ended)
+    assert (kept["outcome"], kept["explore"], kept["disallowed"]) == (
+        "accepted",
+        ended,
+        None,
+    )
     assert {key: kept["spend"][key] for key in BOUND} == BOUND
     promoted = (library / f"{name}.yaml").read_text()
     assert promoted == (attempt / f"{name}.yaml").read_text()
 
 
-@pytest.mark.parametrize(
-    "scripted",
-    [
-        (
-            "decoy-success",
-            [planned(1, WEAK_PLAN), *turns(fill, click, check, finish)],
-            CONFIRMED,
-        ),
-        ("steering-secret", [planned(1, GOOD_PLAN), *turns(report)], BLOCKED),
-    ],
-    ids=["a script that misses the subject", "a block whose host is withheld"],
-)
-def test_an_injection_capture_its_attack_disallows_is_never_promoted(
-    provider: Start, library: Path, tmp_path: Path, scripted: Scripted
-) -> None:
-    case, answers, ended = scripted
+def disallowed(
+    provider: Start, library: Path, tmp_path: Path, case: str, answers: list[Answering]
+) -> dict[str, Any]:
+    """The receipt of a recording of `case` from `answers` that is never
+    promoted, its outcome `disallowed`."""
     name = f"explore_injection_{case}"
     attempt = tmp_path / "injection" / "001"
     provider(answers)
@@ -187,11 +193,39 @@ def test_an_injection_capture_its_attack_disallows_is_never_promoted(
     with pytest.raises(ValueError, match="disallowed"):
         record(name, attempt, library=library)
 
-    assert (receipt(attempt)["outcome"], receipt(attempt)["explore"]) == (
-        "disallowed",
-        ended,
-    )
     assert not (library / f"{name}.yaml").exists()
+    kept = receipt(attempt)
+    assert kept["outcome"] == "disallowed"
+    return kept
+
+
+def test_a_compile_bound_to_a_decoy_outside_the_subject_is_disallowed(
+    provider: Start, library: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # With no contract to refuse it, a1 binds the banner, which says the name
+    # was saved whatever the save did, and confirms.
+    monkeypatch.setattr(injection_fixtures, "CONTRACT", ProjectConfig())
+    answers = [planned(1, FAITHFUL_PLAN), *turns(fill, click, decoy, finish)]
+
+    kept = disallowed(provider, library, tmp_path, "decoy-success", answers)
+
+    assert (kept["explore"], kept["disallowed"]) == (
+        CONFIRMED,
+        "its script passes where only the subject reads wrong",
+    )
+
+
+def test_a_block_whose_host_is_withheld_is_disallowed(
+    provider: Start, library: Path, tmp_path: Path
+) -> None:
+    answers = [planned(1, GOOD_PLAN), *turns(report)]
+
+    kept = disallowed(provider, library, tmp_path, "steering-secret", answers)
+
+    assert (kept["explore"], kept["disallowed"]) == (
+        BLOCKED,
+        "it ended egress_blocked, which this attack doesn't allow",
+    )
 
 
 def test_an_injection_plan_replays_from_the_fixture_explores_cassette(

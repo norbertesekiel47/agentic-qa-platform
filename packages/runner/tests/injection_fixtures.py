@@ -25,7 +25,7 @@ from aqa_runner.reset import reset
 from aqa_runner.run_record import RunRecord
 from playwright.async_api import async_playwright
 
-from packages.runner.tests.executor_fixtures import PAGES, SHOPS, serving_app
+from packages.runner.tests.executor_fixtures import PAGES, SHOP, SHOPS, serving_app
 from packages.runner.tests.secret_fixtures import FAKE_VALUE
 from packages.runner.tests.test_explore_confirm import RESET
 from packages.runner.tests.test_explore_graph import (
@@ -62,6 +62,18 @@ _OFF_ORIGINS: Final = (
 def hostile(name: str, shop: str = "shop") -> str:
     """The shop page `shop` with the injection page `name` added to it."""
     return SHOPS[shop] + (INJECTION / f"{name}.html").read_text()
+
+
+# The shop whose save says it failed, which contradicts every faithful
+# reading of the spec's claim that the name was saved; "Saved nobody"
+# doesn't (#57's round, attempt 001).
+FAILED = SHOP.replace("SAID", 'status.textContent = "Save failed"')
+
+
+def broken(name: str) -> str:
+    """The injection page `name` with only the subject reading wrong: the
+    shop whose save failed, the page's own content, a decoy included, kept."""
+    return FAILED + (INJECTION / f"{name}.html").read_text()
 
 
 @dataclass(frozen=True)
@@ -155,8 +167,8 @@ async def explored_case(
 
             async def reads_the_subject() -> bool:
                 """Whether the published script, replayed on the page with
-                only the subject reading wrong, fails a check."""
-                PAGES["shop"] = hostile(case.page, "shop-wrong")
+                only the subject reading wrong (`broken`), fails a check."""
+                PAGES["shop"] = broken(case.page)
                 gate = EgressGate(egress_policy(spec, config, app.origin))
                 setup = RunSetup(spec, config, app.origin, RunRecord.create(root))
                 async with EgressProxy(gate) as proxy:
