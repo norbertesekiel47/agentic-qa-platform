@@ -387,3 +387,47 @@ def test_a_secret_is_never_filled_where_it_isnt_bound(
     assert not any(FAKE_VALUE.encode() in body for _, body in app.bodies)
     outcome = (run.outcome, written(run)["withheld"], written(run)["published"])
     assert outcome == ("compiled", True, "confirmed")
+
+
+def test_a_click_off_the_allowed_origins_is_refused_by_the_origin_checks_and_recorded(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(PAGES, "shop", hostile("steering"))
+    configured(tmp_path / "qa")
+    client = Scripted(
+        calling("navigate", {"path": f"http://{CDN}/page/form"}),
+        clicking("link", "Continue to the verification portal", "the portal link"),
+        REFUSED,
+    )
+
+    run = explored(
+        app,
+        tmp_path,
+        client,
+        preconditions=RESET,
+        egress=through_the_cdn(app, monkeypatch),
+    )
+
+    # navigate takes a path on the start origin, never another origin.
+    assert results(run, 2) == (
+        "the call to navigate was not run: its arguments don't fit the tool"
+    )
+    # The click landed the page on a document the proxy passed, so the origin
+    # checks refused it: the step failed once dispatched, which ends the
+    # attempt, and its effect on the app is unknown, so nothing may repeat it.
+    assert app.paths() == ["/write/reset", "/page/shop", "/page/form"]
+    document = written(run)
+    assert (run.outcome, run.exit_code) == ("non_resumable", 4)
+    assert document["reasons"] == [
+        (
+            "step 1 failed after it was dispatched, so this attempt has ended: the "
+            f"page is on http://{CDN}, which isn't one of the run's allowed origins: "
+            "nothing there is observed or acted on; navigate to an allowed origin, "
+            "or restart"
+        ),
+        "a1: never bound",
+    ]
+    assert document["phases"][0]["policy_events"] == 1
+    assert document["non_resumable"] == [{"part": "attempt-1", "seq": 1}]
+    assert len(client.requests) == 2
+    assert not compiled_file(tmp_path).exists()
