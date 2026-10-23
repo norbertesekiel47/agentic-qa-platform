@@ -29,6 +29,7 @@ from aqa_runner import reasons
 from aqa_runner.anthropic_client import ProviderError
 from aqa_runner.document_origins import DocumentChangedError, PolicyEventError
 from aqa_runner.executor import StepResult
+from aqa_runner.explore_attempts import Attempts
 from aqa_runner.explore_result import Stop
 from aqa_runner.model_router import ModelCallError, ModelRouter, Routed, Spend
 from aqa_runner.navigator import (
@@ -149,6 +150,9 @@ class Turning:
     turns: int
     stops: list[Stop]
     script: CompiledScript | None = None
+    # The run's attempts (#56): the turn records' numbers, which go on
+    # across attempts. One attempt by default.
+    attempts: Attempts = field(default_factory=lambda: Attempts(1, resets=False))
 
     @property
     def redactor(self) -> Redactor:
@@ -226,7 +230,7 @@ async def _taken(context: Turning, state: Turns) -> Turns | Stop | None:
         return reply
     number = state["turn"] + 1
     try:
-        chosen = _kept(context, number, messages, reply, priced)
+        chosen = _kept(context, messages, reply, priced)
         if reply.stop is not None or chosen is None or attempt.interrupted():
             return reply.stop
         results, logged, parts = await _ran(context, chosen)
@@ -326,20 +330,21 @@ async def _called(context: Turning, messages: list[BaseMessage]) -> _Reply | Sto
 
 def _kept(
     context: Turning,
-    number: int,
     messages: list[BaseMessage],
     reply: _Reply,
     priced: int,
 ) -> Decision | None:
-    """Write `turns/<number>.json`: the turn as sent, the reply's first
-    tool call and notes, and the lines of the cost records it added to
-    `costs.jsonl`, past the `priced` before it; then the reply's decision,
-    if a reply came."""
+    """Write `turns/<n>.json`, numbered on across the run's attempts: the
+    turn as sent, the reply's first tool call and notes, and the lines of
+    the cost records it added to `costs.jsonl`, past the `priced` before
+    it; then the reply's decision, if a reply came."""
     redactor = context.redactor
     routed = reply.routed
     chosen = None if routed is None else decision(routed)
     calls = [] if routed is None else routed.message.tool_calls
     first = None if not calls else {"name": calls[0]["name"], "args": calls[0]["args"]}
+    context.attempts.taken += 1
+    number = context.attempts.taken
     name = f"turns/{number}.json"
     context.spending.record.write(
         name,

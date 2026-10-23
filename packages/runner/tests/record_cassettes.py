@@ -73,9 +73,10 @@ CASES = (
 )
 # The whole explore of the fixture spec: the plan and every turn.
 EXPLORE = "explore_fixture"
-# The explore's own guard: the run stops calling once it has spent this.
+# The explore's own guard: the run stops calling once it has spent this. One
+# attempt, so the run's bound covers its turns (#56).
 FIXTURE_CONFIG = ProjectConfig.model_validate(
-    {"budgets": {"model_usd": 0.15, "actions_per_attempt": 12}}
+    {"budgets": {"model_usd": 0.15, "actions_per_attempt": 12, "attempts": 1}}
 )
 SECRET_FORMATS = cast(
     tuple[tuple[str, Pattern[str]], ...],
