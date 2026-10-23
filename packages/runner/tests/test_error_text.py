@@ -127,6 +127,11 @@ BENIGN = {
     "withheld": Case(
         None, CALL_MESSAGE, None, True, f"Error: Page.goto: {WITHHOLDING}"
     ),
+    # Playwright writes a call as `apiName: error`; without the space it is
+    # the page's text, so nothing is kept as the call.
+    "withheld_without_a_call": Case(
+        None, "Page.goto:fake diagnostic", None, True, f"Error: {WITHHOLDING}"
+    ),
     "owned": Case(
         None,
         CALL_MESSAGE,
