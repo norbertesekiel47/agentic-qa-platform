@@ -320,8 +320,8 @@ def explore(
             help=(
                 "Lay one of config.yaml's budgets over it for this run: attempts, "
                 "actions_per_attempt, model_usd, minutes or resolve_seconds. "
-                "Repeatable, once per name. M1 makes one attempt, whatever "
-                "attempts says."
+                "Repeatable, once per name. Without a reset hook, explore makes "
+                "one attempt, whatever attempts says."
             ),
         ),
     ] = None,
