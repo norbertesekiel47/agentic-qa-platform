@@ -265,6 +265,24 @@ def test_a_write_delayed_past_the_next_kept_action_counts_against_both(
     assert inferred(attempt) == [(True, LATER), (True, WROTE)]
 
 
+def test_a_write_delayed_past_two_later_actions_counts_against_every_earlier_step(
+    app: App, tmp_path: Path
+) -> None:
+    async def scenario(attempt: Attempt) -> Attempt:
+        schedule = Click(ref=ref(attempt, "button", "Schedule"), meaning="schedule")
+        await acted(attempt, schedule)
+        for _ in range(2):
+            nxt = Click(ref=ref(attempt, "button", "Next"), meaning="the next button")
+            await acted(attempt, nxt)
+        app.release("later")  # the stream ends, and the page writes
+        await arrived(app, "/write/later")
+        return await finished(attempt, [1, 2, 3], [1, 2, 3])
+
+    attempt = on_app(app, tmp_path, scenario, plan=ON_A_PAGE, page="/page/deferred")
+
+    assert inferred(attempt) == [(True, LATER), (True, LATER), (True, WROTE)]
+
+
 def test_a_model_that_disagrees_keeps_the_step_true_naming_it(
     app: App, tmp_path: Path
 ) -> None:
