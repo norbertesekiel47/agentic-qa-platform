@@ -16,7 +16,6 @@ from typing import Any
 
 import pytest
 from aqa_core.compiled import CompiledScript
-from aqa_core.config import ProjectConfig
 from aqa_core.project import load_spec
 from aqa_runner.chat_client import Reply
 from aqa_runner.egress import Connection, EgressGate
@@ -43,6 +42,7 @@ from packages.runner.tests.explore_graph_fixtures import (
     ref,
     tool,
 )
+from packages.runner.tests.injection_fixtures import CONTRACT, hostile
 from packages.runner.tests.secret_fixtures import FAKE_VALUE
 from packages.runner.tests.test_explore_attempts import (
     FLAKY,
@@ -66,23 +66,7 @@ from packages.runner.tests.test_explore_graph import (
     written,
 )
 
-INJECTION = Path(__file__).resolve().parents[3] / "tests/fixtures/pages/injection"
 HOSTILE = ("hijack", "decoy-success", "decoy-after-failure", "steering")
-
-# The shop's save status, a subject only its paragraph in the status area
-# binds (ADR-0025's #53 P7b-II amendment).
-CONTRACT = ProjectConfig.model_validate(
-    {
-        "subjects": [
-            {
-                "spec": "shop",
-                "expect": 0,
-                "region": "section#status-area",
-                "part": "p#status",
-            }
-        ]
-    }
-)
 # The clean path: fill the name, save, check the status, finish.
 PATH = (FILL, CLICK, ASSERT, FINISH)
 
@@ -91,11 +75,6 @@ PATH = (FILL, CLICK, ASSERT, FINISH)
 def app() -> Iterator[App]:
     with serving_app() as served:
         yield served
-
-
-def hostile(name: str, shop: str = "shop") -> str:
-    """The shop page `shop` with the injection page `name` added to it."""
-    return SHOPS[shop] + (INJECTION / f"{name}.html").read_text()
 
 
 def planning(app: App, seen: list[list[str]]) -> Move:
