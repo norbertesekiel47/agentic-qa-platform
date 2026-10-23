@@ -8,6 +8,7 @@ unless the shards' records say so.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -242,3 +243,27 @@ def test_the_records_rewrite_the_durations_table(tmp_path: Path) -> None:
     written = json.loads(table.read_text())
     assert written == {"a.py": 12.3, "b.py": 3.0, "c.py": 0.0}
     assert list(written) == ["a.py", "b.py", "c.py"]  # sorted, for readable diffs
+
+
+# --- the workflow ----------------------------------------------------------------
+
+
+def python_job() -> str:
+    """The lines of ci.yml's job named `python`, a required check."""
+    jobs = (REPO / ".github/workflows/ci.yml").read_text().split("\njobs:\n", 1)[1]
+    return next(
+        job
+        for job in re.split(r"^  (?=\S)", jobs, flags=re.MULTILINE)
+        if re.search(r"^    name: python$", job, flags=re.MULTILINE)
+    )
+
+
+def test_python_fails_rather_than_skips_when_a_shard_does() -> None:
+    # A skipped required check passes. So python always runs, downloads the
+    # records only when every shard passed, and the check fails without them.
+    job = python_job()
+
+    assert re.search(r"^    needs: tests$", job, flags=re.MULTILINE)
+    assert re.search(r"^    if: always\(\)$", job, flags=re.MULTILINE)
+    assert "if: needs.tests.result == 'success'" in job
+    assert "run: python .github/scripts/check_shards.py shards" in job
