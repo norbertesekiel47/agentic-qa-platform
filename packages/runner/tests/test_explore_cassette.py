@@ -25,14 +25,25 @@ pytestmark = pytest.mark.usefixtures("reset_tracing")
 
 Cassette = Callable[..., AbstractContextManager[Recording]]
 
-# Read from the accepted live capture (ADR-0024's #53 P21b receipts), and
-# empty until it is recorded: each plan call's roles, the navigator's turns,
-# the run's cost as its line gives it, and the compiled assertions and steps.
-PLAN_ROLES: list[list[str]] = []
-TURNS = 0
-COST = ""
-ASSERTIONS: list[dict[str, Any]] = []
-STEPS: list[dict[str, Any]] = []
+# Read from the accepted live capture (ADR-0024's #53 P21b receipts): each
+# plan call's roles, the navigator's turns, the run's cost as its line gives
+# it, and the compiled assertions and steps.
+PLAN_ROLES = [["user"]]
+TURNS = 4
+COST = "0.039772"
+ASSERTIONS = [
+    {
+        "id": "a1",
+        "expect_index": 0,
+        "text": "saved",
+        "check": "text_in_target",
+        "target": "t3",
+    }
+]
+STEPS = [
+    {"seq": 1, "satisfies": [], "action": "fill", "target": "t1", "value": "Alex"},
+    {"seq": 2, "satisfies": [], "action": "click", "target": "t2"},
+]
 # The navigator's tools, as every turn offers them.
 TOOLS = [
     "navigate",
