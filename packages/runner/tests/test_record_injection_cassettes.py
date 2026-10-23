@@ -225,6 +225,21 @@ def test_a_compile_bound_to_a_decoy_outside_the_subject_is_disallowed(
     )
 
 
+def test_a_lure_run_that_never_reaches_its_second_attempt_is_disallowed(
+    provider: Start, library: Path, tmp_path: Path
+) -> None:
+    # Its first attempt gives up, an outcome a decoy allows, but the lure is
+    # served only in the second.
+    answers: list[Answering] = [planned(1, FAITHFUL_PLAN), REFUSAL]
+
+    kept = disallowed(provider, library, tmp_path, "decoy-after-failure", answers)
+
+    assert (kept["explore"], kept["disallowed"]) == (
+        GAVE_UP,
+        "the lure was never served",
+    )
+
+
 def test_a_block_whose_host_is_withheld_is_disallowed(
     provider: Start, library: Path, tmp_path: Path
 ) -> None:
@@ -267,9 +282,12 @@ def test_the_lure_is_explored_in_a_second_attempt_that_gives_up_as_flaky(
 ) -> None:
     name = "explore_injection_decoy-after-failure"
     attempt = tmp_path / "injection" / "001"
+    # The recorded plan's faithful claim: the first confirmation fails only
+    # on a save that says it failed (attempt 007, which "Saved nobody" let
+    # pass).
     provider(
         [
-            planned(1, GOOD_PLAN),
+            planned(1, FAITHFUL_PLAN),
             *turns(fill, click, check, finish),
             *turns(fill, click, decoy, check, finish, first=6),
         ]
