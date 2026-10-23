@@ -2,7 +2,8 @@
 selection and attempts, and Confirmation replay): explore runs up to the
 attempt budget, resets before every attempt and every confirmation, starts
 no new attempt and runs no restart without a reset hook, since every
-attempt's start URL has loaded, feeds a failed confirmation's outcome and
+attempt's start URL has loaded, lets a single `--confirm-repeat` repeat one
+confirmation's side effects, feeds a failed confirmation's outcome and
 bounded evidence to the next attempt, and gives up as flaky when the
 identical script fails, then passes. Real Chromium against the executor's
 fixture app, whose `/write/…` paths count each write, with a scripted
@@ -138,13 +139,14 @@ SPILLING = SHOP.replace("SAID", 'status.textContent = "Saved nobody"') + (
     + "</ul>"
 )
 # A start page whose load logs a console error, and a path that goes on
-# from it to the shop: the invariant is violated before the shop loads.
+# from it to the shop, served as "quiet": the invariant is violated before
+# the shop loads.
 NOISY = (
     "<p>Before the shop</p>"
     '<script>console.error("fake: the start logged an error")</script>'
 )
 VIA_NOISY = (
-    calling("navigate", {"path": "/page/shop"}),
+    calling("navigate", {"path": "/page/quiet"}),
     FILL,
     CLICK,
     ASSERT,
@@ -165,13 +167,12 @@ def exploring(
     *,
     preconditions: str = RESET,
     config: ProjectConfig | None = None,
-    page: str = "/page/shop",
+    confirm_repeat: bool = False,
 ) -> Explored:
-    """How `explore` ended a run of the shop spec, starting at `page`,
-    against the app."""
+    """How `explore` ended a run of the shop spec against the app."""
     config = config or ProjectConfig()
     root = configured(tmp_path / "qa", config)
-    spec = shop_spec(root, config, page, preconditions)
+    spec = shop_spec(root, config, "/page/shop", preconditions)
 
     async def scenario() -> Explored:
         async with async_playwright() as playwright, asyncio.timeout(240):
@@ -180,8 +181,8 @@ def exploring(
                 config,
                 root,
                 app.origin,
-                router=ModelRouter.from_config(config, client),
-                playwright=playwright,
+                explore.Drivers(ModelRouter.from_config(config, client), playwright),
+                confirm_repeat=confirm_repeat,
             )
 
     return asyncio.run(scenario())
@@ -389,6 +390,51 @@ def test_a_restart_with_a_reset_hook_resets_before_its_fresh_attempt(
     ]
 
 
+# A single --confirm-repeat.
+
+
+def test_confirm_repeat_lets_one_confirmation_repeat_the_save_with_no_reset(
+    app: App, tmp_path: Path
+) -> None:
+    client = Scripted(planned(), *PATH)
+
+    run = exploring(app, tmp_path, client, preconditions="", confirm_repeat=True)
+
+    assert (run.outcome, run.exit_code) == ("compiled", 0)
+    document = written(run)
+    assert document["published"] == "confirmed"
+    # The person authorized this repeat, so the run doesn't warn of it.
+    assert document["reasons"] == []
+    assert document["phases"] == [phase("attempt-1"), phase("confirmation")]
+    assert app.paths() == ["/page/shop", "/did/fill", "/write/save"] * 2
+
+
+def test_confirm_repeat_authorizes_a_single_confirmation(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    replay = executor.replay
+
+    async def failing(*args: Any, **kwargs: Any) -> Any:
+        monkeypatch.setitem(PAGES, "shop", PAGES["shop-wrong"])
+        return await replay(*args, **kwargs)
+
+    monkeypatch.setattr(executor, "replay", failing)
+    config = ProjectConfig.model_validate({"budgets": {"resolve_seconds": 2}})
+    client = Scripted(planned(), *PATH)
+
+    run = exploring(
+        app, tmp_path, client, preconditions="", config=config, confirm_repeat=True
+    )
+
+    assert (run.outcome, run.exit_code) == ("gave_up", 3)
+    assert written(run)["reasons"] == [
+        f"no new attempt started: {UNRESET}",
+        "confirmation a1: failed",
+    ]
+    assert app.paths() == ["/page/shop", "/did/fill", "/write/save"] * 2
+    assert len(client.requests) == 5
+
+
 # The attempt budget.
 
 
@@ -528,13 +574,14 @@ def test_the_evidence_is_scanned_escaped_and_cut(
 def test_an_invariants_evidence_is_the_page_where_it_first_became_violated(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setitem(PAGES, "noisy", NOISY)
+    monkeypatch.setitem(PAGES, "quiet", PAGES["shop"])
+    monkeypatch.setitem(PAGES, "shop", NOISY)
     config = ProjectConfig.model_validate(
         {"budgets": {"resolve_seconds": 2, "attempts": 2}}
     )
     client = Scripted(planned(), *VIA_NOISY * 2)
 
-    run = exploring(app, tmp_path, client, config=config, page="/page/noisy")
+    run = exploring(app, tmp_path, client, config=config)
 
     assert (
         written(run)["reasons"][0] == "confirmation invariant console_errors: violated"
@@ -543,7 +590,7 @@ def test_an_invariants_evidence_is_the_page_where_it_first_became_violated(
     assert block(client.requests[6][2].text, "confirmation") == (
         "<confirmation>\n"
         "step 0, the start URL: completed\n"
-        "step 1, navigate /page/shop: completed\n"
+        "step 1, navigate /page/quiet: completed\n"
         "step 2, fill the shop's name field: completed\n"
         "step 3, click the shop's save button: completed\n"
         "invariant console_errors: violated\n"

@@ -827,17 +827,23 @@ def test_api_md_lists_every_explore_option() -> None:
         for name in param.opts
         if name.startswith("--")
     ]
-    assert options == ["--url", "--plan-only", "--force", "--budget"]
+    assert options == [
+        "--url",
+        "--plan-only",
+        "--force",
+        "--budget",
+        "--confirm-repeat",
+    ]
     for option in options:
         assert f"[{option}" in block
     [budget] = [line for line in block.splitlines() if "[--budget" in line]
     assert "[--budget <name>=<value>]..." in budget
     for name in Budgets.model_fields:
         assert re.search(rf"\b{name}\b", budget), name
-    assert re.search(r"--confirm-repeat\b.*\(planned, #56\)", block)
+    assert "planned" not in block
     assert (
         "--confirm-repeat"
-        not in typer.testing.CliRunner().invoke(aqa, ["explore", "--help"]).stdout
+        in typer.testing.CliRunner().invoke(aqa, ["explore", "--help"]).stdout
     )
 
 
@@ -851,6 +857,10 @@ def test_explore_help_states_the_m1_rules() -> None:
         "Without a reset hook, explore makes one attempt, whatever attempts says"
         in words
     )
+    assert (
+        "When the spec has no reset hook, let one confirmation replay repeat the "
+        "path's side effects"
+    ) in words
 
 
 GIVE = (
@@ -920,8 +930,13 @@ def test_a_budget_diagnostic_names_the_budget_and_the_rule_never_what_was_given(
 
 @pytest.mark.parametrize(
     "given",
-    [["--force"], ["--budget", "minutes=1"], ["--force", "--budget", "minutes=1"]],
-    ids=["force", "budget", "both"],
+    [
+        ["--force"],
+        ["--budget", "minutes=1"],
+        ["--force", "--budget", "minutes=1"],
+        ["--confirm-repeat"],
+    ],
+    ids=["force", "budget", "both", "confirm-repeat"],
 )
 def test_plan_only_refuses_the_options_only_exploring_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, given: list[str]
@@ -933,7 +948,7 @@ def test_plan_only_refuses_the_options_only_exploring_reads(
 
     assert result.exit_code == 2, result.output
     plain = re.sub(r"\x1b\[[0-9;]*m", "", result.stderr)
-    assert "Invalid value for '--force', '--budget'" in " ".join(
+    assert "Invalid value for '--force', '--budget', '--confirm-repeat'" in " ".join(
         re.sub(r"[│╭╮╰╯─]", " ", plain).split()
     )
 

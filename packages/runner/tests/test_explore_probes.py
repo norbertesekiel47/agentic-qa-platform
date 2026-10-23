@@ -112,8 +112,7 @@ def probed(
                 config,
                 root,
                 start or app.origin,
-                router=ModelRouter.from_config(config, client),
-                playwright=playwright,
+                explore.Drivers(ModelRouter.from_config(config, client), playwright),
             )
 
     return asyncio.run(scenario())
