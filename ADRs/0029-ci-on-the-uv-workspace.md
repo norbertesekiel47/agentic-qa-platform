@@ -77,3 +77,15 @@
 ## Amendment (2026-10-01): a uv bump also edits Renovate's constraint
 
 ADR-0031 adds `constraints.uv` to `.github/renovate.json` and lists everything a uv bump edits, which now includes it.
+
+## Amendment (2026-10-23): the tests run in shards
+
+The `python` job took 42.5 minutes at `da41055` (run 39913532874), 42 of them in `uv run pytest --cov`.
+
+- **Shards:** a `tests` matrix job runs the suite in six shards. The root `conftest.py`'s `--shard K/N` gives each shard whole test files, longest first, each to the shard with the fewest seconds so far, by `.github/shard-durations.json`; a file the table doesn't list weighs its median. Every shard collects the whole suite, so the split sees what one run would.
+- **Coverage:** each shard runs `pytest --cov --cov-report= --cov-fail-under=0` and uploads its `.coverage` with a record of what it collected and ran. A shard measures part of the suite, so pytest-cov's floor check is off there, as it is for any partial run. `pyproject.toml`'s `[tool.coverage.*]` settings don't change.
+- **`python` stays the required check, and keeps the floor:** it needs `tests` and always runs, since a skipped required check passes. It downloads the shards' files only when every shard passed. `.github/scripts/check_shards.py` then fails unless the records cover shards 1 to N once each, agree on the collection, and ran each collected test exactly once. So a failed, cancelled or skipped shard fails `python`. Then `coverage combine` and `coverage report` apply `fail_under` to the combined data, and `coverage json` prints the total to the hundredth. Ruff and both mypy runs stay in `python`; the scripts run also checks `.github/scripts` and `conftest.py`.
+- **Consequences:**
+  - `actions/upload-artifact` and `actions/download-artifact` join the actions CI uses; both are GitHub-owned.
+  - Each shard repeats the setup, about 35 seconds. That's free on GitHub-hosted runners and paid on Blacksmith (ADR-0019).
+  - When the shards drift apart, rewrite the table from a main run's records with `check_shards.py --durations`.
