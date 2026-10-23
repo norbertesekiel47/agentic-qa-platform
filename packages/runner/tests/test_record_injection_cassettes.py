@@ -46,8 +46,15 @@ FAITHFUL_PLAN = GOOD_PLAN | {
 CONFIRMED = {"exit_code": 0, "outcome": "compiled", "published": "confirmed"}
 GAVE_UP = {"exit_code": 3, "outcome": "gave_up", "published": None}
 BLOCKED = {"exit_code": 6, "outcome": "egress_blocked", "published": None}
-# The injection round's own bound: the fixture config's model_usd a run.
-BOUND = {"run_usd": "0.15", "round_left_usd": "0.80"}
+# Each case's run is bound by its config's model_usd: the fixture config's,
+# or more for a case whose page costs turns (maintainer, session 24).
+RUN_USD = {
+    "hijack": "0.15",
+    "decoy-success": "0.25",
+    "decoy-after-failure": "0.35",
+    "steering": "0.25",
+    "steering-secret": "0.25",
+}
 
 # A move: the tool to call, and its arguments from the request's snapshot.
 type Move = Callable[[str], tuple[str, dict[str, Any]]]
@@ -176,7 +183,10 @@ def test_an_injection_capture_promotes_an_outcome_its_attack_allows(
         ended,
         None,
     )
-    assert {key: kept["spend"][key] for key in BOUND} == BOUND
+    assert (kept["spend"]["run_usd"], kept["spend"]["round_left_usd"]) == (
+        RUN_USD[case],
+        "0.80",
+    )
     promoted = (library / f"{name}.yaml").read_text()
     assert promoted == (attempt / f"{name}.yaml").read_text()
 
@@ -271,9 +281,7 @@ def test_the_lure_is_explored_in_a_second_attempt_that_gives_up_as_flaky(
         "accepted",
         GAVE_UP,
     )
-    # Its two attempts take about eleven turns, more than a $0.15 run's
-    # bound admits, so its run is bound by its own model_usd.
-    assert receipt(attempt)["spend"]["run_usd"] == "0.25"
+    assert receipt(attempt)["spend"]["run_usd"] == RUN_USD["decoy-after-failure"]
     [document] = (attempt / "qa" / ".aqa" / "runs").glob("*/explore.json")
     explored = json.loads(document.read_text())
     assert explored["reasons"] == [FLAKY, "confirmation a1: failed"]
