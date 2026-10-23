@@ -928,20 +928,22 @@ The #53 P21a amendment's recorder records `explore_fixture` once from the live m
 
 - **The round's limit.** `ROUND_USD` is USD 0.597950: P21a's USD 0.699946 less #55's plan round, USD 0.101996 (the #55 amendment; relay, session 21). The round is one directory, `.scratch/captures/p21-explore-round/`, read by P21a's ledger.
 - **One attempt.** `FIXTURE_CONFIG` sets `attempts: 1` (#56), so no restart or second attempt runs, and the run's `model_usd` of $0.15 and the bound's $0.20 cover all its turns.
-- **The bound cuts in sooner than P21a measured.** A turn's request is now about 8.9 KB, not 6.9 KB, so its worst case is $0.060792 and the bound refuses once a run has spent $0.139208: a corrected plan and all 12 turns can be refused on the last turn, which ends `no_response` (11, a stop) rather than `gave_up` (3).
+- **The bound cuts in sooner than P21a measured.** A turn's request is now about 8.9 KB, not 6.9 KB, so its worst case is about $0.061 and the bound refuses once a run has spent about $0.139: a corrected plan and all 12 turns can be refused on the last turn, which ends `no_response` (11, a stop) rather than `gave_up` (3).
 - **The replay.** `aqa explore` in process, with the real `AnthropicClient` replaying the cassette (`replay_only`), in real Chromium against the executor's fixture app: exit 0, the line with the recorded cost, a confirmed script with the recorded assertions and steps, the confirmation passed with every locator, and one request per interaction. The recorder's stand-in cassette replayed the same way on another port before the round, so the CLI's requests hash as the recorder's `explore()` call's do.
 - **The requests, as the file holds them.** The plan calls have no tools and no tool choice. Every turn has `tool_choice: auto`, the twelve strict tools, the navigator's instructions as `system`, and one user message of two blocks, `<spec>` then `<log>`. The cross-cassette tests hold it to the output bound and to no credential, as every cassette.
 - **Limits.** Recorded on macOS and replayed on CI's Linux, so a snapshot that differs there fails the replay. A changed prompt, tool, spec or page fails it too, and is re-recorded deliberately (TESTING §4).
 - Tests: `packages/runner/tests/test_explore_cassette.py`, and `test_record_explore_cassette.py` for the bound at the new limit.
 
-### The round's receipts (recorded pending)
+### The round's receipts (recorded 2026-10-23)
 
-Source `pending`, model `claude-sonnet-5-5`, effort none, the pinned price map `ae6b762`.
+One attempt, `001`, with the named recorder at source 25b56f4 (this branch on main 52e0d6e). Model `claude-sonnet-5-5`, effort none, the pinned price map `ae6b762`, no cached input. Every response was HTTP 200 and priced `ok`; nothing was withheld, refused or overrun, and no finalization failed.
 
-| Attempt | Call | Request ID | Status | Tokens in / out | CostRecord (USD) |
-|---|---|---|---|---|---|
-
-| Attempt | Outcome | Explore (exit, outcome, published) | Spent (USD) |
+| Call | Request ID | Tokens in / out | CostRecord (USD) |
 |---|---|---|---|
+| plan | `req_011CgK7NzpoU1hHPiMu94Uw5` | 4014 / 105 | 0.009078 |
+| turn 1 | `req_011CgK7PWocSexvsxY6Lr5sg` | 3357 / 97 | 0.007684 |
+| turn 2 | `req_011CgK7Qz3UnoPwE493Hiw6T` | 3402 / 72 | 0.007524 |
+| turn 3 | `req_011CgK7R9rqCBxtLgGTRKsCC` | 3425 / 74 | 0.007590 |
+| turn 4 | `req_011CgK7RMY4KadDSCGRidPWL` | 3428 / 104 | 0.007896 |
 
-The round cost USD `pending`. With B1, B2b and #161 (USD 0.300054) and #55's round (USD 0.101996), the live total is USD `pending`. The cassette's sha256 is `pending`.
+The attempt's receipt: outcome `accepted`, explore exit 0 `compiled` and `confirmed`, `spend.spent_usd` 0.039772 against a round limit of USD 0.597950. The path fills the name field with "Alex", clicks save, and checks the status for "saved". The round cost USD 0.039772, against the estimate of USD 0.052: each turn billed about 3,400 input tokens, not the 4,100 the plan requests' bytes per token gave. With B1, B2b and #161 (USD 0.300054) and #55's round (USD 0.101996), the live total is USD 0.441822. The cassette's sha256 is `72913996e1f91f6cf8970fdd755329dff0d0d330af92314aa4a340995dc2a8e1`.
