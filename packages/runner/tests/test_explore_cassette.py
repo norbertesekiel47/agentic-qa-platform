@@ -25,12 +25,12 @@ pytestmark = pytest.mark.usefixtures("reset_tracing")
 
 Cassette = Callable[..., AbstractContextManager[Recording]]
 
-# Read from the accepted live capture (ADR-0024's #53 P21b receipts): each
-# plan call's roles, the navigator's turns, the run's cost as its line gives
-# it, and the compiled assertions and steps.
+# Read from the accepted live capture (ADR-0024's #58 receipts, its plan
+# replayed from #53 P21b's): each plan call's roles, the navigator's turns,
+# the run's cost as its lines give it, and the compiled assertions and steps.
 PLAN_ROLES = [["user"]]
 TURNS = 4
-COST = "0.039772"
+COST = "0.040256"
 ASSERTIONS = [
     {
         "id": "a1",
@@ -107,7 +107,9 @@ def test_the_fixture_explore_passes_from_its_recorded_cassette(
 
 def test_no_navigator_request_forces_a_tool_choice() -> None:
     plans, turns = recorded()
-    choices = [None] * len(PLAN_ROLES) + [{"type": "auto"}] * TURNS
+    # One call a reply, still forcing none (ADR-0024's #58 amendment).
+    choice = {"type": "auto", "disable_parallel_tool_use": True}
+    choices = [None] * len(PLAN_ROLES) + [choice] * TURNS
 
     assert [body.get("tool_choice") for body in plans + turns] == choices
     assert [body.get("tools") for body in plans] == [None] * len(PLAN_ROLES)
