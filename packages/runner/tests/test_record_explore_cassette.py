@@ -188,7 +188,8 @@ def test_an_explore_capture_promotes_only_a_confirmed_compile(
         ] == [
             (True, None, ["user"]),
             (True, None, ["user", "assistant", "user"]),
-            *[(False, {"type": "auto"}, ["user"])] * 4,
+            *[(False, {"type": "auto", "disable_parallel_tool_use": True}, ["user"])]
+            * 4,
         ]
     else:
         assert costs == FIVE_COSTS
