@@ -192,7 +192,7 @@ HEADER_LINK = Target(
     semantic=LINK,
     locators=(
         ByRole(scope=NAVBAR, role="link", name="Sign in"),
-        ByCss(scope=NAVBAR, css="a"),
+        ByCss(scope=NAVBAR, css='a[href="/page/form"]'),
     ),
 )
 
@@ -732,7 +732,10 @@ def test_finish_judges_every_check_as_the_confirmation_will(
             {
                 "t1": Target(
                     semantic="the page's Next link",
-                    locators=(ByRole(role="link", name="Next"), ByCss(css="a")),
+                    locators=(
+                        ByRole(role="link", name="Next"),
+                        ByCss(css='a[href="/page/two"]'),
+                    ),
                 ),
                 "t2": SECOND_STATUS,
             },
