@@ -806,13 +806,16 @@ def unreused(
 
 def preloaded(name: str, attempt: Path, library: Path) -> list[Reused]:
     """Write the plan interactions of the library's fixture explore cassette
-    as the attempt's cassette, for an injection case to replay: its plan
-    request is the fixture explore's, its account left out (#57). None
-    when the library holds no plan interaction."""
+    as the attempt's cassette, for the case to replay: an injection case's
+    plan request is the fixture explore's, its account left out (#57), and
+    the fixture explore's own is unchanged by a change to the turns (#58).
+    None when the library holds no plan interaction."""
     source = library / f"{EXPLORE}.yaml"
     if not source.is_file():
         return []
     cassette = yaml.safe_load(source.read_text())
+    if not isinstance(cassette, dict):
+        return []
     plans = [
         each
         for each in cassette["interactions"]
@@ -873,9 +876,12 @@ def bounded(
 ) -> tuple[list[Reused], dict[str, Any]]:
     """Hold `name`'s requests to its spend bound, when it has one; and give
     the interactions it replays, which the capture neither prices nor
-    inspects (an injection case's plan, from the fixture explore, #57), with
-    how its cassette records past them and drops any not replayed."""
-    reusable = preloaded(name, attempt, library) if name in INJECTED else []
+    inspects (the plan, from the library's fixture explore: an injection
+    case's, #57, and the fixture explore's own, #58), with how its cassette
+    records past them and drops any not replayed."""
+    reusable = (
+        preloaded(name, attempt, library) if name == EXPLORE or name in INJECTED else []
+    )
     capture.replayed = frozenset(each.request for each in reusable)
     if (limit := round_limit(name)) is not None:
         model = resolve_roles(config, vendored())["navigator"].model
