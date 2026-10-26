@@ -1262,16 +1262,23 @@ async def see_header_link(session: BrowserSession, uses: TargetUses, name: str) 
 @pytest.mark.parametrize(
     ("name", "checks_text", "expected"),
     [
-        ("Sign in", False, (ByRole(role="link", name="Sign in", scope=HEADER_LINKS),)),
+        (
+            "Sign in",
+            False,
+            (
+                ByRole(role="link", name="Sign in", scope=HEADER_LINKS),
+                ByCss(css='a[href="/login"]', scope=HEADER_LINKS),
+            ),
+        ),
         (
             "Sign up",
             False,
             (
                 ByRole(role="link", name="Sign up", scope=HEADER_LINKS),
-                ByCss(css="a.nav-signup", scope=HEADER_LINKS),
+                ByCss(css='a[href="/register"]', scope=HEADER_LINKS),
             ),
         ),
-        ("Sign up", True, (ByCss(css="a.nav-signup", scope=HEADER_LINKS),)),
+        ("Sign up", True, (ByCss(css='a[href="/register"]', scope=HEADER_LINKS),)),
     ],
     ids=["Sign in", "Sign up", "Sign up, its text checked"],
 )
@@ -1408,8 +1415,14 @@ def test_a_negative_check_joins_the_current_target_only_where_it_holds() -> None
 
     assert indexes == [0, 0, 1]
     assert [target.locators for target in targets] == [
-        (ByRole(role="link", name="Sign in", scope=HEADER_LINKS),),
-        (ByRole(role="link", name="Sign in", scope=ByCss(css="ul.nav")),),
+        (
+            ByRole(role="link", name="Sign in", scope=HEADER_LINKS),
+            ByCss(css='a[href="/login"]', scope=HEADER_LINKS),
+        ),
+        (
+            ByRole(role="link", name="Sign in", scope=ByCss(css="ul.nav")),
+            ByCss(css='a[href="/login"]', scope=ByCss(css="ul.nav")),
+        ),
     ]
 
 
