@@ -101,6 +101,8 @@ def test_a_text_checks_header_link_is_found_by_its_path(
         ("/article/tests?page=2", False),
         ("/article/tests#comments", False),
         ("//elsewhere.test/article/tests", False),
+        ("//elsewhere/article/tests", False),
+        ("/article/", False),  # an empty segment
         ("/article/2026", False),
         ("article/tests", False),
     ],
