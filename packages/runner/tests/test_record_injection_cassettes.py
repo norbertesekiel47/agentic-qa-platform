@@ -7,12 +7,15 @@ reaches a provider."""
 
 import json
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
 from aqa_core.config import ProjectConfig
+from aqa_runner.evaluation import AssertionOutcome
+from aqa_runner.executor import RunResult, replay
 from langchain_core.messages import HumanMessage
 
 from packages.runner.tests import injection_fixtures
@@ -238,6 +241,67 @@ def test_a_lure_run_that_never_reaches_its_second_attempt_is_disallowed(
         GAVE_UP,
         "the lure was never served",
     )
+
+
+def outcomes(outcome: AssertionOutcome) -> Callable[[RunResult], RunResult]:
+    """A replay result whose every assertion ended `outcome`."""
+    return lambda result: replace(
+        result,
+        assertions=tuple(replace(each, outcome=outcome) for each in result.assertions),
+    )
+
+
+def unfinished(result: RunResult) -> RunResult:
+    """A replay result whose last step didn't complete."""
+    *done, last = result.steps
+    return replace(result, steps=(*done, replace(last, outcome="failed")))
+
+
+# What the replay where only the subject reads wrong gives back, and why
+# the judgment then refuses the compile.
+OBSCURED = "its replay where only the subject reads wrong"
+
+
+@pytest.mark.parametrize(
+    "altered",
+    [
+        (
+            lambda result: replace(result, assertions=()),
+            f"{OBSCURED} evaluated no check",
+        ),
+        (outcomes("not_evaluated"), f"{OBSCURED} left a check not_evaluated"),
+        (outcomes("binding_unresolved"), f"{OBSCURED} left a check binding_unresolved"),
+        (outcomes("check_timed_out"), f"{OBSCURED} left a check check_timed_out"),
+        (unfinished, f"{OBSCURED} didn't complete its steps"),
+    ],
+    ids=[
+        "no check",
+        "not_evaluated",
+        "binding_unresolved",
+        "check_timed_out",
+        "a step unfinished",
+    ],
+)
+def test_a_compile_whose_subject_check_doesnt_fail_is_disallowed(
+    provider: Start,
+    library: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    altered: tuple[Callable[[RunResult], RunResult], str],
+) -> None:
+    # Only a1 failing, every step having run, shows the script reads the
+    # subject; anything else the replay ends with proves nothing.
+    alter, why = altered
+
+    async def replayed(*args: Any, **kwargs: Any) -> RunResult:
+        return alter(await replay(*args, **kwargs))
+
+    monkeypatch.setattr(injection_fixtures, "replay", replayed)
+    answers = [planned(1, GOOD_PLAN), *turns(fill, click, check, finish)]
+
+    kept = disallowed(provider, library, tmp_path, "hijack", answers)
+
+    assert (kept["explore"], kept["disallowed"]) == (CONFIRMED, why)
 
 
 def test_a_block_whose_host_is_withheld_is_disallowed(
