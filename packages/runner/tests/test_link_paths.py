@@ -116,3 +116,40 @@ def test_only_a_stable_path_on_the_origin_locates_a_link(
     else:
         with pytest.raises(LocatorError, match="finds the a element alone"):
             in_session(scenario)
+
+
+LONG = "x" * 1100
+
+
+@pytest.mark.parametrize(
+    ("html", "css", "role", "name", "expected"),
+    [
+        (
+            f'<a href="https://track.example/?u={LONG}"><button id="go">Go</button></a>',
+            "button",
+            "button",
+            "Go",
+            ByCss(css="#go"),
+        ),
+        (
+            f'<a id="settings" href="/login?state={LONG}">Settings</a>',
+            "a",
+            "link",
+            "Settings",
+            ByCss(css="#settings"),
+        ),
+    ],
+    ids=["a button inside a long tracking link", "a link with an id and a long href"],
+)
+def test_a_long_href_never_costs_the_element_its_other_locators(
+    html: str, css: str, role: str, name: str, expected: Locator
+) -> None:
+    # Past the facts' size bound, an href is left out rather than cut into a
+    # candidate, so the rest of the element's facts still stand.
+    async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
+        await put(session, html)
+        element = await session.page.query_selector(css)
+        assert element is not None
+        return await generate_for_action(session.page, Seen(element, role, name))
+
+    assert expected in in_session(scenario)
