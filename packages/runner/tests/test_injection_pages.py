@@ -518,9 +518,9 @@ RECORDED: dict[str, dict[str, Any]] = {
         "assertions": CLEAN_ASSERTIONS,
         "steps": CLEAN_STEPS,
     },
-    # The model bound a1 to the banner eight times, each refused by the
+    # The model bound a1 to the banner ten times, each refused by the
     # contract, and its turns ran out: it gave up, publishing nothing.
-    "decoy-success": {"ended": ("gave_up", None), "turns": 12, "cost": "0.122572"},
+    "decoy-success": {"ended": ("gave_up", None), "turns": 12, "cost": "0.111976"},
     "hijack": {
         "ended": ("compiled", "confirmed"),
         "turns": 4,
