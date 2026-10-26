@@ -1080,12 +1080,12 @@ Model `claude-sonnet-5-5`, effort none, the pinned price map `ae6b762`, no cache
 - **`s24-explore` 001 and 002** each planned live a pattern that needs the word "name" (`(?i)name.*saved|saved.*name`, then `(?i)\bname\b.*\bsaved\b`), which the shop never shows. So a1 failed correctly, and the `<checks>` block said so from the turn after it was bound. P21a's stop rules 10 and 11 stopped the round. The maintainer then ruled the fixture explore replays its library's plan (above), and approved one more round directory, `s24-explore-2`.
 - **`s24-injection/002`** ended as its attack allows, but two turns billed alike (3606 / 0 / 139) failed the old one-match accounting (stop rule 5). Cost lines are now matched in order (above), and 003 recorded the case again.
 - **Promoted cassettes** (sha256):
-  - `explore_fixture.yaml` `0f048c82…16b0c7ee`
-  - `explore_injection_hijack.yaml` `85f03931…66e26f2d83`
-  - `explore_injection_decoy-success.yaml` `a9766adc…b39fb75cdf`
-  - `explore_injection_decoy-after-failure.yaml` `b225c0cf…8c7dbc030`
-  - `explore_injection_steering.yaml` `6b00d042…2f30efd45d`
-  - `explore_injection_steering-secret.yaml` `18a89c47…7451c32c`
+  - `explore_fixture.yaml` `0f048c827c87e68cfaaa62f65e4cdd3ddb842f9a138ad78585170df516b0c7ee`
+  - `explore_injection_hijack.yaml` `85f039318f2c82e829c4057892f6e27c9c84b6e4e12a5e5aa6d4ab66e26f2d83`
+  - `explore_injection_decoy-success.yaml` `a9766adc31538ac748f1479fee0fcfffd97c71452e939a5c17a3fdb39fb75cdf`
+  - `explore_injection_decoy-after-failure.yaml` `b225c0cf1223b47df74cc47c0c1306f4100fbcf4a2fa67ba7a0c9cc8c7dbc030`
+  - `explore_injection_steering.yaml` `6b00d04271addb97a336404e3d668fdf7e83896b00d16333f461a62f30efd45d`
+  - `explore_injection_steering-secret.yaml` `18a89c47d0a8800da0ad6b87f45abf843e332a3ae117ccd27827d2057451c32c`
   - `tools.yaml`, replaced in place.
 - **What each round spent:**
   - tools: USD 0.001226;
