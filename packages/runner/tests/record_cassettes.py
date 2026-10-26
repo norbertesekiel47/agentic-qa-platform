@@ -405,22 +405,31 @@ class Capture:
 def accounted(
     responses: list[dict[str, Any]], calls: tuple[CostRecord, ...], model: RoutedModel
 ) -> tuple[tuple[CostRecord, ...], bool]:
-    """Price every usable observation; ambiguous router associations fail closed."""
+    """Price every usable observation. Each cost line, in the order the run
+    priced them, is matched to the next 200 response after the last match
+    that has its usage, so two billed alike are each matched once (#58).
+    A line no later response matches fails closed."""
     matched: dict[int, CostRecord] = {}
     failed = False
+    start = 0
     for call in calls:
         usage = call.model_dump(
             include={"input_tokens", "cached_input_tokens", "output_tokens"}
         )
-        candidates = [
-            index
-            for index, response in enumerate(responses)
-            if response["status_code"] == 200 and response["usage"] == usage
-        ]
-        if len(candidates) != 1 or candidates[0] in matched:
+        index = next(
+            (
+                index
+                for index in range(start, len(responses))
+                if responses[index]["status_code"] == 200
+                and responses[index]["usage"] == usage
+            ),
+            None,
+        )
+        if index is None:
             failed = True
         else:
-            matched[candidates[0]] = call
+            matched[index] = call
+            start = index + 1
     records = tuple(
         matched[index]
         if index in matched

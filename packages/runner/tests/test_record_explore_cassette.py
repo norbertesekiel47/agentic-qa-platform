@@ -244,6 +244,25 @@ def test_the_fixture_explore_replays_its_librarys_plan_and_records_its_turns(
     assert len(kept["cost_records"]) == 4
 
 
+def test_two_responses_billed_alike_are_each_matched_in_order(
+    provider: Start, library: Path, attempt: Path
+) -> None:
+    # A page that doesn't change gives turns billed the same (#58's decoy
+    # round); each cost line is matched to the next response with its usage,
+    # in order, not refused as ambiguous.
+    def same(turn: int) -> dict[str, int]:
+        return {"input_tokens": 30, "output_tokens": 3} if turn in (2, 3) else {}
+
+    provider(explore_answers(usage=same))
+
+    costs = record(EXPLORE, attempt, library=library)
+
+    kept = receipt(attempt)
+    assert (kept["outcome"], kept["finalization_failures"]) == ("accepted", [])
+    assert [each["status"] for each in kept["cost_records"]] == ["ok"] * 5
+    assert kept["cost_records"] == [cost.model_dump(mode="json") for cost in costs]
+
+
 # The bound's own model, and a request body of 50 bytes, whose worst case is
 # 1,074 input tokens and 4,096 output at $2 and $10 a million.
 MODEL = resolve_roles(recorder.FIXTURE_CONFIG, vendored())["navigator"].model
