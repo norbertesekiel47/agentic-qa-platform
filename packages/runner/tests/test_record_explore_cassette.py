@@ -221,6 +221,29 @@ def test_every_explore_interaction_is_priced_once(
     }
 
 
+def test_the_fixture_explore_replays_its_librarys_plan_and_records_its_turns(
+    provider: Start, library: Path, tmp_path: Path
+) -> None:
+    # The plan request is the library's accepted one, so it is neither sent
+    # nor priced again, as an injection case's isn't; only the turns are
+    # recorded live (ADR-0024's #58 amendment).
+    provider(explore_answers())
+    record(EXPLORE, tmp_path / "earlier" / "001", library=library)
+    attempt = tmp_path / "round" / "001"
+    stand_in = provider(
+        [called(11 + turn, name, args) for turn, (name, args) in enumerate(MOVES)]
+    )
+
+    record(EXPLORE, attempt, library=library)
+
+    assert not any("output_config" in json.loads(body) for body in stand_in.sent)
+    assert len(stand_in.sent) == 4
+    kept = receipt(attempt)
+    assert (kept["outcome"], kept["explore"]) == ("accepted", CONFIRMED)
+    assert [each["request_id"] for each in kept["reused"]] == ["req_fake_01"]
+    assert len(kept["cost_records"]) == 4
+
+
 # The bound's own model, and a request body of 50 bytes, whose worst case is
 # 1,074 input tokens and 4,096 output at $2 and $10 a million.
 MODEL = resolve_roles(recorder.FIXTURE_CONFIG, vendored())["navigator"].model
