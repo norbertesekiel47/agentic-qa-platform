@@ -1,0 +1,233 @@
+{
+  "schema_version": 1,
+  "spec_id": "favorite-article",
+  "spec_hash": "sha256:5f036f412c0dcfafd20305ced05580e69961a07679960eaecf59ab51eecb805b",
+  "compiled_at": "2026-10-26T11:18:48.534142Z",
+  "compiled_by": {
+    "mode": "explore",
+    "models": {
+      "navigator": "claude-sonnet-5-5"
+    },
+    "price_map": "ae6b762190658e695c77b0ba63b6c65913b86ac0",
+    "subject_contracts": "sha256:b64fd8c08356c3223622177268dc1a7eb9a279a4e331cbbaf49ddb39ecc0a8be"
+  },
+  "confirmed": true,
+  "browser": {
+    "timezone": "UTC",
+    "locale": "en-US",
+    "viewport": [
+      1280,
+      800
+    ],
+    "device_scale_factor": 1.0,
+    "color_scheme": "light"
+  },
+  "coverage": {
+    "plan_hash": "sha256:aced24d9185a27ed9743a7457a96a9ab40884a2efb01725afafa7a6db988645b",
+    "expectations": [
+      {
+        "expect_index": 0,
+        "subject": "the favorite button in the article banner under the article title",
+        "claim": "The favorite button's label reads \"Unfavorite Article\"",
+        "assertions": [
+          "a1"
+        ]
+      },
+      {
+        "expect_index": 1,
+        "subject": "the article's favorites count in the article banner",
+        "claim": "The favorites count displayed for the article is 1",
+        "assertions": [
+          "a2"
+        ]
+      }
+    ],
+    "requires": [
+      {
+        "id": "c1",
+        "condition": "checked after reloading the article page",
+        "kind": "reload"
+      }
+    ]
+  },
+  "targets": {
+    "t1": {
+      "semantic": "Email field",
+      "locators": [
+        {
+          "role": "textbox",
+          "name": "Email"
+        },
+        {
+          "placeholder": "Email"
+        },
+        {
+          "css": "input[name=email]"
+        }
+      ]
+    },
+    "t2": {
+      "semantic": "Password field",
+      "locators": [
+        {
+          "role": "textbox",
+          "name": "Password"
+        },
+        {
+          "placeholder": "Password"
+        },
+        {
+          "css": "input[name=password]"
+        }
+      ]
+    },
+    "t3": {
+      "semantic": "Sign in submit button",
+      "locators": [
+        {
+          "role": "button",
+          "name": "Sign in"
+        },
+        {
+          "css": "button[type=submit]"
+        }
+      ]
+    },
+    "t4": {
+      "semantic": "Article title \"Flaky tests are bugs\" in the global feed",
+      "locators": [
+        {
+          "scope": {
+            "css": "a[href=\"/article/flaky-tests-are-bugs\"]"
+          },
+          "css": "h1"
+        }
+      ]
+    },
+    "t5": {
+      "semantic": "the favorite toggle button in the article banner under the article title",
+      "locators": [
+        {
+          "role": "button",
+          "name": "Favorite Article (0)"
+        },
+        {
+          "scope": {
+            "css": "app-favorite-button"
+          },
+          "css": "button.btn"
+        }
+      ],
+      "contract": {
+        "region": "div.banner",
+        "part": "app-favorite-button > button",
+        "leaf": false
+      }
+    },
+    "t6": {
+      "semantic": "the favorite toggle button in the article banner under the article title",
+      "locators": [
+        {
+          "scope": {
+            "css": "app-favorite-button"
+          },
+          "role": "button"
+        },
+        {
+          "scope": {
+            "css": "app-favorite-button"
+          },
+          "css": "button.btn"
+        }
+      ],
+      "contract": {
+        "region": "div.banner",
+        "part": "app-favorite-button > button",
+        "leaf": false
+      }
+    },
+    "t7": {
+      "semantic": "the favorites count shown on the favorite toggle in the article banner under the article title",
+      "locators": [
+        {
+          "css": "span.counter"
+        }
+      ],
+      "contract": {
+        "region": "div.banner",
+        "part": "span.counter",
+        "leaf": true
+      }
+    }
+  },
+  "probe_baselines": {},
+  "steps": [
+    {
+      "seq": 1,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "fill",
+      "target": "t1",
+      "value": "reader@conduit.test"
+    },
+    {
+      "seq": 2,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "fill_secret",
+      "target": "t2",
+      "secret": "TEST_PASSWORD"
+    },
+    {
+      "seq": 3,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request; network: a write request came later, which it may have caused; model: finish didn't list it in changes_nothing",
+      "satisfies": [],
+      "action": "click",
+      "target": "t3"
+    },
+    {
+      "seq": 4,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request; network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "click",
+      "target": "t4"
+    },
+    {
+      "seq": 5,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request; model: finish didn't list it in changes_nothing",
+      "satisfies": [],
+      "action": "click",
+      "target": "t5"
+    },
+    {
+      "seq": 6,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request",
+      "satisfies": [
+        "c1"
+      ],
+      "action": "reload"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "a1",
+      "expect_index": 0,
+      "text": "Unfavorite Article",
+      "check": "text_in_target",
+      "target": "t6"
+    },
+    {
+      "id": "a2",
+      "expect_index": 1,
+      "text": "1",
+      "check": "text_in_target",
+      "target": "t7"
+    }
+  ]
+}
