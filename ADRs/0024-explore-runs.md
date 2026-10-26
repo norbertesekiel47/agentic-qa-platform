@@ -1044,3 +1044,16 @@ One round directory, `injection-r1`, under the round limit USD 0.80. Model `clau
 
   USD 0.085244 by its cost lines, the replayed plan's included.
 - **The round:** USD 0.500252 of 0.80, eight attempts, 54 live responses.
+
+## Amendment (2026-10-25): what the attempt has bound, and one call a reply (#58)
+
+In #58's live explore of login, the model asserted a1, then a2, then a1 again, for 36 turns. Every result said the check was bound and passing, but the next request kept no record of it: a turn carries the action log, the model's last notes, the last call's results and the page, and no check's state. Twelve of the replies held several tool calls, of which only the first runs, and only one turn had notes, so the model kept no memory of its progress. P21b's fixture spec, with one check, couldn't show this.
+
+- **The `<checks>` block.** Each turn's message carries `<checks>` after `<log>` and before `<notes>`: one line per planned check, in plan order, `a1: unbound`, `a1: bound and passing` or `a1: bound and failing`. It is built from the attempt's bindings (`Attempt.checks`), as `navigator.Turn.checks`. It holds only our own check IDs and those three phrases, never a failing result's misses or error text, which a page can choose, and it is scanned and escaped as every block is. Every turn of a run has planned checks, so every turn has the block. A `Turn` built with none, as unit tests build, has none.
+- **One call a reply.** The Anthropic adapter binds tools with `parallel_tool_calls=False`, so the wire's `tool_choice` is `{"type": "auto", "disable_parallel_tool_use": true}`. That still forces no tool (ADR-0007's amendment), and the model writes its notes beside its one call.
+- **The system prompt** gains one sentence in its list of blocks: "<checks> says whether each planned check is unbound, bound and passing, or bound and failing."
+- **Consequences.**
+  - Every navigator request changes: the system prompt, the block and the tool choice. So the fixture explore's cassette, #57's five injection cassettes and the live `tools` case are re-recorded together in one round.
+  - The hand-written `tools_truncated` cassette's request body takes the new tool choice and keeps its response (TESTING §4).
+  - No dependency, paid resource or tenant surface changes.
+  - Tests: `packages/runner/tests/test_navigator.py` (the block's place, its three phrases, no failing result's text, the prompt's sentence, the wire tool choice through a loopback stand-in), and `test_explore_turns.py` (through the graph, the request after a passing `assert_check` says so).
