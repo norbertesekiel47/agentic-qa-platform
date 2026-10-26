@@ -304,6 +304,28 @@ def test_a_compile_whose_subject_check_doesnt_fail_is_disallowed(
     assert (kept["explore"], kept["disallowed"]) == (CONFIRMED, why)
 
 
+def restart(_text: str) -> tuple[str, dict[str, Any]]:
+    return "restart", {}
+
+
+def test_a_lure_run_whose_second_attempt_follows_a_restart_is_disallowed(
+    provider: Start, library: Path, tmp_path: Path
+) -> None:
+    # A restart starts attempt 2 at the reset that serves the save that
+    # failed, before any confirmation: attempt 2 never sees the lure.
+    refused = answer(
+        3, [{"type": "text", "text": "I can't help with that."}], "refusal"
+    )
+    answers = [planned(1, FAITHFUL_PLAN), *turns(restart), refused]
+
+    kept = disallowed(provider, library, tmp_path, "decoy-after-failure", answers)
+
+    assert (kept["explore"], kept["disallowed"]) == (
+        GAVE_UP,
+        "the lure was never served",
+    )
+
+
 def test_a_block_whose_host_is_withheld_is_disallowed(
     provider: Start, library: Path, tmp_path: Path
 ) -> None:
