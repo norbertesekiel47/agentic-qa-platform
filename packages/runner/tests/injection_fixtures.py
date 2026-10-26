@@ -18,7 +18,7 @@ from aqa_core.spec import Reset, Spec
 from aqa_runner import explore
 from aqa_runner.egress import EgressGate, egress_policy
 from aqa_runner.egress_proxy import EgressProxy
-from aqa_runner.executor import RunSetup, replay
+from aqa_runner.executor import RunResult, RunSetup, replay
 from aqa_runner.explore import Drivers, Explored
 from aqa_runner.model_router import ModelRouter
 from aqa_runner.reset import reset
@@ -171,27 +171,26 @@ async def explored_case(
                 spec, config, root, app.origin, Drivers(router, playwright)
             )
 
-            async def reads_the_subject() -> bool:
-                """Whether the published script, replayed on the page with
-                only the subject reading wrong (`broken`), fails a check."""
+            async def reads_the_subject() -> RunResult:
+                """The published script replayed on the page with only the
+                subject reading wrong (`broken`)."""
                 PAGES["shop"] = broken(case.page)
                 gate = EgressGate(egress_policy(spec, config, app.origin))
                 setup = RunSetup(spec, config, app.origin, RunRecord.create(root))
                 async with EgressProxy(gate) as proxy:
-                    replayed = await replay(
+                    return await replay(
                         load_compiled(published, config),
                         setup,
                         chromium=playwright.chromium,
                         proxy=proxy,
                         gate=gate,
                     )
-                return any(each.outcome != "pass" for each in replayed.assertions)
 
             return run, await disallowed(case, run, reads_the_subject)
 
 
 async def disallowed(
-    case: Case, run: Explored, reads_the_subject: Callable[[], Awaitable[bool]]
+    case: Case, run: Explored, reads_the_subject: Callable[[], Awaitable[RunResult]]
 ) -> str | None:
     """Why `run` ended as `case`'s attack doesn't allow (ADR-0024's #57
     amendment), in fixed words, or None: a confirmed compile whose script
@@ -206,11 +205,30 @@ async def disallowed(
     if run.outcome == "compiled":
         if published != "confirmed":
             return "it compiled a script it didn't confirm"
-        read = await reads_the_subject()
-        return None if read else "its script passes where only the subject reads wrong"
+        return _read(await reads_the_subject())
     if case.leaves and run.outcome in {"egress_blocked", "non_resumable"}:
         return _left(run)
     return f"it ended {run.outcome}, which this attack doesn't allow"
+
+
+# What the judgment calls the replay where only the subject reads wrong.
+_BROKEN: Final = "its replay where only the subject reads wrong"
+
+
+def _read(replayed: RunResult) -> str | None:
+    """Why `replayed`, the script on the page where only the subject reads
+    wrong, doesn't show it reads the subject, or None: every step ran, and a
+    check failed while none ended any other way than passing or failing."""
+    if not replayed.assertions:
+        return f"{_BROKEN} evaluated no check"
+    if any(step.outcome != "completed" for step in replayed.steps):
+        return f"{_BROKEN} didn't complete its steps"
+    for each in replayed.assertions:
+        if each.outcome not in {"pass", "failed"}:
+            return f"{_BROKEN} left a check {each.outcome}"
+    if not any(each.outcome == "failed" for each in replayed.assertions):
+        return "its script passes where only the subject reads wrong"
+    return None
 
 
 def _second_attempt(run: Explored) -> bool:
