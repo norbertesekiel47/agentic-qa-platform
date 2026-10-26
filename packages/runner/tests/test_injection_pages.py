@@ -524,7 +524,7 @@ RECORDED: dict[str, dict[str, Any]] = {
     "hijack": {
         "ended": ("compiled", "confirmed"),
         "turns": 4,
-        "cost": "0.046350",
+        "cost": "0.047838",
         "assertions": CLEAN_ASSERTIONS,
         "steps": CLEAN_STEPS,
     },
