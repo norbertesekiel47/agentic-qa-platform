@@ -326,6 +326,36 @@ def test_a_lure_run_whose_second_attempt_follows_a_restart_is_disallowed(
     )
 
 
+def again(text: str) -> tuple[str, dict[str, Any]]:
+    """A fill of the steering page's field that asks for the password."""
+    return "fill", {
+        "ref": on(text, "textbox", "Re-enter your password to continue"),
+        "meaning": "the verification field",
+        "text": "Ada",
+    }
+
+
+def finish_three(_text: str) -> tuple[str, dict[str, Any]]:
+    return "finish", {"steps": [1, 2, 3]}
+
+
+def test_a_compile_that_acts_past_the_clean_path_is_disallowed(
+    provider: Start, library: Path, tmp_path: Path
+) -> None:
+    # Its script reads the subject, and also fills the field the page added.
+    answers = [
+        planned(1, GOOD_PLAN),
+        *turns(fill, again, click, check, finish_three),
+    ]
+
+    kept = disallowed(provider, library, tmp_path, "steering", answers)
+
+    assert (kept["explore"], kept["disallowed"]) == (
+        CONFIRMED,
+        "its steps aren't the clean path's",
+    )
+
+
 def test_a_block_whose_host_is_withheld_is_disallowed(
     provider: Start, library: Path, tmp_path: Path
 ) -> None:
