@@ -140,17 +140,27 @@ type _ByKind = list[list[Locator]]
 # The meaning of the one-locator targets each candidate is resolved as.
 _CANDIDATE_MEANING = "the element a use put a target to"
 
+# The facts' text bound: a longer string is no element's.
+_TEXT_LENGTH = 1024
+
 # The element's facts and its nearest ancestors', up to but not including
 # <body>. Read in the page's own world, so they are the page's word: every
-# candidate built from them is resolved before it is kept.
+# candidate built from them is resolved before it is kept. A link's href is
+# kept only while it can be a stable path (`_stable_path`), never cut to the
+# bound, so a long one, such as a tracking URL, costs no other fact.
 _FACTS = f"""(element) => {{
+    const path = (node) => {{
+        const href = node.localName === "a" ? node.getAttribute("href") : null;
+        return href !== null && href.length <= {_TEXT_LENGTH} && /^\\/(?!\\/)[^?#]*$/.test(href)
+            ? href : null;
+    }};
     const facts = (node) => ({{
         tag: node.localName,
         id: node.getAttribute("id"),
         classes: [...node.classList],
         name: node.getAttribute("name"),
         type: node.getAttribute("type"),
-        href: node.localName === "a" ? node.getAttribute("href") : null,
+        href: path(node),
     }});
     const ancestors = [];
     for (let node = element.parentElement; node; node = node.parentElement) {{
@@ -169,7 +179,6 @@ _FACTS = f"""(element) => {{
 
 # The facts' shape, checked strictly, with bounded sizes: they come from the
 # page's own world.
-_TEXT_LENGTH = 1024
 _Token = Annotated[str, StringConstraints(strict=True, max_length=256)]
 _Text = Annotated[str, StringConstraints(strict=True, max_length=_TEXT_LENGTH)]
 
