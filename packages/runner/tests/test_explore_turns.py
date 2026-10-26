@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 from aqa_core.config import ProjectConfig
+from aqa_core.coverage_plan import CoveragePlan
 from aqa_runner import explore_turns, model_router, navigator
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.chat_client import Reply
@@ -43,7 +44,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from packages.runner.tests.document_fixtures import Sites, run_gate, serving_sites
 from packages.runner.tests.egress_fixtures import gate
-from packages.runner.tests.executor_fixtures import App, serving_app
+from packages.runner.tests.executor_fixtures import PAGES, App, serving_app
 from packages.runner.tests.explore_graph_fixtures import (
     CLICK,
     FILL,
@@ -51,6 +52,7 @@ from packages.runner.tests.explore_graph_fixtures import (
     PLAN,
     REFUSED,
     SAVE,
+    STATUS,
     USAGE,
     Scripted,
     answer,
@@ -264,17 +266,98 @@ def test_each_turn_sends_one_fresh_request_with_one_snapshot(
     )
 
 
-def test_each_request_says_what_the_attempt_has_bound(app: App, tmp_path: Path) -> None:
-    # The model keeps no memory but its notes: the turn after a check is
-    # bound says so (ADR-0024's #58 amendment).
-    client = Scripted(FILL, CLICK, ASSERT, FINISH)
+# A status page and its successor without the status's id, so a check bound
+# on the first is no longer established on the second.
+STATUS_PAGES = {
+    "status-one": '<p id="status" class="status">Saved</p>',
+    "status-two": '<p class="status">Saved</p>',
+}
+# Ten checks, so plan order (a9, a10) isn't the IDs' sorted order: eight the
+# turns never bind, then the status read twice.
+TEN = CoveragePlan.model_validate(
+    {
+        "expectations": [
+            {
+                "expect_index": 0,
+                "subject": STATUS,
+                "claim": "says the form was saved",
+                "checks": [
+                    *(
+                        {"check": "url_matches", "pattern": f"/page/{n}"}
+                        for n in range(8)
+                    ),
+                    {
+                        "check": "text_in_target",
+                        "target_meaning": STATUS,
+                        "text": "Saved",
+                    },
+                    {
+                        "check": "text_in_target",
+                        "target_meaning": STATUS,
+                        "text": "Saved Bob",
+                    },
+                ],
+            }
+        ],
+        "requires": [],
+    }
+)
 
-    turned(app, tmp_path, client)
 
+def asserting(check_id: str) -> Callable[[Sequence[BaseMessage]], Reply]:
+    return tool(
+        "assert_check",
+        lambda m: {"check_id": check_id, "ref": ref(m, "paragraph", "Saved")},
+    )
+
+
+def test_each_request_says_what_the_attempt_has_bound_in_plan_order(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The model keeps no memory but its notes: each request says how every
+    # planned check stood at its last evaluation (ADR-0024's #58 amendment).
+    for name, page in STATUS_PAGES.items():
+        monkeypatch.setitem(PAGES, name, page)
+    client = Scripted(
+        asserting("a10"),
+        asserting("a9"),
+        calling("navigate", {"path": "/page/status-two"}),
+        # finish evaluates both on the page without the status's id.
+        calling("finish", {"steps": [1]}),
+        calling("finish", {"steps": [1]}),
+    )
+
+    turned(app, tmp_path, client, turns=5, page="/page/status-one", plan=TEN)
+
+    unbound = [f"a{n}: unbound" for n in range(1, 9)]
     assert [
         re.findall(r"<checks>\n(.*?)\n</checks>", request[2].text, re.DOTALL)
         for request in client.requests
-    ] == [["a1: unbound"]] * 3 + [["a1: bound, passed when last checked"]]
+    ] == [
+        ["\n".join([*unbound, "a9: unbound", "a10: unbound"])],
+        ["\n".join([*unbound, "a9: unbound", "a10: bound, failed when last checked"])],
+        *[
+            [
+                "\n".join(
+                    [
+                        *unbound,
+                        "a9: bound, passed when last checked",
+                        "a10: bound, failed when last checked",
+                    ]
+                )
+            ]
+        ]
+        * 2,
+        [
+            "\n".join(
+                [
+                    *unbound,
+                    "a9: bound, not established when last checked",
+                    "a10: bound, not established when last checked",
+                ]
+            )
+        ],
+    ]
 
 
 def test_each_priced_response_is_on_disk_before_the_next_call(

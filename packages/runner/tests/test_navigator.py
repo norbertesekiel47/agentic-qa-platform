@@ -413,7 +413,7 @@ BASELINE_PLAN = CoveragePlan.model_validate(
                 "checks": [
                     *(
                         {"check": "url_matches", "pattern": f"/page/{n}"}
-                        for n in range(5)
+                        for n in range(9)
                     ),
                     {"check": "probe_equals_baseline", "probe": "count"},
                 ],
@@ -426,14 +426,14 @@ BASELINE_PLAN = CoveragePlan.model_validate(
 
 def test_a_checks_state_comes_from_its_last_evaluation_in_plan_order() -> None:
     # Only the outcome is read, so a result's misses and error stay out. A
-    # kind exploring can't bind (`navigator_tools._misfit`) says so.
+    # kind exploring can't bind (`navigator_tools._misfit`) says so. Ten
+    # checks, so plan order isn't the IDs' sorted order.
     results = {
         "a1": AssertionResult("a1", "pass"),
         "a2": AssertionResult("a2", "failed"),
         "a3": AssertionResult("a3", "binding_unresolved", ("no match",)),
         "a4": AssertionResult("a4", "check_timed_out"),
-        "a5": None,
-        "a6": None,
+        "a5": AssertionResult("a5", "not_evaluated", error="fake: a page said so"),
     }
 
     assert list(check_states(BASELINE_PLAN, results).items()) == [
@@ -441,8 +441,9 @@ def test_a_checks_state_comes_from_its_last_evaluation_in_plan_order() -> None:
         ("a2", "failed"),
         ("a3", "not_established"),
         ("a4", "not_established"),
-        ("a5", "unbound"),
-        ("a6", "unbindable"),
+        ("a5", "not_established"),
+        *((f"a{n}", "unbound") for n in range(6, 10)),
+        ("a10", "unbindable"),
     ]
 
 
