@@ -26,11 +26,12 @@ from aqa_core.spec import Spec
 from aqa_runner.anthropic_client import AnthropicClient
 from aqa_runner.bound_secrets import BoundSecret
 from aqa_runner.chat_client import Reply
-from aqa_runner.evaluation import AssertionOutcome
+from aqa_runner.evaluation import AssertionResult
 from aqa_runner.model_router import Routed
 from aqa_runner.navigator import (
     INSTRUCTIONS,
     AssertCheck,
+    CheckState,
     Click,
     Decision,
     DescribeParts,
@@ -43,6 +44,7 @@ from aqa_runner.navigator import (
     Satisfied,
     Turn,
     Unrunnable,
+    check_states,
     decision,
     navigator_prefix,
     navigator_request,
@@ -375,15 +377,15 @@ def test_the_snapshot_reaches_the_model_inside_its_delimited_block(
 def test_each_planned_checks_state_follows_the_log_in_fixed_words(
     prefix: Prefix,
 ) -> None:
-    # What a failing result says, its misses or a page's error text, stays
-    # out: the block holds our check IDs and three phrases (ADR-0024's #58
-    # amendment).
-    checks: dict[str, AssertionOutcome | None] = {
-        "a1": "pass",
-        "a2": "failed",
-        "a3": "binding_unresolved",
-        "a4": "not_evaluated",
-        "a5": None,
+    # In the turn's own order, never sorted: a2, a10, a1. The block holds
+    # our check IDs and our phrases, nothing a result's text says (ADR-0024's
+    # #58 amendment).
+    checks: dict[str, CheckState] = {
+        "a2": "passed",
+        "a10": "failed",
+        "a1": "not_established",
+        "a3": "unbound",
+        "a4": "unbindable",
     }
 
     sent = navigator_request(
@@ -391,16 +393,64 @@ def test_each_planned_checks_state_follows_the_log_in_fixed_words(
     )
 
     assert (
-        "</log>\n\n<checks>\na1: bound and passing\na2: bound and failing\n"
-        "a3: bound and failing\na4: bound and failing\na5: unbound\n</checks>\n\n"
-        "<notes>\n"
+        "</log>\n\n<checks>\n"
+        "a2: bound, passed when last checked\n"
+        "a10: bound, failed when last checked\n"
+        "a1: bound, not established when last checked\n"
+        "a3: unbound\n"
+        "a4: exploring can't bind it yet\n"
+        "</checks>\n\n<notes>\n"
     ) in sent[2].content
+
+
+BASELINE_PLAN = CoveragePlan.model_validate(
+    {
+        "expectations": [
+            {
+                "expect_index": 0,
+                "subject": "the cart",
+                "claim": "is saved",
+                "checks": [
+                    *(
+                        {"check": "url_matches", "pattern": f"/page/{n}"}
+                        for n in range(5)
+                    ),
+                    {"check": "probe_equals_baseline", "probe": "count"},
+                ],
+            }
+        ],
+        "requires": [],
+    }
+)
+
+
+def test_a_checks_state_comes_from_its_last_evaluation_in_plan_order() -> None:
+    # Only the outcome is read, so a result's misses and error stay out. A
+    # kind exploring can't bind (`navigator_tools._misfit`) says so.
+    results = {
+        "a1": AssertionResult("a1", "pass"),
+        "a2": AssertionResult("a2", "failed"),
+        "a3": AssertionResult("a3", "binding_unresolved", ("no match",)),
+        "a4": AssertionResult("a4", "check_timed_out"),
+        "a5": None,
+        "a6": None,
+    }
+
+    assert list(check_states(BASELINE_PLAN, results).items()) == [
+        ("a1", "passed"),
+        ("a2", "failed"),
+        ("a3", "not_established"),
+        ("a4", "not_established"),
+        ("a5", "unbound"),
+        ("a6", "unbindable"),
+    ]
 
 
 def test_the_system_prompt_names_the_checks_block() -> None:
     assert (
-        "<checks> says whether each planned check is unbound, bound and passing, "
-        "or bound and failing."
+        "<checks> says where each planned check stands: unbound; bound, and "
+        "whether it passed, failed or wasn't established when last checked; or "
+        "one exploring can't bind yet."
     ) in INSTRUCTIONS
 
 

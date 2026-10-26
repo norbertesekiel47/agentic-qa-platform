@@ -274,7 +274,7 @@ def test_each_request_says_what_the_attempt_has_bound(app: App, tmp_path: Path) 
     assert [
         re.findall(r"<checks>\n(.*?)\n</checks>", request[2].text, re.DOTALL)
         for request in client.requests
-    ] == [["a1: unbound"]] * 3 + [["a1: bound and passing"]]
+    ] == [["a1: unbound"]] * 3 + [["a1: bound, passed when last checked"]]
 
 
 def test_each_priced_response_is_on_disk_before_the_next_call(
