@@ -9,7 +9,7 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Annotated, Any
+from typing import Annotated, Any, Final, Literal
 
 from aqa_core.coverage_plan import CoveragePlan, planned_checks
 from aqa_core.project import SpecError
@@ -19,7 +19,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import AfterValidator, StrictInt, StrictStr, ValidationError
 
-from aqa_runner.evaluation import AssertionOutcome
+from aqa_runner.evaluation import AssertionResult
 from aqa_runner.model_router import Routed
 from aqa_runner.probes import OFFERED_PATH_CHARS
 from aqa_runner.redaction import Redacted, Redactor
@@ -35,8 +35,9 @@ The user's messages hold labelled blocks. <spec> is the spec: its goal, \
 optional steps, the account to sign in with, and its expectations. <plan> is \
 the coverage plan, frozen for the run: each expectation's checks, each with \
 an ID such as a1. <log> lists what this attempt has done, numbered by step. \
-<checks> says whether each planned check is unbound, bound and passing, or \
-bound and failing. <notes> holds the notes you wrote last turn. <results> says what your last \
+<checks> says where each planned check stands: unbound; bound, and whether \
+it passed, failed or wasn't established when last checked; or one exploring \
+can't bind yet. <notes> holds the notes you wrote last turn. <results> says what your last \
 tool call did. <parts>, after a describe_parts call, lists the parts it \
 described, with refs such as p1.2. <probes> lists, for each probe a check \
 reads, the JSON paths of the values in its response as options with refs \
@@ -227,6 +228,42 @@ def probe_listing(offered: Offered, redactor: Redactor) -> Redacted | None:
     return redactor.redact("\n".join(lines))
 
 
+# A planned check as a turn's <checks> block states it (ADR-0024's #58
+# amendment): our own words, true whatever the page did since. A result's
+# misses and error text, which a page can choose, are never read.
+type CheckState = Literal[
+    "unbound", "passed", "failed", "not_established", "unbindable"
+]
+_STATED: Final[Mapping[CheckState, str]] = {
+    "unbound": "unbound",
+    "passed": "bound, passed when last checked",
+    "failed": "bound, failed when last checked",
+    "not_established": "bound, not established when last checked",
+    # `navigator_tools._misfit` refuses to bind it, and explore refuses its
+    # plan before any turn (`unsupported_features`).
+    "unbindable": "exploring can't bind it yet",
+}
+
+
+def check_states(
+    plan: CoveragePlan, results: Mapping[str, AssertionResult | None]
+) -> dict[str, CheckState]:
+    """Each of `plan`'s checks, in plan order, by its last evaluation in
+    `results` (`Attempt.checks`): unbound while it has none."""
+    states: dict[str, CheckState] = {}
+    for check_id, (_, check) in planned_checks(plan).items():
+        result = results.get(check_id)
+        if check.check == "probe_equals_baseline":
+            states[check_id] = "unbindable"
+        elif result is None:
+            states[check_id] = "unbound"
+        elif result.outcome in ("pass", "failed"):
+            states[check_id] = "passed" if result.outcome == "pass" else "failed"
+        else:
+            states[check_id] = "not_established"
+    return states
+
+
 @dataclass(frozen=True)
 class Turn:
     """What a request adds to the prefix. The log, notes, results and parts
@@ -245,8 +282,8 @@ class Turn:
     parts: str = ""
     probes: Redacted | None = None
     confirmation: Redacted | None = None
-    # Each planned check's last evaluation in the attempt, None while unbound.
-    checks: Mapping[str, AssertionOutcome | None] = field(default_factory=dict)
+    # Each planned check's state in the attempt (`check_states`).
+    checks: Mapping[str, CheckState] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # Through a checkpoint, Redacted comes back as str; a cast can't
@@ -268,19 +305,9 @@ def _block(label: str, text: str, redactor: Redactor) -> str:
     return f"<{label}>\n{redactor.redact(escaped)}\n</{label}>"
 
 
-def _check_states(checks: Mapping[str, AssertionOutcome | None]) -> str:
-    """Each planned check by its ID, in our own words: never a failing
-    result's misses or error text, which a page can choose."""
+def _check_lines(checks: Mapping[str, CheckState]) -> str:
     return "\n".join(
-        f"{check_id}: "
-        + (
-            "unbound"
-            if outcome is None
-            else "bound and passing"
-            if outcome == "pass"
-            else "bound and failing"
-        )
-        for check_id, outcome in checks.items()
+        f"{check_id}: {_STATED[state]}" for check_id, state in checks.items()
     )
 
 
@@ -301,7 +328,7 @@ def navigator_request(
     parts, the probes block
     only in an attempt whose probes offer options, and the confirmation
     block, first, only in an attempt after a failed confirmation."""
-    checks = (("checks", _check_states(turn.checks)),) if turn.checks else ()
+    checks = (("checks", _check_lines(turn.checks)),) if turn.checks else ()
     parts = (("parts", turn.parts),) if turn.parts else ()
     probes = () if turn.probes is None else (("probes", turn.probes),)
     failed = () if turn.confirmation is None else (("confirmation", turn.confirmation),)

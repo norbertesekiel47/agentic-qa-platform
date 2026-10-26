@@ -42,6 +42,7 @@ from aqa_runner.navigator import (
     Restart,
     Turn,
     Unrunnable,
+    check_states,
     decision,
     navigator_request,
     navigator_tools,
@@ -285,10 +286,7 @@ async def _request(
         parts=state["parts"],
         probes=probe_listing(context.attempt.offered, context.redactor),
         confirmation=context.attempts.feedback,
-        checks={
-            check_id: None if result is None else result.outcome
-            for check_id, result in context.attempt.checks.items()
-        },
+        checks=check_states(context.attempt.plan, context.attempt.checks),
     )
     return navigator_request(context.prefix, turn, redactor=context.redactor), seen
 
