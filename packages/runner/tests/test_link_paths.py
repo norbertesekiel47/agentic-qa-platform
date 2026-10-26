@@ -92,6 +92,12 @@ def test_a_text_checks_header_link_is_found_by_its_path(
     [
         ("/article/testing-without-flakes", True),
         ("/article/Benchmarks-we-trust-5d7dc78d", False),  # a generated suffix
+        # Conduit's suffix is crypto.randomUUID().slice(0, 8): all digits, or
+        # all hex letters, are a generated part too.
+        ("/article/Benchmarks-we-trust-12345678", False),
+        ("/article/Benchmarks-we-trust-deadbeef", False),
+        ("/user/u-1234567", False),
+        ("/article/css-grid-for-layouts", True),
         ("/article/tests?page=2", False),
         ("/article/tests#comments", False),
         ("//elsewhere.test/article/tests", False),

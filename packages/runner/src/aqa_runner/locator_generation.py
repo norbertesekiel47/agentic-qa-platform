@@ -295,14 +295,27 @@ def _plain(token: str) -> bool:
     )
 
 
+# A path segment's part a tool generated, beyond `_plain`'s mixed ones: a
+# run of eight or more hex digits, or of five or more digits, such as
+# Conduit's `crypto.randomUUID().slice(0, 8)` slug suffix.
+_GENERATED_PART = re.compile(r"[0-9a-fA-F]{8,}|[0-9]{5,}")
+
+
 def _stable_path(href: str | None) -> bool:
-    """Whether a link's `href` is a path on the page's origin, with no query
-    or fragment, every segment of it plain: never a page a run created, whose
-    slug ends in a generated part (ADR-0025's #58 amendment). A slug such as
-    `css-grid-for-layouts` is words, not a tool's class prefix."""
+    """Whether a link's `href` is a root-relative path with no query or
+    fragment, every segment of it plain and no part of it generated: never
+    a page a run created, whose slug ends in a generated part (ADR-0025's
+    #58 amendment). A slug such as `css-grid-for-layouts` is words, not a
+    tool's class prefix."""
     if href is None or not href.startswith("/"):
         return False
-    return all(_plain(segment) for segment in href[1:].split("/"))
+    return all(
+        _plain(segment)
+        and not any(
+            _GENERATED_PART.fullmatch(part) for part in re.split(r"[-_]", segment)
+        )
+        for segment in href[1:].split("/")
+    )
 
 
 def _structures(node: _Node) -> list[str]:
