@@ -19,6 +19,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import AfterValidator, StrictInt, StrictStr, ValidationError
 
+from aqa_runner.evaluation import AssertionOutcome
 from aqa_runner.model_router import Routed
 from aqa_runner.probes import OFFERED_PATH_CHARS
 from aqa_runner.redaction import Redacted, Redactor
@@ -34,7 +35,8 @@ The user's messages hold labelled blocks. <spec> is the spec: its goal, \
 optional steps, the account to sign in with, and its expectations. <plan> is \
 the coverage plan, frozen for the run: each expectation's checks, each with \
 an ID such as a1. <log> lists what this attempt has done, numbered by step. \
-<notes> holds the notes you wrote last turn. <results> says what your last \
+<checks> says whether each planned check is unbound, bound and passing, or \
+bound and failing. <notes> holds the notes you wrote last turn. <results> says what your last \
 tool call did. <parts>, after a describe_parts call, lists the parts it \
 described, with refs such as p1.2. <probes> lists, for each probe a check \
 reads, the JSON paths of the values in its response as options with refs \
@@ -231,9 +233,10 @@ class Turn:
     come from graph state; the snapshot is this turn's observation, which
     never enters graph state, so it is still the `Redacted` text the session
     gave. `parts` is what the last turn's describe_parts listed, if any,
-    `probes` the attempt's `probe_listing`, and `confirmation` the run's
-    last failed confirmation (`explore_result.feedback`, #56), which never
-    enter it either."""
+    `probes` the attempt's `probe_listing`, `confirmation` the run's last
+    failed confirmation (`explore_result.feedback`, #56), and `checks` the
+    attempt's planned checks (`Attempt.checks`), which never enter it
+    either."""
 
     log: tuple[str, ...]
     notes: str
@@ -242,6 +245,8 @@ class Turn:
     parts: str = ""
     probes: Redacted | None = None
     confirmation: Redacted | None = None
+    # Each planned check's last evaluation in the attempt, None while unbound.
+    checks: Mapping[str, AssertionOutcome | None] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # Through a checkpoint, Redacted comes back as str; a cast can't
@@ -263,6 +268,22 @@ def _block(label: str, text: str, redactor: Redactor) -> str:
     return f"<{label}>\n{redactor.redact(escaped)}\n</{label}>"
 
 
+def _check_states(checks: Mapping[str, AssertionOutcome | None]) -> str:
+    """Each planned check by its ID, in our own words: never a failing
+    result's misses or error text, which a page can choose."""
+    return "\n".join(
+        f"{check_id}: "
+        + (
+            "unbound"
+            if outcome is None
+            else "bound and passing"
+            if outcome == "pass"
+            else "bound and failing"
+        )
+        for check_id, outcome in checks.items()
+    )
+
+
 def _message(redactor: Redactor, *blocks: tuple[str, str]) -> HumanMessage:
     return HumanMessage(
         content="\n\n".join(_block(label, text, redactor) for label, text in blocks)
@@ -274,10 +295,13 @@ def navigator_request(
 ) -> list[BaseMessage]:
     """One navigator request: the instructions, the prefix and the turn. Every
     block is scanned with the run's redactor as it is built, whatever scanned
-    it before, and holds no "<", so no text can close its block. The parts
-    block comes only after a turn whose call listed parts, the probes block
+    it before, and holds no "<", so no text can close its block. The checks
+    block follows the log in a turn with planned checks, as every turn of a
+    run has. The parts block comes only after a turn whose call listed
+    parts, the probes block
     only in an attempt whose probes offer options, and the confirmation
     block, first, only in an attempt after a failed confirmation."""
+    checks = (("checks", _check_states(turn.checks)),) if turn.checks else ()
     parts = (("parts", turn.parts),) if turn.parts else ()
     probes = () if turn.probes is None else (("probes", turn.probes),)
     failed = () if turn.confirmation is None else (("confirmation", turn.confirmation),)
@@ -288,6 +312,7 @@ def navigator_request(
             redactor,
             *failed,
             ("log", "\n".join(turn.log)),
+            *checks,
             ("notes", turn.notes),
             ("results", "\n".join(turn.results)),
             *parts,

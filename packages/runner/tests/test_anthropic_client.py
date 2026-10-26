@@ -262,7 +262,7 @@ def test_a_tools_call_sends_strict_tools_and_lets_the_model_choose(
 
     (body,) = recording.sent
     assert body["model"] == "claude-sonnet-5-5"
-    assert body["tool_choice"] == {"type": "auto"}
+    assert body["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
     (click_tool,) = body["tools"]
     assert click_tool["name"] == "click"
     assert click_tool["strict"] is True

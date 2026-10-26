@@ -110,8 +110,10 @@ class AnthropicClient:
             result = cast(dict[str, Any], await structured.ainvoke(list(messages)))
             raw, parsed = result["raw"], result["parsed"]
         elif tools:
+            # One tool call a reply: only the first of several would run, and
+            # the model writes no notes beside them (ADR-0024's #58 amendment).
             raw = await self.chat.bind_tools(
-                list(tools), tool_choice="auto", strict=True
+                list(tools), tool_choice="auto", parallel_tool_calls=False, strict=True
             ).ainvoke(list(messages))
         else:
             raw = await self.chat.ainvoke(list(messages))

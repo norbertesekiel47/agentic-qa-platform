@@ -264,6 +264,19 @@ def test_each_turn_sends_one_fresh_request_with_one_snapshot(
     )
 
 
+def test_each_request_says_what_the_attempt_has_bound(app: App, tmp_path: Path) -> None:
+    # The model keeps no memory but its notes: the turn after a check is
+    # bound says so (ADR-0024's #58 amendment).
+    client = Scripted(FILL, CLICK, ASSERT, FINISH)
+
+    turned(app, tmp_path, client)
+
+    assert [
+        re.findall(r"<checks>\n(.*?)\n</checks>", request[2].text, re.DOTALL)
+        for request in client.requests
+    ] == [["a1: unbound"]] * 3 + [["a1: bound and passing"]]
+
+
 def test_each_priced_response_is_on_disk_before_the_next_call(
     app: App, tmp_path: Path
 ) -> None:

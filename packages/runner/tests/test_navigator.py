@@ -26,6 +26,7 @@ from aqa_core.spec import Spec
 from aqa_runner.anthropic_client import AnthropicClient
 from aqa_runner.bound_secrets import BoundSecret
 from aqa_runner.chat_client import Reply
+from aqa_runner.evaluation import AssertionOutcome
 from aqa_runner.model_router import Routed
 from aqa_runner.navigator import (
     INSTRUCTIONS,
@@ -369,6 +370,38 @@ def test_the_snapshot_reaches_the_model_inside_its_delimited_block(
         '- link "Sign in" [ref=e3]\n- heading "Fake article" [level=1] [ref=e4]\n'
         "</snapshot>"
     )
+
+
+def test_each_planned_checks_state_follows_the_log_in_fixed_words(
+    prefix: Prefix,
+) -> None:
+    # What a failing result says, its misses or a page's error text, stays
+    # out: the block holds our check IDs and three phrases (ADR-0024's #58
+    # amendment).
+    checks: dict[str, AssertionOutcome | None] = {
+        "a1": "pass",
+        "a2": "failed",
+        "a3": "binding_unresolved",
+        "a4": "not_evaluated",
+        "a5": None,
+    }
+
+    sent = navigator_request(
+        prefix, replace(turn(), checks=checks), redactor=NO_SECRETS
+    )
+
+    assert (
+        "</log>\n\n<checks>\na1: bound and passing\na2: bound and failing\n"
+        "a3: bound and failing\na4: bound and failing\na5: unbound\n</checks>\n\n"
+        "<notes>\n"
+    ) in sent[2].content
+
+
+def test_the_system_prompt_names_the_checks_block() -> None:
+    assert (
+        "<checks> says whether each planned check is unbound, bound and passing, "
+        "or bound and failing."
+    ) in INSTRUCTIONS
 
 
 def test_a_checkpointed_log_line_holding_a_secret_is_redacted_at_request_construction(
@@ -723,7 +756,8 @@ def test_every_tool_schema_is_strict_and_none_is_forced(
     ask(monkeypatch, sonnet, [{"type": "text", "text": "Looking."}], sent)
 
     (body,) = sent
-    assert body["tool_choice"] == {"type": "auto"}
+    # One call a reply, and still no tool forced (ADR-0024's #58 amendment).
+    assert body["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
     assert [tool["name"] for tool in body["tools"]] == TOOL_NAMES
     unions = 0
     for tool in body["tools"]:
