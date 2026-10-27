@@ -69,6 +69,43 @@ def test_visible_text_reads_the_pages_body_without_its_frames(sites: Sites) -> N
     assert asyncio.run(scenario()).split() == ["Top", "Shown", "words"]
 
 
+# Conduit's tag list: pills that are inline-block boxes with nothing between
+# them, which innerText joins into one word; beside it, an inline count that
+# a word break would split, a pill the page uppercases and one it hides.
+BOXES = (
+    '<ul id="tags"><li style="display:inline-block">testing</li>'
+    '<li style="display:inline-block">benchmarks</li>'
+    '<li style="display:inline-block;text-transform:uppercase">flaky</li>'
+    '<li style="display:none">hidden</li></ul>'
+    '<p id="cart">Cart<span>(3)</span></p>'
+)
+
+
+def test_text_reads_break_words_between_rendered_boxes(sites: Sites) -> None:
+    # ADR-0025's #58 amendment: each box reads as its own words.
+    tags = Target(semantic="the tag list", locators=(ByCss(css="#tags"),))
+    cart = Target(semantic="the cart link", locators=(ByCss(css="#cart"),))
+
+    async def scenario() -> tuple[str, str, str]:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/kept")
+            await session.page.evaluate(
+                "(markup) => document.body.insertAdjacentHTML('beforeend', markup)",
+                BOXES,
+            )
+            return (
+                await session.text_of(await found(session, tags)),
+                await session.text_of(await found(session, cart)),
+                await session.visible_text(),
+            )
+
+    tags_text, cart_text, page_text = asyncio.run(scenario())
+
+    assert tags_text.split() == ["testing", "benchmarks", "FLAKY"]
+    assert cart_text == "Cart(3)"
+    assert "testing benchmarks FLAKY Cart(3)" in " ".join(page_text.split())
+
+
 def test_text_reads_refuse_a_page_off_the_allowed_origins(sites: Sites) -> None:
     go = Target(semantic="the link", locators=(ByRole(role="link", name="Go"),))
     landed = f"{sites.cdn}/doc"
