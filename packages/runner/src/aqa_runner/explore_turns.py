@@ -7,8 +7,11 @@ the step dispatched before it (ADR-0024's #53 P22 amendment), builds one
 fresh request (`navigator.navigator_request`) and runs at most the reply's
 first tool call. Each priced response is on disk in `costs.jsonl` before
 the next call, and each request sent leaves `turns/<n>.json`, whatever came
-back, unless its cost line isn't on disk or the call is cancelled."""
+back, unless its cost line isn't on disk or the call is cancelled. The
+turns stop, as when they are all taken, once the navigator makes the same
+refused call `REPEATS` times in a row (ADR-0024's #232 amendment)."""
 
+import hashlib
 import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -31,6 +34,7 @@ from aqa_runner.document_origins import DocumentChangedError, PolicyEventError
 from aqa_runner.executor import StepResult
 from aqa_runner.explore_attempts import Attempts
 from aqa_runner.explore_result import Stop
+from aqa_runner.locator_generation import snapshot_elements
 from aqa_runner.model_router import ModelCallError, ModelRouter, Routed, Spend
 from aqa_runner.navigator import (
     AssertCheck,
@@ -71,6 +75,11 @@ UNSENT: Final = (
     "a request still spelled a bound value after its scans, so it wasn't sent"
 )
 
+# How many times in a row the navigator may make one refused call before
+# its turns stop, and why they stop then (#232).
+REPEATS: Final = 5
+REPEATED: Final = f"the navigator made the same refused call {REPEATS} times in a row"
+
 
 class UnsentRequestError(Exception):
     """A model request in which the run's scan still finds a bound value:
@@ -100,14 +109,17 @@ def unspelled(redactor: Redactor) -> Callable[[Sequence[BaseMessage]], None]:
 class Turns(TypedDict):
     """The graph's state, plain data a checkpoint keeps: the turns taken,
     the attempt's log of steps, the model's last notes, what its last tool
-    call did, the parts it listed for the next turn's call, and whether
-    the turns are over."""
+    call did, the parts it listed for the next turn's call, the digest of
+    the last call if it was refused (`_refusal`) and how many times in a row
+    that call was made, and whether the turns are over."""
 
     turn: int
     log: tuple[str, ...]
     notes: str
     results: tuple[str, ...]
     parts: str
+    refused: str
+    repeats: int
     done: bool
 
 
@@ -182,7 +194,16 @@ async def take_turns(context: Turning) -> None:
     graph.add_conditional_edges("turn", _next)
     try:
         await graph.compile(checkpointer=InMemorySaver()).ainvoke(
-            Turns(turn=0, log=(), notes="", results=(), parts="", done=False),
+            Turns(
+                turn=0,
+                log=(),
+                notes="",
+                results=(),
+                parts="",
+                refused="",
+                repeats=0,
+                done=False,
+            ),
             # One superstep per turn, and one to stop: the budget stops the
             # turns, never LangGraph's limit, which an environment can lower.
             {
@@ -219,7 +240,7 @@ async def _taken(context: Turning, state: Turns) -> Turns | Stop | None:
     run was interrupted (an egress block or an infrastructure event), whose
     facts then decide how it ends."""
     attempt = context.attempt
-    if (stop := _spent(context, state["turn"])) is not None:
+    if (stop := _spent(context, state)) is not None:
         return stop
     messages, seen = await _request(context, state)
     unsaved = await _evidenced(context, seen)
@@ -242,12 +263,18 @@ async def _taken(context: Turning, state: Turns) -> Turns | Stop | None:
         # A journal or a document the record couldn't take, a broken
         # journal's refusal included: nothing more may be dispatched.
         return Stop("record_error", context.said(UNWRITTEN))
+    refused = _refusal(context, reply, results[0])
+    repeats = 0
+    if refused:
+        repeats = state["repeats"] + 1 if refused == state["refused"] else 1
     return Turns(
         turn=number,
         log=(*state["log"], *logged),
         notes=chosen.notes,
         results=results,
         parts=parts,
+        refused=refused,
+        repeats=repeats,
         done=context.script is not None
         or context.attempts.restarted
         or attempt.ended
@@ -255,9 +282,12 @@ async def _taken(context: Turning, state: Turns) -> Turns | Stop | None:
     )
 
 
-def _spent(context: Turning, taken: int) -> Stop | None:
-    """Why no further turn may start: every turn taken, or no spend left."""
-    if taken >= context.turns:
+def _spent(context: Turning, state: Turns) -> Stop | None:
+    """Why no further turn may start: the same refused call made
+    `REPEATS` times in a row, every turn taken, or no spend left."""
+    if state["repeats"] >= REPEATS:
+        return Stop("gave_up", context.said(REPEATED))
+    if (taken := state["turn"]) >= context.turns:
         return Stop(
             "gave_up", context.said(f"the attempt took all {taken} of its turns")
         )
@@ -407,6 +437,27 @@ async def _ran(
         "a turn runs one"
     )
     return ((text, unrun) if chosen.unrun else (text,)), logged, parts
+
+
+def _refusal(context: Turning, reply: _Reply, text: str) -> str:
+    """The digest of the reply's first tool call, when `text`, what it did,
+    says in fixed words that it was refused: it did not run, its arguments
+    didn't fit the tool, or `finish` compiled nothing; else "". The digest
+    covers the tool, its arguments, with a ref as the role and name the
+    snapshot gave its element, since each snapshot gives fresh refs, and
+    that text; never the model's words themselves."""
+    calls = [] if reply.routed is None else reply.routed.message.tool_calls
+    if not calls:
+        return ""
+    name, args = calls[0]["name"], dict(calls[0]["args"])
+    refusals = (f"{name} did not run: ", f"the call to {name} was not run: ")
+    if not text.startswith((*refusals, f"{name} compiled nothing: ")):
+        return ""
+    if isinstance(seen := args.get("ref"), str):
+        elements = snapshot_elements(context.attempt.observation or "")
+        args["ref"] = elements.get(seen, seen)
+    said = json.dumps([name, args, text], sort_keys=True)
+    return hashlib.sha256(said.encode()).hexdigest()
 
 
 def _line(call: Action, step: StepResult | None) -> tuple[str, ...]:
