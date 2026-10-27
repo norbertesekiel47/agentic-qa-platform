@@ -60,6 +60,10 @@ def test_normalize_strips_private_use_glyphs_and_collapses_whitespace(
         ("USD$5", "$5", True),
         ("Price: $9.99", "$9.99", True),
         ("A1", "1", False),
+        # A letter beyond ASCII is a word character too, as the browser's
+        # match of a held value reads one (ADR-0025's #58 amendment).
+        ("\u00e9foo", "foo", False),
+        ("\u00c9foo", "\u00e9foo", True),
         # Text without spaces between words (CJK) has no word boundaries to
         # find, so a claim about part of it needs a pattern.
         ("\u4fdd\u5b58\u3057\u307e\u3057\u305f", "\u4fdd\u5b58", False),

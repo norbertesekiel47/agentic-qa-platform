@@ -3,6 +3,7 @@ scope holding the value an earlier fill step typed finds only the elements
 whose text holds it as whole words, ignoring case, so of two comment cards
 by one author, the one the run posted."""
 
+import html
 import re
 import time
 from collections.abc import Callable, Iterator
@@ -11,6 +12,7 @@ from pathlib import Path
 import pytest
 from aqa_core.compiled import ByCss, HeldValue, Locator, Target
 from aqa_core.coverage_plan import CoveragePlan
+from aqa_core.text import has_text
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.locator_generation import LocatorError, Seen, TargetUses
 from aqa_runner.locators import (
@@ -19,6 +21,7 @@ from aqa_runner.locators import (
     Shown,
     Unresolved,
     Use,
+    css_query,
     resolve,
     resolve_every,
 )
@@ -133,6 +136,65 @@ def test_a_negative_check_under_a_held_scope_needs_the_card_to_stand(
         return await found_in(session, gone, "negative_check", every=every)
 
     assert in_session(scenario) == expected
+
+
+# Page texts and values a scope may hold, where the browser's match and
+# `has_text`, which text checks compare by, must agree (ADR-0025's #58
+# amendment): word boundaries, case and what normalizing strips.
+AGREED = [
+    ("éfoo bar", "foo bar"),
+    ("Éfoo bar", "éfoo bar"),
+    ("Thanks for the warm welcome!", "anks for the warm welcome!"),
+    ("Thanks for the warm welcome!", "for the WARM"),
+    ("Thanks for\n      the warm   welcome!", POSTED),
+    ("Thanks\u00ad for the warm welcome!", POSTED),
+    ("Tha\ue000nks for the warm welcome!", POSTED),
+    ("x\u00adThanks for the warm welcome!", POSTED),
+    ("foo_bar", "bar"),
+    ("foo-bar", "bar"),
+    ("STRASSE ist lang", "Straße"),
+]
+
+
+def holds(text: str, value: str) -> int:
+    """How many paragraphs holding `text` a css scope holding `value` finds."""
+
+    async def scenario(session: BrowserSession) -> int:
+        # As character references: the page is served with no charset.
+        written = html.escape(text).encode("ascii", "xmlcharrefreplace").decode()
+        await put(session, f"<p>{written}</p>")
+        scope = ByCss(css="p", holds_value=HeldValue(step=1, value=value))
+        return await css_query(session.page, scope).count()
+
+    return in_session(scenario)
+
+
+@pytest.mark.parametrize(
+    ("text", "value"),
+    AGREED,
+    ids=[
+        "a letter beyond ASCII touches it",
+        "case beyond ASCII",
+        "a suffix of a longer word",
+        "whole words of it in another case",
+        "newlines and runs of spaces",
+        "a soft hyphen normalizing strips",
+        "a glyph inside a word",
+        "a stripped character makes no boundary",
+        "an underscore is a word character",
+        "a hyphen is not",
+        "a value whose case folding expands",
+    ],
+)
+def test_a_held_value_holds_where_has_text_says_it_does(text: str, value: str) -> None:
+    assert holds(text, value) == int(has_text(text, value))
+
+
+def test_a_page_text_whose_case_folding_expands_holds_no_value_it_folds_to() -> None:
+    # JavaScript folds case one character to one: a page's ß never finds
+    # "ss", so the scope finds fewer cards than has_text would, never more.
+    assert has_text("Straße", "STRASSE")
+    assert holds("Straße", "STRASSE") == 0
 
 
 AUTHOR = "the new comment's author name"
