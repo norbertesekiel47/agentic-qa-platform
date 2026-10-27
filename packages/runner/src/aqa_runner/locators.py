@@ -128,33 +128,68 @@ def name_pattern(name: str) -> str:
     return f"^{_ENDS}{''.join(parts)}{_ENDS}$"
 
 
-# A word character, as JavaScript reads `\w` without the u flag.
-_WORD = "[A-Za-z0-9_]"
+# What a held value's match reads past, as normalizing does
+# (`aqa_core.text.normalize`): private-use glyphs, the soft hyphen and the
+# zero-width space, which may sit anywhere; whitespace as `str.split` reads
+# it, any run of which is one space; and a word character as Python's `\w`
+# reads one, a letter, a digit or `_`. Each is written for JavaScript's u
+# flag.
+_IGNORED = r"[\p{Co}\u00ad\u200b]"
+_BLANK = (
+    "["
+    + "".join(f"\\u{code:04x}" for code in range(0x10000) if chr(code).isspace())
+    + "]"
+)
+_WORD = r"[\p{L}\p{N}_]"
 
 
-def holding(value: str) -> re.Pattern[str]:
-    """A regex that finds `value` in an element's text as whole words,
-    ignoring case: normalized, with any run of whitespace where it has a
-    space, and no word character touching an end that is one (ADR-0025's
-    #58 amendment). Every character but an ASCII letter or digit is
-    escaped, as in `name_pattern`, so none is read as syntax."""
+def _folded(char: str) -> str:
+    """`char` escaped (`_escaped`), or either it or what its case folding
+    expands it to, such as ß and ss, which JavaScript's one-to-one folding
+    never equates."""
+    folded = char.casefold()
+    if len(folded) == 1:
+        return _escaped(char)
+    return f"(?:{_escaped(char)}|{''.join(map(_escaped, folded))})"
+
+
+def holding(value: str) -> str:
+    """A JavaScript regex, as Playwright's text selectors write one, that
+    finds `value` in an element's text where `aqa_core.text.has_text` would
+    (ADR-0025's #58 amendment): as whole words, by Python's `\\w`, with any
+    run of whitespace for a space, what normalizing strips allowed anywhere,
+    and case ignored by the u flag's Unicode folding. That folding maps one
+    character to one, so a page's ß never matches a value's ss: the scope
+    finds fewer elements than `has_text`, never more. Every character but an
+    ASCII letter or digit is escaped, as in `name_pattern`."""
     words = normalize(value)
-    body = "".join("\\s+" if char == " " else _escaped(char) for char in words)
-    before = f"(?<!{_WORD})" if re.match(_WORD, words) else ""
-    after = f"(?!{_WORD})" if re.match(_WORD, words[-1:]) else ""
-    return re.compile(f"{before}{body}{after}", re.IGNORECASE)
+    gap = f"{_IGNORED}*"
+    space = f"(?:{_BLANK}|{_IGNORED})*{_BLANK}(?:{_BLANK}|{_IGNORED})*"
+    parts: list[str] = []
+    for index, char in enumerate(words):
+        if char == " ":
+            parts.append(space)
+            continue
+        if index and words[index - 1] != " ":
+            parts.append(gap)
+        parts.append(_folded(char))
+    before = f"(?<!{_WORD}{gap})" if re.match(r"\w", words) else ""
+    after = f"(?!{gap}{_WORD})" if re.match(r"\w", words[-1:]) else ""
+    return f"/{before}{''.join(parts)}{after}/iu"
 
 
 def css_query(root: Page | PlaywrightLocator, locator: ByCss) -> PlaywrightLocator:
     """The elements a css locator finds under `root`, with no scope: those its
     selector matches, sent as `css=<value>`, and, when it holds an earlier
     fill step's value, only those whose text holds that value
-    (`holding`), as Playwright's `has_text` reads an element's text: its
-    text nodes and its descendants', hidden ones included."""
+    (`holding`), as Playwright's text selectors read an element's text: its
+    text nodes and its descendants', hidden ones included. The regex goes
+    through `internal:has-text`, as `Locator.filter(has_text=...)` sends
+    one, since a Python pattern can't carry the u flag."""
     found = root.locator(f"css={locator.css}")
     if locator.holds_value is None:
         return found
-    return found.filter(has_text=holding(locator.holds_value.value))
+    return found.locator(f"internal:has-text={holding(locator.holds_value.value)}")
 
 
 def _query(
