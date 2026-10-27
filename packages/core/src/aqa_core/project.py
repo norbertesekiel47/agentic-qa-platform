@@ -14,10 +14,12 @@ from pydantic import BaseModel, ValidationError
 from aqa_core import strict_yaml
 from aqa_core.browser import BrowserSettings
 from aqa_core.compiled import (
+    ByCss,
     Click,
     CompiledScript,
     Fill,
     FillSecret,
+    HeldValue,
     NotVisible,
     ProbeEqualsBaseline,
     Reload,
@@ -25,6 +27,7 @@ from aqa_core.compiled import (
     TextInTarget,
     VisibleUnoccluded,
 )
+from aqa_core.compiled import Locator as CompiledLocator
 from aqa_core.config import Budgets, ProjectConfig, SecretField
 from aqa_core.model_roles import RoleError, resolve_roles
 from aqa_core.price_map import vendored
@@ -37,6 +40,7 @@ from aqa_core.spec import (
     secret_references,
     spec_hash,
 )
+from aqa_core.text import has_text
 
 
 class SpecError(Exception):
@@ -500,6 +504,77 @@ def _unscoped_negative_checks(script: CompiledScript) -> Iterator[str]:
                 )
 
 
+def _levels(
+    where: str, locator: CompiledLocator
+) -> Iterator[tuple[str, CompiledLocator]]:
+    """`locator` and each scope under it, each with its key."""
+    level: CompiledLocator | None = locator
+    while level is not None:
+        yield where, level
+        where, level = f"{where}.scope", level.scope
+
+
+def _reads(check: TextInTarget, value: str) -> bool:
+    """Whether a text check reads text `value` matches: its pattern matches
+    the value, or the value and its literal hold one another."""
+    if check.text is not None and has_text(check.text, value):
+        return True
+    return check.matches(value)
+
+
+def _held(script: CompiledScript) -> Iterator[tuple[str, str, HeldValue]]:
+    """Each held value of `script`'s css locators, their scopes' included,
+    with its target's name and its key."""
+    for name, target in script.targets.items():
+        for position, locator in enumerate(target.locators):
+            for where, level in _levels(
+                f"targets.{name}.locators[{position}]", locator
+            ):
+                if isinstance(level, ByCss) and level.holds_value is not None:
+                    yield name, f"{where}.holds_value", level.holds_value
+
+
+def _held_values(script: CompiledScript) -> Iterator[str]:
+    """A css locator's held value (ADR-0025's #58 amendment) that names no
+    `fill` step, isn't that step's value, isn't filled before every step
+    that uses its target, or matches the text a check of its target reads:
+    found by that text, the target would be missing, which is drift, where
+    the text is missing, which is a failure. No problem quotes a value."""
+    fills = {
+        step.seq: (index, step.value)
+        for index, step in enumerate(script.steps)
+        if isinstance(step, Fill)
+    }
+    uses: dict[str, list[int]] = {}
+    for index, step in enumerate(script.steps):
+        if isinstance(step, Click | Fill | FillSecret | Select):
+            uses.setdefault(step.target, []).append(index)
+    for name, key, held in _held(script):
+        if held.step not in fills:
+            yield f"{key}.step: {held.step} names no fill step"
+            continue
+        filled, value = fills[held.step]
+        if value != held.value:
+            yield f"{key}.value: isn't the value step {held.step} fills"
+            continue
+        if early := [index for index in uses.get(name, []) if index <= filled]:
+            yield (
+                f"{key}.step: steps[{early[0]}] uses this target, and step "
+                f"{held.step}, whose value it holds, doesn't come before it"
+            )
+        for index, check in enumerate(script.assertions):
+            if (
+                isinstance(check, TextInTarget)
+                and check.target == name
+                and _reads(check, held.value)
+            ):
+                yield (
+                    f"{key}.value: assertions[{index}] ({check.id}) checks this "
+                    "target's text, and the value it holds matches that text, so "
+                    "a failure there would read as drift"
+                )
+
+
 def _name_problems(script: CompiledScript, config: ProjectConfig) -> Iterator[str]:
     """How the parts of `script`, which the format accepts, fail to name each
     other (DATA_MODEL §7, "Checked by the loader"), each `<key>: <problem>`:
@@ -533,6 +608,7 @@ def _name_problems(script: CompiledScript, config: ProjectConfig) -> Iterator[st
                 f"{baseline.capture_before_seq} names no step's seq"
             )
     yield from _unscoped_negative_checks(script)
+    yield from _held_values(script)
 
 
 def load_compiled(path: Path, config: ProjectConfig) -> CompiledScript:

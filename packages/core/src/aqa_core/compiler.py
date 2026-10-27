@@ -7,7 +7,7 @@ plan or spec text; never a step's fields, a bound target's meaning or its
 locators, which the attempt and the page chose."""
 
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final, Literal
 
@@ -15,11 +15,14 @@ from pydantic import AwareDatetime, TypeAdapter, ValidationError
 
 from aqa_core.compiled import (
     Assertion,
+    ByCss,
     CompiledBy,
     CompiledScript,
     Coverage,
     ExpectationCoverage,
     FillSecret,
+    HeldValue,
+    Locator,
     Step,
     Target,
     json_path_steps,
@@ -286,6 +289,59 @@ def _steps(
     return steps, problems
 
 
+def _held_renumbered(
+    locator: Locator, seqs: Mapping[int, int], dropped: set[int]
+) -> Locator:
+    """`locator` with each held value in it, its scopes' included, naming its
+    fill step by the script's number in `seqs` rather than the attempt's; a
+    step `seqs` doesn't number goes in `dropped`."""
+    update: dict[str, object] = {}
+    if locator.scope is not None:
+        scope = _held_renumbered(locator.scope, seqs, dropped)
+        if scope is not locator.scope:
+            update["scope"] = scope
+    if isinstance(locator, ByCss) and (held := locator.holds_value) is not None:
+        if held.step in seqs:
+            update["holds_value"] = HeldValue(step=seqs[held.step], value=held.value)
+        else:
+            dropped.add(held.step)
+    return locator.model_copy(update=update) if update else locator
+
+
+def _renumbered(
+    path: ExploredPath, taken: Sequence[int]
+) -> tuple[ExploredPath, list[str]]:
+    """`path` with each held value of a kept step's or a bound check's target
+    naming its fill step as the script numbers its steps, `taken` 1, 2, ...
+    (ADR-0025's #58 amendment), and a problem for each step such a value
+    names that finish doesn't keep."""
+    seqs = {number: seq for seq, number in enumerate(taken, start=1)}
+    dropped: set[int] = set()
+
+    def renumbered(target: Target) -> Target:
+        locators = tuple(
+            _held_renumbered(each, seqs, dropped) for each in target.locators
+        )
+        return target.model_copy(update={"locators": locators})
+
+    steps = {
+        number: replace(step, target=renumbered(step.target))
+        if number in seqs and step.target is not None
+        else step
+        for number, step in path.steps.items()
+    }
+    bound = {
+        check_id: renumbered(target) if isinstance(target, Target) else target
+        for check_id, target in path.bound.items()
+    }
+    problems = [
+        f"a kept target is found by the value step {number} typed, but finish "
+        f"doesn't keep step {number}"
+        for number in sorted(dropped)
+    ]
+    return replace(path, steps=steps, bound=bound), problems
+
+
 def kept_steps(path: ExploredPath) -> list[int]:
     """The numbers of the steps `finish` kept that the attempt took, each
     once, in the attempt's order: the script's steps 1, 2, ..."""
@@ -472,6 +528,7 @@ def compile_script(
     contracts, meaning_problems = _contracts(plan, subject_contracts(config, spec_id))
     kept = sorted(set(path.kept))
     taken = kept_steps(path)
+    path, held_problems = _renumbered(path, taken)
     names: dict[Target, str] = {}
     marks, condition_problems = _conditions(plan, path, taken)
     steps, step_problems = _steps(
@@ -487,6 +544,7 @@ def compile_script(
             if number not in path.steps
         ),
         *step_problems,
+        *held_problems,
         *condition_problems,
         *check_problems,
     ]

@@ -20,6 +20,7 @@ from aqa_core.compiled import (
     Target,
 )
 from aqa_core.schema import Contract
+from aqa_core.text import normalize
 from playwright.async_api import ElementHandle, Error, JSHandle, Page
 from playwright.async_api import Locator as PlaywrightLocator
 
@@ -127,6 +128,35 @@ def name_pattern(name: str) -> str:
     return f"^{_ENDS}{''.join(parts)}{_ENDS}$"
 
 
+# A word character, as JavaScript reads `\w` without the u flag.
+_WORD = "[A-Za-z0-9_]"
+
+
+def holding(value: str) -> re.Pattern[str]:
+    """A regex that finds `value` in an element's text as whole words,
+    ignoring case: normalized, with any run of whitespace where it has a
+    space, and no word character touching an end that is one (ADR-0025's
+    #58 amendment). Every character but an ASCII letter or digit is
+    escaped, as in `name_pattern`, so none is read as syntax."""
+    words = normalize(value)
+    body = "".join("\\s+" if char == " " else _escaped(char) for char in words)
+    before = f"(?<!{_WORD})" if re.match(_WORD, words) else ""
+    after = f"(?!{_WORD})" if re.match(_WORD, words[-1:]) else ""
+    return re.compile(f"{before}{body}{after}", re.IGNORECASE)
+
+
+def css_query(root: Page | PlaywrightLocator, locator: ByCss) -> PlaywrightLocator:
+    """The elements a css locator finds under `root`, with no scope: those its
+    selector matches, sent as `css=<value>`, and, when it holds an earlier
+    fill step's value, only those whose text holds that value
+    (`holding`), as Playwright's `has_text` reads an element's text: its
+    text nodes and its descendants', hidden ones included."""
+    found = root.locator(f"css={locator.css}")
+    if locator.holds_value is None:
+        return found
+    return found.filter(has_text=holding(locator.holds_value.value))
+
+
 def _query(
     root: Page | PlaywrightLocator, locator: Locator, *, hidden: bool
 ) -> PlaywrightLocator:
@@ -146,11 +176,11 @@ def _query(
             return root.get_by_placeholder(placeholder, exact=True)
         case ByTestId(testid=testid):
             return root.get_by_test_id(testid)
-        case ByCss(css=css):
+        case ByCss():
             # Always the css engine: another engine's syntax is a parse
             # error, never a match, and the format refuses >> and any quote
             # left open (ADR-0025, "reading a compiled script").
-            return root.locator(f"css={css}")
+            return css_query(root, locator)
 
 
 async def _scoped(

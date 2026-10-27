@@ -336,8 +336,30 @@ class ByTestId(_Locator):
     testid: NonEmpty
 
 
+def _has_words(value: str) -> str:
+    if not normalize(value):
+        raise ValueError(
+            "a held value has a word to find: comparing strips private-use "
+            "glyphs, soft hyphens and zero-width spaces, and collapses whitespace"
+        )
+    return value
+
+
+class HeldValue(StrictModel):
+    """The value an earlier `fill` step of the script typed, by the step's
+    `seq` and as that step writes it: a css locator holding it finds only
+    the elements whose text holds the value as whole words, ignoring case
+    (ADR-0025's #58 amendment, "a scope by the run's own typed value"). The
+    loader checks that the step fills exactly this value before every step
+    that uses the target, and that no text check of the target reads it."""
+
+    step: _Positive
+    value: Annotated[StrictStr, AfterValidator(_has_words)]
+
+
 class ByCss(_Locator):
     css: _OneSelector
+    holds_value: HeldValue | None = None
 
 
 _KINDS = ("role", "label", "placeholder", "testid", "css")
