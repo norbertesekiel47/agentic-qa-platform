@@ -1,0 +1,13 @@
+{
+  "base_hash": "sha256:09aac5d3615532eb1811fb83b60c5ac6ebd753e0de4a192c3d5c55bd13f3b921",
+  "operations": [
+    {
+      "op": "replace",
+      "path": "/targets/t6/locators",
+      "value": [
+        { "role": "button", "name": "Add Comment" },
+        { "css": "button[type=submit]" }
+      ]
+    }
+  ]
+}
