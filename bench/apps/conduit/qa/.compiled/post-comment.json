@@ -1,0 +1,243 @@
+{
+  "schema_version": 1,
+  "spec_id": "post-comment",
+  "spec_hash": "sha256:bd062a63f524f88682aeeeec7c75b63338d3f6dc97a75ae5d5975663849f6bb6",
+  "compiled_at": "2026-10-27T09:40:22.822947Z",
+  "compiled_by": {
+    "mode": "explore",
+    "models": {
+      "navigator": "claude-sonnet-5-5"
+    },
+    "price_map": "ae6b762190658e695c77b0ba63b6c65913b86ac0",
+    "subject_contracts": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "confirmed": true,
+  "browser": {
+    "timezone": "UTC",
+    "locale": "en-US",
+    "viewport": [
+      1280,
+      800
+    ],
+    "device_scale_factor": 1.0,
+    "color_scheme": "light"
+  },
+  "coverage": {
+    "plan_hash": "sha256:da8b080237f06ce72c23926e8800601d9922a0e3836625f8758c9db0aea9d5a1",
+    "expectations": [
+      {
+        "expect_index": 0,
+        "subject": "the comments list under the article",
+        "claim": "The comment text \"Thanks for the warm welcome!\" is shown in the comments under the article",
+        "assertions": [
+          "a1"
+        ]
+      },
+      {
+        "expect_index": 1,
+        "subject": "the newly added comment under the article",
+        "claim": "The new comment's author is reader",
+        "assertions": [
+          "a2"
+        ]
+      },
+      {
+        "expect_index": 2,
+        "subject": "the comments list under the article",
+        "claim": "jake's earlier comment \"Glad to be here.\" is still shown",
+        "assertions": [
+          "a3"
+        ]
+      },
+      {
+        "expect_index": 3,
+        "subject": "the number of comments stored for the article",
+        "claim": "The comment was saved once, so the total comment count is exactly 2",
+        "assertions": [
+          "a4"
+        ]
+      }
+    ],
+    "requires": []
+  },
+  "targets": {
+    "t1": {
+      "semantic": "Email field",
+      "locators": [
+        {
+          "role": "textbox",
+          "name": "Email"
+        },
+        {
+          "placeholder": "Email"
+        },
+        {
+          "css": "input[name=email]"
+        }
+      ]
+    },
+    "t2": {
+      "semantic": "Password field",
+      "locators": [
+        {
+          "role": "textbox",
+          "name": "Password"
+        },
+        {
+          "placeholder": "Password"
+        },
+        {
+          "css": "input[name=password]"
+        }
+      ]
+    },
+    "t3": {
+      "semantic": "Sign in submit button",
+      "locators": [
+        {
+          "role": "button",
+          "name": "Sign in"
+        },
+        {
+          "css": "button[type=submit]"
+        }
+      ]
+    },
+    "t4": {
+      "semantic": "Welcome to Conduit article link in global feed",
+      "locators": [
+        {
+          "css": "a[href=\"/article/welcome-to-conduit\"]"
+        }
+      ]
+    },
+    "t5": {
+      "semantic": "Comment textbox",
+      "locators": [
+        {
+          "role": "textbox",
+          "name": "Write a comment..."
+        },
+        {
+          "placeholder": "Write a comment..."
+        },
+        {
+          "css": "textarea.form-control"
+        }
+      ]
+    },
+    "t6": {
+      "semantic": "Post Comment button below comment textbox",
+      "locators": [
+        {
+          "role": "button",
+          "name": "Post Comment"
+        },
+        {
+          "css": "button[type=submit]"
+        }
+      ]
+    },
+    "t7": {
+      "semantic": "the list of comments under the article",
+      "locators": [
+        {
+          "css": "div.comment-list"
+        }
+      ]
+    },
+    "t8": {
+      "semantic": "the author name on the newly posted comment, the one just added by the signed-in user, in the comments under the article",
+      "locators": [
+        {
+          "css": "a[href=\"/profile/reader\"]:not(:has(img))"
+        }
+      ]
+    }
+  },
+  "probe_baselines": {},
+  "steps": [
+    {
+      "seq": 1,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "fill",
+      "target": "t1",
+      "value": "reader@conduit.test"
+    },
+    {
+      "seq": 2,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "fill_secret",
+      "target": "t2",
+      "secret": "TEST_PASSWORD"
+    },
+    {
+      "seq": 3,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request; network: a write request came later, which it may have caused; model: finish didn't list it in changes_nothing",
+      "satisfies": [],
+      "action": "click",
+      "target": "t3"
+    },
+    {
+      "seq": 4,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request; network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "click",
+      "target": "t4"
+    },
+    {
+      "seq": 5,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "fill",
+      "target": "t5",
+      "value": "Thanks for the warm welcome!"
+    },
+    {
+      "seq": 6,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request; model: finish didn't list it in changes_nothing",
+      "satisfies": [],
+      "action": "click",
+      "target": "t6"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "a1",
+      "expect_index": 0,
+      "text": "Thanks for the warm welcome!",
+      "check": "text_in_target",
+      "target": "t7"
+    },
+    {
+      "id": "a2",
+      "expect_index": 1,
+      "text": "reader",
+      "check": "text_in_target",
+      "target": "t8"
+    },
+    {
+      "id": "a3",
+      "expect_index": 2,
+      "text": "Glad to be here.",
+      "check": "text_in_target",
+      "target": "t7"
+    },
+    {
+      "id": "a4",
+      "expect_index": 3,
+      "check": "probe_equals",
+      "probe": "comment_count",
+      "json_path": "$.count",
+      "value": 2
+    }
+  ]
+}
