@@ -1,0 +1,413 @@
+{
+  "schema_version": 1,
+  "spec_id": "publish-article",
+  "spec_hash": "sha256:cdef977bb78bf74a2043aca0e882332dec72bdca77f4d3b73398b9dc546a9f43",
+  "compiled_at": "2026-10-27T09:44:15.031566Z",
+  "compiled_by": {
+    "mode": "explore",
+    "models": {
+      "navigator": "claude-sonnet-5-5"
+    },
+    "price_map": "ae6b762190658e695c77b0ba63b6c65913b86ac0",
+    "subject_contracts": "sha256:18255eedb6fa75264d34ec9c40eaa4b36cdb40161a6c3c54efffb8c2fd357f9f"
+  },
+  "confirmed": true,
+  "browser": {
+    "timezone": "UTC",
+    "locale": "en-US",
+    "viewport": [
+      1280,
+      800
+    ],
+    "device_scale_factor": 1.0,
+    "color_scheme": "light"
+  },
+  "coverage": {
+    "plan_hash": "sha256:d85b8c952c8e6103e331a4677d9346a4182ef39eab6f6f6d63c0aac0dbd7a18b",
+    "expectations": [
+      {
+        "expect_index": 0,
+        "subject": "the title of the new article on its page",
+        "claim": "The new article's page is shown and its title is \"Benchmarks we trust\"",
+        "assertions": [
+          "a1",
+          "a2"
+        ]
+      },
+      {
+        "expect_index": 1,
+        "subject": "the body of the article on its page",
+        "claim": "The article body reads \"Every number cites the commit that produced it.\"",
+        "assertions": [
+          "a3"
+        ]
+      },
+      {
+        "expect_index": 2,
+        "subject": "the tags of the article",
+        "claim": "The article is tagged with both \"testing\" and \"benchmarks\"",
+        "assertions": [
+          "a4",
+          "a5"
+        ]
+      },
+      {
+        "expect_index": 3,
+        "subject": "the author of the article on its page",
+        "claim": "The article is shown with jake as its author",
+        "assertions": [
+          "a6"
+        ]
+      },
+      {
+        "expect_index": 4,
+        "subject": "the number of articles jake has",
+        "claim": "Exactly one article was created, so jake now has 6 articles",
+        "assertions": [
+          "a7"
+        ]
+      }
+    ],
+    "requires": []
+  },
+  "targets": {
+    "t1": {
+      "semantic": "Email field",
+      "locators": [
+        {
+          "role": "textbox",
+          "name": "Email"
+        },
+        {
+          "placeholder": "Email"
+        },
+        {
+          "css": "input[name=email]"
+        }
+      ]
+    },
+    "t2": {
+      "semantic": "Password field",
+      "locators": [
+        {
+          "role": "textbox",
+          "name": "Password"
+        },
+        {
+          "placeholder": "Password"
+        },
+        {
+          "css": "input[name=password]"
+        }
+      ]
+    },
+    "t3": {
+      "semantic": "Sign in submit button",
+      "locators": [
+        {
+          "role": "button",
+          "name": "Sign in"
+        },
+        {
+          "css": "button[type=submit]"
+        }
+      ]
+    },
+    "t4": {
+      "semantic": "New Article link in nav",
+      "locators": [
+        {
+          "role": "link",
+          "name": "New Article"
+        },
+        {
+          "css": "a[href=\"/editor\"]"
+        }
+      ]
+    },
+    "t5": {
+      "semantic": "Article title field",
+      "locators": [
+        {
+          "role": "textbox",
+          "name": "Article Title"
+        },
+        {
+          "placeholder": "Article Title"
+        },
+        {
+          "css": "input[name=title]"
+        }
+      ]
+    },
+    "t6": {
+      "semantic": "Article description field",
+      "locators": [
+        {
+          "role": "textbox",
+          "name": "What's this article about?"
+        },
+        {
+          "placeholder": "What's this article about?"
+        },
+        {
+          "css": "input[name=description]"
+        }
+      ]
+    },
+    "t7": {
+      "semantic": "Article body field",
+      "locators": [
+        {
+          "role": "textbox",
+          "name": "Write your article (in markdown)"
+        },
+        {
+          "placeholder": "Write your article (in markdown)"
+        },
+        {
+          "css": "textarea[name=body]"
+        }
+      ]
+    },
+    "t8": {
+      "semantic": "Tags input field",
+      "locators": [
+        {
+          "role": "textbox",
+          "name": "Enter tags"
+        },
+        {
+          "placeholder": "Enter tags"
+        }
+      ]
+    },
+    "t9": {
+      "semantic": "Publish Article button",
+      "locators": [
+        {
+          "role": "button",
+          "name": "Publish Article"
+        },
+        {
+          "css": "button[type=button]"
+        }
+      ]
+    },
+    "t10": {
+      "semantic": "the article title heading at the top of the article page",
+      "locators": [
+        {
+          "role": "heading"
+        },
+        {
+          "css": "h1"
+        }
+      ]
+    },
+    "t11": {
+      "semantic": "the article body content area of the article page",
+      "locators": [
+        {
+          "role": "paragraph"
+        },
+        {
+          "css": "p"
+        }
+      ]
+    },
+    "t12": {
+      "semantic": "the list of tags on the article page",
+      "locators": [
+        {
+          "scope": {
+            "css": "div.col-md-12"
+          },
+          "role": "list"
+        },
+        {
+          "css": "ul.tag-list"
+        }
+      ]
+    },
+    "t13": {
+      "semantic": "the author name link in the article's byline on the article page",
+      "locators": [
+        {
+          "scope": {
+            "css": "div.info"
+          },
+          "role": "link"
+        },
+        {
+          "scope": {
+            "css": "div.info"
+          },
+          "css": "a[href=\"/profile/jake\"]"
+        }
+      ],
+      "contract": {
+        "region": "div.banner",
+        "part": "a.author",
+        "leaf": true
+      }
+    }
+  },
+  "probe_baselines": {},
+  "steps": [
+    {
+      "seq": 1,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "fill",
+      "target": "t1",
+      "value": "jake@conduit.test"
+    },
+    {
+      "seq": 2,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "fill_secret",
+      "target": "t2",
+      "secret": "TEST_PASSWORD"
+    },
+    {
+      "seq": 3,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request; network: a write request came later, which it may have caused; model: finish didn't list it in changes_nothing",
+      "satisfies": [],
+      "action": "click",
+      "target": "t3"
+    },
+    {
+      "seq": 4,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request; network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "click",
+      "target": "t4"
+    },
+    {
+      "seq": 5,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "fill",
+      "target": "t5",
+      "value": "Benchmarks we trust"
+    },
+    {
+      "seq": 6,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "fill",
+      "target": "t6",
+      "value": "How we measure agents."
+    },
+    {
+      "seq": 7,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "fill",
+      "target": "t7",
+      "value": "Every number cites the commit that produced it."
+    },
+    {
+      "seq": 8,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "fill",
+      "target": "t8",
+      "value": "testing"
+    },
+    {
+      "seq": 9,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "press",
+      "key": "Enter"
+    },
+    {
+      "seq": 10,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "fill",
+      "target": "t8",
+      "value": "benchmarks"
+    },
+    {
+      "seq": 11,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "press",
+      "key": "Enter"
+    },
+    {
+      "seq": 12,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request; model: finish didn't list it in changes_nothing",
+      "satisfies": [],
+      "action": "click",
+      "target": "t9"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "a1",
+      "expect_index": 0,
+      "check": "url_matches",
+      "pattern": "(?i)/article/benchmarks-we-trust-"
+    },
+    {
+      "id": "a2",
+      "expect_index": 0,
+      "text": "Benchmarks we trust",
+      "check": "text_in_target",
+      "target": "t10"
+    },
+    {
+      "id": "a3",
+      "expect_index": 1,
+      "text": "Every number cites the commit that produced it.",
+      "check": "text_in_target",
+      "target": "t11"
+    },
+    {
+      "id": "a4",
+      "expect_index": 2,
+      "text": "testing",
+      "check": "text_in_target",
+      "target": "t12"
+    },
+    {
+      "id": "a5",
+      "expect_index": 2,
+      "text": "benchmarks",
+      "check": "text_in_target",
+      "target": "t12"
+    },
+    {
+      "id": "a6",
+      "expect_index": 3,
+      "text": "jake",
+      "check": "text_in_target",
+      "target": "t13"
+    },
+    {
+      "id": "a7",
+      "expect_index": 4,
+      "check": "probe_equals",
+      "probe": "jake_article_count",
+      "json_path": "$.count",
+      "value": 6
+    }
+  ]
+}
