@@ -5,7 +5,7 @@ Planted bugs and benign UI changes in vendored open-source apps, used to measure
 | Path | What | Policed by our gates |
 |---|---|---|
 | `apps/<app>/` | Vendored third-party apps, with our flag plumbing, `/test-api/*` routes and planted changes (see each app's README) | No: gitleaks only (ADR-0021) |
-| `apps/<app>/qa/` | That app's specs and their dry compile review (`REVIEW.md`) | No (inside `apps/`), so review them by hand |
+| `apps/<app>/qa/` | That app's specs, their dry compile review (`REVIEW.md`), and the scripts `aqa explore` compiled from them (`.compiled/`) | No (inside `apps/`), so review them by hand |
 | `harness/` | Our Python harness, a uv workspace member (ADR-0027). `toggle_checks.py` runs in the checks image (`checks.Dockerfile`, `checks-requirements.txt`, `chromium-seccomp.json`) | Yes |
 | `manifest.v1.json` | Ground truth, keyed by case ID (format: DATA_MODEL.md §8) | Yes |
 | `manifest.v1.split.sha256` | The split freeze (TESTING.md §5) | Yes |
@@ -25,6 +25,7 @@ uv run python bench/harness/flags.py selftest <app>    # alternate the reserved 
 uv run python bench/harness/toggle.py <app> --cycles 5 # every check on the clean app and under each case's flag
 
 uv run python bench/harness/pilot.py <app> --out .scratch/<new dir> [--spec <id> ...] [--repeat 3] [--compiled-dir DIR] [--patches DIR]
+uv run python bench/harness/pilot.py conduit --out .scratch/<new dir> --repeat 3 --patches bench/harness/patches   # M1's exit run: the committed scripts and the hand-written benign patches
 uv run python bench/harness/pilot_read_article.py <dir>/report.json --report .scratch/<new file> [--root DIR]
 ```
 

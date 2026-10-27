@@ -1,6 +1,6 @@
 # Roadmap — Agentic QA Platform
 
-Last updated: 2026-10-08 (M1 saves no screenshots, ADR-0033); 2026-10-01 (hosted compute: one Lambda MicroVM per run, ADR-0032). **Core first, then SaaS** (ADR-0016): prove the agent on the benchmark before building the platform around it. Each milestone is one vertical slice, one PR series, with an explicit exit criterion. No dates — quality over speed; milestones are sequential.
+Last updated: 2026-10-27 (M1's exit met, #58); 2026-10-08 (M1 saves no screenshots, ADR-0033); 2026-10-01 (hosted compute: one Lambda MicroVM per run, ADR-0032). **Core first, then SaaS** (ADR-0016): prove the agent on the benchmark before building the platform around it. Each milestone is one vertical slice, one PR series, with an explicit exit criterion. No dates — quality over speed; milestones are sequential.
 
 **Release checkpoints** (added after review): full v1 scope is unchanged, but two public, independently defensible releases ship along the way so the strongest hiring signal doesn't wait for the whole SaaS:
 - **Release 0.1 — "CLI + benchmark"** after M3: open-source CLI, frozen benchmark, local run viewer, measured test-split numbers.
@@ -53,6 +53,14 @@ Design: ADR-0024 (explore runs), ADR-0025 (compiled scripts), ADR-0026 (the brow
   - Under each of the 7 case flags, the M1 executor reproduces the manifest: each bug fails exactly the expectations and invariants it names. Each benign case's broken bindings are listed, and a hand-written rebinding patch restores every pass without touching an assertion.
   - The egress tests pass: redirects, rebinding, WebSockets, WebRTC/UDP, service workers and document origins.
   - The sandbox gate is decided.
+
+  *Met 2026-10-27 (#58), except for `conduit-benign-002`:*
+  - `aqa explore` compiled and confirmed all five pilot specs. The scripts are committed in `bench/apps/conduit/qa/.compiled/`. `bench/harness/test_pilot_compiled.py` checks each one against its spec, its subject contracts, its UTC browser and REVIEW.md's "Not acceptable" proxies.
+  - `env -u ANTHROPIC_API_KEY uv run python bench/harness/pilot.py conduit --out <dir> --repeat 3 --patches bench/harness/patches`, from `79c61255`: each script passed 3 identical replays on the clean app, and every scored bug pair matched the manifest.
+  - `conduit-benign-001` is `accepted`. Its original attempt passed through the submit button's css fallback (#25 decides what such a match means), and the hand-written patch in `bench/harness/patches/` passed too.
+  - `conduit-benign-002` is the exception. It moves the favorites count out of its contracted part, and a patch may change locators, never a contract. So its count stays unbound ("no match") and the run exits 1 on that pair. #229 (M2) decides how a heal treats it.
+  - post-comment's submit meaning still names its button's label. Enforcing label-free meanings is #234 (M2).
+  - The sandbox gate is ADR-0032. The egress files' run at the final commit, and the round's cost, are in #58's pull request.
 
 ## M2 — Replay, heal & verdicts
 - `strict` replay built on M1's executor: verdicts and full deterministic visual checks (`visible_unoccluded`, `pixel_diff`, `contrast_min`); `verified` mode behind a flag.
