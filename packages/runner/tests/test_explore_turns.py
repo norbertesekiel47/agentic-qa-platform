@@ -41,6 +41,7 @@ from langchain_core.messages import (
 )
 from langchain_core.tracers.langchain import wait_for_all_tracers
 from langgraph.checkpoint.memory import InMemorySaver
+from playwright.async_api import ElementHandle
 
 from packages.runner.tests.document_fixtures import Sites, run_gate, serving_sites
 from packages.runner.tests.egress_fixtures import gate
@@ -439,6 +440,9 @@ def unchosen(
     )
 
 
+# A tool call the reply wrote but no parser could read.
+BROKEN: Any = {"name": "click", "args": '{"ref":', "id": "toolu_fake", "error": None}
+
 # Why the turns stop once the navigator repeats one refused call (#232).
 REPEATED = "the navigator made the same refused call 5 times in a row"
 
@@ -464,8 +468,22 @@ def test_the_same_refused_call_five_times_in_a_row_ends_the_attempt(
         calling("select", {"ref": "e1"}),
         FINISH,
         calling("assert_check", {"check_id": "a1", "ref": None}),
+        # A restart on the run's one attempt, which #56 refuses.
+        calling("restart", {}),
+        # Replies of which nothing ran.
+        calling("hover", {"ref": "e1"}),
+        answer(AIMessage(content="", invalid_tool_calls=[BROKEN])),
+        answer(AIMessage(content="I'll look at the page again.")),
     ],
-    ids=["arguments that don't fit", "a finish that compiled nothing", "a check's"],
+    ids=[
+        "arguments that don't fit",
+        "a finish that compiled nothing",
+        "a check's",
+        "a restart's",
+        "an unknown tool",
+        "a malformed call",
+        "no call",
+    ],
 )
 def test_each_kind_of_refused_call_counts(
     app: App, tmp_path: Path, refused: Reply | Callable[[Sequence[BaseMessage]], Reply]
@@ -476,6 +494,36 @@ def test_each_kind_of_refused_call_counts(
 
     assert stops(context) == [("gave_up", REPEATED)]
     assert len(client.requests) == 5
+
+
+def test_a_refusal_naming_each_turns_fresh_ref_still_counts(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The page swaps the Save button for a copy as each click looks it up,
+    # so each click is refused for an element that has left the page, by
+    # the fresh ref of its turn.
+    locate = BrowserSession.locate
+
+    async def swapped(session: BrowserSession, ref: str) -> ElementHandle:
+        element = await locate(session, ref)
+        await element.evaluate("(e) => e.replaceWith(e.cloneNode(true))")
+        await element.dispose()
+        return await locate(session, ref)
+
+    monkeypatch.setattr(BrowserSession, "locate", swapped)
+    client = Scripted(*[CLICK] * 6)
+
+    context = turned(app, tmp_path, client)
+
+    assert stops(context) == [("gave_up", REPEATED)]
+    refusals = [results(request) for request in client.requests[1:]]
+    assert len(set(refusals)) == 4
+    assert all(
+        re.fullmatch(
+            r"click did not run: 'e\d+' names an element that has left the page", each
+        )
+        for each in refusals
+    )
 
 
 def test_calls_that_ran_never_count_as_repeats(app: App, tmp_path: Path) -> None:

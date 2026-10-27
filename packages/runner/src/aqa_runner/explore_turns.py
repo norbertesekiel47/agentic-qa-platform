@@ -13,6 +13,7 @@ refused call `REPEATS` times in a row (ADR-0024's #232 amendment)."""
 
 import hashlib
 import json
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -439,25 +440,31 @@ async def _ran(
     return ((text, unrun) if chosen.unrun else (text,)), logged, parts
 
 
+# A ref a snapshot gives an element, wherever a refusal's text names one.
+_REF = re.compile(r"\b(?:f[0-9]+)?e[0-9]+\b")
+
+
 def _refusal(context: Turning, reply: _Reply, text: str) -> str:
     """The digest of the reply's first tool call, when `text`, what it did,
-    says in fixed words that it was refused: it did not run, its arguments
-    didn't fit the tool, or `finish` compiled nothing; else "". The digest
-    covers the tool, its arguments, with a ref as the role and name the
-    snapshot gave its element, since each snapshot gives fresh refs, and
-    that text; never the model's words themselves."""
+    says in fixed words that it was refused or that nothing ran: it did not
+    run, its arguments didn't fit the tool, `finish` compiled nothing, or the
+    reply called an unknown tool, a malformed one or none; else "". The
+    digest covers the tool, its arguments and that text, never the model's
+    words themselves. Each snapshot gives fresh refs, so a ref, in the
+    arguments or the text, counts as the role and name the snapshot gave its
+    element, or as itself when it gave none."""
     calls = [] if reply.routed is None else reply.routed.message.tool_calls
-    if not calls:
-        return ""
-    name, args = calls[0]["name"], dict(calls[0]["args"])
+    name, args = (calls[0]["name"], dict(calls[0]["args"])) if calls else ("", {})
     refusals = (f"{name} did not run: ", f"the call to {name} was not run: ")
-    if not text.startswith((*refusals, f"{name} compiled nothing: ")):
+    refused = name and text.startswith((*refusals, f"{name} compiled nothing: "))
+    if not refused and not text.endswith(", so nothing ran"):
         return ""
+    elements = snapshot_elements(context.attempt.observation or "")
     if isinstance(seen := args.get("ref"), str):
-        elements = snapshot_elements(context.attempt.observation or "")
         args["ref"] = elements.get(seen, seen)
-    said = json.dumps([name, args, text], sort_keys=True)
-    return hashlib.sha256(said.encode()).hexdigest()
+    said = _REF.sub(lambda found: json.dumps(elements.get(found[0], found[0])), text)
+    canonical = json.dumps([name, args, said], sort_keys=True)
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _line(call: Action, step: StepResult | None) -> tuple[str, ...]:
