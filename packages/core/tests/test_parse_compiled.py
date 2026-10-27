@@ -250,3 +250,71 @@ def test_a_target_whose_text_check_is_a_pattern_holds_no_value(
         "held value, so this target may hold none"
     )
     assert found == [(problem,), (problem,)]
+
+
+def test_a_text_check_of_another_target_may_read_a_held_value(tmp_path: Path) -> None:
+    # a4 reads the pay button's text for the value the cart's scope holds:
+    # only a check of the held target itself could make it circular.
+    data = holding("cart_items", 1, {"step": 2, "value": HOODIE})
+    data["steps"][1]["value"] = HOODIE
+    checked(data, {"text": "Classic Hoodie"})["assertions"][3]["target"] = "pay_button"
+
+    script = read(data, tmp_path)
+
+    scope = script.targets["cart_items"].locators[1].scope
+    assert isinstance(scope, ByCss)
+    assert scope.holds_value == HeldValue(step=2, value=HOODIE)
+
+
+# A last step that fills the email field again, with a value to hold.
+REFILL = {
+    "seq": 10,
+    "action": "fill",
+    "target": "email_input",
+    "value": "later@example.test",
+    "side_effect": False,
+}
+
+
+@pytest.mark.parametrize(
+    ("target", "position", "use", "index"),
+    [
+        ("password_input", 2, None, 2),
+        (
+            "cart_items",
+            1,
+            {
+                "seq": 5,
+                "action": "select",
+                "target": "cart_items",
+                "option": "M",
+                "side_effect": False,
+            },
+            4,
+        ),
+    ],
+    ids=["a fill_secret", "a select"],
+)
+def test_every_step_that_uses_a_held_target_comes_after_its_fill(
+    tmp_path: Path,
+    target: str,
+    position: int,
+    use: dict[str, object] | None,
+    index: int,
+) -> None:
+    data: dict[str, Any] = json.loads(data_models_example())
+    if use is not None:
+        data["steps"].insert(4, use)
+    data["steps"].append(REFILL)
+    data["targets"]["password_input"]["locators"].append({"css": "#password"})
+    held = {"step": 10, "value": "later@example.test"}
+    data["targets"][target]["locators"][position]["holds_value"] = held
+    if target == "cart_items":
+        checked(data, {"text": "Classic Hoodie"})
+
+    key = f"targets.{target}.locators[{position}].holds_value.step"
+    problem = (
+        f"{key}: steps[{index}] uses this target, and step 10, whose value it "
+        "holds, doesn't come before it"
+    )
+    assert refusals(data, tmp_path) == [(problem,), (problem,)]

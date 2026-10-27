@@ -25,13 +25,14 @@ from aqa_runner.locators import (
     resolve,
     resolve_every,
 )
-from aqa_runner.navigator import AssertCheck, Click, Fill, Finish
+from aqa_runner.navigator import AssertCheck, Click, Fill, FillSecret, Finish
 from aqa_runner.navigator_tools import Attempt, Finished
 
 from packages.runner.tests.executor_fixtures import PAGES, App, serving_app
-from packages.runner.tests.navigator_fixtures import on_app, ref
+from packages.runner.tests.navigator_fixtures import bound, on_app, ref
 from packages.runner.tests.pilot_pages import in_session, put
-from packages.runner.tests.test_link_paths import CARD, comments
+from packages.runner.tests.secret_fixtures import FAKE_VALUE, copies_found
+from packages.runner.tests.test_link_paths import CARD, HEADER, comments
 from packages.runner.tests.test_locator_generation import is_same
 from packages.runner.tests.test_navigator_checks import BY, COMPILED
 
@@ -251,9 +252,52 @@ def test_a_target_two_cards_share_is_scoped_by_a_value_typed_earlier(
         assert in_session(scenario) == expected
 
 
+# The posted card, marked edited outside its div.card.
+EDITED = (
+    f'{HEADER}<div class="comment-list">{CARD.format(text=EARLIER, who="reader")}'
+    + CARD.format(text=POSTED, who="reader").replace(
+        "</app-article-comment>",
+        '<span class="badge">edited</span></app-article-comment>',
+    )
+    + "</div>"
+)
+
+
+@pytest.mark.parametrize(
+    ("typed", "scope"),
+    [
+        (
+            (HeldValue(step=4, value="edited"), HeldValue(step=3, value=POSTED)),
+            ByCss(
+                css="app-article-comment", holds_value=HeldValue(step=4, value="edited")
+            ),
+        ),
+        (
+            (HeldValue(step=3, value=POSTED), HeldValue(step=4, value="edited")),
+            ByCss(css="div.card", holds_value=HeldValue(step=3, value=POSTED)),
+        ),
+    ],
+    ids=["the nearest step's value, under a farther scope", "then the nearest scope"],
+)
+def test_a_held_scope_takes_the_nearest_steps_value_then_the_nearest_scope(
+    typed: tuple[HeldValue, ...], scope: ByCss
+) -> None:
+    async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
+        await put(session, EDITED)
+        links = await session.page.query_selector_all(NAME_LINK)
+        uses = TargetUses(AUTHOR, checks_text=True, typed=lambda: typed)
+        used = Seen(links[1], "link", "reader")
+        index = await uses.add(session.page, used, "assertion")
+        return uses.targets[index].locators
+
+    assert in_session(scenario) == (
+        ByCss(css='a[href="/profile/reader"]:not(:has(img))', scope=scope),
+    )
+
+
 # reader's earlier comment, a comment box that posts the next one above it,
 # and a search box.
-COMMENTING = f"""<input placeholder="Search">
+COMMENTING = f"""<input placeholder="Search"><input type="password" placeholder="Password">
     <form class="card comment-form"><textarea placeholder="Write a comment...">
     </textarea><button type="button" id="post">Post Comment</button></form>
     <div class="comment-list">{CARD.format(text=EARLIER, who="reader")}</div>
@@ -416,4 +460,59 @@ def test_explore_never_runs_a_text_checks_pattern_against_a_typed_value(
     assert told == (
         f"assert_check did not run: {TEXT}: no locator of the grammar finds the p "
         "element alone for an assertion"
+    )
+
+
+def test_a_typed_secret_or_a_blank_fill_never_becomes_a_held_value(
+    app: App, tmp_path: Path
+) -> None:
+    # Step 1 fills a test secret and step 4 a blank: neither is a value the
+    # scope may hold, so the nearest one left is step 2's comment.
+    async def scenario(attempt: Attempt) -> Finished:
+        password = ref(attempt, "textbox", "Password")
+        await attempt.act(
+            FillSecret(ref=password, meaning="the password", name="TEST_PASSWORD")
+        )
+        await attempt.observe()
+        box = ref(attempt, "textbox", "Write a comment...")
+        await attempt.act(Fill(ref=box, meaning=BOX, text=POSTED))
+        await attempt.observe()
+        await attempt.act(
+            Click(ref=ref(attempt, "button", "Post Comment"), meaning=POST)
+        )
+        await attempt.observe()
+        search = ref(attempt, "textbox", "Search")
+        await attempt.act(Fill(ref=search, meaning=SEARCH, text="   "))
+        await attempt.observe()
+        await attempt.check(
+            AssertCheck(check_id="a1", ref=ref(attempt, "link", "reader"))
+        )
+        # The spec binds no secret, so the path keeps the rest.
+        return await attempt.finish(Finish(steps=(2, 3, 4)), BY)
+
+    finished = on_app(
+        app,
+        tmp_path,
+        scenario,
+        page="/page/commenting",
+        plan=checking(AUTHOR, text="reader"),
+        secrets=(bound(app.origin, FAKE_VALUE),),
+    )
+
+    assert finished.text == COMPILED
+    assert finished.script is not None
+    [target] = [
+        each for each in finished.script.targets.values() if each.semantic == AUTHOR
+    ]
+    [locator] = target.locators
+    # Step 2 of the attempt is the script's step 1.
+    assert locator.scope == ByCss(
+        css="div.card", holds_value=HeldValue(step=1, value=POSTED)
+    )
+    stored = [path for path in tmp_path.rglob("*") if path.is_file()]
+    assert (
+        copies_found(
+            FAKE_VALUE, files=stored, texts=[finished.script.model_dump_json()]
+        )
+        == []
     )
