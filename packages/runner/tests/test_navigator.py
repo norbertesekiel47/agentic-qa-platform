@@ -447,6 +447,44 @@ def test_a_checks_state_comes_from_its_last_evaluation_in_plan_order() -> None:
     ]
 
 
+GONE_PLAN = CoveragePlan.model_validate(
+    {
+        "expectations": [
+            {
+                "expect_index": 0,
+                "subject": "the header",
+                "claim": "has no Sign in link and no Sign up link",
+                "checks": [
+                    {"check": "not_visible", "target_meaning": "the sign-in link"},
+                    {"check": "not_visible", "target_meaning": "the sign-up link"},
+                ],
+            }
+        ],
+        "requires": [],
+    }
+)
+
+
+def test_a_noted_negative_check_says_to_assert_it_once_it_is_gone(
+    prefix: Prefix,
+) -> None:
+    # Noted, a not_visible check is still unbound until its assert_check:
+    # the block says what comes next, so it isn't noted again (login's live
+    # explore, ADR-0024's #58 amendment). Once bound, its result decides.
+    states = check_states(
+        GONE_PLAN, {"a1": None, "a2": AssertionResult("a2", "pass")}, {"a1", "a2"}
+    )
+    sent = navigator_request(
+        prefix, replace(turn(), checks=states), redactor=NO_SECRETS
+    )
+
+    assert states == {"a1": "noted", "a2": "passed"}
+    assert (
+        "<checks>\na1: noted; assert it once it is gone\n"
+        "a2: bound, passed when last checked\n</checks>"
+    ) in sent[2].content
+
+
 def test_the_system_prompt_names_the_checks_block() -> None:
     assert (
         "<checks> says where each planned check stands: unbound; bound, and "

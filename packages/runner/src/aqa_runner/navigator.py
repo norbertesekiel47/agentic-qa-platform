@@ -7,7 +7,7 @@ probes its checks read, and the page's snapshot)."""
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Final, Literal
 
@@ -232,10 +232,13 @@ def probe_listing(offered: Offered, redactor: Redactor) -> Redacted | None:
 # amendment): our own words, true whatever the page did since. A result's
 # misses and error text, which a page can choose, are never read.
 type CheckState = Literal[
-    "unbound", "passed", "failed", "not_established", "unbindable"
+    "unbound", "noted", "passed", "failed", "not_established", "unbindable"
 ]
 _STATED: Final[Mapping[CheckState, str]] = {
     "unbound": "unbound",
+    # A not_visible check's element noted while it shows, still unbound until
+    # its assert_check once it is gone.
+    "noted": "noted; assert it once it is gone",
     "passed": "bound, passed when last checked",
     "failed": "bound, failed when last checked",
     "not_established": "bound, not established when last checked",
@@ -246,17 +249,20 @@ _STATED: Final[Mapping[CheckState, str]] = {
 
 
 def check_states(
-    plan: CoveragePlan, results: Mapping[str, AssertionResult | None]
+    plan: CoveragePlan,
+    results: Mapping[str, AssertionResult | None],
+    noted: Collection[str] = (),
 ) -> dict[str, CheckState]:
     """Each of `plan`'s checks, in plan order, by its last evaluation in
-    `results` (`Attempt.checks`): unbound while it has none."""
+    `results` (`Attempt.checks`): while it has none, noted if its element
+    was noted for absence (`Attempt.noted`), else unbound."""
     states: dict[str, CheckState] = {}
     for check_id, (_, check) in planned_checks(plan).items():
         result = results.get(check_id)
         if check.check == "probe_equals_baseline":
             states[check_id] = "unbindable"
         elif result is None:
-            states[check_id] = "unbound"
+            states[check_id] = "noted" if check_id in noted else "unbound"
         elif result.outcome in ("pass", "failed"):
             states[check_id] = "passed" if result.outcome == "pass" else "failed"
         else:

@@ -286,7 +286,9 @@ async def _request(
         parts=state["parts"],
         probes=probe_listing(context.attempt.offered, context.redactor),
         confirmation=context.attempts.feedback,
-        checks=check_states(context.attempt.plan, context.attempt.checks),
+        checks=check_states(
+            context.attempt.plan, context.attempt.checks, context.attempt.noted
+        ),
     )
     return navigator_request(context.prefix, turn, redactor=context.redactor), seen
 

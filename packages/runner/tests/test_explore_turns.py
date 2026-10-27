@@ -360,6 +360,45 @@ def test_each_request_says_what_the_attempt_has_bound_in_plan_order(
     ]
 
 
+# A header's Sign in link, checked not to show: noting it binds nothing.
+HEADER_LINK = "the header's Sign in link"
+GONE = CoveragePlan.model_validate(
+    {
+        "expectations": [
+            {
+                "expect_index": 0,
+                "subject": HEADER_LINK,
+                "claim": "is gone",
+                "checks": [{"check": "not_visible", "target_meaning": HEADER_LINK}],
+            }
+        ],
+        "requires": [],
+    }
+)
+
+
+def test_the_request_after_a_note_says_to_assert_the_check_once_it_is_gone(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        PAGES,
+        "signed-out",
+        '<nav class="navbar"><a href="/page/form">Sign in</a></nav>',
+    )
+    note = tool(
+        "note_for_absence",
+        lambda m: {"check_id": "a1", "ref": ref(m, "link", "Sign in")},
+    )
+    client = Scripted(note, calling("finish", {"steps": []}))
+
+    turned(app, tmp_path, client, turns=2, page="/page/signed-out", plan=GONE)
+
+    assert [
+        re.findall(r"<checks>\n(.*?)\n</checks>", request[2].text, re.DOTALL)
+        for request in client.requests
+    ] == [["a1: unbound"], ["a1: noted; assert it once it is gone"]]
+
+
 def test_each_priced_response_is_on_disk_before_the_next_call(
     app: App, tmp_path: Path
 ) -> None:

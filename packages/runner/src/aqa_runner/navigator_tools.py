@@ -206,6 +206,7 @@ class Attempt:
     observation: Redacted | None = field(init=False, default=None)
     _uses: dict[str, TargetUses] = field(init=False, default_factory=dict)
     _bound: dict[str, _Bound] = field(init=False, default_factory=dict)
+    _noted: set[str] = field(init=False, default_factory=set)
     parts: Parts = field(init=False, default_factory=Parts)
     _unseen: executor.StepResult | None = field(init=False, default=None)
 
@@ -247,6 +248,11 @@ class Attempt:
             check_id: self._bound[check_id].result if check_id in self._bound else None
             for check_id in planned_checks(self.plan)
         }
+
+    @property
+    def noted(self) -> frozenset[str]:
+        """The not_visible checks whose element `note_for_absence` noted."""
+        return frozenset(self._noted)
 
     def uses(self, meaning: str) -> TargetUses:
         """The targets `meaning` gets across its uses, under its subject
@@ -407,6 +413,7 @@ class Attempt:
         except _REFUSED as error:
             reason = reasons.reason(error, self.session.redactor)
             return self._said(f"note_for_absence did not run: {reason}")
+        self._noted.add(call.check_id)
         return self._said(
             f"{call.check_id}'s element is noted where it shows: call assert_check "
             f"for {call.check_id} with no ref once it is gone"
