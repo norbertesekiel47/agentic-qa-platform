@@ -165,6 +165,26 @@ def test_an_unknown_field_is_rejected(path: tuple[str | int, ...]) -> None:
             {"testid": "pay", "scope": {"label": "Payment", "scope": {"css": 7}}},
             "string_type",
         ),
+        # A scope by a value an earlier fill step typed: that step's number
+        # and its value, which has a word to find (ADR-0025's #58 amendment).
+        ({"css": "app-pay", "holds_value": 2}, "model_type"),
+        ({"css": "app-pay", "holds_value": {"step": 2}}, "missing"),
+        (
+            {"css": "app-pay", "holds_value": {"step": 0, "value": "Ada"}},
+            "greater_than_equal",
+        ),
+        (
+            {"css": "app-pay", "holds_value": {"step": 2, "value": " \xa0"}},
+            "value_error",
+        ),
+        (
+            {"css": "app-pay", "holds_value": {"step": 2, "value": "Ada", "x": 1}},
+            "extra_forbidden",
+        ),
+        (
+            {"role": "button", "holds_value": {"step": 2, "value": "Ada"}},
+            "extra_forbidden",
+        ),
     ],
 )
 def test_a_malformed_locator_is_rejected(locator: object, kind: str) -> None:

@@ -19,6 +19,7 @@ from aqa_core.compiled import (
     CompiledScript,
     Coverage,
     ExpectationCoverage,
+    HeldValue,
     NetworkNone,
     NetworkSeen,
     NotVisible,
@@ -961,3 +962,45 @@ def test_a_script_replays_agreement_refuses_is_never_returned(
     monkeypatch.setattr(aqa_core.compiler, "contract_problems", lambda *_: ["refused"])
 
     assert problems(tmp_path) == ("refused",)
+
+
+# The add button, found under the header holding the value step 5 typed:
+# the attempt's number, which the script's steps renumber.
+HELD_ADD = Target(
+    semantic=ADD,
+    locators=(
+        ByRole(
+            role="link",
+            name="New Article",
+            scope=ByCss(css="header", holds_value=HeldValue(step=5, value="flaky")),
+        ),
+    ),
+)
+
+
+def test_a_held_value_names_its_fill_step_by_the_scripts_number(
+    tmp_path: Path,
+) -> None:
+    script = compiled(
+        tmp_path,
+        steps=STEPS | {9: PathStep({"action": "click"}, HELD_ADD)},
+        bound=BOUND | {"a5": HELD_ADD},
+    )
+
+    [target] = [each for each in script.targets.values() if each.semantic == ADD]
+    [scope] = [each.scope for each in target.locators]
+    assert scope == ByCss(css="header", holds_value=HeldValue(step=4, value="flaky"))
+    assert [step.seq for step in script.steps if step.action == "fill"] == [4]
+
+
+def test_a_held_value_whose_step_finish_drops_fails_by_its_number(
+    tmp_path: Path,
+) -> None:
+    assert problems(
+        tmp_path,
+        steps=STEPS | {9: PathStep({"action": "click"}, HELD_ADD)},
+        kept=tuple(number for number in KEPT if number != 5),
+        bound=BOUND | {"a5": HELD_ADD},
+    ) == (
+        "a kept target is found by the value step 5 typed, but finish doesn't keep step 5",
+    )
