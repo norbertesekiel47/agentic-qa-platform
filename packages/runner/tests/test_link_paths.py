@@ -161,3 +161,43 @@ def test_a_long_href_never_costs_the_element_its_other_locators(
         return await generate_for_action(session.page, Seen(element, role, name))
 
     assert expected in in_session(scenario)
+
+
+# A Conduit comment card, as `article-comment.component.ts` renders it: the
+# author's image link and name link share a class and a path, and only what
+# they hold tells them apart. The header's profile link holds an image too.
+CARD = """<app-article-comment><div class="card"><div class="card-block">
+    <p class="card-text"> {text} </p></div><div class="card-footer">
+    <a class="comment-author" href="/profile/{who}"><img src="/a.svg"
+        class="comment-author-img"></a>
+    &nbsp;<a class="comment-author" href="/profile/{who}"> {who} </a>
+    <span class="date-posted"> October 26, 2026 </span></div></div>
+    </app-article-comment>"""
+HEADER = """<nav class="navbar"><ul class="nav navbar-nav"><li class="nav-item">
+    <a class="nav-link" href="/profile/reader"><img class="user-pic" src="/a.svg">
+    reader </a></li></ul></nav>"""
+
+
+def comments(*cards: tuple[str, str]) -> str:
+    """The header and a comment list of `cards`, each its text and author."""
+    listed = "".join(CARD.format(text=text, who=who) for text, who in cards)
+    return f'{HEADER}<div class="comment-list">{listed}</div>'
+
+
+def test_a_comment_authors_name_link_is_found_as_the_link_that_holds_no_image() -> None:
+    # post-comment's a2 reads the new comment's author name, which a text
+    # check may not locate by name (#58).
+    html = comments(
+        ("Glad to be here.", "jake"), ("Thanks for the warm welcome!", "reader")
+    )
+
+    async def scenario(session: BrowserSession) -> tuple[Locator, ...]:
+        await put(session, html)
+        links = await session.page.query_selector_all("a.comment-author")
+        return await generate_for_assertion(
+            session.page, Seen(links[3], "link", "reader"), checks_text=True
+        )
+
+    assert in_session(scenario) == (
+        ByCss(css='a[href="/profile/reader"]:not(:has(img))'),
+    )

@@ -147,7 +147,8 @@ _TEXT_LENGTH = 1024
 # <body>. Read in the page's own world, so they are the page's word: every
 # candidate built from them is resolved before it is kept. A link's href is
 # kept only while it can be a stable path (`_stable_path`), never cut to the
-# bound, so a long one, such as a tracking URL, costs no other fact.
+# bound, so a long one, such as a tracking URL, costs no other fact. Whether
+# the element holds an image says whether `:not(:has(img))` can tell it apart.
 _FACTS = f"""(element) => {{
     const path = (node) => {{
         const href = node.localName === "a" ? node.getAttribute("href") : null;
@@ -173,6 +174,7 @@ _FACTS = f"""(element) => {{
         placeholder: element.getAttribute("placeholder"),
         testid: element.getAttribute("data-testid"),
         labels: element.labels ? [...element.labels].map((label) => label.innerText) : [],
+        image: element.querySelector("img") !== null,
         ancestors,
     }};
 }}"""
@@ -196,6 +198,7 @@ class _Element(_Node):
     placeholder: _Text | None
     testid: _Text | None
     labels: Annotated[list[_Text], Field(max_length=64)]
+    image: bool
     ancestors: Annotated[list[_Node], Field(max_length=_ANCESTORS_TRIED)]
 
 
@@ -356,7 +359,10 @@ def _scopes(element: _Element) -> list[str]:
 
 def _structural(element: _Element) -> Iterator[ByCss]:
     """Structural locators for the element, each alone and then under its
-    nearest custom-element ancestor, such as `app-favorite-button button`."""
+    nearest custom-element ancestor, such as `app-favorite-button button`.
+    A link that holds no image then gets each again with `:not(:has(img))`,
+    which tells it from an image link of the same class and path, as a
+    Conduit comment's author name link (ADR-0025's #58 amendment)."""
     custom = next(
         (
             node["tag"]
@@ -365,7 +371,10 @@ def _structural(element: _Element) -> Iterator[ByCss]:
         ),
         None,
     )
-    for structure in _structures(element):
+    structures = _structures(element)
+    if element["tag"] == "a" and not element["image"]:
+        structures += [f"{structure}:not(:has(img))" for structure in structures]
+    for structure in structures:
         yield ByCss(css=structure)
         if custom is not None:
             yield ByCss(css=f"{custom} {structure}")
