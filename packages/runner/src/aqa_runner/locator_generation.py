@@ -16,7 +16,7 @@ import json
 import re
 import secrets
 import typing
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from typing import Annotated, Literal, TypedDict
@@ -27,6 +27,7 @@ from aqa_core.compiled import (
     ByPlaceholder,
     ByRole,
     ByTestId,
+    HeldValue,
     Locator,
     Target,
 )
@@ -43,7 +44,7 @@ from aqa_runner.binding import (
     register_binding_engine,
 )
 from aqa_runner.browser_session import BrowserSession
-from aqa_runner.locators import Absent, Resolved, Use, resolve
+from aqa_runner.locators import Absent, Resolved, Use, css_query, resolve
 from aqa_runner.snapshot_refs import ELEMENT_REF, LINE
 
 # The key of an element's line in a snapshot, up to its ref: its role, its
@@ -397,6 +398,22 @@ def _keep(_: Locator) -> bool:
     return False
 
 
+@dataclass(frozen=True)
+class _Tried:
+    """What a use's generating may try past the grammar's candidates and
+    scopes: never a candidate or a scope `drop` names, and, when nothing
+    else finds the element, each scope again holding each value the run
+    `typed` earlier, nearest first (ADR-0025's #58 amendment)."""
+
+    drop: Callable[[Locator], bool] = _keep
+    typed: Sequence[HeldValue] = ()
+
+
+# What a use tries when it says nothing more: every candidate and scope,
+# and no value typed earlier.
+_EVERY = _Tried()
+
+
 def _alone(locator: Locator, contract: Contract | None) -> Target:
     """`locator` as a candidate's one-locator target, inside `contract`'s
     region when there is one."""
@@ -429,7 +446,7 @@ class _Trial:
     contract: Contract | None
     tries: int = _TRIES
     # Whether each scope finds one element on the page, counted once.
-    counted: dict[str, bool] = field(default_factory=dict)
+    counted: dict[ByCss, bool] = field(default_factory=dict)
 
     def _spend(self) -> None:
         if self.tries == 0:
@@ -451,13 +468,13 @@ class _Trial:
         self._spend()
         return await _unless_the_page_breaks(self.page, self._found(locator), False)
 
-    async def _count_is_one(self, scope: str) -> bool:
+    async def _count_is_one(self, scope: ByCss) -> bool:
         root: Page | PlaywrightLocator = self.page
         if self.contract is not None:
             root = self.page.locator(f"css={self.contract.region}")
-        return await root.locator(f"css={scope}").count() == 1
+        return await css_query(root, scope).count() == 1
 
-    async def unique(self, scope: str) -> bool:
+    async def unique(self, scope: ByCss) -> bool:
         """Whether `scope` finds one element on the page, or in the region,
         counted once."""
         if scope not in self.counted:
@@ -467,16 +484,16 @@ class _Trial:
             )
         return self.counted[scope]
 
-    async def under(self, locator: Locator, scope: str) -> Locator | None:
+    async def under(self, locator: Locator, scope: ByCss) -> Locator | None:
         """`locator` scoped under `scope`, if the scope finds one element on
         the page and the locator finds the element inside it, else None."""
         if not await self.unique(scope):
             return None
-        scoped = locator.model_copy(update={"scope": ByCss(css=scope)})
+        scoped = locator.model_copy(update={"scope": scope})
         return scoped if await self.finds(scoped) else None
 
     async def scoped_as_needed(
-        self, locator: Locator, scopes: list[str]
+        self, locator: Locator, scopes: list[ByCss]
     ) -> Locator | None:
         """`locator` if it finds the element alone, else `locator` scoped
         under the nearest scope, unique on the page, that makes it find the
@@ -602,23 +619,34 @@ async def _placed(
     kinds_of: Callable[[_Element], _ByKind],
     contract: Contract | None,
     *,
-    drop: Callable[[Locator], bool] = _keep,
+    tried: _Tried = _EVERY,
 ) -> _ByKind:
     """For each of the grammar's kinds, in order, its candidates where they
     find the element `used` for `use`: for an action or an assertion, the
-    first (`_first_of_each_kind`); for a negative check, every one under
-    every scope (`_every_scoped`). A candidate or a scope `drop` names is
-    never tried: the next of its kind, or the next scope, is. Raises
-    `LocatorError` when none does."""
+    first (`_first_of_each_kind`), and when no kind's does, the first under
+    a scope holding a value typed earlier (`_first_held`); for a negative
+    check, every one under every scope (`_every_scoped`). A candidate or a
+    scope `tried` drops is never tried: the next of its kind, or the next
+    scope, is. Raises `LocatorError` when none does."""
     element = await _facts(page, used.element)
+    drop = tried.drop
     kinds = [[each for each in kind if not drop(each)] for kind in kinds_of(element)]
-    scopes = [scope for scope in _scopes(element) if not drop(ByCss(css=scope))]
+    found = [ByCss(css=scope) for scope in _scopes(element)]
+    scopes = [scope for scope in found if not drop(scope)]
+    held = [
+        scope
+        for value in tried.typed
+        for each in found
+        if not drop(scope := each.model_copy(update={"holds_value": value}))
+    ]
     placed: _ByKind = [[] for _ in kinds]
     place = _every_scoped if use == "negative_check" else _first_of_each_kind
     async with _holding(page, used.element) as token:
         try:
             trial = _Trial(page, use, token, contract)
             await place(trial, kinds, scopes, placed)
+            if use != "negative_check" and not any(placed):
+                await _first_held(trial, kinds, held, placed)
         except _OutOfTriesError:
             # Out of tries, the kinds found so far stand; with none, the
             # budget is the reason.
@@ -638,7 +666,7 @@ async def _placed(
 
 
 async def _first_of_each_kind(
-    trial: _Trial, kinds: _ByKind, scopes: list[str], placed: _ByKind
+    trial: _Trial, kinds: _ByKind, scopes: list[ByCss], placed: _ByKind
 ) -> None:
     """Append to each kind's list in `placed` the kind's first candidate that
     finds the element, scoped as needed."""
@@ -650,8 +678,26 @@ async def _first_of_each_kind(
                 break
 
 
+async def _first_held(
+    trial: _Trial, kinds: _ByKind, held: list[ByCss], placed: _ByKind
+) -> None:
+    """Append to each kind's list in `placed` the kind's first candidate that
+    finds the element under a scope holding a value typed earlier, the
+    nearest step's first, then the nearest scope (ADR-0025's #58
+    amendment): of two cards alike in all else, the one the run's own value
+    is in."""
+    for kind, found in zip(kinds, placed, strict=True):
+        for candidate in kind:
+            for scope in held:
+                if (scoped := await trial.under(candidate, scope)) is not None:
+                    found.append(scoped)
+                    break
+            if found:
+                break
+
+
 async def _every_scoped(
-    trial: _Trial, kinds: _ByKind, scopes: list[str], placed: _ByKind
+    trial: _Trial, kinds: _ByKind, scopes: list[ByCss], placed: _ByKind
 ) -> None:
     """Append to each kind's list in `placed` every candidate under every
     scope that makes it find the element, nearest first: a negative check
@@ -670,11 +716,13 @@ async def _generate(
     kinds_of: Callable[[_Element], _ByKind],
     contract: Contract | None,
     *,
-    drop: Callable[[Locator], bool] = _keep,
+    tried: _Tried = _EVERY,
 ) -> tuple[Locator, ...]:
     """The first candidate of each kind that finds the element for `use`,
-    in order, none that `drop` names. Raises `LocatorError` when none does."""
-    placed = await _placed(page, used, use, kinds_of, contract, drop=drop)
+    in order, none that `tried` drops, under a scope holding a value typed
+    earlier only when no candidate finds it otherwise. Raises
+    `LocatorError` when none does."""
+    placed = await _placed(page, used, use, kinds_of, contract, tried=tried)
     return tuple(found[0] for found in placed if found)
 
 
@@ -723,7 +771,9 @@ class TargetUses:
     keeps no sighting. A meaning with no contract is refused where copies of
     the element are detected. A candidate or scope `drop` names, such as one
     spelling a bound value, is never tried at any use (ADR-0025's #53 P13
-    amendment)."""
+    amendment). When nothing else finds an action's or an assertion's
+    element, a new target may be scoped by a value the run has `typed` by
+    then, nearest first (ADR-0025's #58 amendment)."""
 
     def __init__(
         self,
@@ -732,11 +782,13 @@ class TargetUses:
         checks_text: bool,
         contract: Contract | None = None,
         drop: Callable[[Locator], bool] = _keep,
+        typed: Callable[[], Sequence[HeldValue]] = tuple,
     ) -> None:
         self.meaning = meaning
         self.checks_text = checks_text
         self.contract = contract
         self.drop = drop
+        self.typed = typed
         self._targets: list[Target] = []
         # Where a later negative check's element was seen: for each kind,
         # its candidates under every scope that found it there.
@@ -761,7 +813,12 @@ class TargetUses:
                 kinds_of = self._kinds_of(used, use)
                 self._start(
                     await _generate(
-                        page, used, use, kinds_of, self.contract, drop=self.drop
+                        page,
+                        used,
+                        use,
+                        kinds_of,
+                        self.contract,
+                        tried=_Tried(self.drop, self.typed()),
                     )
                 )
         return len(self._targets) - 1
@@ -779,7 +836,7 @@ class TargetUses:
                 "negative_check",
                 self._kinds_of(seen, "negative_check"),
                 self.contract,
-                drop=self.drop,
+                tried=_Tried(self.drop),
             )
 
     async def add_negative_check(self, page: Page) -> int:

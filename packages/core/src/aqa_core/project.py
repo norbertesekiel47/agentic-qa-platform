@@ -40,7 +40,6 @@ from aqa_core.spec import (
     secret_references,
     spec_hash,
 )
-from aqa_core.text import has_text
 
 
 class SpecError(Exception):
@@ -514,14 +513,6 @@ def _levels(
         where, level = f"{where}.scope", level.scope
 
 
-def _reads(check: TextInTarget, value: str) -> bool:
-    """Whether a text check reads text `value` matches: its pattern matches
-    the value, or the value and its literal hold one another."""
-    if check.text is not None and has_text(check.text, value):
-        return True
-    return check.matches(value)
-
-
 def _held(script: CompiledScript) -> Iterator[tuple[str, str, HeldValue]]:
     """Each held value of `script`'s css locators, their scopes' included,
     with its target's name and its key."""
@@ -566,7 +557,7 @@ def _held_values(script: CompiledScript) -> Iterator[str]:
             if (
                 isinstance(check, TextInTarget)
                 and check.target == name
-                and _reads(check, held.value)
+                and check.reads(held.value)
             ):
                 yield (
                     f"{key}.value: assertions[{index}] ({check.id}) checks this "
