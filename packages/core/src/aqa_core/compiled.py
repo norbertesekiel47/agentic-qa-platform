@@ -514,13 +514,15 @@ class TextInTarget(_TextCheck):
     target: NonEmpty
 
     def reads(self, value: str) -> bool:
-        """Whether this check reads text the held value `value` matches: its
-        pattern matches the value, or the value and its literal hold one
-        another as whole words. A target found by such a value would be
-        found by what its check verifies (ADR-0025's #58 amendment)."""
-        if self.text is not None and has_text(self.text, value):
+        """Whether a target this check reads may not hold the value `value`
+        (ADR-0025's #58 amendment): the value and the check's literal hold
+        one another as whole words, so the target would be found by what
+        its check verifies; or the check is a pattern, whatever the value,
+        since a pattern runs only inside a run's bounded text search, never
+        against a held value."""
+        if self.text is None:
             return True
-        return self.matches(value)
+        return has_text(value, self.text) or has_text(self.text, value)
 
 
 class NotVisible(_Assertion):
