@@ -519,6 +519,47 @@ def test_a_restart_on_the_last_attempt_is_refused(app: App, tmp_path: Path) -> N
     assert written(run)["phases"] == [phase("attempt-1"), phase("confirmation")]
 
 
+# A select of no option, refused before its intent, by each turn's fresh ref.
+UNCHOSEN = tool(
+    "select",
+    lambda m: {
+        "ref": ref(m, "combobox", "Size"),
+        "meaning": "the shop's size select",
+        "option": "",
+    },
+)
+REPEATED = "the navigator made the same refused call 5 times in a row"
+
+
+def test_five_refused_restarts_end_the_run_as_the_turn_budget_would(
+    app: App, tmp_path: Path
+) -> None:
+    config = ProjectConfig.model_validate({"budgets": {"attempts": 1}})
+    client = Scripted(planned(), *[RESTART] * 6)
+
+    run = exploring(app, tmp_path, client, config=config)
+
+    assert (run.outcome, run.exit_code) == ("gave_up", 3)
+    assert written(run)["reasons"] == [REPEATED, "a1: never bound"]
+    assert len(client.requests) == 6  # the plan and five turns
+
+
+def test_a_restart_starts_the_count_of_refused_calls_again(
+    app: App, tmp_path: Path
+) -> None:
+    # Eight of one refusal around a restart, never five in a row.
+    client = Scripted(planned(), *[UNCHOSEN] * 4, RESTART, *[UNCHOSEN] * 4, *PATH)
+
+    run = exploring(app, tmp_path, client)
+
+    assert (run.outcome, run.exit_code) == ("compiled", 0)
+    assert [each["part"] for each in written(run)["phases"]] == [
+        "attempt-1",
+        "attempt-2",
+        "confirmation-2",
+    ]
+
+
 def test_a_next_part_that_cant_be_made_keeps_each_phase_once_and_exits_15(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
