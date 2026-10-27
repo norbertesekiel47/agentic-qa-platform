@@ -36,6 +36,7 @@ from aqa_runner.egress import EgressPolicy
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.invariants import Observers
 from aqa_runner.locators import (
+    READ_TEXT,
     UNOCCLUDED,
     Absent,
     Resolved,
@@ -95,15 +96,15 @@ SERVICE_WORKERS_REFUSED = """(() => {
 # box. Only HTML elements have rendered text: any other, such as SVG's, raises,
 # as Playwright's innerText does, since its text content holds what the page
 # hides (a `<tspan visibility="hidden">`, a `<title>`).
-RENDERED_TEXT = """(element) => {
-    if (!(element instanceof HTMLElement)) {
-        throw new Error(`text_of reads HTML elements only: <${element.localName}> isn't one`);
-    }
+RENDERED_TEXT = f"""(element) => {{
+    if (!(element instanceof HTMLElement)) {{
+        throw new Error(`text_of reads HTML elements only: <${{element.localName}}> isn't one`);
+    }}
     const box = element.getBoundingClientRect();
     const shown = box.width > 0 && box.height > 0 &&
         getComputedStyle(element).visibility === "visible";
-    return shown ? element.innerText : "";
-}"""
+    return shown ? ({READ_TEXT})(element) : "";
+}}"""
 
 # Whether an element with the focus stands for nothing focused: the body, or
 # the document's root.

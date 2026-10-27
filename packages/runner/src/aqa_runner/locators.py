@@ -606,7 +606,44 @@ async def _absence(held: HeldRegion | None, misses: list[Miss]) -> Absent | Unre
     return Unresolved(tuple(shown if miss == "no match" else miss for miss in misses))
 
 
+# An element's rendered text, as a function of the element: its innerText,
+# where CSS text-transform shows (LAB_NOTES, 2026-09-29), with a word break
+# around each atomic inline box (inline-block, -flex, -grid, -table), which
+# innerText joins to its neighbours with nothing between, as it does
+# Conduit's tag pills (ADR-0025's #58 amendment). An element with no such box
+# inside reads as its innerText alone; around one, its own text nodes read as
+# they render, a hidden element's left out.
+READ_TEXT = """(() => {
+    const atomic = (e) =>
+        /^inline-(block|flex|grid|table)$/.test(getComputedStyle(e).display);
+    const transformed = (text, style) =>
+        style.textTransform === "uppercase" ? text.toUpperCase()
+        : style.textTransform === "lowercase" ? text.toLowerCase()
+        : style.textTransform === "capitalize"
+            ? text.replace(/(^|\\s)(\\S)/g, (_, space, first) => space + first.toUpperCase())
+        : text;
+    const read = (element) => {
+        if (![...element.querySelectorAll("*")].some(atomic)) return element.innerText;
+        const style = getComputedStyle(element);
+        let text = "";
+        for (const child of element.childNodes) {
+            if (child.nodeType === Node.TEXT_NODE) {
+                if (style.visibility === "visible") text += transformed(child.data, style);
+            } else if (child instanceof HTMLElement) {
+                const display = getComputedStyle(child).display;
+                if (display === "none") continue;
+                if (child.localName === "br") text += "\\n";
+                else if (display === "inline" || display === "contents") text += read(child);
+                else text += ` ${read(child)} `;
+            }
+        }
+        return text;
+    };
+    return read;
+})()"""
+
+
 async def rendered_text(element: ElementHandle) -> str:
-    """The element's rendered text, which text checks compare: its
-    innerText, where CSS text-transform shows (LAB_NOTES, 2026-09-29)."""
-    return await element.inner_text()
+    """The element's rendered text, which text checks compare (`READ_TEXT`)."""
+    text = await element.evaluate(f"(element) => ({READ_TEXT})(element)")
+    return text if isinstance(text, str) else ""
