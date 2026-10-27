@@ -48,6 +48,7 @@ from packages.runner.tests.executor_fixtures import PAGES, App, serving_app
 from packages.runner.tests.explore_graph_fixtures import (
     CLICK,
     FILL,
+    NAME,
     NO_RESPONSE,
     PLAN,
     REFUSED,
@@ -424,6 +425,86 @@ def test_the_turn_budget_gives_up(app: App, tmp_path: Path) -> None:
 
     assert stops(context) == [("gave_up", "the attempt took all 2 of its turns")]
     assert len(client.requests) == 2
+
+
+def unchosen(
+    role: str, name: str, meaning: str = NAME
+) -> Callable[[Sequence[BaseMessage]], Reply]:
+    """A select of no option, which is refused before its intent, on the
+    element with `role` and `name`, by the ref the request's snapshot gives
+    it: a fresh one each turn."""
+    return tool(
+        "select",
+        lambda m: {"ref": ref(m, role, name), "meaning": meaning, "option": ""},
+    )
+
+
+# Why the turns stop once the navigator repeats one refused call (#232).
+REPEATED = "the navigator made the same refused call 5 times in a row"
+
+
+@pytest.mark.parametrize("turns", [40, 5])
+def test_the_same_refused_call_five_times_in_a_row_ends_the_attempt(
+    app: App, tmp_path: Path, turns: int
+) -> None:
+    client = Scripted(*[unchosen("textbox", "Name")] * 6)
+
+    context = turned(app, tmp_path, client, turns=turns)
+
+    # Whether or not that was the last turn too.
+    assert stops(context) == [("gave_up", REPEATED)]
+    assert len(client.requests) == 5
+    # Every call named the same field by the fresh ref of its turn.
+    assert len({ref(request, "textbox", "Name") for request in client.requests}) == 5
+
+
+@pytest.mark.parametrize(
+    "refused",
+    [
+        calling("select", {"ref": "e1"}),
+        FINISH,
+        calling("assert_check", {"check_id": "a1", "ref": None}),
+    ],
+    ids=["arguments that don't fit", "a finish that compiled nothing", "a check's"],
+)
+def test_each_kind_of_refused_call_counts(
+    app: App, tmp_path: Path, refused: Reply | Callable[[Sequence[BaseMessage]], Reply]
+) -> None:
+    client = Scripted(*[refused] * 6)
+
+    context = turned(app, tmp_path, client)
+
+    assert stops(context) == [("gave_up", REPEATED)]
+    assert len(client.requests) == 5
+
+
+def test_calls_that_ran_never_count_as_repeats(app: App, tmp_path: Path) -> None:
+    client = Scripted(*[FILL] * 7)
+
+    context = turned(app, tmp_path, client, turns=6)
+
+    assert stops(context) == [("gave_up", "the attempt took all 6 of its turns")]
+
+
+@pytest.mark.parametrize(
+    "between",
+    [
+        unchosen("combobox", "Size"),
+        unchosen("textbox", "Name", meaning=SAVE),
+        FILL,
+    ],
+    ids=["another target", "other arguments", "a call that ran"],
+)
+def test_another_call_between_refused_calls_starts_their_count_again(
+    app: App, tmp_path: Path, between: Callable[[Sequence[BaseMessage]], Reply]
+) -> None:
+    refused = unchosen("textbox", "Name")
+    client = Scripted(*[refused] * 4, between, *[refused] * 4)
+
+    context = turned(app, tmp_path, client, turns=9)
+
+    assert stops(context) == [("gave_up", "the attempt took all 9 of its turns")]
+    assert len(client.requests) == 9
 
 
 def test_the_spend_budget_stops_before_the_turns_action(
