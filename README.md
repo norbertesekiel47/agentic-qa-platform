@@ -2,7 +2,7 @@
 
 **Natural-language E2E tests that run as deterministic replays and self-heal on UI drift. CLI, GitHub App, and multi-tenant SaaS.**
 
-> **Status: M0 (benchmark pilot) complete; M1 (local explore and compile) is next.** This README is the public front page; sections marked *(planned)* will be filled with measured results as milestones land. No number appears here without the command and commit that produced it.
+> **Status: M0 (benchmark pilot) and M1 (local explore and compile) complete; M2 (replay, heal and verdicts) is next.** M1's evidence is in [ROADMAP.md](ROADMAP.md#m1--local-explore--compile). This README is the public front page; sections marked *(planned)* will be filled with measured results as milestones land. No number appears here without the command and commit that produced it.
 
 ## Why
 
