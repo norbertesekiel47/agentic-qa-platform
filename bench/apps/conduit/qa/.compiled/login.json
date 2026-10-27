@@ -1,0 +1,325 @@
+{
+  "schema_version": 1,
+  "spec_id": "login",
+  "spec_hash": "sha256:39ee8d0b2aa419e6f270018f9272ef10176690315ff8fd2e7c60af87f0172d16",
+  "compiled_at": "2026-10-27T09:45:46.174612Z",
+  "compiled_by": {
+    "mode": "explore",
+    "models": {
+      "navigator": "claude-sonnet-5-5"
+    },
+    "price_map": "ae6b762190658e695c77b0ba63b6c65913b86ac0",
+    "subject_contracts": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "confirmed": true,
+  "browser": {
+    "timezone": "UTC",
+    "locale": "en-US",
+    "viewport": [
+      1280,
+      800
+    ],
+    "device_scale_factor": 1.0,
+    "color_scheme": "light"
+  },
+  "coverage": {
+    "plan_hash": "sha256:d92382feef0f450876635cc089986707f39ce0d608831de1a1f8803ed355f7fd",
+    "expectations": [
+      {
+        "expect_index": 0,
+        "subject": "the page shown after signing in",
+        "claim": "The home page is shown after signing in",
+        "assertions": [
+          "a1"
+        ]
+      },
+      {
+        "expect_index": 1,
+        "subject": "the feed tabs on the home page",
+        "claim": "A \"Your Feed\" tab is shown",
+        "assertions": [
+          "a2"
+        ]
+      },
+      {
+        "expect_index": 2,
+        "subject": "the header links for signed-in users",
+        "claim": "The header has \"New Article\", \"Settings\" and \"reader\" links",
+        "assertions": [
+          "a3",
+          "a4",
+          "a5"
+        ]
+      },
+      {
+        "expect_index": 3,
+        "subject": "the header's sign-in and sign-up links",
+        "claim": "The header no longer has \"Sign in\" or \"Sign up\" links",
+        "assertions": [
+          "a6",
+          "a7"
+        ]
+      },
+      {
+        "expect_index": 4,
+        "subject": "the header's signed-in links",
+        "claim": "The header's \"New Article\", \"Settings\" and \"reader\" links are visible and not covered by any other element",
+        "assertions": [
+          "a8",
+          "a9",
+          "a10"
+        ]
+      }
+    ],
+    "requires": []
+  },
+  "targets": {
+    "t1": {
+      "semantic": "Email field in sign-in form",
+      "locators": [
+        {
+          "role": "textbox",
+          "name": "Email"
+        },
+        {
+          "placeholder": "Email"
+        },
+        {
+          "css": "input[name=email]"
+        }
+      ]
+    },
+    "t2": {
+      "semantic": "Password field in sign-in form",
+      "locators": [
+        {
+          "role": "textbox",
+          "name": "Password"
+        },
+        {
+          "placeholder": "Password"
+        },
+        {
+          "css": "input[name=password]"
+        }
+      ]
+    },
+    "t3": {
+      "semantic": "Sign in submit button of the form",
+      "locators": [
+        {
+          "role": "button",
+          "name": "Sign in"
+        },
+        {
+          "css": "button[type=submit]"
+        }
+      ]
+    },
+    "t4": {
+      "semantic": "the feed tabs above the article list on the home page",
+      "locators": [
+        {
+          "css": "div.col-md-9"
+        }
+      ]
+    },
+    "t5": {
+      "semantic": "the header link for composing a fresh post, in the top navigation bar",
+      "locators": [
+        {
+          "css": "a[href=\"/editor\"]"
+        }
+      ]
+    },
+    "t6": {
+      "semantic": "the header link to the page for editing account preferences, in the top navigation bar",
+      "locators": [
+        {
+          "css": "a[href=\"/settings\"]"
+        }
+      ]
+    },
+    "t7": {
+      "semantic": "the header link to the signed-in user's profile",
+      "locators": [
+        {
+          "scope": {
+            "css": "ul.navbar-nav"
+          },
+          "css": "a[href=\"/profile/reader\"]"
+        }
+      ]
+    },
+    "t8": {
+      "semantic": "the header link to the sign-in page",
+      "locators": [
+        {
+          "scope": {
+            "css": "ul.navbar-nav"
+          },
+          "role": "link",
+          "name": "Sign in"
+        },
+        {
+          "scope": {
+            "css": "ul.navbar-nav"
+          },
+          "css": "a[href=\"/login\"]"
+        }
+      ]
+    },
+    "t9": {
+      "semantic": "the header link to the sign-up page",
+      "locators": [
+        {
+          "scope": {
+            "css": "ul.navbar-nav"
+          },
+          "role": "link",
+          "name": "Sign up"
+        },
+        {
+          "scope": {
+            "css": "ul.navbar-nav"
+          },
+          "css": "a[href=\"/register\"]"
+        }
+      ]
+    },
+    "t10": {
+      "semantic": "the header link for creating a new article",
+      "locators": [
+        {
+          "role": "link",
+          "name": "New Article"
+        },
+        {
+          "css": "a[href=\"/editor\"]"
+        }
+      ]
+    },
+    "t11": {
+      "semantic": "the header link to account settings",
+      "locators": [
+        {
+          "role": "link",
+          "name": "Settings"
+        },
+        {
+          "css": "a[href=\"/settings\"]"
+        }
+      ]
+    }
+  },
+  "probe_baselines": {},
+  "steps": [
+    {
+      "seq": 1,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "fill",
+      "target": "t1",
+      "value": "reader@conduit.test"
+    },
+    {
+      "seq": 2,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request came later, which it may have caused",
+      "satisfies": [],
+      "action": "fill_secret",
+      "target": "t2",
+      "secret": "TEST_PASSWORD"
+    },
+    {
+      "seq": 3,
+      "side_effect": true,
+      "side_effect_basis": "network: a write request; model: finish didn't list it in changes_nothing",
+      "satisfies": [],
+      "action": "click",
+      "target": "t3"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "a1",
+      "expect_index": 0,
+      "check": "url_matches",
+      "pattern": "^https?://[^/]+/?(#/?)?$"
+    },
+    {
+      "id": "a2",
+      "expect_index": 1,
+      "text": "Your Feed",
+      "check": "text_in_target",
+      "target": "t4"
+    },
+    {
+      "id": "a3",
+      "expect_index": 2,
+      "text": "New Article",
+      "check": "text_in_target",
+      "target": "t5"
+    },
+    {
+      "id": "a4",
+      "expect_index": 2,
+      "text": "Settings",
+      "check": "text_in_target",
+      "target": "t6"
+    },
+    {
+      "id": "a5",
+      "expect_index": 2,
+      "text": "reader",
+      "check": "text_in_target",
+      "target": "t7"
+    },
+    {
+      "id": "a6",
+      "expect_index": 3,
+      "check": "not_visible",
+      "target": "t8"
+    },
+    {
+      "id": "a7",
+      "expect_index": 3,
+      "check": "not_visible",
+      "target": "t9"
+    },
+    {
+      "id": "a8",
+      "expect_index": 4,
+      "check": "visible_unoccluded",
+      "target": "t10",
+      "min_size_px": [
+        1,
+        1
+      ],
+      "in_viewport": true
+    },
+    {
+      "id": "a9",
+      "expect_index": 4,
+      "check": "visible_unoccluded",
+      "target": "t11",
+      "min_size_px": [
+        1,
+        1
+      ],
+      "in_viewport": true
+    },
+    {
+      "id": "a10",
+      "expect_index": 4,
+      "check": "visible_unoccluded",
+      "target": "t7",
+      "min_size_px": [
+        1,
+        1
+      ],
+      "in_viewport": true
+    }
+  ]
+}
