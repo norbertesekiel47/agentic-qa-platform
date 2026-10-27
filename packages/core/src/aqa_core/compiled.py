@@ -513,6 +513,15 @@ class TextInTarget(_TextCheck):
     check: Literal["text_in_target"]
     target: NonEmpty
 
+    def reads(self, value: str) -> bool:
+        """Whether this check reads text the held value `value` matches: its
+        pattern matches the value, or the value and its literal hold one
+        another as whole words. A target found by such a value would be
+        found by what its check verifies (ADR-0025's #58 amendment)."""
+        if self.text is not None and has_text(self.text, value):
+            return True
+        return self.matches(value)
+
 
 class NotVisible(_Assertion):
     check: Literal["not_visible"]

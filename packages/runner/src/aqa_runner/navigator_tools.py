@@ -15,7 +15,14 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
-from aqa_core.compiled import CompiledScript, Locator, Target
+from aqa_core.compiled import (
+    ByCss,
+    CompiledScript,
+    HeldValue,
+    Locator,
+    Target,
+    TextInTarget,
+)
 from aqa_core.compiler import (
     CompileError,
     ExploredPath,
@@ -33,6 +40,7 @@ from aqa_core.coverage_plan import CoveragePlan, PlannedCheck, planned_checks
 from aqa_core.project import path_on_origin
 from aqa_core.schema import Contract
 from aqa_core.spec import Spec
+from aqa_core.text import normalize
 from playwright.async_api import Error
 
 from aqa_runner import evaluation, executor, reasons
@@ -256,7 +264,9 @@ class Attempt:
 
     def uses(self, meaning: str) -> TargetUses:
         """The targets `meaning` gets across its uses, under its subject
-        contract, none spelling a bound value."""
+        contract, none spelling a bound value and none scoped by a value a
+        text check of the meaning reads (`_dropping`), and each new one
+        free to be scoped by a value the attempt typed (`_typed`)."""
         if meaning not in self._uses:
             self._uses[meaning] = TargetUses(
                 meaning,
@@ -265,9 +275,44 @@ class Attempt:
                     for _, check in planned_checks(self.plan).values()
                 ),
                 contract=self.contracts.get(meaning),
-                drop=self._spelled,
+                drop=self._dropping(meaning),
+                typed=self._typed,
             )
         return self._uses[meaning]
+
+    def _dropping(self, meaning: str) -> Callable[[Locator], bool]:
+        """What `meaning`'s targets never try: a locator spelling a bound
+        value, or a scope holding a value a text check of the meaning reads,
+        which would find the target by what its check verifies, so a missing
+        text would read as drift (ADR-0025's #58 amendment)."""
+        checks = [
+            assertion
+            for check_id, (index, check) in planned_checks(self.plan).items()
+            if check.check == "text_in_target"
+            and check.target_meaning == meaning
+            and isinstance(
+                assertion := assertion_for(check_id, index, check, target=meaning),
+                TextInTarget,
+            )
+        ]
+
+        def dropped(locator: Locator) -> bool:
+            held = locator.holds_value if isinstance(locator, ByCss) else None
+            read = held is not None and any(each.reads(held.value) for each in checks)
+            return read or self._spelled(locator)
+
+        return dropped
+
+    def _typed(self) -> tuple[HeldValue, ...]:
+        """What the attempt's completed fill steps typed, nearest first: the
+        values a new target's scope may hold when nothing else finds its
+        element (ADR-0025's #58 amendment). A value with no word to find is
+        left out."""
+        return tuple(
+            HeldValue(step=seq, value=step.fields["value"])
+            for seq, step in sorted(self.steps.items(), reverse=True)
+            if step.fields["action"] == "fill" and normalize(step.fields["value"])
+        )
 
     async def act(self, call: Action) -> ActionResult:
         """Run `call`, once the last description's parts are let go: nothing
