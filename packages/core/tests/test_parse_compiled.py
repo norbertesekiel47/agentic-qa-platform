@@ -1,4 +1,5 @@
 import json
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -119,9 +120,11 @@ def read(data: dict[str, Any], tmp_path: Path) -> CompiledScript:
 def test_a_scope_may_hold_the_value_an_earlier_fill_step_typed(
     tmp_path: Path, target: str, position: int
 ) -> None:
+    # a4 checks the cart's text for a literal the value doesn't hold.
     held = {"step": 2, "value": EMAIL}
+    data = checked(holding(target, position, held), {"text": "Classic Hoodie"})
 
-    script = read(holding(target, position, held), tmp_path)
+    script = read(data, tmp_path)
 
     scope = script.targets[target].locators[position].scope
     assert isinstance(scope, ByCss)
@@ -188,29 +191,26 @@ def test_a_held_value_names_an_earlier_fill_step_and_its_value(
 HOODIE = "Classic Hoodie in M"
 
 
-@pytest.mark.parametrize(
-    ("check", "value"),
-    [
-        ({"pattern": "Classic Hoodie.*\\bM\\b"}, HOODIE),
-        ({"text": "Classic Hoodie"}, HOODIE),
-        ({"text": "Classic Hoodie in M, size medium"}, HOODIE),
-    ],
-    ids=[
-        "its pattern matches the value",
-        "the value holds its text",
-        "its text holds the value",
-    ],
-)
-def test_a_held_value_never_finds_the_text_its_targets_check_reads(
-    tmp_path: Path, check: dict[str, str], value: str
-) -> None:
-    # Found by the text its check verifies, the target would be missing,
-    # which is drift, wherever that text is missing, which is a failure.
-    data = holding("cart_items", 1, {"step": 2, "value": value})
-    data["steps"][1]["value"] = value
+def checked(data: dict[str, Any], check: dict[str, str]) -> dict[str, Any]:
+    """`data` with a4, the cart's text check, checking `check` instead."""
     assertion = data["assertions"][3]
     assertion.pop("pattern")
     assertion.update(check)
+    return data
+
+
+@pytest.mark.parametrize(
+    "check",
+    [{"text": "Classic Hoodie"}, {"text": "Classic Hoodie in M, size medium"}],
+    ids=["the value holds its text", "its text holds the value"],
+)
+def test_a_held_value_never_finds_the_text_its_targets_check_reads(
+    tmp_path: Path, check: dict[str, str]
+) -> None:
+    # Found by the text its check verifies, the target would be missing,
+    # which is drift, wherever that text is missing, which is a failure.
+    data = checked(holding("cart_items", 1, {"step": 2, "value": HOODIE}), check)
+    data["steps"][1]["value"] = HOODIE
 
     problem = (
         "targets.cart_items.locators[1].scope.holds_value.value: assertions[3] "
@@ -218,3 +218,35 @@ def test_a_held_value_never_finds_the_text_its_targets_check_reads(
         "text, so a failure there would read as drift"
     )
     assert refusals(data, tmp_path) == [(problem,), (problem,)]
+
+
+# A pattern that backtracks for a very long time on this value: no admission
+# may run it.
+CATASTROPHIC = ("^(a+)+$", "a" * 28 + "!")
+
+
+@pytest.mark.parametrize(
+    ("pattern", "value"),
+    [("Classic Hoodie.*\\bM\\b", HOODIE), CATASTROPHIC, ("^x$", EMAIL)],
+    ids=["one that matches the value", "a catastrophic one", "one that doesn't"],
+)
+def test_a_target_whose_text_check_is_a_pattern_holds_no_value(
+    tmp_path: Path, pattern: str, value: str
+) -> None:
+    # Whether a pattern reads a value is never tested: running a check's
+    # pattern has no time bound outside a run's text search.
+    data = checked(
+        holding("cart_items", 1, {"step": 2, "value": value}), {"pattern": pattern}
+    )
+    data["steps"][1]["value"] = value
+
+    started = time.monotonic()
+    found = refusals(data, tmp_path)
+
+    assert time.monotonic() - started < 1
+    problem = (
+        "targets.cart_items.locators[1].scope.holds_value: assertions[3] (a4) "
+        "checks this target's text by a pattern, which is never run against a "
+        "held value, so this target may hold none"
+    )
+    assert found == [(problem,), (problem,)]

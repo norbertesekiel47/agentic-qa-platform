@@ -4,6 +4,7 @@ whose text holds it as whole words, ignoring case, so of two comment cards
 by one author, the one the run posted."""
 
 import re
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -209,19 +210,21 @@ BOX, POST, SEARCH = "the comment box", "the post button", "the search box"
 TEXT = "the new comment's text"
 
 
-def checking(meaning: str, text: str) -> CoveragePlan:
+def checking(meaning: str, **check: str) -> CoveragePlan:
+    """A plan whose one check reads `meaning`'s text for `check`'s literal
+    or pattern."""
     return CoveragePlan.model_validate(
         {
             "expectations": [
                 {
                     "expect_index": 0,
                     "subject": meaning,
-                    "claim": f"reads {text}",
+                    "claim": "reads as the check says",
                     "checks": [
                         {
                             "check": "text_in_target",
                             "target_meaning": meaning,
-                            "text": text,
+                            **check,
                         }
                     ],
                 }
@@ -266,7 +269,7 @@ def test_explore_scopes_the_new_comments_author_by_the_nearest_value_it_typed(
         tmp_path,
         scenario,
         page="/page/commenting",
-        plan=checking(AUTHOR, "reader"),
+        plan=checking(AUTHOR, text="reader"),
     )
 
     assert told.startswith("a1 is bound, and on this page it is ")
@@ -301,7 +304,11 @@ def test_explore_never_scopes_a_target_by_a_value_its_text_check_reads(
         return told, attempt.checks["a1"] is None
 
     told, unbound = on_app(
-        app, tmp_path, scenario, page="/page/commenting", plan=checking(TEXT, POSTED)
+        app,
+        tmp_path,
+        scenario,
+        page="/page/commenting",
+        plan=checking(TEXT, text=POSTED),
     )
 
     assert told == (
@@ -309,3 +316,42 @@ def test_explore_never_scopes_a_target_by_a_value_its_text_check_reads(
         "element alone for an assertion"
     )
     assert unbound
+
+
+def test_explore_never_runs_a_text_checks_pattern_against_a_typed_value(
+    app: App, tmp_path: Path
+) -> None:
+    # A pattern runs only inside a run's bounded text search: a target its
+    # pattern checks is held by no value, whichever (ADR-0025's #58
+    # amendment), so a catastrophic one costs nothing here.
+    pattern, value = "^(a+)+$", "a" * 28 + "!"
+
+    async def scenario(attempt: Attempt) -> tuple[str, float]:
+        box = ref(attempt, "textbox", "Write a comment...")
+        await attempt.act(Fill(ref=box, meaning=BOX, text=value))
+        await attempt.observe()
+        await attempt.act(
+            Click(ref=ref(attempt, "button", "Post Comment"), meaning=POST)
+        )
+        await attempt.observe()
+        [card_text] = re.findall(
+            r"- paragraph \[ref=(e\d+)\]: " + re.escape(value),
+            attempt.observation or "",
+        )
+        started = time.monotonic()
+        told = await attempt.check(AssertCheck(check_id="a1", ref=card_text))
+        return told, time.monotonic() - started
+
+    told, took = on_app(
+        app,
+        tmp_path,
+        scenario,
+        page="/page/commenting",
+        plan=checking(TEXT, pattern=pattern),
+    )
+
+    assert took < 5
+    assert told == (
+        f"assert_check did not run: {TEXT}: no locator of the grammar finds the p "
+        "element alone for an assertion"
+    )

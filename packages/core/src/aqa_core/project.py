@@ -553,17 +553,29 @@ def _held_values(script: CompiledScript) -> Iterator[str]:
                 f"{key}.step: steps[{early[0]}] uses this target, and step "
                 f"{held.step}, whose value it holds, doesn't come before it"
             )
-        for index, check in enumerate(script.assertions):
-            if (
-                isinstance(check, TextInTarget)
-                and check.target == name
-                and check.reads(held.value)
-            ):
-                yield (
-                    f"{key}.value: assertions[{index}] ({check.id}) checks this "
-                    "target's text, and the value it holds matches that text, so "
-                    "a failure there would read as drift"
-                )
+        yield from _read_held(script, name, key, held)
+
+
+def _read_held(
+    script: CompiledScript, name: str, key: str, held: HeldValue
+) -> Iterator[str]:
+    """Each `text_in_target` check of the target `name` that may not read
+    a target holding `held` (`TextInTarget.reads`): a pattern, which is
+    never run against a held value, or a literal the value matches."""
+    for index, check in enumerate(script.assertions):
+        if not isinstance(check, TextInTarget) or check.target != name:
+            continue
+        where = f"assertions[{index}] ({check.id}) checks this target's text"
+        if check.pattern is not None:
+            yield (
+                f"{key}: {where} by a pattern, which is never run against a "
+                "held value, so this target may hold none"
+            )
+        elif check.reads(held.value):
+            yield (
+                f"{key}.value: {where}, and the value it holds matches that "
+                "text, so a failure there would read as drift"
+            )
 
 
 def _name_problems(script: CompiledScript, config: ProjectConfig) -> Iterator[str]:
