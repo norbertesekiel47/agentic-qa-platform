@@ -1,7 +1,7 @@
 """The five pilot scripts `aqa explore` compiled and confirmed (#58, ROADMAP
 M1 exit): each up to date with its spec and the project's subject contracts,
-none holding a check REVIEW.md marks "Not acceptable", #20's two points, and
-the benign rebinding patches."""
+none holding a check REVIEW.md marks "Not acceptable", #20's second point
+(its first is #234's), and the benign rebinding patches."""
 
 import re
 import unittest
@@ -10,9 +10,7 @@ from pathlib import Path
 
 from aqa_core.compiled import (
     Assertion,
-    Click,
     CompiledScript,
-    Fill,
     ProbeEquals,
     Reload,
     TextInTarget,
@@ -244,17 +242,6 @@ class CompiledPilotTests(unittest.TestCase):
                     f"favorite-article/{index}: {PROXIES['favorite-article', index][0]}",
                     proxies("favorite-article", planted),
                 )
-
-    def test_the_comment_forms_submit_button_names_no_label(self) -> None:
-        # #20: conduit-benign-001 relabels Post Comment to Add Comment.
-        script = compiled("post-comment")
-        steps = list(script.steps)
-        [fill] = [
-            i for i, s in enumerate(steps) if isinstance(s, Fill) and s.value == COMMENT
-        ]
-        submit = next(s for s in steps[fill + 1 :] if isinstance(s, Click))
-        meaning = script.targets[submit.target].semantic
-        self.assertIsNone(re.search(r"(?i)\b(post|add) comment\b", meaning), meaning)
 
     def test_the_favorites_counts_check_is_the_count_and_the_claim(self) -> None:
         # #20: conduit-benign-002 moves the count out of the button and drops
