@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from aqa_core.compiled import CompiledScript, Target
 from aqa_core.config import ProjectConfig
+from aqa_core.project import parse_compiled
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.evaluation import AssertionResult
 from aqa_runner.executor import replay
@@ -18,6 +19,7 @@ from aqa_runner.locators import Absent, Miss, Resolved, Shown, Unresolved, Use
 from packages.runner.tests import executor_fixtures as fx
 from packages.runner.tests.test_every_locator import AREA, CONTROL, RESTORE, around
 from packages.runner.tests.test_executor_runs import COUNT_ROW, copies, stamped
+from packages.runner.tests.test_link_paths import comments
 
 ONE_SECOND = ProjectConfig.model_validate({"budgets": {"resolve_seconds": 1}})
 # A side-effect click on the target.
@@ -297,3 +299,36 @@ def test_every_locator_reports_the_first_locator_for_a_target_all_agree_on(
     hello = {"check": "text_in_target", "text": "Hello"}
     title = script([first, {"testid": "heading"}], hello)
     assert outcomes(app, tmp_path, title, page) == expected
+
+
+def test_a_link_that_holds_no_image_loads_and_replays_by_every_locator(
+    app: fx.App, tmp_path: Path
+) -> None:
+    # A comment card's author name link, found by what it doesn't hold
+    # (ADR-0025's #58 amendment): the loader reads it back, and both of its
+    # locators find the one element, at the default replay and the
+    # confirmation's.
+    page = comments(
+        ("Glad to be here.", "jake"), ("Thanks for the warm welcome!", "reader")
+    )
+    named = script(
+        [
+            {"css": 'a[href="/profile/reader"]:not(:has(img))'},
+            {"css": 'app-article-comment a[href="/profile/reader"]:not(:has(img))'},
+        ],
+        {"check": "text_in_target", "text": "reader"},
+    )
+    loaded = parse_compiled(
+        named.model_dump_json(), ProjectConfig(), source=tmp_path / "script.json"
+    )
+
+    runs = [
+        replayed(app, tmp_path, loaded, page, every=every) for every in (True, False)
+    ]
+
+    assert loaded == named
+    assert [
+        (each.outcome, each.locator_index)
+        for done in runs
+        for each in done.result.assertions
+    ] == [("pass", 0), ("pass", 0)]
