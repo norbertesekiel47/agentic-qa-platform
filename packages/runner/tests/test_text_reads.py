@@ -16,7 +16,7 @@ from aqa_runner.document_origins import (
     PolicyEvent,
     PolicyEventError,
 )
-from aqa_runner.locators import Resolved
+from aqa_runner.locators import Resolved, rendered_text
 from playwright.async_api import ElementHandle, Error
 
 from packages.runner.tests.document_fixtures import Sites, browsing, serving_sites, to
@@ -268,3 +268,95 @@ def test_text_of_reads_no_element_that_isnt_html(sites: Sites) -> None:
 
     # A look that raises, never a reading of text the page hides.
     assert "reads HTML elements only" in str(asyncio.run(scenario()))
+
+
+def test_rendered_text_reads_no_element_that_isnt_html(sites: Sites) -> None:
+    # As Playwright's innerText refuses one: SVG text holds what it hides.
+    async def scenario() -> Error:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/kept")
+            await session.page.evaluate(
+                """document.body.insertAdjacentHTML("beforeend",
+                    '<svg><text id="status" x="0" y="20">Payment failed</text></svg>')"""
+            )
+            element = await session.page.query_selector("#status")
+            assert element is not None
+            with pytest.raises(Error) as refused:
+                await rendered_text(element)
+            return refused.value
+
+    assert "not an HTMLElement" in str(asyncio.run(scenario()))
+
+
+def box(display: str, text: str, style: str = "") -> str:
+    return f'<span style="display:{display};{style}">{text}</span>'
+
+
+IB = "inline-block"
+
+
+@pytest.mark.parametrize(
+    ("markup", "expected"),
+    [
+        (
+            f'<ul id="t">{box(IB, "testing")}{box(IB, "benchmarks")}</ul>',
+            "testing benchmarks",
+        ),
+        (f'<p id="t">un{box(IB, "believ")}able</p>', "unbelievable"),
+        (f'<p id="t">${box(IB, "5")}</p>', "$5"),
+        (
+            f'<p id="t">Cart<span>(3)</span> {box(IB, "Checkout")}</p>',
+            "Cart(3) Checkout",
+        ),
+        (
+            f'<div id="t">{box("inline-flex", "a")}{box("inline-flex", "b")}</div>',
+            "a b",
+        ),
+        (
+            f'<div id="t">{box("inline-table", "a")}{box("inline-table", "b")}</div>',
+            "a b",
+        ),
+        (f'<div id="t">{box("contents", box(IB, "a") + box(IB, "b"))}c</div>', "a bc"),
+        (f'<p id="t">{box(IB, "a")}b<br>c</p>', "ab c"),
+        (
+            (
+                f'<div id="t"><div style="visibility:hidden">secret '
+                f"{box(IB, 'shown', 'visibility:visible')}</div></div>"
+            ),
+            "shown",
+        ),
+        (
+            f'<p id="t" style="text-transform:uppercase">post {box(IB, "now")}</p>',
+            "POST NOW",
+        ),
+    ],
+    ids=[
+        "the tag pills",
+        "a box inside a word",
+        "a box after a sign",
+        "an inline child beside a box",
+        "inline-flex",
+        "inline-table",
+        "display: contents",
+        "a line break",
+        "a hidden parent",
+        "text-transform beside a box",
+    ],
+)
+def test_text_reads_break_words_only_between_sibling_boxes(
+    sites: Sites, markup: str, expected: str
+) -> None:
+    # ADR-0025's #58 amendment: two element boxes side by side read as two
+    # words, and a box joins the text beside it as it renders.
+    shown = Target(semantic="the element read", locators=(ByCss(css="#t"),))
+
+    async def scenario() -> str:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/kept")
+            await session.page.evaluate(
+                "(markup) => document.body.insertAdjacentHTML('beforeend', markup)",
+                markup,
+            )
+            return await session.text_of(await found(session, shown))
+
+    assert " ".join(asyncio.run(scenario()).split()) == expected

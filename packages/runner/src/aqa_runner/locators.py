@@ -673,42 +673,77 @@ async def _absence(held: HeldRegion | None, misses: list[Miss]) -> Absent | Unre
 
 # An element's rendered text, as a function of the element: its innerText,
 # where CSS text-transform shows (LAB_NOTES, 2026-09-29), with a word break
-# around each atomic inline box (inline-block, -flex, -grid, -table), which
-# innerText joins to its neighbours with nothing between, as it does
-# Conduit's tag pills (ADR-0025's #58 amendment). An element with no such box
-# inside reads as its innerText alone; around one, its own text nodes read as
-# they render, a hidden element's left out.
+# between two sibling element boxes, where an atomic inline box (inline-block,
+# -flex, -grid, -table) sits beside another or beside a block, which innerText
+# joins with nothing between, as it does Conduit's tag pills (ADR-0025's #58
+# amendment). A box joins the text or the inline element beside it as it
+# renders, so `un<b>believ</b>able` stays one word. An element with no atomic
+# box inside reads as its innerText alone; around one, its own text nodes read
+# as they render, a hidden element's left out, a `display: contents` child's
+# children read as its parent's, and a block is a line of its own.
 READ_TEXT = """(() => {
-    const atomic = (e) =>
-        /^inline-(block|flex|grid|table)$/.test(getComputedStyle(e).display);
+    const kind = (element) => {
+        const display = getComputedStyle(element).display;
+        if (display === "none" || display === "inline" || display === "contents") {
+            return display;
+        }
+        return /^inline-(block|flex|grid|table)$/.test(display) ? "atomic" : "block";
+    };
     const transformed = (text, style) =>
         style.textTransform === "uppercase" ? text.toUpperCase()
         : style.textTransform === "lowercase" ? text.toLowerCase()
         : style.textTransform === "capitalize"
             ? text.replace(/(^|\\s)(\\S)/g, (_, space, first) => space + first.toUpperCase())
         : text;
-    const read = (element) => {
-        if (![...element.querySelectorAll("*")].some(atomic)) return element.innerText;
+    // Each child's rendered text in order, with what it is: "text" for a
+    // text node, a line break or an inline element, else its box's kind.
+    const pieces = (element) => {
         const style = getComputedStyle(element);
-        let text = "";
+        const found = [];
         for (const child of element.childNodes) {
             if (child.nodeType === Node.TEXT_NODE) {
-                if (style.visibility === "visible") text += transformed(child.data, style);
+                if (style.visibility === "visible") {
+                    found.push(["text", transformed(child.data, style)]);
+                }
             } else if (child instanceof HTMLElement) {
-                const display = getComputedStyle(child).display;
-                if (display === "none") continue;
-                if (child.localName === "br") text += "\\n";
-                else if (display === "inline" || display === "contents") text += read(child);
-                else text += ` ${read(child)} `;
+                const each = child.localName === "br" ? "br" : kind(child);
+                if (each === "br") found.push(["text", "\\n"]);
+                else if (each === "contents") found.push(...pieces(child));
+                else if (each !== "none") {
+                    found.push([each === "inline" ? "text" : each, read(child)]);
+                }
             }
+        }
+        return found;
+    };
+    const read = (element) => {
+        if (![...element.querySelectorAll("*")].some((each) => kind(each) === "atomic")) {
+            return element.innerText;
+        }
+        let text = "";
+        let last = null;
+        for (const [each, words] of pieces(element)) {
+            if (last === "block" || each === "block") text += last === null ? "" : "\\n";
+            else if (last === "atomic" && each === "atomic") text += " ";
+            text += words;
+            last = each;
         }
         return text;
     };
     return read;
 })()"""
 
+# Only an HTML element has rendered text: any other, such as SVG's, raises,
+# as Playwright's innerText does, since its text content holds what the page
+# hides.
+_RENDERED = f"""(element) => {{
+    if (!(element instanceof HTMLElement)) throw new Error("Node is not an HTMLElement");
+    return ({READ_TEXT})(element);
+}}"""
+
 
 async def rendered_text(element: ElementHandle) -> str:
-    """The element's rendered text, which text checks compare (`READ_TEXT`)."""
-    text = await element.evaluate(f"(element) => ({READ_TEXT})(element)")
+    """The element's rendered text, which text checks compare (`READ_TEXT`).
+    Playwright's general error for an element that isn't HTML."""
+    text = await element.evaluate(_RENDERED)
     return text if isinstance(text, str) else ""
