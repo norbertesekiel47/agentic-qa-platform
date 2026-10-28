@@ -1,8 +1,8 @@
 """Pages the screenshot tests load (#171, ADR-0034): the hostile pages the
 reviewers and the prototype aimed at a capture, and the owner's tricks,
 each drawing the field that gets the bound value in pure red, which
-nothing else on the page is; and the oracle that counts red pixels in a
-saved PNG. Imported by its path, as pytest names the runner's test modules
+nothing else on the page is, and a marker in pure green; and the oracle
+that counts red or green pixels in a saved PNG. Imported by its path, as pytest names the runner's test modules
 (TESTING.md §1, Shared egress fixtures)."""
 
 import base64
@@ -58,6 +58,13 @@ TRIGGER = (
     '<input id=trigger aria-label=Trigger style="position:fixed;left:0;bottom:0;'
     'width:80px;height:20px;font:12px sans-serif;color:#000;border:1px solid #000">'
 )
+# On every case's page, in a corner nothing else reaches: a render that shows
+# it isn't blank. It is `MARKED` pixels in a capture, at any scale.
+MARKER = (
+    '<div style="position:fixed;right:0;top:0;width:20px;height:20px;'
+    'background:#0f0"></div>'
+)
+MARKED = 400
 FRAME = f"<!doctype html>{STYLE}{FIELD}"
 # Frame pages that keep what a maxlength left of a fill: as the field's
 # `value` attribute, or as a button's label once its type flips.
@@ -360,7 +367,9 @@ async def serve_cases(page: Page, other: str) -> dict[str, str]:
             body, kind = FRAMES[name], "text/html"
         elif name == "x.xhtml" or CASES[name].xhtml:
             body, kind = (
-                XHTML if name == "x.xhtml" else CASES[name].body,
+                XHTML
+                if name == "x.xhtml"
+                else CASES[name].body.replace("</body>", MARKER + "</body>"),
                 "application/xhtml+xml",
             )
         else:
@@ -368,6 +377,7 @@ async def serve_cases(page: Page, other: str) -> dict[str, str]:
             body = (
                 "<!doctype html><meta charset=utf-8>"
                 + TRIGGER
+                + MARKER
                 + CASES[name].body.replace("VALUE", escaped).replace("OTHER", other)
             )
             kind = "text/html"
@@ -382,22 +392,29 @@ def armed(script: str, value: str) -> str:
     return script.replace("VALUE", json.dumps(value))
 
 
-# Counts pure red pixels in a PNG with the browser's own decoder.
-RED_PIXELS = """async (data) => {
+# Counts a PNG's pixels of one pure colour, by its channel, with the
+# browser's own decoder.
+PURE_PIXELS = """async ([data, channel]) => {
     const bitmap = await createImageBitmap(await (await fetch("data:image/png;base64," + data)).blob());
     const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
     const context = canvas.getContext("2d");
     context.drawImage(bitmap, 0, 0);
     const pixels = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
-    let red = 0;
+    const [one, other] = [0, 1, 2].filter((each) => each !== channel);
+    let pure = 0;
     for (let i = 0; i < pixels.length; i += 4) {
-        if (pixels[i] >= 180 && pixels[i + 1] <= 80 && pixels[i + 2] <= 80) red++;
+        if (pixels[i + channel] >= 180 && pixels[i + one] <= 80 && pixels[i + other] <= 80) pure++;
     }
-    return red;
+    return pure;
 }"""
 
 
 async def red_pixels(scratch: Page, png: bytes) -> int:
     """How many of the PNG's pixels are pure red (R at least 180, G and B
     at most 80), decoded in `scratch`, a page of its own."""
-    return int(await scratch.evaluate(RED_PIXELS, base64.b64encode(png).decode()))
+    return int(await scratch.evaluate(PURE_PIXELS, [base64.b64encode(png).decode(), 0]))
+
+
+async def green_pixels(scratch: Page, png: bytes) -> int:
+    """How many of the PNG's pixels are pure green, as `red_pixels` counts."""
+    return int(await scratch.evaluate(PURE_PIXELS, [base64.b64encode(png).decode(), 1]))
