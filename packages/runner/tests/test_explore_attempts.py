@@ -20,7 +20,7 @@ import pytest
 from aqa_core.config import ProjectConfig
 from aqa_core.coverage_plan import CoveragePlan
 from aqa_core.spec import Reset
-from aqa_runner import executor, explore
+from aqa_runner import executor, explore, replays
 from aqa_runner.egress_proxy import EgressProxy, PhaseTraffic
 from aqa_runner.evaluation import evaluate_each
 from aqa_runner.explore import Explored
@@ -204,6 +204,7 @@ def before_resets(
         await reset(gate, hook, start, **kwargs)
 
     monkeypatch.setattr(explore, "reset", resetting)
+    monkeypatch.setattr(replays, "reset", resetting)
     return sent
 
 

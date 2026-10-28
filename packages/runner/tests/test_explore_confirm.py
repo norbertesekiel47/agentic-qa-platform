@@ -22,7 +22,7 @@ from aqa_core.config import ProjectConfig
 from aqa_core.coverage_plan import CoveragePlan
 from aqa_core.project import load_compiled, load_config
 from aqa_core.spec import Reset
-from aqa_runner import executor, explore, settling
+from aqa_runner import executor, explore, replays, settling
 from aqa_runner.chat_client import ChatClient
 from aqa_runner.egress_proxy import EgressProxy, ListenerUnavailableError
 from aqa_runner.explore import Explored
@@ -159,6 +159,7 @@ def resets(
         await reset(gate, spec_hook, start, **kwargs)
 
     monkeypatch.setattr(explore, "reset", resetting)
+    monkeypatch.setattr(replays, "reset", resetting)
     return sent
 
 
@@ -453,6 +454,7 @@ def test_the_minutes_budget_expiring_during_the_confirmations_reset_begins_no_ph
         await reset(gate, hook, start, **kwargs)
 
     monkeypatch.setattr(explore, "reset", expiring)
+    monkeypatch.setattr(replays, "reset", expiring)
 
     run = confirming(app, tmp_path, Scripted(planned(), *PATH))
 
