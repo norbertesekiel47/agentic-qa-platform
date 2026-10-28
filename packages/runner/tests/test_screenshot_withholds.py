@@ -58,11 +58,13 @@ async def withheld(
     session: BrowserSession, record: RunRecord
 ) -> tuple[str, list[Path], int]:
     """Why the session's screenshot is withheld, what the record then holds,
-    and how many browser contexts are left open beyond the page's own."""
+    and how many browser contexts are left open beyond the page's own. The
+    error keeps nothing of an error behind it, which can quote the page."""
     browser = session.page.context.browser
     assert browser is not None
     with pytest.raises(ScreenshotWithheldError) as raised:
         await take_screenshot(session)
+    assert (raised.value.__cause__, raised.value.__context__) == (None, None)
     return str(raised.value), list(record.path.iterdir()), len(browser.contexts) - 1
 
 
