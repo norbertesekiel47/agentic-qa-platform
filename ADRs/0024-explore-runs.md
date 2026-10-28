@@ -1140,3 +1140,7 @@ Maintainer decision (2026-10-27): the spec marks it, and `--mode verified` runs 
 ## Amendment (2026-10-27): a click lured off the allowed origins stays non-resumable (#230)
 
 Maintainer decision (2026-10-27): keep it fail-closed. A click lured off the allowed origins ends explore as non-resumable (exit 4), as #57's suite pins today (the #57 amendment above). A successful reset doesn't let a new attempt follow. ARCHITECTURE §3.3 now says so. M2 has no build work for this decision.
+
+## Amendment (2026-10-27): the confirmation replays through `replay_run` (#237)
+
+- **One replay entry point.** `_confirming` now replays through `aqa_runner.replays.replay_run(..., every_locator=True)`, and the bench pilot uses the same function first-match (ADR-0023's #237 amendment). `replay_run` sends the spec's hook through the run's gate (14 when it fails). Only once the hook has passed does it enter the confirmation's opening (`explore._Opening`): the `confirmation` part, `begin_phase()` and the browser on `_confirming`'s outer stack. Then it calls `executor.replay`. This keeps the #53 P16b step 4 order and the #204 amendment's phase end. Nothing about the gate, the proxy or the record changes: the confirmation still shares the run's gate, proxy and Playwright.
