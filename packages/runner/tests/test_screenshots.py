@@ -8,6 +8,8 @@ runs them: Linux in CI, macOS locally."""
 
 import asyncio
 import json
+import struct
+import zlib
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -526,3 +528,72 @@ def test_fields_the_render_doesnt_have_withhold_it(
         [],
         0,
     )
+
+
+def test_an_image_whose_bytes_spell_a_bound_value_withholds_it(
+    sites: Sites, tmp_path: Path
+) -> None:
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        checked = kind + data
+        return (
+            struct.pack(">I", len(data))
+            + checked
+            + struct.pack(">I", zlib.crc32(checked))
+        )
+
+    # A 1x1 PNG whose text chunk holds the value, which a render would serve.
+    image = b"".join(
+        (
+            b"\x89PNG\r\n\x1a\n",
+            chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 0, 0, 0, 0)),
+            chunk(b"tEXt", b"Comment\x00" + RED_VALUE.encode()),
+            chunk(b"IDAT", zlib.compress(b"\x00\x00")),
+            chunk(b"IEND", b""),
+        )
+    )
+
+    async def scenario() -> tuple[str, list[Path], int]:
+        async with browsing(sites, redactor=Redactor(bound(sites.app))) as session:
+            await serve_cases(session.page, sites.other)
+            await session.page.route(
+                "**/picture.png",
+                lambda route: route.fulfill(body=image, content_type="image/png"),
+            )
+            record = RunRecord.create(tmp_path).redacting(session.redactor)
+            await red_filled(session, sites)
+            await session.page.evaluate(
+                "new Promise((loaded) => document.body.append(Object.assign("
+                "new Image(), {src: '/picture.png', onload: loaded, onerror: loaded})))"
+            )
+            return await withheld(session, record)
+
+    assert asyncio.run(scenario()) == ("a binary part spells a bound value", [], 0)
+
+
+@pytest.mark.parametrize(
+    ("archive", "reason"),
+    [
+        ("From: nobody\r\n\r\nno parts", "the archive names no page"),
+        ("Content-Type: text/html\r\n\r\né", "the archive isn't 7-bit MIME"),
+    ],
+    ids=["no-page", "not-7-bit"],
+)
+def test_an_archive_the_scrub_cant_read_withholds_it(
+    sites: Sites,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    archive: str,
+    reason: str,
+) -> None:
+    send = CDPSession.send
+
+    async def handing_over(
+        devtools: CDPSession, method: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        if method == "Page.captureSnapshot":
+            return {"data": archive}
+        return await send(devtools, method, params)
+
+    monkeypatch.setattr(CDPSession, "send", handing_over)
+
+    assert withholding(sites, tmp_path, "0") == (reason, [], 0)
