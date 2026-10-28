@@ -497,10 +497,11 @@ def _cut(text: str, spans: list[tuple[int, int]]) -> str:
 
 def _plan(dom: _Snapshot, document: int, redactor: Redactor) -> _Document:
     """What a render must find of document `document`, taken before the
-    scrub, in the order a DOM snapshot lists it, its flat tree's. Each
-    field's value is dropped (made empty) when the scan finds a bound value
-    in it or it shares `SHARED_RUN` characters with one; a frame whose
-    document isn't in the snapshot is None."""
+    scrub, in the order a DOM snapshot lists it, its flat tree's, leaving
+    out what the archive leaves out. Each field's value is dropped (made
+    empty) when the scan finds a bound value in it or it shares
+    `SHARED_RUN` characters with one; a frame whose document isn't in the
+    snapshot is None."""
     strings = dom["strings"]
     nodes = dom["documents"][document]["nodes"]
     inputs = _rare(nodes.get("inputValue"))
@@ -508,9 +509,26 @@ def _plan(dom: _Snapshot, document: int, redactor: Redactor) -> _Document:
     documents = _rare(nodes.get("contentDocumentIndex"))
     checked = set(nodes.get("inputChecked", {"index": []})["index"])
     plan = _Document(kinds=[], values=[], checked=[], frames=[])
+    heads: set[int] = set()
+    omitted: set[int] = set()
     for node, name in enumerate(nodes["nodeName"]):
         element = strings[name].lower()
         named = _attributes(nodes, strings, node)
+        # A snapshot lists a node after its parent.
+        parent = nodes["parentIndex"][node]
+        if element == "head" or parent in heads:
+            heads.add(node)
+        # What Blink's archive leaves out, with all it holds: a <noscript>,
+        # and what MHTMLFrameSerializerDelegate::ShouldIgnoreHiddenElement
+        # does (#171's probes fix-q2, fix-q3).
+        if parent in omitted or (
+            "hidden" in named
+            or element == "noscript"
+            or (element == "input" and named.get("type", "").lower() == "hidden")
+            or (element == "iframe" and node in heads)
+        ):
+            omitted.add(node)
+            continue
         match element:
             # https://chromedevtools.github.io/devtools-protocol/tot/DOMSnapshot/#type-NodeTreeSnapshot
             # A textarea's value is its textValue, not its inputValue.
