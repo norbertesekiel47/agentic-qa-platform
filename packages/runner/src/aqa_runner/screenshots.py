@@ -1,0 +1,439 @@
+"""Screenshots a run may save (ADR-0034; SECURITY §5): `take_screenshot`
+makes a `Screenshot`, which nothing else can make, and
+`RunRecord.write_screenshot` saves one.
+
+Until `fill_secret` hands the page a test secret's value in the browser
+session, a screenshot is the live page's. From then on it is a render of
+a snapshot, which the page can't steer:
+- DevTools takes the page's MHTML archive and a DOM snapshot of its
+  fields' values. Neither runs anything in the page's worlds or fires an
+  event in it.
+- Every part of the archive is scrubbed with the run's scan, raw and with
+  HTML's character references decoded. Each field's value is dropped when
+  the scan finds a bound value in it or it shares `SHARED_RUN` characters
+  with one, and every editable element is emptied.
+- What is left is rendered in a page of its own, with JavaScript off and
+  every request answered from the archive or refused, at the session's
+  viewport, scale and colour scheme and the live page's scroll, and that
+  page is captured.
+The render has no canvas, web fonts, adopted style sheets, shadow-root
+`<style>` or inner scroll, and a value the page draws into an image is
+drawn there too: ADR-0034's residuals, the last #250's OCR check."""
+
+import asyncio
+import base64
+import html
+import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import InitVar, dataclass, field
+from email import message_from_bytes
+from email.message import Message
+from functools import partial
+from typing import Any, TypedDict, cast
+from urllib.parse import urldefrag, urlsplit
+
+from playwright.async_api import CDPSession, Error, Page, Route
+
+from aqa_runner.browser_session import BrowserSession
+from aqa_runner.redaction import Redactor
+
+# How long the live page's snapshot, and then its render, may take: a page
+# that keeps its main thread busy holds a snapshot back (ADR-0034).
+CAPTURE_SECONDS = 5.0
+
+# A field's value that shares this many consecutive characters with a bound
+# value, or all of a shorter one, is dropped from a render. A test secret
+# has at least 4 bytes, so a longer run would let a short one show whole
+# (ADR-0034).
+SHARED_RUN = 4
+
+# The computed style a DOM snapshot reports editing by.
+USER_MODIFY = "-webkit-user-modify"
+
+# Where a render serves the archive's frames, by Content-ID, on the page's
+# own origin, so the render's script reaches into each.
+ARCHIVE_PATH = "/.aqa-archive/"
+
+# An HTML character reference, as html.unescape finds one (CPython 3.14's
+# `html._charref`).
+_REFERENCE = re.compile(r"&(#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};?)")
+# The encoding Blink names in each HTML part's <meta>.
+_DECLARED = re.compile(rb"""charset=["']?([A-Za-z0-9._:-]+)""")
+# A shadow root as Blink writes one into an archive. A render's parser
+# attaches it, open, so the render's script reaches into it.
+_SHADOW = re.compile(r'<template shadowmode="(?:open|closed)"')
+
+# In the render, before its capture: walks each document's flat tree, as a
+# DOM snapshot lists it (each shadow root's content, then what each slot
+# shows), and each frame's document; drops <noscript>, which a page with
+# script never showed; gives each field its value, by order, when the
+# fields and frames match the snapshot's; empties every editing host; and
+# scrolls to the live page's place. False when they don't match.
+RESTORE = """({fields, scroll}) => {
+    const editing = [];
+    const walk = (document, plan) => {
+        const inputs = [], frames = [];
+        const visit = (node) => {
+            if (node.nodeType === Node.ELEMENT_NODE) {
+                const name = node.localName;
+                if (name === "noscript") return node.remove();
+                if (name === "template") return;
+                if (name === "input" || name === "textarea") inputs.push(node);
+                if (name === "iframe" || name === "frame") frames.push(node);
+                if (node.isContentEditable && !node.parentElement?.isContentEditable) {
+                    editing.push(node);
+                }
+            }
+            let kids = node.shadowRoot?.childNodes ?? node.childNodes;
+            if (node.localName === "slot" && node.getRootNode() instanceof ShadowRoot) {
+                const assigned = node.assignedNodes();
+                if (assigned.length > 0) kids = assigned;
+            }
+            for (const kid of [...kids]) visit(kid);
+        };
+        visit(document);
+        if (plan) {
+            if (inputs.length !== plan.values.length) return false;
+            if (frames.length !== plan.frames.length) return false;
+            inputs.forEach((input, i) => {
+                if (input.type !== "file") input.value = plan.values[i];
+            });
+        }
+        return frames.every((frame, i) => {
+            const inner = frame.contentDocument;
+            const expected = plan ? plan.frames[i] : null;
+            return inner ? walk(inner, expected) : expected === null;
+        });
+    };
+    if (!walk(document, fields)) return false;
+    for (const host of editing) host.replaceChildren();
+    window.scrollTo({left: scroll[0], top: scroll[1], behavior: "instant"});
+    return true;
+}"""
+
+_CAPTURED = object()
+
+# A render's archive parts, by URL: each one's content type and body.
+type _Parts = dict[str, tuple[str, bytes]]
+
+
+class _Fields(TypedDict):
+    """A document's fields' values and its frames' fields, in walk order."""
+
+    values: list[str]
+    frames: list[_Fields | None]
+
+
+class ScreenshotWithheldError(Exception):
+    """A screenshot that wasn't taken, and why, in words of ours that
+    never quote the page."""
+
+
+@dataclass(frozen=True)
+class Screenshot:
+    """A PNG `take_screenshot` made, and the scan of the session it made it
+    in, which a record that saves it must share. Only `take_screenshot`
+    makes one, so a record never holds an image no capture scrubbed."""
+
+    png: bytes = field(repr=False)
+    redactor: Redactor = field(repr=False)
+    _key: InitVar[object] = None
+
+    def __post_init__(self, _key: object) -> None:
+        if _key is not _CAPTURED:
+            raise TypeError("only take_screenshot makes a Screenshot")
+
+
+async def take_screenshot(session: BrowserSession) -> Screenshot:
+    """A screenshot of the session's page, at its viewport: the live page's
+    until the session's first `fill_secret`, a render of its scrubbed
+    snapshot from then on. On a page off the run's allowed origins it
+    raises `PolicyEventError`, and after a frame change during the
+    snapshot `DocumentChangedError`, as every observation does. Any other
+    failure withholds it (`ScreenshotWithheldError`), so nothing is saved."""
+    try:
+        png = await (_rendered(session) if session.secret_filled else _live(session))
+    except TimeoutError:
+        raise ScreenshotWithheldError(
+            f"the page's snapshot or its render took over {CAPTURE_SECONDS} s"
+        ) from None
+    except Error:
+        # Playwright's general error type: a DevTools call, or the render's
+        # load or capture, failed. Its message isn't kept: it can hold the
+        # page's URL, which can spell a value.
+        raise ScreenshotWithheldError("a DevTools call or the render failed") from None
+    return Screenshot(png, session.redactor, _key=_CAPTURED)
+
+
+async def _live(session: BrowserSession) -> bytes:
+    async with (
+        session.observing_page() as page,
+        asyncio.timeout(CAPTURE_SECONDS),
+        _devtools(page) as devtools,
+    ):
+        # https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-captureScreenshot
+        shot = await devtools.send("Page.captureScreenshot", {"format": "png"})
+    return base64.b64decode(shot["data"])
+
+
+async def _rendered(session: BrowserSession) -> bytes:
+    async with (
+        session.observing_page() as page,
+        asyncio.timeout(CAPTURE_SECONDS),
+        _devtools(page) as devtools,
+    ):
+        # https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-getLayoutMetrics
+        metrics = await devtools.send("Page.getLayoutMetrics")
+        # https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-captureSnapshot
+        archive = await devtools.send("Page.captureSnapshot", {"format": "mhtml"})
+        # https://chromedevtools.github.io/devtools-protocol/tot/DOMSnapshot/#method-captureSnapshot
+        dom = await devtools.send(
+            "DOMSnapshot.captureSnapshot", {"computedStyles": [USER_MODIFY]}
+        )
+    if _editing_unmarked(dom):
+        raise ScreenshotWithheldError(
+            "an element is editable in a way the snapshot doesn't hold "
+            "(designMode, or a style it leaves out)"
+        )
+    parts, main = _scrubbed(archive["data"], session.redactor)
+    fields = _fields(dom, 0, session.redactor)
+    viewport = metrics["cssVisualViewport"]
+    async with asyncio.timeout(CAPTURE_SECONDS):
+        return await _render(
+            session, parts, main, fields, (viewport["pageX"], viewport["pageY"])
+        )
+
+
+@asynccontextmanager
+async def _devtools(page: Page) -> AsyncIterator[CDPSession]:
+    """A DevTools session of `page`'s own, which the page can't see."""
+    devtools = await page.context.new_cdp_session(page)
+    try:
+        yield devtools
+    finally:
+        await devtools.detach()
+
+
+def _scrubbed(archive: str, redactor: Redactor) -> tuple[_Parts, str]:
+    """`archive`'s parts, each scrubbed and rewritten for a render, by the
+    URLs a render asks for them by, and the page's own URL."""
+    try:
+        message = message_from_bytes(archive.encode("ascii"))
+    except UnicodeEncodeError:
+        raise ScreenshotWithheldError("the archive isn't 7-bit MIME") from None
+    parts = [part for part in message.walk() if not part.is_multipart()]
+    main = _header(parts[0], "Content-Location") if parts else None
+    if main is None:
+        raise ScreenshotWithheldError("the archive names no page")
+    place = urlsplit(main)
+    prefix = f"{place.scheme}://{place.netloc}{ARCHIVE_PATH}"
+    served: _Parts = {}
+    for part in parts:
+        kind, body = _scrubbed_part(part, redactor, prefix)
+        named = _header(part, "Content-ID")
+        # A frame is named by its Content-ID, a <style> by a `cid:` URL, and
+        # each is asked for as its text names it once `cid:` is rewritten.
+        for url in (
+            named and f"cid:{named.strip('<>')}",
+            _header(part, "Content-Location"),
+        ):
+            if url:
+                served.setdefault(
+                    urldefrag(url.replace("cid:", prefix)).url, (kind, body)
+                )
+    return served, urldefrag(main).url
+
+
+def _header(part: Message, name: str) -> str | None:
+    """A part's header, any folding taken out: Blink's are URLs and IDs."""
+    value = part[name]
+    return None if value is None else re.sub(r"\s+", "", str(value))
+
+
+def _scrubbed_part(part: Message, redactor: Redactor, prefix: str) -> tuple[str, bytes]:
+    """A part's content type and body as a render gets them. Text is
+    served as UTF-8 of exactly what was scanned, whatever its encoding
+    was, so the render reads nothing the scan didn't."""
+    kind = part.get_content_type()
+    # A part that isn't multipart decodes to bytes, its transfer encoding
+    # undone.
+    body = cast("bytes", part.get_payload(decode=True))
+    if not kind.startswith("text/") and not kind.endswith(
+        ("/xml", "+xml", "/javascript", "/json")
+    ):
+        if redactor.finds(body.decode("latin-1")):
+            raise ScreenshotWithheldError("a binary part spells a bound value")
+        return kind, body
+    text = _scrubbed_text(_text(part, body, kind), redactor)
+    text = _SHADOW.sub('<template shadowrootmode="open"', text.replace("cid:", prefix))
+    if redactor.finds(text) or redactor.finds(html.unescape(text)):
+        raise ScreenshotWithheldError(
+            "a bound value's spelling is left in a part after the scrub"
+        )
+    return f"{kind}; charset=utf-8", text.encode()
+
+
+def _text(part: Message, body: bytes, kind: str) -> str:
+    declared = part.get_content_charset()
+    if declared is None and kind in ("text/html", "application/xhtml+xml"):
+        named = _DECLARED.search(body[:1024])
+        declared = None if named is None else named[1].decode("ascii")
+    try:
+        return body.decode(declared or "utf-8")
+    except LookupError, UnicodeDecodeError:
+        # An encoding Python doesn't have, one that isn't text's, or bytes
+        # it doesn't hold.
+        raise ScreenshotWithheldError(
+            "a part is in an encoding the scrub can't read"
+        ) from None
+
+
+def _scrubbed_text(text: str, redactor: Redactor) -> str:
+    """`text` with each span the scan finds cut out, raw, then with HTML's
+    character references decoded, where a span takes every reference it
+    touches."""
+    text = _cut(text, redactor.spans(text))
+    if not redactor.finds(html.unescape(text)):
+        return text
+    pieces: list[str] = []
+    starts: list[int] = []
+    ends: list[int] = []
+    cursor = 0
+    for found in (*_REFERENCE.finditer(text), None):
+        stop = len(text) if found is None else found.start()
+        pieces.append(text[cursor:stop])
+        starts.extend(range(cursor, stop))
+        ends.extend(range(cursor + 1, stop + 1))
+        if found is not None:
+            decoded = html.unescape(found[0])
+            pieces.append(decoded)
+            starts.extend([found.start()] * len(decoded))
+            ends.extend([found.end()] * len(decoded))
+            cursor = found.end()
+    spans = redactor.spans("".join(pieces))
+    return _cut(text, [(starts[start], ends[end - 1]) for start, end in spans])
+
+
+def _cut(text: str, spans: list[tuple[int, int]]) -> str:
+    pieces: list[str] = []
+    cursor = 0
+    for start, end in spans:
+        pieces.append(text[cursor : max(cursor, start)])
+        cursor = max(cursor, end)
+    pieces.append(text[cursor:])
+    return "".join(pieces)
+
+
+def _fields(dom: dict[str, Any], document: int, redactor: Redactor) -> _Fields:
+    """Document `document`'s fields' values in the order a DOM snapshot
+    lists them, its flat tree's, each dropped (made empty) when the scan
+    finds a bound value in it or it shares `SHARED_RUN` characters with
+    one; and each frame's, in the same order, None for a frame whose
+    document isn't in the snapshot."""
+    strings: list[str] = dom["strings"]
+    nodes = dom["documents"][document]["nodes"]
+    inputs, texts, documents = (
+        _rare(nodes, key) for key in ("inputValue", "textValue", "contentDocumentIndex")
+    )
+    fields: _Fields = {"values": [], "frames": []}
+    for node, name in enumerate(nodes["nodeName"]):
+        match strings[name].casefold():
+            # https://chromedevtools.github.io/devtools-protocol/tot/DOMSnapshot/#type-NodeTreeSnapshot
+            # A textarea's value is its textValue, not its inputValue.
+            case "input" | "textarea" as kind:
+                held = (inputs if kind == "input" else texts).get(node, -1)
+                value = strings[held] if held >= 0 else ""
+                shown = not (
+                    redactor.finds(value) or redactor.overlaps(value, SHARED_RUN)
+                )
+                fields["values"].append(value if shown else "")
+            case "iframe" | "frame":
+                inner = documents.get(node)
+                fields["frames"].append(
+                    None if inner is None else _fields(dom, inner, redactor)
+                )
+    return fields
+
+
+def _rare(nodes: dict[str, Any], key: str) -> dict[int, int]:
+    data = nodes.get(key, {"index": [], "value": []})
+    return dict(zip(data["index"], data["value"], strict=True))
+
+
+def _editing_unmarked(dom: dict[str, Any]) -> bool:
+    """Whether a node the page draws is editable with no `contenteditable`
+    attribute on it or an element around it: a designMode document, or
+    editing a style the archive leaves out turned on. A render couldn't
+    tell to empty it."""
+    strings: list[str] = dom["strings"]
+    for document in dom["documents"]:
+        nodes = document["nodes"]
+        layout = document["layout"]
+        for node, styles in zip(layout["nodeIndex"], layout["styles"], strict=True):
+            editable = any(strings[style].startswith("read-write") for style in styles)
+            if editable and not _marked(nodes, strings, node):
+                return True
+    return False
+
+
+def _marked(nodes: dict[str, Any], strings: list[str], node: int) -> bool:
+    """Whether the nearest `contenteditable` attribute on `node` or around
+    it turns editing on."""
+    while node >= 0:
+        attributes = nodes["attributes"][node]
+        named: dict[str, str] = {
+            strings[name].casefold(): strings[value]
+            for name, value in zip(attributes[::2], attributes[1::2], strict=True)
+        }
+        if "contenteditable" in named:
+            return named["contenteditable"].casefold() != "false"
+        node = nodes["parentIndex"][node]
+    return False
+
+
+async def _render(
+    session: BrowserSession,
+    parts: _Parts,
+    main: str,
+    fields: _Fields,
+    scroll: tuple[float, float],
+) -> bytes:
+    browser = session.page.context.browser
+    if browser is None:  # a persistent context's page, which no session has
+        raise ScreenshotWithheldError("the page's browser can't be reached")
+    settings = session.settings
+    width, height = settings.viewport
+    # A context that names no proxy takes the launch's fail-closed one
+    # (`aqa_runner.sandbox.FAIL_CLOSED_PROXY`), and every request is answered
+    # from the archive or refused: nothing leaves the render.
+    # https://playwright.dev/python/docs/api/class-browser#browser-new-context
+    context = await browser.new_context(
+        java_script_enabled=False,
+        service_workers="block",
+        accept_downloads=False,
+        viewport={"width": width, "height": height},
+        device_scale_factor=settings.device_scale_factor,
+        color_scheme=settings.color_scheme,
+        locale=settings.locale,
+    )
+    try:
+        await context.route("**/*", partial(_answer, parts))
+        page = await context.new_page()
+        await page.goto(main, wait_until="load")
+        if not await page.evaluate(RESTORE, {"fields": fields, "scroll": scroll}):
+            raise ScreenshotWithheldError(
+                "the snapshot's fields and frames don't match its render's"
+            )
+        return await page.screenshot(type="png", animations="disabled", caret="hide")
+    finally:
+        await context.close()
+
+
+async def _answer(parts: _Parts, route: Route) -> None:
+    found = parts.get(urldefrag(route.request.url).url)
+    if found is None:
+        await route.abort()
+    else:
+        kind, body = found
+        await route.fulfill(body=body, content_type=kind)
