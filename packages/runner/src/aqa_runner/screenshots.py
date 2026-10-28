@@ -153,7 +153,7 @@ async def take_screenshot(session: BrowserSession) -> Screenshot:
     snapshot `DocumentChangedError`, as every observation does. Any other
     failure withholds it (`ScreenshotWithheldError`), so nothing is saved."""
     try:
-        png = await (_rendered(session) if session.secret_filled else _live(session))
+        png = await _captured(session)
     except TimeoutError:
         raise ScreenshotWithheldError(
             f"the page's snapshot or its render took over {CAPTURE_SECONDS} s"
@@ -166,24 +166,20 @@ async def take_screenshot(session: BrowserSession) -> Screenshot:
     return Screenshot(png, session.redactor, _key=_CAPTURED)
 
 
-async def _live(session: BrowserSession) -> bytes:
+async def _captured(session: BrowserSession) -> bytes:
     # The bound covers the page's checks too, which a busy page holds back.
     async with (
         asyncio.timeout(CAPTURE_SECONDS),
         session.observing_page() as page,
         _devtools(page) as devtools,
     ):
-        # https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-captureScreenshot
-        shot = await devtools.send("Page.captureScreenshot", {"format": "png"})
-    return base64.b64decode(shot["data"])
-
-
-async def _rendered(session: BrowserSession) -> bytes:
-    async with (
-        asyncio.timeout(CAPTURE_SECONDS),
-        session.observing_page() as page,
-        _devtools(page) as devtools,
-    ):
+        # Read under the session's lock, which `fill_secret` holds from its
+        # checks through its fill, so a capture queued behind the first fill
+        # is a render.
+        if not session.secret_filled:
+            # https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-captureScreenshot
+            shot = await devtools.send("Page.captureScreenshot", {"format": "png"})
+            return base64.b64decode(shot["data"])
         # https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-getLayoutMetrics
         metrics = await devtools.send("Page.getLayoutMetrics")
         # https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-captureSnapshot
