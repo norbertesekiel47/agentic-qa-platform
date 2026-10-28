@@ -39,8 +39,9 @@ BOTH_ACCOUNT = "{ email: { secret: API_TOKEN }, password: { secret: TEST_PASSWOR
 # variables it names (#215).
 ELSEWHERE = (
     "a test secret's value is in the environment outside AQA_SECRET_* "
-    "variables, where Playwright's driver could print it; remove it from "
-    "these variables to run with test secrets: "
+    "variables, where Playwright's driver could print it; unset these "
+    "variables, or choose a test secret value none of them holds, to run "
+    "with test secrets: "
 )
 
 
