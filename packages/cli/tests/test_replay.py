@@ -330,6 +330,26 @@ def test_an_unresolved_side_effect_intent_exits_4_non_resumable(
     assert document(root)["non_resumable"] == [1]
 
 
+def test_a_withheld_line_still_says_non_resumable(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The run record's path spells the value, and so does its marker,
+    # `[SECRET:TEST_PASSWORD]`, so no scan can take it out of the line.
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "test")
+    fill = {"seq": 1, "action": "fill", "target": "save", "value": "x"}
+    fill |= {"side_effect": True, "side_effect_basis": "network: POST /write/save"}
+    spec = shop(tmp_path / "qa", preconditions=ACCOUNT, config=SECRETS)
+    committed(spec, compiled([fill], targets={"save": SHOP_TARGETS["save"]}))
+
+    result = replay(monkeypatch, on(app, spec))
+
+    assert result.exit_code == 4, result.output
+    assert result.stderr == (
+        "non_resumable shop: the rest is withheld, since it would spell a bound "
+        "value\nnon-resumable\n"
+    )
+
+
 def test_the_run_document_holds_each_verdict_with_its_evidence(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
