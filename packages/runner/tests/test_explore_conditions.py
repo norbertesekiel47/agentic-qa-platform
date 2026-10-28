@@ -207,7 +207,7 @@ def test_detours_outside_the_named_path_are_not_in_the_compiled_script(
         "click",
         lambda m: {
             "ref": ref(m, "link", "Another page"),
-            "meaning": "the article page's link to another page",
+            "meaning": "the article page's link away from the article",
         },
     )
     back = calling("navigate", {"path": "/page/favorite"})

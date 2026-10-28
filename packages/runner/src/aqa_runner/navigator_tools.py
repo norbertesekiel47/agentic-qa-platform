@@ -12,7 +12,8 @@ after it. Every text a tool returns is fixed words, plan text and
 lists, which the page chose and `navigator_parts` scans."""
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+import re
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
 from aqa_core.compiled import (
@@ -40,7 +41,7 @@ from aqa_core.coverage_plan import CoveragePlan, PlannedCheck, planned_checks
 from aqa_core.project import path_on_origin
 from aqa_core.schema import Contract
 from aqa_core.spec import Spec
-from aqa_core.text import normalize
+from aqa_core.text import has_text, normalize
 from playwright.async_api import Error
 
 from aqa_runner import evaluation, executor, reasons
@@ -56,6 +57,7 @@ from aqa_runner.locator_generation import (
     Seen,
     TargetUses,
     seen_element,
+    snapshot_elements,
 )
 from aqa_runner.navigator import (
     TOOLS,
@@ -609,6 +611,14 @@ class Attempt:
                 f"fill_secret did not run: no test secret named {call.name} is bound "
                 "for this run"
             )
+        if isinstance(call, Click | Fill | Select) and _names_label(
+            call, self.observation or "", self.spec
+        ):
+            return (
+                f"{TOOL_NAMES[type(call)]} did not run: its meaning holds the "
+                "element's label; say what the element is for and where it sits "
+                "instead"
+            )
         return None
 
     async def _prepared(
@@ -749,6 +759,33 @@ class Attempt:
             if isinstance(read, ProbePath) and result.outcome != "pass":
                 self.pinned[result.id] = read
         return results
+
+
+def _names_label(call: Click | Fill | Select, observation: str, spec: Spec) -> bool:
+    """Whether `call`'s meaning holds, as a text check finds a literal, the
+    name `observation` gives its element, when that name is more than one
+    word and no text the spec's frontmatter quotes is that name (ADR-0025's
+    #234 amendment)."""
+    _, name = snapshot_elements(observation).get(call.ref, ("", None))
+    if name is None or " " not in (words := normalize(name).casefold()):
+        return False
+    quoted = set(_quoted(spec.frontmatter.model_dump(mode="json")))
+    return words not in quoted and has_text(call.meaning, name)
+
+
+# A text in double quotes: in a spec's frontmatter as validated, the
+# person's own words, since validating has read YAML's own quoting.
+_QUOTE = re.compile(r'"([^"]*)"')
+
+
+def _quoted(value: object) -> Iterator[str]:
+    """Each text that `value`'s strings put in double quotes, normalized and
+    casefolded."""
+    if isinstance(value, str):
+        yield from (normalize(quote).casefold() for quote in _QUOTE.findall(value))
+    elif isinstance(value, dict | list):
+        for each in value.values() if isinstance(value, dict) else value:
+            yield from _quoted(each)
 
 
 def _fields(call: Action) -> dict[str, str]:

@@ -72,8 +72,8 @@ class Run(TypedDict, total=False):
     starts on (the form by default), its egress gate (one allowing only the
     start origin by default), the secrets it binds, its plan and contracts,
     its `resolve_seconds`, its project config (an empty one by default),
-    the probes its spec declares, and what they offer the attempt (nothing
-    by default)."""
+    the probes its spec declares, what they offer the attempt (nothing
+    by default), and frontmatter its spec adds after its expectation."""
 
     page: str
     egress: EgressGate
@@ -84,6 +84,7 @@ class Run(TypedDict, total=False):
     config: ProjectConfig
     probes: dict[str, str]
     offered: Offered
+    extra: str
 
 
 def explored[T](
@@ -135,7 +136,13 @@ def explored[T](
                     run.get("contracts", {}),
                     {secret.name: secret for secret in secrets},
                     budget,
-                    a_spec(tmp_path, config, start_url=page, probes=run.get("probes")),
+                    a_spec(
+                        tmp_path,
+                        config,
+                        start_url=page,
+                        extra=run.get("extra", ""),
+                        probes=run.get("probes"),
+                    ),
                     config,
                     run_gate,
                     lambda: (
