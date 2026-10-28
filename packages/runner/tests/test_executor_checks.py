@@ -559,22 +559,35 @@ def test_network_overflow_errors_only_when_kept_responses_cannot_decide(
 
 
 @pytest.mark.parametrize("kind", ["network_seen", "network_none"])
+@pytest.mark.parametrize("matched", [False, True])
 def test_network_checks_after_a_failed_request_scan_are_not_evaluated(
-    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+    app: App,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    matched: bool,
 ) -> None:
     # As a session stands once a request's scan has failed: test_traffic_redaction
-    # fails one for real.
+    # fails one for real. Its first window overflows too, which the failure
+    # outranks.
     class UnrecordedTraffic(settling.Traffic):
         def __init__(self, page: Page, redactor: Redactor) -> None:
             super().__init__(page, redactor)
             self._unrecorded = True
+            first = self.windows[0]
+            for _ in range(101):
+                exchange = Exchange("GET", app.origin + "/unrelated", 200)
+                first.responses.add(exchange)
+                self._complete_responses[first].add(exchange)
 
     monkeypatch.setattr(browser_session, "Traffic", UnrecordedTraffic)
     result = run(
         app,
         tmp_path,
         compiled(
-            [CLICK], targets=FORM_TARGETS, assertions=[NETWORK | {"check": kind}, AFTER]
+            [CLICK] if matched else [],
+            targets=FORM_TARGETS,
+            assertions=[NETWORK | {"check": kind}, AFTER],
         ),
     ).result
 
