@@ -183,11 +183,16 @@ class _Judged:
 def _judged(end: ReplayEnd) -> list[_Judged]:
     """Each step's verdict, then each assertion's and each enabled
     invariant's. An assertion a stopped step left unevaluated has none: the
-    step's verdict says why. A run with no result, or with an egress block,
-    has none at all."""
+    step's verdict says why. A run that stopped before its checks were
+    evaluated gives a held invariant none either, since what it held so far
+    establishes nothing; a violation is established. A run with no result,
+    or with an egress block, has none at all."""
     result = end.result
     if result is None or result.egress_blocks.blocked:
         return []
+    stopped = result.steps[-1].outcome != "completed" or any(
+        assertion.stopped_at is not None for assertion in result.assertions
+    )
     last = result.steps[-1].seq
     judging = _Judging(
         end.record.redactor,
@@ -206,7 +211,8 @@ def _judged(end: ReplayEnd) -> list[_Judged]:
     judged.extend(
         judging.invariant(invariant)
         for invariant in result.invariants
-        if invariant.outcome != "disabled"
+        if invariant.outcome == "violated"
+        or (invariant.outcome == "held" and not stopped)
     )
     return judged
 
