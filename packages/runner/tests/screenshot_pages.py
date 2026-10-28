@@ -150,6 +150,10 @@ BLOB_IMAGE = """<img id=i><input id=f2 aria-label=Secret style='position:absolut
 c.width=500;c.height=70;const x=c.getContext('2d');x.font='bold 48px sans-serif';x.fillStyle='#f00';x.fillText(f2.value,0,50);
 c.toBlob(b=>document.getElementById('i').src=URL.createObjectURL(b))}</script>"""
 CSS_ESCAPE = "<style>#p::after{content:'VALUE';font:bold 48px sans-serif;color:#f00}</style><p id=p></p>"
+SHOWN_ATTRIBUTE = "<style>#p::after{content:attr(data-v);font:bold 48px sans-serif;color:#f00}</style><p id=p></p>"
+PERCENT_ENCODED = (
+    "p.textContent=[...VALUE].map(c=>'%'+c.charCodeAt(0).toString(16)).join('')"
+)
 FRACTIONAL = "<style>#f{position:absolute;left:10.37px;top:20.61px;transform:translate(0.33px,0.5px) scale(1.013)}</style>"
 
 CASES = {
@@ -235,6 +239,21 @@ CASES = {
         STYLE + FIELD.replace(">", " maxlength=6>"), arm="f.type='submit'", partial=True
     ),
     "css-escape": Case(CSS_ESCAPE, into="page"),
+    # Spellings the scrub finds only once HTML's references are decoded (the
+    # archive writes `&` and `<` as references), in text and in an attribute
+    # a style shows, and one percent-encoded.
+    "entity-encoded-text": Case(
+        f"<p id=p style='{RED}'></p>",
+        into="page",
+        arm="p.textContent=VALUE",
+        binding="SPECIALS",
+    ),
+    "entity-encoded-attribute": Case(
+        SHOWN_ATTRIBUTE, into="page", arm="p.dataset.v=VALUE", binding="SPECIALS"
+    ),
+    "percent-encoded-text": Case(
+        f"<p id=p style='{RED}'></p>", into="page", arm=PERCENT_ENCODED
+    ),
     "canvas": Case(STYLE + CANVAS_DRAW, into="second", arm="arm()"),
     "blob-image": Case(STYLE + BLOB_IMAGE, into="second", arm="arm()"),
     # The owner's tricks (plan-v1-value-removal.md), the first two M1's
