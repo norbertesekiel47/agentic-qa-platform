@@ -140,8 +140,8 @@ def _existing_steps(steps: Sequence[Step], healed: Sequence[Step]) -> Iterator[s
         yield "/steps: a heal reorders no step"
 
 
-# The actions a heal never inserts, each with why. Either load could stand in
-# for the interaction a user can't complete (#19).
+# The actions a heal never inserts, each with why. A navigation or a reload
+# could stand in for an interaction a user can't complete (#19).
 _NOT_INSERTED = {
     "navigate": "a heal inserts no navigation, which could route around a path "
     "that is broken for its users",
