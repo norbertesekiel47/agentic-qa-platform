@@ -47,12 +47,7 @@ from aqa_runner.locators import (
     resolve_every,
 )
 from aqa_runner.locators import resolve as resolve_target
-from aqa_runner.page_scripts import (
-    CONTAINS,
-    FILL,
-    SERVICE_WORKERS_REFUSED,
-    TRANSFORMED,
-)
+from aqa_runner.page_scripts import CONTAINS, FILL, SERVICE_WORKERS_REFUSED, TRANSFORMED
 from aqa_runner.redaction import NO_SECRETS, Redacted, Redactor
 from aqa_runner.routing import install_routes
 from aqa_runner.sandbox import (
@@ -149,13 +144,16 @@ class BrowserSession:
         policy: EgressPolicy,
         invariant_observers: Observers,
         redactor: Redactor,
+        *,
         settings: BrowserSettings,
+        browser: Browser,
     ) -> None:
         self.page = page
         self._redactor = redactor
-        # The settings the page runs under, which a screenshot's render copies
-        # (`aqa_runner.screenshots`).
+        # The settings the page runs under and its browser, which a
+        # screenshot's render copies and opens a context in (`aqa_runner.screenshots`).
         self.settings = settings
+        self.browser = browser
         self._secret_filled = False
         self._policy = policy
         # What each invariant saw on the page, from before its first
@@ -990,7 +988,9 @@ async def prepared_session(
             "Chromium's session couldn't be prepared after its sandbox check "
             f"({type(error).__name__})"
         ) from error
-    session = BrowserSession(page, egress.policy, observers, redactor, settings)
+    session = BrowserSession(
+        page, egress.policy, observers, redactor, settings=settings, browser=browser
+    )
     session.watch(egress)  # before any window of a step opens
     yield session
     await context.close()
