@@ -21,6 +21,7 @@ from packages.runner.tests.secret_fixtures import (
     BOUND_AT_START,
     FAKE_VALUE,
     OTHER_FAKE_VALUE,
+    hermetic_environment,
     secret_spec,
 )
 
@@ -46,7 +47,9 @@ ELSEWHERE = (
 @pytest.fixture(autouse=True)
 def no_secrets_in_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     """None of the names these tests use, whatever the developer's shell has,
-    and no Playwright debug logging."""
+    no Playwright debug logging, and nothing else that could spell a short
+    value, such as a CI token (#215)."""
+    hermetic_environment(monkeypatch)
     for name in ("TEST_PASSWORD", "API_TOKEN"):
         monkeypatch.delenv(f"AQA_SECRET_{name}", raising=False)
         monkeypatch.delenv(name, raising=False)
@@ -366,8 +369,8 @@ def test_a_blank_or_under_four_byte_value_is_refused(
         assert value not in str(raised.value)
 
 
-# Ids that spell no value: pytest puts the test's id in PYTEST_CURRENT_TEST,
-# where a value would be refused (#215).
+# Ids that spell no value: pytest puts the test's id in PYTEST_CURRENT_TEST
+# once its fixtures are set up, where a value would be refused (#215).
 @pytest.mark.parametrize(
     "value",
     ["fake", "fäke", "秘密", "\ufeff fake \ufeff"],
