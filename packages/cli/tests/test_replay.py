@@ -570,6 +570,35 @@ def test_a_refusal_after_binding_prints_none_of_the_specs_secrets(
     )
 
 
+def test_a_missing_secret_prints_none_of_the_values_bound_beside_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FIRST)
+    monkeypatch.delenv("AQA_SECRET_TEST_EMAIL", raising=False)
+    # The password binds before the email is found missing, and the spec's
+    # id and path spell its value.
+    account = (
+        "  account: { email: { secret: TEST_EMAIL }, "
+        "password: { secret: TEST_PASSWORD } }\n"
+    )
+    secrets = (
+        "secrets: { TEST_PASSWORD: { origins: [start], field: password }, "
+        "TEST_EMAIL: { origins: [start], field: { role: textbox, name: Email } } }\n"
+    )
+    spec = shop(tmp_path / "qa", preconditions=account, config=secrets)
+    spec = committed(renamed(spec, FIRST), compiled([]))
+
+    result = replay(monkeypatch, [str(spec)], driver=False)
+
+    assert result.exit_code == 12, result.output
+    assert result.stderr == (
+        "secret_unusable [SECRET:TEST_PASSWORD]: nothing was replayed\n  "
+        "AQA_SECRET_TEST_EMAIL is not set: set it to the value of test secret "
+        f"TEST_EMAIL, which {tmp_path / 'qa'}/[SECRET:TEST_PASSWORD].spec.md "
+        "references at preconditions.account.email\n"
+    )
+
+
 def later(root: Path, second: str) -> Path:
     """The second spec, at `root`, for `second`: one that doesn't resolve,
     one replay refuses once its secret is bound, whose id spells both

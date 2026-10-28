@@ -77,13 +77,17 @@ class BoundSecret:
 class MissingSecretError(Exception):
     """A test secret the spec references has no usable value: an infrastructure
     error, the environment's rather than the spec's (exit code 12, API.md
-    §7). Each problem names the variable to set."""
+    §7). Each problem names the variable to set. It carries the secrets that
+    did bind, so whoever prints the problems can scan them with those."""
 
     exit_code = 12
 
-    def __init__(self, problems: Sequence[str]) -> None:
+    def __init__(
+        self, problems: Sequence[str], bound: Mapping[str, BoundSecret]
+    ) -> None:
         super().__init__("\n".join(problems))
         self.problems = tuple(problems)
+        self.bound = bound
 
 
 class SecretLoggedError(Exception):
@@ -148,7 +152,7 @@ def bound_secrets(spec: Spec, start: str) -> dict[str, BoundSecret]:
             "that isn't set as an empty string)"
         )
     if problems:
-        raise MissingSecretError(problems)
+        raise MissingSecretError(problems, bound)
     return bound
 
 
