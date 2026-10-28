@@ -179,3 +179,9 @@ The report said `assertion_provenance: pending` and called a benign pair whose p
 - **Status and key.** This supersedes the 2026-10-07 amendment's `accepted_pending_C` and `pending` field, and the 2026-10-04 note that provenance remains later work. The status is `accepted`, and the report has no `assertion_provenance` key: each check's index is the provenance. The proof refuses a report that still has it (`report.extra`).
   - *Options:* (a) drop the key; (b) keep it as a constant `"complete"`. *Chosen: a.* A constant field says nothing a reader can check.
 - **The proof.** It rebuilds every read-article check on locator 0, its target's only one, so a report whose check resolved elsewhere, or lacks the field, doesn't prove. This replaces the 2026-10-11 amendment's limit that C was still to come. The proof still isn't the M1 exit alone: it scores no benign pair, and the scored ones (`post-comment`, `favorite-article`) need the compiled scripts and patches #58 brings.
+
+## Amendment (2026-10-27): core owns the heal-patch rules (#241)
+
+- **The comparison moves to core.** The #51 amendment's choice compared every field outside the locator lists with the original, in the harness. Product code now owns that rule as `aqa_core.heal_patch.heal_patch_problems(original, candidate)` (DATA_MODEL §7, as #19 narrows it). `apply_rebinding` calls it after `parse_compiled`, and raises `ValueError` naming each problem's JSON pointer. The harness keeps no copy of the rules.
+- **The format stays.** A rebinding is still `replace` operations on `/targets/<id>/locators` under a base hash: the harness's input grammar, narrower than what core allows, since core also allows inserting replay-safe steps.
+- **Consequence.** A rebinding whose locators find an element by a child-indexed pseudo-class, such as `:nth-child()`, is now refused, as ADR-0025's #52 amendment asked of M2's validator. The committed patch passes (`test_pilot_compiled.py`).
