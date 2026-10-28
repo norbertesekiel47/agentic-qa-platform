@@ -135,6 +135,7 @@ SPELLS = (
         (LITERAL, "cart_items", {"css": r'ul[title="Classic\20 Hoodie\20 M"]'}, "/css"),
         (LITERAL, "cart_items", {"css": r"ul[title=Classic\ Hoodie\ M]"}, "/css"),
         (LITERAL, "cart_items", {"css": r"ul[title=\43 lassic\ Hoodie\ M]"}, "/css"),
+        (LITERAL, "cart_items", {"css": 'ul[title="Classic   Hoodie\tM"]'}, "/css"),
         (LITERAL, "cart_items", {"testid": "Classic Hoodie M"}, "/testid"),
         (
             LITERAL,
@@ -164,6 +165,7 @@ SPELLS = (
         "hex escapes",
         "unquoted, escaped spaces",
         "an escape first",
+        "runs of white space",
         "testid",
         "scope",
         "meaning",
