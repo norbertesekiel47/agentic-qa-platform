@@ -121,6 +121,22 @@ class Redactor:
         out of text it can't mark (#171)."""
         return self._chosen(self._matches(text))
 
+    def overlaps(self, text: str, run: int) -> bool:
+        """Whether `text` shares `run` consecutive characters with a bound
+        value, or the whole of a shorter one, compared casefolded with
+        gaps left out: the most of a value a field may show in a
+        screenshot (#171). Encodings aren't compared; `finds` covers those."""
+        shown = GAP.sub("", text).casefold()
+        for secret in self._secrets:
+            value = GAP.sub("", secret.value.get_secret_value()).casefold()
+            width = min(run, len(value))
+            if any(
+                value[start : start + width] in shown
+                for start in range(len(value) - width + 1)
+            ):
+                return True
+        return False
+
     @staticmethod
     def _chosen(matches: dict[int, tuple[int, str]]) -> list[tuple[int, int]]:
         """The matches a scan replaces: leftmost first, skipping any that
