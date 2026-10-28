@@ -36,23 +36,20 @@ _POSITIONAL = frozenset(
 )
 
 
-def _positional(path: str, locators: Sequence[Locator]) -> Iterator[str]:
-    """The path of each css value, a scope's included, that finds its element
-    by position."""
-    for index, locator in enumerate(locators):
-        for where, level in locator_levels(
-            f"{path}/{index}", locator, scope_key="/scope"
+def _written(path: str, locator: Locator) -> Iterator[str]:
+    """Problems with a locator the heal wrote at `path`, its scopes'
+    included: a css value that finds its element by position."""
+    for where, level in locator_levels(path, locator, scope_key="/scope"):
+        if isinstance(level, ByCss) and not _POSITIONAL.isdisjoint(
+            pseudo_classes(level.css)
         ):
-            if isinstance(level, ByCss) and not _POSITIONAL.isdisjoint(
-                pseudo_classes(level.css)
-            ):
-                yield f"{where}/css: a heal finds no element by its position among its siblings"
+            yield f"{where}/css: a heal finds no element by its position among its siblings"
 
 
 def _target_problems(script: CompiledScript, healed: CompiledScript) -> Iterator[str]:
-    """Targets match by name: each keeps its meaning and contract, and only
-    the locators a heal rebinds are held to the grammar here, so a person's
-    reviewed edit elsewhere stands."""
+    """Targets match by name: each keeps its meaning and contract. Only a
+    locator the heal wrote, one its target didn't have, is held to the
+    grammar here, so a person's reviewed edit stands."""
     for name in healed.targets:
         if name not in script.targets:
             yield f"/targets/{_pointer(name)}: a heal adds no target"
@@ -69,8 +66,9 @@ def _target_problems(script: CompiledScript, healed: CompiledScript) -> Iterator
                 f"{path}/contract: a heal never changes a subject contract, which "
                 "only the reviewed config gives"
             )
-        if rebound.locators != target.locators:
-            yield from _positional(f"{path}/locators", rebound.locators)
+        for index, locator in enumerate(rebound.locators):
+            if locator not in target.locators:
+                yield from _written(f"{path}/locators/{index}", locator)
 
 
 def _pointer(name: str) -> str:

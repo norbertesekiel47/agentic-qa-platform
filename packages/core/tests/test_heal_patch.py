@@ -129,16 +129,25 @@ def test_a_heal_writes_no_positional_pseudo_class(
     ]
 
 
-def test_a_heal_may_keep_a_positional_locator_on_a_target_it_doesnt_rebind() -> None:
-    # A person may write one in a reviewed edit (ADR-0025, #52 amendment).
-    positional = [{"css": "app-payment-step button:last-child"}]
-    assert (
-        heal(
-            lambda d: d["targets"]["cart_items"].update(locators=[{"css": "#x"}]),
-            base=lambda d: d["targets"]["pay_button"].update(locators=positional),
-        )
-        == []
-    )
+def reviewed(data: dict[str, Any]) -> None:
+    """Gives the Pay button a positional locator, as a person may write in a
+    reviewed edit (ADR-0025, #52 amendment), before a locator of its own."""
+    data["targets"]["pay_button"]["locators"] = [
+        {"css": "app-payment-step button:last-child"},
+        {"css": "#pay"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda d: d["targets"]["cart_items"].update(locators=[{"css": "#x"}]),
+        lambda d: d["targets"]["pay_button"]["locators"][1].update(css="#pay-now"),
+    ],
+    ids=["another target", "its other locator"],
+)
+def test_a_heal_may_keep_a_reviewed_positional_locator(change: Change) -> None:
+    assert heal(change, base=reviewed) == []
 
 
 def inserted(step: dict[str, Any]) -> Change:
