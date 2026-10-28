@@ -29,7 +29,12 @@ from aqa_runner.screenshots import (
 from aqa_runner.secret_fields import SecretNotFilledError
 from playwright.async_api import CDPSession, ElementHandle, Error, Page
 
-from packages.runner.tests.document_fixtures import Sites, browsing, serving_sites
+from packages.runner.tests.document_fixtures import (
+    APP,
+    Sites,
+    browsing,
+    serving_sites,
+)
 from packages.runner.tests.screenshot_pages import (
     CASES,
     FIELD,
@@ -597,3 +602,35 @@ def test_an_archive_the_scrub_cant_read_withholds_it(
     monkeypatch.setattr(CDPSession, "send", handing_over)
 
     assert withholding(sites, tmp_path, "0") == (reason, [], 0)
+
+
+def test_a_render_asks_nothing_of_the_network(sites: Sites) -> None:
+    # A source only a page without script picks: the render asks for it,
+    # the live page never does until it loads it itself, at the end.
+    picture = (
+        "<picture><source media='(scripting: none)' srcset='/without-script.png'>"
+        "<img src='data:image/gif;base64,R0lGODlhAQABAAAAACw='></picture>"
+    )
+
+    async def scenario() -> tuple[bool, bool]:
+        async with browsing(sites, redactor=Redactor(bound(sites.app))) as session:
+            await serve_cases(session.page, sites.other)
+            await red_filled(session, sites)
+            await session.page.evaluate(
+                "(picture) => document.body.insertAdjacentHTML('beforeend', picture)",
+                picture,
+            )
+            await take_screenshot(session)
+            asked = await asyncio.to_thread(
+                sites.saw, APP, "/without-script.png", within=1
+            )
+            await session.page.evaluate(
+                "new Promise((done) => Object.assign(new Image(), "
+                "{src: '/without-script.png', onload: done, onerror: done}))"
+            )
+            loaded = await asyncio.to_thread(
+                sites.saw, APP, "/without-script.png", within=5
+            )
+            return asked, loaded
+
+    assert asyncio.run(scenario()) == (False, True)
