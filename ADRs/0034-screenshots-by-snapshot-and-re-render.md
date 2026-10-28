@@ -30,22 +30,25 @@
   - Each part is decoded, text by its charset. Every span the run's scan finds is cut out, first in the raw text, then in the text with HTML's character references decoded, where a span takes every reference it touches.
   - Text is served to the render as UTF-8 of exactly the scanned text, whatever its encoding was, so the renderer reads nothing the scan didn't.
   - A binary part is served as it is.
-- **Field values are scrubbed and dropped.** Values come from the DOM snapshot in its flat-tree order: shadow roots' content, slotted nodes, slot fallback, and each frame's document at its element. A value is dropped (made empty) when the scan finds a bound value in it, or when it shares `SHARED_RUN` = 4 consecutive characters with one, compared casefolded with gaps removed, or all of a shorter one.
-- **Editing hosts are emptied.** Every editing host is emptied in the render.
+- **Field values are scrubbed and dropped.** Values come from the DOM snapshot in its flat-tree order: shadow roots' content, slotted nodes, slot fallback, and each frame's document at its element. A value is dropped (made empty) when the scan finds a bound value in it, or when it shares `SHARED_RUN` = 4 consecutive characters with one, compared casefolded with gaps removed, or all of a shorter one. The render drops a field value it shows that the snapshot didn't hold by the same rule, before its capture: a `value` attribute, or a field in a frame whose document the snapshot leaves out.
+- **Editing hosts are emptied.** Every element with a `contenteditable` attribute and every editing host is emptied in the render.
 - **Why N is 4.** A test secret has at least 4 bytes besides gaps (SECURITY §5, #53 ZW), so any larger N would let a whole short secret, or a 4-character prefix a `maxlength` left, show. A smaller N drops more ordinary values that share a common trigram with a password. The tests check both sides: 3 shared characters are kept, 4 are dropped.
+- **The scrub runs in a thread,** inside the render's own `CAPTURE_SECONDS`, so a large archive holds up neither the event loop nor the egress proxy on it. An archive over `ARCHIVE_CHARS` (5,000,000 characters, about what the scan reads in that time) is withheld before it.
 - **The render.** It runs in a new context of the session's browser, with JavaScript off and service workers blocked, at the session's viewport, scale, colour scheme and locale. The context inherits the launch's fail-closed proxy, and every request is answered from the archive or aborted.
   - Before the render loads the page: frames' `cid:` references are rewritten to the page's own origin, so every frame is same-origin, and `<template shadowmode>` becomes `shadowrootmode="open"`.
-  - One evaluation walks every document's flat tree. It drops `<noscript>`, gives each field its value by order, empties each editing host and scrolls to the live position.
-  - Playwright then captures the render (`animations="disabled"`, `caret="hide"`) and the context closes.
+  - One evaluation walks every document's flat tree. Its fields (element and `type`), frames and elements with a `contenteditable` attribute must match, in order, what the snapshot held before the scrub, so a cut that took markup is caught. The snapshot side leaves out what Blink's archive leaves out: `<noscript>`, hidden inputs, elements with a `hidden` attribute and frames in `<head>`, each with all it holds. The walk gives each field its typed value (a button's label and a file input are left as they are) and each checkbox and radio button its checked state, hides a frame it can't reach (sandboxed onto an opaque origin), empties editable elements and scrolls to the live position.
+  - The field values and text the render then shows are scanned again, which catches a value the render's parser joins (a NUL it drops).
+  - Playwright then captures the render in CSS pixels, as the live capture is (`animations="disabled"`, `caret="hide"`, `scale="css"`), and the context closes.
 - **Withheld (`ScreenshotWithheldError`, nothing written).** The capture's reason never quotes the page. It is withheld when:
   - a part is in an encoding Python can't decode;
   - a binary part spells a bound value;
   - a spelling is left in any served text after the scrub;
-  - the archive isn't 7-bit MIME or names no page;
-  - the page's checks and snapshot, or then the render, take over `CAPTURE_SECONDS` (5 s);
-  - any DevTools or Playwright call fails;
+  - the archive is over `ARCHIVE_CHARS`, isn't 7-bit MIME or names no page;
+  - the page's checks and snapshot, or then the scrub and render, take over `CAPTURE_SECONDS` (5 s);
+  - any DevTools or Playwright call fails, or DevTools replies in a shape the capture doesn't read;
   - any node the page draws is editable with no `contenteditable` around it (designMode, or editing turned on by an adopted style sheet or a shadow-root `<style>`, which a render can't reproduce);
-  - the snapshot's fields and frames don't match the render's by count.
+  - the render's fields, frames and editable elements don't match the snapshot's;
+  - the render's field values or text spell a bound value.
   - A page off the allowed origins raises `PolicyEventError`, and a frame change during the snapshot raises `DocumentChangedError`, as every observation does.
 - **A `Screenshot` can't be forged.** Only `take_screenshot` makes a `Screenshot`: its constructor refuses without the module's key. `RunRecord.write_screenshot(name, shot)` writes it once, only to a record whose scan is the session's. A record therefore never holds an image no capture scrubbed.
 
@@ -63,7 +66,7 @@ The prototype (reviews/171-prototype.md; Chromium 153.0.8010.12 headless shell, 
 | What MHTML carries | |
 |---|---|
 | Carried | text, attributes, document `<style>` (script-added rules too, as their own `cid:` parts), images, same-origin and cross-site frames, open and closed shadow roots (inline styles only), the main scroll |
-| Not carried | live field values, script-ticked checkboxes, 2D canvas (10,000 red pixels to 0), WebGL, adoptedStyleSheets, shadow-root `<style>`, font files, inner scroll |
+| Not carried | live field values, script-ticked checkboxes, 2D canvas (10,000 red pixels to 0), WebGL, adoptedStyleSheets, shadow-root `<style>`, font files, inner scroll, `<noscript>`, hidden inputs, elements with a `hidden` attribute, frames in `<head>` |
 
 | Conduit fidelity, B (share of pixels that differ / differ strongly) | home | article | login | settings | editor |
 |---|---|---|---|---|---|
@@ -80,15 +83,18 @@ This build, at `e27cc6c1`, same browser and host:
 - **Against an unscrubbed render.** With the scrub, the value drop and the emptying of editable elements switched off, 41 of the 43 cases fail on red pixels. The other two, a decoy swap and a hidden contenteditable, keep the field off the live page too.
 - **Capture time.** On these small pages a capture took 67 to 95 ms at scale 1 and 104 to 107 ms at scale 2 (median of 8, from a measurement script in the ticket's notes).
 
+After the review fixes (#171's Phase 5), the suite runs 55 cases: 51 pages, 4 of them also at scale 2. The new pages are a sandboxed frame, frames whose document the snapshot leaves out holding a `maxlength` prefix, what the archive leaves out (a CSRF input, a frame in `<head>`, `<noscript>`, a `hidden` element the page's style shows), entity- and percent-encoded spellings, a textarea and a slotted field. Every saved PNG holds 0 red pixels and all 400 pixels of a green marker each page carries, so a blank render can't pass. `blind-clone` and `blind-type-flip` are withheld 1 to 3 times in 8 and must save at least one capture; no other case is withheld.
+
 ## Consequences
 - **What is guaranteed.** In a session where a secret has been filled, a saved screenshot shows no text, attribute or field value in which the run's scan finds a bound value, raw or with HTML's references decoded. It shows no field value sharing 4 characters with one, and no editable element's content. A screenshot that can't meet that is withheld, and nothing is saved.
 - **Residuals, named and not fixed:**
   - a value the page draws into an image (a `data:` or same-origin image), a font or anything else pixel-made: #250's OCR;
   - content the page shows only without script (`@media (scripting: none)`), and content a style the archive leaves out had hidden: the render shows it;
-  - the render has no canvas, web fonts, adoptedStyleSheets, shadow-root `<style>`, inner scroll, or checkbox, radio and select state.
+  - the render has no canvas, web fonts, adoptedStyleSheets, shadow-root `<style>`, inner scroll, or select's chosen option (restoring it would have cost about 10 more lines);
+  - the render lacks what the archive leaves out that a page can still show: an element with a `hidden` attribute that the page's style shows; and it hides a frame on an opaque origin.
 - **Canvas pixels are absent from every secret-filled screenshot.** This limits #252's visual checks and `pixel_diff` (#254) in those runs: a baseline taken live won't match a render.
 - **A filled field renders empty**, and so does every editable element in a secret-filled session. A screenshot shows a filled password field as unfilled. Heal reads the accessibility tree for that.
-- **A page can force withholding**: by changing its fields between the two snapshot calls, keeping its main thread busy, or turning on designMode. A withheld screenshot is safe. #251 records the reason.
+- **A page can force withholding**: by changing its fields between the two snapshot calls, keeping its main thread busy, growing its archive past `ARCHIVE_CHARS`, or turning on designMode. A withheld screenshot is safe. #251 records the reason.
 - **Seams for later tickets:**
   - #251 calls `take_screenshot(session)`, then `record.write_screenshot(f"evidence/{seq}/<name>.png", shot)`, and records the reason when it catches `ScreenshotWithheldError`.
   - #250 checks `shot.png` between the two, and before any model input.
