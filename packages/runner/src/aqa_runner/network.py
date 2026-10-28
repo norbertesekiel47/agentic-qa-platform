@@ -17,6 +17,11 @@ class WindowsOverflowError(Exception):
     """Kept responses establish no match, and discarded responses may hide one."""
 
 
+class UnrecordedRequestError(Exception):
+    """A request's scan failed, so the session recorded nothing of it, and no
+    response record can establish a check."""
+
+
 async def held(
     check: NetworkNone | NetworkSeen, windows: Sequence[Records[Exchange]]
 ) -> bool:

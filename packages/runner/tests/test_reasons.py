@@ -38,6 +38,10 @@ APP = "http://app.example.test:8080"
 BOUND = Redactor([fake_secret("TEST_PASSWORD", "fake-bound-value", APP)])
 WITHHELD = "(withheld: the run has a test secret)"
 UNWRITTEN = "steps.jsonl: a bound value's spelling is in it, so it isn't written"
+UNRECORDED = (
+    "a request's scan failed, so it went unrecorded and no network check can be "
+    "evaluated"
+)
 
 
 def policy(kind: PolicyEventKind, origin: str | None = EVIL) -> PolicyEventError:
@@ -134,6 +138,7 @@ REFUSED_FIELD = SecretRefusedError(
             network.WindowsOverflowError("settle window 0 kept 100 of 101 responses"),
             "settle window 0 kept 100 of 101 responses",
         ),
+        (network.UnrecordedRequestError(), UNRECORDED),
         (probes.ProbeError(f"{EVIL} answered 500"), "the probe could not be read"),
         (
             probes.ProbeUnstableError(EVIL),
@@ -254,6 +259,7 @@ def test_an_owned_reason_outside_a_withheld_run_keeps_its_origin(
             network.WindowsOverflowError("settle window 2 kept 100 of 140 responses"),
             "settle window 2 kept 100 of 140 responses",
         ),
+        (network.UnrecordedRequestError(), UNRECORDED),
         (probes.ProbeError("answered 500"), "the probe could not be read"),
         (
             probes.ProbeUnstableError("unstable"),
