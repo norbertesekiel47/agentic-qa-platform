@@ -173,6 +173,27 @@ def present(end: ReplayEnd) -> dict[str, object]:
     }
 
 
+def unrecorded(spec: Spec, redactor: Redactor, reason: str) -> dict[str, object]:
+    """The document of a run of `spec` whose record couldn't be made, which
+    no file holds: `present`'s fields, with no run ID, nothing that ran, and
+    `reason`, scanned with `redactor`, the run's, its one reason."""
+    withheld = not redactor.empty
+    return {
+        "schema_version": 1,
+        "run_id": None,
+        "spec_id": spec.frontmatter.id,
+        "mode": "strict",
+        "outcome": "record_error",
+        "exit_code": EXIT_CODES["record_error"],
+        "withheld": withheld,
+        "error_code": None,
+        "reasons": [redactor.redact(reason)],
+        "non_resumable": [],
+        "infrastructure_events": {"count": 0, "events": None if withheld else []},
+        "verdicts": [],
+    }
+
+
 def _non_resumable(end: ReplayEnd) -> list[int]:
     return [intent.seq for intent in end.record.unresolved() if intent.side_effect]
 

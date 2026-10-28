@@ -674,6 +674,34 @@ def test_json_prints_each_runs_document_and_nothing_else(
     assert result.stderr == ""
 
 
+def test_json_gives_a_run_whose_record_cant_be_made_the_same_fields(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unrecorded = committed(shop(tmp_path / "a"), shop_script("shop"))
+    (tmp_path / "a" / ".aqa").write_text("not a directory\n")
+    recorded = committed(shop(tmp_path / "b"), shop_script("shop"))
+
+    result = replay(monkeypatch, [*on(app, unrecorded, recorded), "--json"])
+
+    assert result.exit_code == 15, result.output
+    first, second = json.loads(result.stdout)
+    assert first == {
+        "schema_version": 1,
+        "run_id": None,
+        "spec_id": "shop",
+        "mode": "strict",
+        "outcome": "record_error",
+        "exit_code": 15,
+        "withheld": False,
+        "error_code": None,
+        "reasons": ["the run record could not be created; nothing was replayed"],
+        "non_resumable": [],
+        "infrastructure_events": {"count": 0, "events": []},
+        "verdicts": [],
+    }
+    assert list(first) == list(second)
+
+
 def test_json_prints_an_empty_array_for_a_stop_before_any_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

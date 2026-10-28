@@ -30,12 +30,12 @@ from aqa_runner.egress_proxy import EgressProxy, ListenerUnavailableError
 from aqa_runner.executor import RunResult
 from aqa_runner.redaction import Redactor
 from aqa_runner.replay_result import (
-    EXIT_CODES,
     Outcome,
     ReplayEnd,
     Stop,
     final_outcome,
     present,
+    unrecorded,
 )
 from aqa_runner.replays import Opened, Replaying, replay_run
 from aqa_runner.reset import ResetFailedError
@@ -78,16 +78,11 @@ async def strict_replay(run: StrictRun, playwright: Playwright) -> Replayed:
     browser from `playwright`, whose selector engines are registered, and
     write its `replay.json` (module docstring)."""
     spec = run.spec
+    redactor = Redactor(run.bound.values())
     try:
-        record = RunRecord.create(run.root).redacting(Redactor(run.bound.values()))
+        record = RunRecord.create(run.root).redacting(redactor)
     except OSError, ValueError:  # ValueError: a .aqa or .aqa/runs that is a link
-        document = {
-            "spec_id": spec.frontmatter.id,
-            "outcome": "record_error",
-            "exit_code": EXIT_CODES["record_error"],
-            "reasons": [_UNMADE],
-        }
-        return Replayed("record_error", document, None)
+        return Replayed("record_error", unrecorded(spec, redactor, _UNMADE), None)
     gate = EgressGate(egress_policy(spec, run.config, run.start))
     proxy = EgressProxy(gate)
     replaying = Replaying(spec, run.config, run.start, gate)
