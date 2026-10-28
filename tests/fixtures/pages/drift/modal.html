@@ -1,0 +1,18 @@
+<header id="toolbar">
+    <button onclick="document.querySelector('#details').hidden = false">Show details</button>
+</header>
+<main id="order">
+    <h1>Order 42</h1>
+    <section id="details" hidden>
+        <p id="summary">Order 42 ships on Monday</p>
+    </section>
+</main>
+<footer>
+    <button>Contact us</button>
+</footer>
+<div id="overlay" style="position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5)">
+    <div role="dialog" aria-label="Newsletter" style="width: 300px; margin: 40vh auto; padding: 16px; background: white">
+        <p>Get our newsletter</p>
+        <button onclick="document.querySelector('#overlay').remove()">No thanks</button>
+    </div>
+</div>
