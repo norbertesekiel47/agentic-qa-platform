@@ -155,13 +155,36 @@ class RebindingTests(unittest.TestCase):
     def test_rebinding_passes_through_the_core_validator(self) -> None:
         # The format reads :nth-child(), and a person may write one; a heal
         # may not (aqa_core.heal_patch).
-        values = [{"css": "li:nth-child(2)", "scope": {"css": "app-payment-step"}}]
-        with self.assertRaisesRegex(
-            ValueError,
-            "^/targets/payment_error/locators/0/css: a heal finds no element by "
-            "its position among its siblings$",
-        ):
-            self.apply(patch(self.original, "/targets/payment_error/locators", values))
+        text = json.dumps(
+            {
+                "base_hash": canonical_hash(self.original.model_dump(mode="json")),
+                "operations": [
+                    {
+                        "op": "replace",
+                        "path": "/targets/payment_error/locators",
+                        "value": [
+                            {
+                                "css": "li:nth-child(2)",
+                                "scope": {"css": "app-payment-step"},
+                            }
+                        ],
+                    },
+                    {
+                        "op": "replace",
+                        "path": "/targets/pay_button/locators",
+                        "value": [{"css": "button:last-child"}],
+                    },
+                ],
+            }
+        )
+        problem = "a heal finds no element by its position among its siblings"
+        with self.assertRaises(ValueError) as refused:
+            self.apply(text)
+        self.assertEqual(
+            str(refused.exception),
+            f"/targets/pay_button/locators/0/css: {problem}; "
+            f"/targets/payment_error/locators/0/css: {problem}",
+        )
 
     def test_valid_rebinding_and_explicit_noop_preserve_the_original(self) -> None:
         before = self.original.model_dump_json()
