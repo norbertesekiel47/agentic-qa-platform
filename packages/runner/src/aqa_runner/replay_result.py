@@ -80,7 +80,7 @@ _CATEGORIES: Final[Mapping[InvariantName, Category]] = {
     "http_5xx": "backend_5xx",
     "broken_images": "visual",
 }
-# Why a run with an infrastructure event exits 13 (API.md §7), in fixed
+# The reason an infrastructure event gives (exit 13, API.md §7), in fixed
 # words: an event's host and cause are withheld in a run that binds a secret.
 _UNREACHED: Final = "an allowed host or the egress proxy couldn't be reached"
 
