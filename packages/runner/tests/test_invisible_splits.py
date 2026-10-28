@@ -17,11 +17,11 @@ from urllib.parse import quote
 import pytest
 from aqa_core.project import SecretDestination
 from aqa_runner import reasons
-from aqa_runner.bound_secrets import GAP, BoundSecret
+from aqa_runner.bound_secrets import BoundSecret
 from aqa_runner.browser_session import BrowserSession, RefError, open_browser_session
 from aqa_runner.navigator import Click, Fill, Prefix, Turn, navigator_request
 from aqa_runner.navigator_tools import ActionResult, Attempt
-from aqa_runner.redaction import Redactor
+from aqa_runner.redaction import GAP, Redactor
 from aqa_runner.run_record import RefusedWriteError, RunRecord, require_clean
 from playwright.async_api import async_playwright
 from pydantic import SecretStr

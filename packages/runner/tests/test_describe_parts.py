@@ -18,7 +18,6 @@ from aqa_core.config import ProjectConfig, SubjectContract
 from aqa_core.coverage_plan import CoveragePlan
 from aqa_core.schema import Contract
 from aqa_core.text import normalize
-from aqa_runner.bound_secrets import GAP
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.chat_client import Reply
 from aqa_runner.evaluation import AssertionResult
@@ -33,6 +32,7 @@ from aqa_runner.navigator import (
 )
 from aqa_runner.navigator_parts import Parts
 from aqa_runner.navigator_tools import Action, Attempt
+from aqa_runner.redaction import GAP
 from langchain_core.messages import AIMessage, BaseMessage
 from playwright.async_api import JSHandle
 
