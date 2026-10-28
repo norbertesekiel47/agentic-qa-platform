@@ -353,6 +353,25 @@ def test_a_variable_near_the_aqa_secret_prefix_is_refused(
     assert str(refused.value) == ELSEWHERE + "AQA_OTHER, AQA_SECRETARY"
 
 
+def test_a_missing_value_is_reported_before_a_bound_value_elsewhere(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Every value is read before the environment is scanned.
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
+    monkeypatch.setenv("NODE_OPTIONS", f"--require /nonexistent/{FAKE_VALUE}/x.js")
+    spec = secret_spec(tmp_path, BOTH, account=BOTH_ACCOUNT, allowed_origins=(OTHER,))
+
+    with pytest.raises(MissingSecretError) as missing:
+        bound_secrets(spec, START)
+
+    assert missing.value.problems == (
+        (
+            "AQA_SECRET_API_TOKEN is not set: set it to the value of test secret "
+            f"API_TOKEN, which {spec.path} references at preconditions.account.email"
+        ),
+    )
+
+
 def test_a_spec_that_references_no_secret_binds_none_whatever_is_logged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
