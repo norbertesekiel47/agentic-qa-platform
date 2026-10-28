@@ -80,6 +80,9 @@ _CATEGORIES: Final[Mapping[InvariantName, Category]] = {
     "http_5xx": "backend_5xx",
     "broken_images": "visual",
 }
+# Why a run with an infrastructure event exits 13 (API.md §7), in fixed
+# words: an event's host and cause are withheld in a run that binds a secret.
+_UNREACHED: Final = "an allowed host or the egress proxy couldn't be reached"
 
 
 @dataclass(frozen=True)
@@ -335,11 +338,13 @@ def _drift(misses: tuple[Miss, ...]) -> str:
 
 
 def _reasons(end: ReplayEnd, judged: list[_Judged]) -> Iterator[Redacted]:
-    """Why the run ended as it did: each stop's reason, then each verdict
-    but a pass, with its reason, each scanned whole, so a value spanning a
-    join is found."""
+    """Why the run ended as it did: each stop's reason, `_UNREACHED` after
+    an infrastructure event, then each verdict but a pass, with its reason,
+    each scanned whole, so a value spanning a join is found."""
     scan = end.record.redactor.redact
     yield from (scan(stop.reason) for stop in end.stops)
+    if end.infrastructure_events:
+        yield scan(_UNREACHED)
     for verdict in judged:
         if verdict.verdict != "pass":
             reason = verdict.entry["reason"]

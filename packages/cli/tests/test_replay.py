@@ -513,10 +513,11 @@ def test_an_unreachable_start_origin_exits_13(
     result = replay(monkeypatch, [str(spec), "--url", closed])
 
     assert result.exit_code == 13, result.output
+    status, cause = result.stderr.splitlines()[:2]
     assert re.fullmatch(
-        rf"unreachable shop: {SECONDS}, \$0, run record: {record_in(root)}",
-        result.stderr.splitlines()[0],
+        rf"unreachable shop: {SECONDS}, \$0, run record: {record_in(root)}", status
     )
+    assert cause == "  an allowed host or the egress proxy couldn't be reached"
 
 
 def test_a_driver_that_cannot_start_exits_13_before_any_run(
