@@ -49,7 +49,11 @@ from packages.runner.tests.executor_fixtures import (
     serving_app,
     shop_script,
 )
-from packages.runner.tests.secret_fixtures import FAKE_VALUE, copies_found
+from packages.runner.tests.secret_fixtures import (
+    FAKE_VALUE,
+    copies_found,
+    hermetic_environment,
+)
 from packages.runner.tests.test_bound_secrets import ELSEWHERE
 
 # How long a run took, as its line gives it.
@@ -334,6 +338,8 @@ def test_an_unresolved_side_effect_intent_exits_4_non_resumable(
 def test_a_withheld_line_still_says_non_resumable(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # `test` is in PYTEST_CURRENT_TEST, where a run would refuse it (#215).
+    hermetic_environment(monkeypatch)
     # The run record's path spells the value, and so does its marker,
     # `[SECRET:TEST_PASSWORD]`, so no scan can take it out of the line.
     monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "test")
@@ -852,6 +858,9 @@ def test_an_egress_block_whose_record_cant_be_written_still_exits_6(
 def test_a_document_that_spells_a_bound_value_isnt_written(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # A common word, which a run refuses anywhere else in its environment
+    # (#215).
+    hermetic_environment(monkeypatch)
     # The spec's id is the bound value, and only the document holds it.
     monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "shop")
     root = tmp_path / "qa"
@@ -972,6 +981,9 @@ def test_json_gives_a_run_whose_record_cant_be_made_the_same_fields(
 def test_json_prints_valid_json_that_spells_no_bound_value(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
+    # PYTEST_CURRENT_TEST holds the value, as this test's id, and a run
+    # refuses it anywhere else in its environment (#215).
+    hermetic_environment(monkeypatch)
     monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", value)
     spec = shop(tmp_path / "qa", preconditions=ACCOUNT, config=SECRETS)
     committed(spec, compiled([]))

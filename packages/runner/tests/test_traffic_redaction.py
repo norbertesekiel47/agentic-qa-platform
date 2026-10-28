@@ -38,7 +38,11 @@ from packages.runner.tests.result_redaction_fixtures import (
     fake_secret,
     leaves,
 )
-from packages.runner.tests.secret_fixtures import copies_found, secret_spec
+from packages.runner.tests.secret_fixtures import (
+    copies_found,
+    hermetic_environment,
+    secret_spec,
+)
 
 
 @pytest.fixture
@@ -244,6 +248,9 @@ def test_a_replays_network_checks_hold_when_a_bound_value_collides(
     value: str,
     exported: tuple[str, str],
 ) -> None:
+    # Common words (`POST` is in POSTGRES_* names), which a run refuses
+    # anywhere else in its environment (#215).
+    hermetic_environment(monkeypatch)
     monkeypatch.setenv("AQA_SECRET_FAKE_COLLIDING", value)
     spec = secret_spec(
         tmp_path,

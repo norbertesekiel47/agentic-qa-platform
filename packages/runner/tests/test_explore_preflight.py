@@ -48,7 +48,7 @@ from packages.runner.tests.explore_graph_fixtures import (
     planned,
 )
 from packages.runner.tests.navigator_fixtures import evidence_of, fail_fsync
-from packages.runner.tests.secret_fixtures import FAKE_VALUE
+from packages.runner.tests.secret_fixtures import FAKE_VALUE, hermetic_environment
 from packages.runner.tests.test_explore_graph import (
     ACCOUNT,
     ASSERT,
@@ -640,6 +640,9 @@ REFUSED_PLACES = {
 def test_admission_refuses_each_place_a_bound_value_would_reach(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: Admission
 ) -> None:
+    # Some values are common (`Europe/Berlin` is a TZ), and a run refuses a
+    # bound value anywhere else in its environment (#215).
+    hermetic_environment(monkeypatch)
     monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", case.value)
     client = Scripted(planned())
 

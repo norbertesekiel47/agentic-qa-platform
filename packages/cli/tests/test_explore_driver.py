@@ -244,6 +244,10 @@ def test_a_driver_start_refusal_with_a_marker_unsafe_binding_prints_only_the_fal
 def test_a_fallback_that_spells_a_bound_value_prints_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # A common word, which a run refuses anywhere else in its environment
+    # (#215).
+    hermetic_environment(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
     monkeypatch.setenv("AQA_SECRET_TEST_SHOP", "shop")
     spec = signed_in(tmp_path / "qa", name="TEST_SHOP")
     failing = Driver(starts=PlaywrightError(SENTINEL))
