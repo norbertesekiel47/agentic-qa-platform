@@ -338,6 +338,41 @@ def test_a_saved_screenshot_shows_no_bound_value_whatever_the_page_does(
         assert outcomes == [f"shots/{repeat}.png" for repeat in range(REPEATS)]
 
 
+def test_a_render_shows_text_and_images_that_spell_an_archive_reference(
+    sites: Sites,
+) -> None:
+    square = (
+        "<svg xmlns='http://www.w3.org/2000/svg' width='50' height='50'>"
+        "<rect width='50' height='50' fill='#f00'/></svg>"
+    )
+    page = (
+        f"<!doctype html><meta charset=utf-8>{TRIGGER}"
+        f"<p style='{RED}'>Folic acid: 5mg</p><img src='/acid:square.svg'>"
+    )
+
+    async def scenario() -> tuple[int, int]:
+        async with browsing(sites, redactor=Redactor(bound(sites.app))) as session:
+            scratch = await scratch_page(session)
+            await session.page.route(
+                "**/acid:square.svg",
+                lambda route: route.fulfill(body=square, content_type="image/svg+xml"),
+            )
+            await session.page.route(
+                "**/folic",
+                lambda route: route.fulfill(body=page, content_type="text/html"),
+            )
+            await session.navigate(f"{sites.app}/folic")
+            live = await red_pixels(scratch, (await take_screenshot(session)).png)
+            trigger = await element(session, "#trigger")
+            await session.fill_secret(trigger, secret(sites, "TRIGGER"))
+            rendered = await red_pixels(scratch, (await take_screenshot(session)).png)
+            return live, rendered
+
+    live, rendered = asyncio.run(scenario())
+    assert live > 2500
+    assert rendered == live
+
+
 def test_a_value_sharing_four_characters_with_a_bound_value_is_dropped(
     sites: Sites,
 ) -> None:
