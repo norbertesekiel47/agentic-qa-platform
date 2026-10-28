@@ -311,29 +311,52 @@ def test_each_executor_result_gets_its_verdict(
     assert (verdict["verdict"], verdict["reason"]) == expected
 
 
-def test_what_never_ran_or_was_turned_off_gets_no_verdict(tmp_path: Path) -> None:
-    end = ending(
-        made(tmp_path), steps=(StepResult(2, "drifted", misses=("no match",)),)
-    )
-    assert end.result is not None
-    stopped = tuple(
-        AssertionResult(check, "not_evaluated", stopped_at=2)
+def unevaluated(seq: int) -> tuple[AssertionResult, ...]:
+    return tuple(
+        AssertionResult(check, "not_evaluated", stopped_at=seq)
         for check in ("a1", "a2", "a3")
     )
-    turned_off = (*HELD[:3], InvariantResult("broken_images", "disabled", (), 0))
+
+
+@pytest.mark.parametrize(
+    ("steps", "assertions", "expected"),
+    [
+        # A step drifted, in a script with no check.
+        (
+            (StepResult(2, "drifted", misses=("no match",)),),
+            (),
+            [("pass", "step"), ("pass", "step"), ("inconclusive", "step")],
+        ),
+        # An interruption after the last step, so no check was evaluated.
+        ((), unevaluated(1), [("pass", "step"), ("pass", "step")]),
+    ],
+    ids=["stopped-step", "interrupted"],
+)
+def test_what_never_ran_or_was_turned_off_gets_no_verdict(
+    tmp_path: Path,
+    steps: tuple[StepResult, ...],
+    assertions: tuple[AssertionResult, ...],
+    expected: list[tuple[str, str]],
+) -> None:
+    end = ending(made(tmp_path), steps=steps)
+    assert end.result is not None
+    # What a stopped run held is no more established than an unevaluated
+    # check; what it violated is.
+    observed = (
+        HELD[0],
+        *VIOLATED,
+        HELD[2],
+        InvariantResult("broken_images", "disabled", (), 0),
+    )
     end = replace(
-        end, result=replace(end.result, assertions=stopped, invariants=turned_off)
+        end, result=replace(end.result, assertions=assertions, invariants=observed)
     )
 
     verdicts = document(end)["verdicts"]
 
     assert [(verdict["verdict"], *list(verdict)[:1]) for verdict in verdicts] == [
-        ("pass", "step"),
-        ("pass", "step"),
-        ("inconclusive", "step"),
-        ("pass", "invariant"),
-        ("pass", "invariant"),
-        ("pass", "invariant"),
+        *expected,
+        ("expectation_violated", "invariant"),
     ]
 
 
