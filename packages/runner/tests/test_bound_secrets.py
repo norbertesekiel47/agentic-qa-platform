@@ -3,7 +3,10 @@
 starts (#49; ADR-0026, Test secrets; SECURITY §5). No browser here: a value
 that is missing fails before one could open."""
 
+import json
+from base64 import b64encode
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from aqa_core.config import RoleField
@@ -31,6 +34,13 @@ BOTH = (
     f"API_TOKEN: {{ origins: [start, '{OTHER}'], field: {{ role: textbox, name: API token }} }}"
 )
 BOTH_ACCOUNT = "{ email: { secret: API_TOKEN }, password: { secret: TEST_PASSWORD } }"
+# The refusal of a bound value elsewhere in the environment, before the
+# variables it names (#215).
+ELSEWHERE = (
+    "a test secret's value is in the environment outside AQA_SECRET_* "
+    "variables, where Playwright's driver could print it; remove it from "
+    "these variables to run with test secrets: "
+)
 
 
 @pytest.fixture(autouse=True)
@@ -245,6 +255,87 @@ def test_debug_logging_that_leaves_the_protocol_out_is_allowed(
     assert list(bound_secrets(secret_spec(tmp_path), START)) == ["TEST_PASSWORD"]
 
 
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [
+        # Node prints a preload it can't find, path and all, to the stderr
+        # it shares with the CLI.
+        ("NODE_OPTIONS", f"--require /nonexistent/{FAKE_VALUE}/x.js"),
+        (
+            "HTTPS_PROXY",
+            f"http://reader:{quote(FAKE_VALUE, safe='')}@proxy.example.test:3128",
+        ),
+        (
+            "PROXY_AUTHORIZATION",
+            "Basic " + b64encode(f"reader:{FAKE_VALUE}".encode()).decode(),
+        ),
+        ("LOGIN", FAKE_VALUE.upper()),
+        ("CREDENTIALS", json.dumps(FAKE_VALUE)),
+    ],
+    ids=["preload-path", "percent-encoded", "base64", "upper-case", "json-escaped"],
+)
+def test_a_bound_value_anywhere_else_in_the_environment_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variable: str, value: str
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
+    monkeypatch.setenv(variable, value)
+
+    with pytest.raises(SecretLoggedError) as refused:
+        bound_secrets(secret_spec(tmp_path), START)
+
+    assert str(refused.value) == ELSEWHERE + variable
+    assert refused.value.exit_code == 12
+
+
+def test_every_variable_holding_a_bound_value_is_named_at_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
+    monkeypatch.setenv("AQA_SECRET_API_TOKEN", OTHER_FAKE_VALUE)
+    # Each secret exported under a second name too.
+    monkeypatch.setenv("TEST_PASSWORD", FAKE_VALUE)
+    monkeypatch.setenv("API_TOKEN", OTHER_FAKE_VALUE)
+    spec = secret_spec(tmp_path, BOTH, account=BOTH_ACCOUNT, allowed_origins=(OTHER,))
+
+    with pytest.raises(SecretLoggedError) as refused:
+        bound_secrets(spec, START)
+
+    assert str(refused.value) == ELSEWHERE + "API_TOKEN, TEST_PASSWORD"
+
+
+def test_a_variable_whose_name_holds_a_bound_value_is_refused_without_naming_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No scan reads the refusal before it is printed, so the name can't be.
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", OTHER_FAKE_VALUE)
+    monkeypatch.setenv(f"COPY_OF_{OTHER_FAKE_VALUE}", "1")
+    monkeypatch.setenv("LOGIN", OTHER_FAKE_VALUE)
+
+    with pytest.raises(SecretLoggedError) as refused:
+        bound_secrets(secret_spec(tmp_path), START)
+
+    assert str(refused.value) == ELSEWHERE + "LOGIN, a variable whose name holds one"
+
+
+def test_a_value_shared_with_another_aqa_secret_variable_binds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Two accounts sharing a password, and a variable this spec doesn't
+    # reference: the driver inherits every AQA_SECRET_* variable anyway.
+    for name in ("TEST_PASSWORD", "API_TOKEN", "OTHER"):
+        monkeypatch.setenv(f"AQA_SECRET_{name}", FAKE_VALUE)
+    spec = secret_spec(tmp_path, BOTH, account=BOTH_ACCOUNT, allowed_origins=(OTHER,))
+
+    bound = bound_secrets(spec, START)
+
+    assert {
+        name: secret.value.get_secret_value() for name, secret in bound.items()
+    } == {
+        "API_TOKEN": FAKE_VALUE,
+        "TEST_PASSWORD": FAKE_VALUE,
+    }
+
+
 def test_a_spec_that_references_no_secret_binds_none_whatever_is_logged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -275,7 +366,13 @@ def test_a_blank_or_under_four_byte_value_is_refused(
         assert value not in str(raised.value)
 
 
-@pytest.mark.parametrize("value", ["fake", "fäke", "秘密", "\ufeff fake \ufeff"])
+# Ids that spell no value: pytest puts the test's id in PYTEST_CURRENT_TEST,
+# where a value would be refused (#215).
+@pytest.mark.parametrize(
+    "value",
+    ["fake", "fäke", "秘密", "\ufeff fake \ufeff"],
+    ids=["ascii", "latin-1", "cjk", "padded"],
+)
 def test_a_value_with_four_bytes_in_every_supported_encoding_is_usable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:

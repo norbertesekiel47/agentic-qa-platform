@@ -44,7 +44,12 @@ from packages.runner.tests.executor_fixtures import (
 )
 from packages.runner.tests.reflection_fixtures import reflecting
 from packages.runner.tests.result_redaction_fixtures import browsing, fake_secret
-from packages.runner.tests.secret_fixtures import FAKE_VALUE, copies, secret_spec
+from packages.runner.tests.secret_fixtures import (
+    FAKE_VALUE,
+    copies,
+    hermetic_environment,
+    secret_spec,
+)
 
 # A fake value whose percent-encoding and base64 differ from it.
 REFLECTED = "fake token/value"
@@ -588,6 +593,7 @@ def test_an_egress_record_its_scan_cant_clear_leaves_the_result_whole(
     value: str,
     saved_as: dict[str, object] | None,
 ) -> None:
+    hermetic_environment(monkeypatch)
     monkeypatch.setenv("AQA_SECRET_FAKE", value)
     blocked = "<script>fetch('http://fake.fragment.test/').catch(() => null)</script>"
     monkeypatch.setitem(PAGES, "evidence-blocked", blocked)

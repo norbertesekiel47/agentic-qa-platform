@@ -4,13 +4,16 @@ path, as pytest names the runner's test modules (TESTING.md §1, Shared
 egress fixtures)."""
 
 import json
+import os
 from base64 import b64encode, urlsafe_b64encode
 from collections.abc import Iterable
 from pathlib import Path
 from urllib.parse import quote, quote_plus
 
+import pytest
 from aqa_core.project import load_config, load_spec
 from aqa_core.spec import Spec
+from aqa_runner.bound_secrets import PREFIX
 
 # Values no real environment holds, each saying it is fake (AGENTS.md rule
 # 9), with characters that URL, base64 and JSON encodings each change.
@@ -19,6 +22,20 @@ OTHER_FAKE_VALUE = "fake-api-token-for-49"
 
 # A config's binding of TEST_PASSWORD to password fields on the start origin.
 BOUND_AT_START = "TEST_PASSWORD: { origins: [start], field: password }"
+
+# The variables a run needs besides its test secrets: where programs,
+# Playwright's browsers and temporary files are.
+RUN_NEEDS = ("PATH", "HOME", "TMPDIR", "PLAYWRIGHT_BROWSERS_PATH")
+
+
+def hermetic_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drop every variable but `RUN_NEEDS` and the test secrets, for a test
+    that binds a common word: a run refuses a bound value anywhere else in
+    its environment (#215), such as `true` in GitHub Actions' `CI`, or in
+    PYTEST_CURRENT_TEST, which holds the test's id."""
+    for name in list(os.environ):
+        if name not in RUN_NEEDS and not name.startswith(PREFIX):
+            monkeypatch.delenv(name)
 
 
 def secret_spec(
