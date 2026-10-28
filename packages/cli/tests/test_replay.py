@@ -82,6 +82,13 @@ ADVICE = "fake raw launch advice 4u49"
 NO_DRIVER = (
     "unreachable shop: the browser driver couldn't start, so nothing was replayed\n"
 )
+# Two fake test secrets' values, and the second's binding and reference.
+FIRST = "fake-first-value"
+SECOND = "fake-second-value"
+OTHER_SECRETS = "secrets: { OTHER_PASSWORD: { origins: [start], field: password } }\n"
+OTHER_ACCOUNT = (
+    "  account: { email: reader@example.test, password: { secret: OTHER_PASSWORD } }\n"
+)
 LOGGED = (
     "DEBUG turns on pw:protocol: Playwright would log every protocol message, a "
     "test secret's value among them; unset it to run with test secrets"
@@ -95,15 +102,25 @@ def app() -> Iterator[App]:
 
 
 def committed(spec: Path, script: CompiledScript) -> Path:
-    """`script` committed as the compiled script of the shop spec at `spec`,
-    compiled from the spec as it is; the spec's path."""
+    """`script` committed as the compiled script of the spec at `spec`, its
+    project's only one, compiled from the spec as it is; the spec's path."""
     root = spec.parent
-    loaded = load_project(root).specs["shop"]
-    target = root / ".compiled" / "shop.json"
+    [loaded] = load_project(root).specs.values()
+    spec_id = loaded.frontmatter.id
+    target = root / ".compiled" / f"{spec_id}.json"
     target.parent.mkdir(exist_ok=True)
-    current = {"spec_id": "shop", "spec_hash": loaded.spec_hash}
+    current = {"spec_id": spec_id, "spec_hash": loaded.spec_hash}
     target.write_text(published_text(script.model_copy(update=current)))
     return spec
+
+
+def renamed(spec: Path, spec_id: str) -> Path:
+    """The shop spec at `spec` as the spec `spec_id`, in its own file; its
+    path."""
+    path = spec.with_name(f"{spec_id}.spec.md")
+    path.write_text(spec.read_text().replace("id: shop\n", f"id: {spec_id}\n"))
+    spec.unlink()
+    return path
 
 
 def replay(
@@ -503,6 +520,71 @@ def test_an_unusable_test_secret_exits_12_before_the_driver_starts(
     assert result.stderr.startswith(
         f"secret_unusable shop: nothing was replayed\n  {said}"
     )
+
+
+def test_a_refusal_after_binding_prints_none_of_the_specs_secrets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FIRST)
+    # Replay refuses a start path that spells the bound value once it is
+    # bound, and the spec's id spells it too.
+    page = f"/page/{FIRST}"
+    spec = shop(tmp_path / "qa", preconditions=ACCOUNT, config=SECRETS, page=page)
+    spec = committed(renamed(spec, FIRST), compiled([]))
+
+    result = replay(monkeypatch, [str(spec)], driver=False)
+
+    assert result.exit_code == 5, result.output
+    assert result.stderr == (
+        "spec_error [SECRET:TEST_PASSWORD]: replay refuses the compiled script, so "
+        "nothing was replayed\n  preconditions.start_url: a bound value's spelling "
+        "is in it, so the replay doesn't start\n"
+    )
+
+
+def later(root: Path, second: str) -> Path:
+    """The second spec, at `root`, for `second`: one that doesn't resolve,
+    one replay refuses once its secret is bound, whose id spells both
+    values, or one that runs and fails."""
+    if second == "invalid":
+        return shop(root, extra="colour: red\n")
+    page = f"/page/{SECOND}" if second == "refused" else "/page/shop-wrong"
+    spec = shop(root, preconditions=OTHER_ACCOUNT, config=OTHER_SECRETS, page=page)
+    if second == "refused":
+        spec = renamed(spec, f"{FIRST}-{SECOND}")
+    return committed(spec, shop_script("shop-wrong"))
+
+
+@pytest.mark.parametrize(
+    ("second", "code"), [("invalid", 5), ("refused", 5), ("run", 1)]
+)
+def test_a_later_specs_stop_and_every_line_scan_with_every_bound_secret(
+    app: App,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    second: str,
+    code: int,
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FIRST)
+    monkeypatch.setenv("AQA_SECRET_OTHER_PASSWORD", SECOND)
+    # Each spec is under a directory named for the other's value, so its
+    # path and its run record's spell that value.
+    first = shop(
+        tmp_path / SECOND,
+        preconditions=ACCOUNT,
+        config=SECRETS,
+        page="/page/shop-wrong",
+    )
+    specs = (
+        committed(first, shop_script("shop-wrong")),
+        later(tmp_path / FIRST, second),
+    )
+
+    result = replay(monkeypatch, on(app, *specs))
+
+    assert result.exit_code == code, result.output
+    texts = [result.stdout, result.stderr]
+    assert copies_found(FIRST, texts=texts) + copies_found(SECOND, texts=texts) == []
 
 
 def test_a_failed_reset_hook_exits_14_and_opens_no_browser(

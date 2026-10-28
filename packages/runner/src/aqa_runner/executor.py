@@ -8,7 +8,7 @@ Browser observations use the session methods, which check every document
 they touch (ADR-0026). Probe reads use the same egress gate as the browser."""
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from typing import Literal
@@ -443,6 +443,19 @@ async def _observed(session: BrowserSession, budget: float) -> Redacted | None:
         return None
 
 
+class BoundValueSpelledError(SpecError):
+    """A bound value is spelled where the run would write or use it
+    (`_spelling_bound_values`): a spec error found once the spec's test
+    secrets are bound, with that binding, so whoever prints the refusal
+    can scan it with them."""
+
+    def __init__(
+        self, problems: Sequence[str], bound: Mapping[str, BoundSecret]
+    ) -> None:
+        super().__init__(problems)
+        self.bound = bound
+
+
 def admitted(
     script: CompiledScript, spec: Spec, config: ProjectConfig, start: str
 ) -> tuple[
@@ -454,8 +467,9 @@ def admitted(
     is, agrees with `config`'s subject contracts and runs in M1
     (`accepted`); every secret the spec references has a value
     (`bound_secrets`); and no bound value is spelled where the run would
-    write or use it (`_spelling_bound_values`). Otherwise `SpecError`, or
-    `bound_secrets`' own error. The script's own problems come first, so a
+    write or use it (`_spelling_bound_values`, else
+    `BoundValueSpelledError`). Otherwise `SpecError`, or `bound_secrets`'
+    own error. The script's own problems come first, so a
     spec error wins over a missing value (exit 5 before 12), and a stale
     script's other problems are moot. Public so `aqa replay` admits every
     spec before any run's reset (#239)."""
@@ -467,7 +481,7 @@ def admitted(
     bound = bound_secrets(spec, start)
     redactor = Redactor(bound.values())
     if problems := _spelling_bound_values(spec, runnable, script.targets, redactor):
-        raise SpecError(problems)
+        raise BoundValueSpelledError(problems, bound)
     return runnable, checks, bound, redactor
 
 
