@@ -218,9 +218,13 @@ class Traffic:
         can, and this raises `network.UnrecordedRequestError`."""
         if self._unrecorded:
             raise network.UnrecordedRequestError
-        return await network.held(
+        held = await network.held(
             check, [self._complete_responses[window] for window in self.windows]
         )
+        # A scan can fail while the search runs in its child.
+        if self._unrecorded:
+            raise network.UnrecordedRequestError
+        return held
 
     def console_log(self, window: Window) -> Records[ConsoleEntry]:
         """`window`'s console messages as they stand now: the first
