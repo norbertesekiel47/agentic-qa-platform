@@ -61,6 +61,7 @@ type Raised = (
     | EgressRefusedError
     | EgressUpstreamError
     | network.WindowsOverflowError
+    | network.UnrecordedRequestError
     | UnsupportedVisualFrameError
     | RefusedWriteError
     | RefError
@@ -71,6 +72,13 @@ type Raised = (
 # hold what its endpoint answered, and an egress error's names a host.
 _FIXED: tuple[tuple[type[Exception], str], ...] = (
     (probes.ProbeError, "the probe could not be read"),
+    (
+        network.UnrecordedRequestError,
+        (
+            "a request's scan failed, so it went unrecorded and no network check "
+            "can be evaluated"
+        ),
+    ),
     (
         UnsupportedVisualFrameError,
         "visible_unoccluded does not support elements inside frames",
