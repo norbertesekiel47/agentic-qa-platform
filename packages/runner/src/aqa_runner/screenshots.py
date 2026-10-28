@@ -24,7 +24,6 @@ attribute, and a value the page draws into an image is drawn there too:
 ADR-0034's residuals, the last #250's OCR check."""
 
 import asyncio
-import base64
 import html
 import re
 from collections.abc import AsyncIterator
@@ -33,11 +32,12 @@ from dataclasses import InitVar, dataclass, field
 from email import message_from_bytes
 from email.message import Message
 from functools import partial
+from itertools import chain
 from typing import Annotated, NotRequired, TypedDict, cast
 from urllib.parse import urldefrag, urlsplit
 
 from playwright.async_api import CDPSession, Error, Page, Route
-from pydantic import AfterValidator, TypeAdapter, ValidationError
+from pydantic import AfterValidator, Base64Bytes, TypeAdapter, ValidationError
 
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.redaction import Redactor
@@ -185,6 +185,10 @@ class _Data(TypedDict):
     data: str
 
 
+class _Shot(TypedDict):
+    data: Base64Bytes
+
+
 class _Viewport(TypedDict):
     pageX: float
     pageY: float
@@ -241,28 +245,51 @@ class _Shown(TypedDict):
 
 
 def _aligned(snapshot: _Snapshot) -> _Snapshot:
-    """`snapshot`, when its arrays of a node each are in step."""
-    for document in snapshot["documents"]:
+    """`snapshot`, when its arrays of a node each are in step and each index
+    in it is to something it holds: a string (-1 for the empty one), a node,
+    a node's parent listed before it, and a frame's document listed after
+    the frame's own."""
+    strings, documents = len(snapshot["strings"]), len(snapshot["documents"])
+    for place, document in enumerate(snapshot["documents"]):
         nodes, layout = document["nodes"], document["layout"]
-        rare = (
+        count = len(nodes["nodeName"])
+        values, texts, frames = (
             nodes.get("inputValue"),
             nodes.get("textValue"),
             nodes.get("contentDocumentIndex"),
         )
         lengths = [
-            (len(nodes["parentIndex"]), len(nodes["nodeName"])),
-            (len(nodes["attributes"]), len(nodes["nodeName"])),
+            (len(nodes["parentIndex"]), count),
+            (len(nodes["attributes"]), count),
             (len(layout["styles"]), len(layout["nodeIndex"])),
-            *((len(data["value"]), len(data["index"])) for data in rare if data),
+            *(
+                (len(data["value"]), len(data["index"]))
+                for data in (values, texts, frames)
+                if data
+            ),
         ]
         if any(one != other for one, other in lengths) or any(
             len(attributes) % 2 for attributes in nodes["attributes"]
         ):
             raise ValueError("a DOM snapshot's arrays are out of step")
+        named = chain(
+            *nodes["attributes"],
+            *layout["styles"],
+            *(data["value"] for data in (values, texts) if data),
+        )
+        if not (
+            all(0 <= name < strings for name in nodes["nodeName"])
+            and all(-1 <= index < strings for index in named)
+            and all(-1 <= up < node for node, up in enumerate(nodes["parentIndex"]))
+            and all(0 <= node < count for node in layout["nodeIndex"])
+            and all(place < inner < documents for inner in _rare(frames).values())
+        ):
+            raise ValueError("a DOM snapshot's index is out of range")
     return snapshot
 
 
 _DATA = TypeAdapter(_Data)
+_SHOT = TypeAdapter(_Shot)
 _METRICS = TypeAdapter(_Metrics)
 _SNAPSHOT: TypeAdapter[_Snapshot] = TypeAdapter(
     Annotated[_Snapshot, AfterValidator(_aligned)]
@@ -338,7 +365,7 @@ async def _captured(session: BrowserSession) -> bytes:
         if not session.secret_filled:
             # https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-captureScreenshot
             shot = await devtools.send("Page.captureScreenshot", {"format": "png"})
-            return base64.b64decode(_DATA.validate_python(shot)["data"])
+            return _SHOT.validate_python(shot)["data"]
         # https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-getLayoutMetrics
         metrics = await devtools.send("Page.getLayoutMetrics")
         # https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-captureSnapshot

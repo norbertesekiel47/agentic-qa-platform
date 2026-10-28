@@ -441,6 +441,29 @@ def test_a_value_the_scrub_changes_the_markup_or_parse_of_is_never_shown(
     assert asyncio.run(scenario()) == reason
 
 
+def snapshot(
+    strings: list[str],
+    nodes: dict[str, Any],
+    layout: tuple[list[int], list[list[int]]] = ([], []),
+) -> dict[str, Any]:
+    """A DOM snapshot reply of one document, of one node named by the first
+    string unless `nodes` says otherwise, and `layout`'s nodes and styles."""
+    return {
+        "strings": strings,
+        "documents": [
+            {
+                "nodes": {
+                    "nodeName": [0],
+                    "parentIndex": [-1],
+                    "attributes": [[]],
+                    **nodes,
+                },
+                "layout": {"nodeIndex": layout[0], "styles": layout[1]},
+            }
+        ],
+    }
+
+
 @pytest.mark.parametrize(
     ("method", "reply"),
     [
@@ -449,23 +472,37 @@ def test_a_value_the_scrub_changes_the_markup_or_parse_of_is_never_shown(
         # A rare value's places and values out of step.
         (
             "DOMSnapshot.captureSnapshot",
-            {
-                "strings": ["INPUT"],
-                "documents": [
-                    {
-                        "nodes": {
-                            "nodeName": [0],
-                            "parentIndex": [-1],
-                            "attributes": [[]],
-                            "inputValue": {"index": [0], "value": []},
-                        },
-                        "layout": {"nodeIndex": [], "styles": []},
-                    }
-                ],
-            },
+            snapshot(["INPUT"], {"inputValue": {"index": [0], "value": []}}),
+        ),
+        # An index past what it indexes: a string, a node's parent, an
+        # attribute's value, an editable node, a frame's document.
+        ("DOMSnapshot.captureSnapshot", snapshot(["INPUT"], {"nodeName": [1]})),
+        (
+            "DOMSnapshot.captureSnapshot",
+            snapshot(["P", "read-write"], {"parentIndex": [1]}, ([0], [[1]])),
+        ),
+        ("DOMSnapshot.captureSnapshot", snapshot(["INPUT"], {"attributes": [[0, 1]]})),
+        (
+            "DOMSnapshot.captureSnapshot",
+            snapshot(["P", "read-write"], {}, ([1], [[1]])),
+        ),
+        (
+            "DOMSnapshot.captureSnapshot",
+            snapshot(
+                ["IFRAME"], {"contentDocumentIndex": {"index": [0], "value": [1]}}
+            ),
         ),
     ],
-    ids=["metrics", "dom-snapshot", "rare-data"],
+    ids=[
+        "metrics",
+        "dom-snapshot",
+        "rare-data",
+        "name-index",
+        "parent-index",
+        "attribute-index",
+        "layout-index",
+        "document-index",
+    ],
 )
 def test_a_devtools_reply_in_a_shape_the_capture_doesnt_read_withholds_it(
     sites: Sites,
@@ -484,6 +521,33 @@ def test_a_devtools_reply_in_a_shape_the_capture_doesnt_read_withholds_it(
     monkeypatch.setattr(CDPSession, "send", replying)
 
     assert withholding(sites, tmp_path, "0") == (
+        "DevTools replied in a shape the capture doesn't read",
+        [],
+        0,
+    )
+
+
+def test_a_live_capture_devtools_hands_back_undecodable_withholds_it(
+    sites: Sites, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    send = CDPSession.send
+
+    async def replying(
+        devtools: CDPSession, method: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        if method == "Page.captureScreenshot":
+            return {"data": "not base64"}
+        return await send(devtools, method, params)
+
+    monkeypatch.setattr(CDPSession, "send", replying)
+
+    async def scenario() -> tuple[str, list[Path], int]:
+        async with browsing(sites) as session:
+            await serve_cases(session.page, sites.other)
+            await session.navigate(f"{sites.app}/shot/plain")
+            return await withheld(session, RunRecord.create(tmp_path))
+
+    assert asyncio.run(scenario()) == (
         "DevTools replied in a shape the capture doesn't read",
         [],
         0,
