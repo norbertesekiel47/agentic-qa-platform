@@ -566,16 +566,13 @@ async def _render(
     plan: _Document,
     scroll: tuple[float, float],
 ) -> bytes:
-    browser = session.page.context.browser
-    if browser is None:  # a persistent context's page, which no session has
-        raise ScreenshotWithheldError("the page's browser can't be reached")
     settings = session.settings
     width, height = settings.viewport
     # A context that names no proxy takes the launch's fail-closed one
     # (`aqa_runner.sandbox.FAIL_CLOSED_PROXY`), and every request is answered
     # from the archive or refused: nothing leaves the render.
     # https://playwright.dev/python/docs/api/class-browser#browser-new-context
-    context = await browser.new_context(
+    context = await session.browser.new_context(
         java_script_enabled=False,
         service_workers="block",
         accept_downloads=False,
