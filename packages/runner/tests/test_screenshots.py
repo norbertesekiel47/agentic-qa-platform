@@ -731,14 +731,15 @@ def test_editing_the_render_cant_reproduce_withholds_it(
     )
 
 
-def test_fields_the_render_doesnt_have_withhold_it(
-    sites: Sites, tmp_path: Path
+@pytest.mark.parametrize("child", ["input", "iframe"])
+def test_fields_or_frames_the_render_doesnt_have_withhold_it(
+    sites: Sites, tmp_path: Path, child: str
 ) -> None:
     # A template's children, put there by script rather than in its content,
     # are in the page's tree; its archive's parser puts them in the content.
     script = (
         "document.body.append(document.createElement('template')); "
-        "document.querySelector('template').append(document.createElement('input'))"
+        f"document.querySelector('template').append(document.createElement('{child}'))"
     )
 
     assert withholding(sites, tmp_path, script) == (MISMATCHED, [], 0)
