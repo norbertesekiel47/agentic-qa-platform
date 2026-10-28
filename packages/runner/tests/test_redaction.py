@@ -237,6 +237,17 @@ def test_spans_are_where_redact_puts_its_markers() -> None:
     assert redactor.spans("nothing bound here") == []
 
 
+def test_text_overlaps_a_bound_value_from_a_run_of_its_characters() -> None:
+    redactor = Redactor([secret("fakeZq7x"), secret("fake-\u00e4\u00e4", "SHORT")])
+    assert redactor.overlaps("an EZQ7 here", 4)
+    assert redactor.overlaps("e\u200bZq7", 4)
+    assert not redactor.overlaps("an eZq here", 4)
+    short = Redactor([secret("\u00e4\u00e4\u200b")])
+    assert not short.overlaps("\u00e4", 4)
+    assert short.overlaps("x\u00c4\u00c4x", 4)
+    assert not NO_SECRETS.overlaps("anything", 4)
+
+
 @pytest.mark.parametrize("value", ["\u200b\u00ad", "\u200b\u200b", "\u00ad" * 4])
 def test_zero_length_matches_do_not_replace_text(value: str) -> None:
     redactor = Redactor([secret(value)])
