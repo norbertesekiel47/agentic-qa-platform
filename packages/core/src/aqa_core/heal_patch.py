@@ -13,6 +13,7 @@ from aqa_core.compiled import (
     Step,
     pseudo_classes,
 )
+from aqa_core.project import locator_levels
 
 # The child-indexed pseudo-classes, typed or not (Selectors Level 4, §13.3
 # and §13.4, https://www.w3.org/TR/selectors-4/#child-index). They find an
@@ -39,14 +40,13 @@ def _positional(path: str, locators: Sequence[Locator]) -> Iterator[str]:
     """The path of each css value, a scope's included, that finds its element
     by position."""
     for index, locator in enumerate(locators):
-        where = f"{path}/{index}"
-        level: Locator | None = locator
-        while level is not None:
+        for where, level in locator_levels(
+            f"{path}/{index}", locator, scope_key="/scope"
+        ):
             if isinstance(level, ByCss) and not _POSITIONAL.isdisjoint(
                 pseudo_classes(level.css)
             ):
                 yield f"{where}/css: a heal finds no element by its position among its siblings"
-            where, level = f"{where}/scope", level.scope
 
 
 def _target_problems(script: CompiledScript, healed: CompiledScript) -> Iterator[str]:
