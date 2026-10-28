@@ -11,7 +11,7 @@ from aqa_core.compiled import (
     Locator,
     Navigate,
     Step,
-    pseudo_classes,
+    css_tokens,
 )
 from aqa_core.project import locator_levels
 
@@ -36,13 +36,27 @@ _POSITIONAL = frozenset(
 )
 
 
+def _positional(css: str) -> bool:
+    """Whether `css` finds its element by its position among its siblings:
+    by a child-indexed pseudo-class, or by a sibling combinator (`+` or `~`,
+    at any depth, `:not(* ~ *)` being `:first-child`). Inside an attribute
+    selector, a `~` is part of an operator (`~=`)."""
+    attribute = False
+    for part in css_tokens(css):
+        if part in ("[", "]"):
+            attribute = part == "["
+        elif (part.startswith(":") and part[1:] in _POSITIONAL) or (
+            part in ("+", "~") and not attribute
+        ):
+            return True
+    return False
+
+
 def _written(path: str, locator: Locator) -> Iterator[str]:
     """Problems with a locator the heal wrote at `path`, its scopes'
     included: a css value that finds its element by position."""
     for where, level in locator_levels(path, locator, scope_key="/scope"):
-        if isinstance(level, ByCss) and not _POSITIONAL.isdisjoint(
-            pseudo_classes(level.css)
-        ):
+        if isinstance(level, ByCss) and _positional(level.css):
             yield f"{where}/css: a heal finds no element by its position among its siblings"
 
 
