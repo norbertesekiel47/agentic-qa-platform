@@ -82,10 +82,36 @@ def test_a_heal_neither_adds_nor_removes_a_target(
     assert heal(change, base) == [problem]
 
 
+# Selectors Level 4, §13.3 and §13.4: every child-indexed pseudo-class.
+@pytest.mark.parametrize(
+    "css",
+    [
+        "li:nth-child(2)",
+        "li:nth-last-child(2)",
+        "li:first-child",
+        "li:last-child",
+        "li:only-child",
+        "li:nth-of-type(2)",
+        "li:nth-last-of-type(2)",
+        "li:first-of-type",
+        "li:last-of-type",
+        "li:only-of-type",
+    ],
+)
+def test_no_child_indexed_pseudo_class_finds_a_rebound_element(css: str) -> None:
+    assert heal(
+        lambda d: d["targets"]["cart_items"].update(locators=[{"css": css}])
+    ) == [
+        (
+            "/targets/cart_items/locators/0/css: a heal finds no element by "
+            "its position among its siblings"
+        )
+    ]
+
+
 @pytest.mark.parametrize(
     ("locator", "path"),
     [
-        ({"css": "ul.cart-lines:nth-child(2)"}, "/targets/cart_items/locators/0/css"),
         (
             {"testid": "cart-lines", "scope": {"css": "app-cart-summary:FIRST-CHILD"}},
             "/targets/cart_items/locators/0/scope/css",
@@ -93,7 +119,7 @@ def test_a_heal_neither_adds_nor_removes_a_target(
         # \2d is an escaped hyphen, which CSS reads as one.
         ({"css": r"ul:nth\2d of-type(1)"}, "/targets/cart_items/locators/0/css"),
     ],
-    ids=["locator", "scope", "escaped"],
+    ids=["scope", "escaped"],
 )
 def test_a_heal_writes_no_positional_pseudo_class(
     locator: dict[str, Any], path: str
