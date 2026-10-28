@@ -8,10 +8,10 @@ spec and the project config, the start origin and each budget `--budget`
 lays over the config's. A problem with any of them is a spec error (exit 5).
 Then, unless `--force`, a compiled script that is up to date is kept, with
 no model call and no browser: it loads, was compiled from the spec and the
-subject contracts as they are, and agrees with them, as replay's contract
-check requires. Only a run that will call a model needs the provider's key. With
-`--plan-only`, one call on the navigator role writes the plan into the run
-record, with every response's cost record.
+subject contracts as they are, agrees with them, as replay's contract check
+requires, and is one replay admits. Only a run that will call a model needs
+the provider's key. With `--plan-only`, one call on the navigator role writes
+the plan into the run record, with every response's cost record.
 
 Everything this module prints goes through `_rendered`, which scans the whole
 text with the run's test secrets once they are bound; a text that still spells
@@ -54,6 +54,7 @@ from aqa_runner.bound_secrets import (
 )
 from aqa_runner.coverage_plan import judge, make_plan
 from aqa_runner.egress_proxy import ListenerUnavailableError
+from aqa_runner.executor import accepted
 from aqa_runner.explore import Drivers, Explored
 from aqa_runner.explore import explore as explore_spec
 from aqa_runner.model_router import ModelCallError, ModelRouter
@@ -103,6 +104,10 @@ _UNLOADED: Final = (
 _DISAGREES: Final = (
     "the compiled script disagrees with the project's subject contracts, so "
     "nothing was explored: correct them, or pass --force to explore the spec again"
+)
+_REFUSED: Final = (
+    "replay refuses the compiled script, so nothing was explored: correct it, or "
+    "pass --force to explore the spec again"
 )
 _NO_DRIVER: Final = "the browser driver couldn't start, so nothing was explored"
 _NO_LISTENER: Final = "the egress listener couldn't start, so nothing was explored"
@@ -496,10 +501,12 @@ def _explore(
 def _kept(root: Path, spec: Spec, config: ProjectConfig) -> CompiledScript | None:
     """The spec's compiled script when it is up to date (D21): it loads, and
     was compiled from the spec and the subject contracts as they are, with
-    every target agreeing with them, as replay requires. None when there is
-    none, or it is stale. Publication compares again under the spec's lock.
-    A link on its way is a spec error, as for exploring; one that can't be
-    read stops the run (15); one that loads but disagrees is a spec error."""
+    every target agreeing with them and every step and check one replay
+    admits (`accepted`), as replay requires. None when there is none, or it
+    is stale. Publication compares again under the spec's lock. A link on
+    its way is a spec error, as for exploring; one that can't be read stops
+    the run (15); one that loads but disagrees, or that replay refuses, is a
+    spec error."""
     try:
         at = publication(root, spec)
     except OSError:
@@ -519,6 +526,10 @@ def _kept(root: Path, spec: Spec, config: ProjectConfig) -> CompiledScript | Non
         return None
     if problems := contract_problems(script, config):
         _stop("spec_error", str(spec.path), _DISAGREES, problems)
+    try:
+        accepted(script, spec)
+    except SpecError as error:
+        _stop("spec_error", str(spec.path), _REFUSED, error.problems)
     return script
 
 

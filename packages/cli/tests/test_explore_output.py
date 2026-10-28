@@ -983,6 +983,63 @@ def test_a_script_disagreeing_with_unchanged_contracts_exits_5_unless_forced(
     assert len(client.requests) == 1
 
 
+@pytest.mark.parametrize(
+    ("refusable", "problem"),
+    [
+        (
+            {
+                "steps": [
+                    {"seq": 2, "action": "press", "key": "Tab+a", "side_effect": False}
+                ]
+            },
+            (
+                "steps[1] (seq 2): press takes one key, with only modifiers held "
+                "before it: 'Tab+a'"
+            ),
+        ),
+        (
+            {
+                "assertions": [
+                    {
+                        "id": "a1",
+                        "expect_index": 0,
+                        "check": "probe_equals",
+                        "probe": "count",
+                        "json_path": "$.count",
+                        "value": 2,
+                    }
+                ]
+            },
+            "assertions[0] (a1): probe count is not declared by the spec",
+        ),
+    ],
+    ids=["multi-key press", "undeclared probe"],
+)
+def test_a_script_replay_refuses_exits_5_unless_forced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    refusable: dict[str, Any],
+    problem: str,
+) -> None:
+    spec = shop(tmp_path / "qa")
+    kept(spec, **refusable)
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    client = Scripted(REFUSED)
+
+    refused = unlaunched(monkeypatch, [str(spec)], client)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
+    forced = unlaunched(monkeypatch, [str(spec), "--url", START, "--force"], client)
+
+    assert refused.exit_code == 5, refused.output
+    assert refused.stderr == (
+        f"spec_error {spec}: replay refuses the compiled script, so nothing was "
+        "explored: correct it, or pass --force to explore the spec again\n"
+        f"  {problem}\n"
+    )
+    assert forced.exit_code == 3, forced.output
+    assert len(client.requests) == 1
+
+
 def test_a_repaired_script_is_kept_up_to_date(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
