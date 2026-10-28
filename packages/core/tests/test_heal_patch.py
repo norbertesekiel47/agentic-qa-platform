@@ -230,13 +230,14 @@ def test_a_pattern_out_of_time_refuses_the_locator(
 ) -> None:
     # Shorter than the 2 s rule, which the runner's test_text_search measures.
     monkeypatch.setattr(text, "SEARCH_SECONDS", 0.5)
+
+    def rebind(data: dict[str, Any]) -> None:
+        data["targets"]["cart_items"]["locators"] = [{"testid": "a" * 40 + "b"}]
+
     # Exponential for re: each extra "a" doubles the work before the "b" fails it.
     catastrophic = "(a+)+$"
     assert heal(
-        lambda d: d["targets"]["cart_items"].update(
-            locators=[{"testid": "a" * 40 + "b"}]
-        ),
-        base=lambda d: d["assertions"][3].update(pattern=catastrophic),
+        rebind, base=lambda d: d["assertions"][3].update(pattern=catastrophic)
     ) == [
         (
             "/targets/cart_items/locators/0/testid: a heal finds no assertion's "
@@ -244,6 +245,9 @@ def test_a_pattern_out_of_time_refuses_the_locator(
             "ran out of time"
         )
     ]
+    # Under a4's own pattern the same search ends within the same bound, so
+    # the pattern is what ran out of time, not the process starting.
+    assert heal(rebind) == []
 
 
 def test_a_pattern_search_that_fails_refuses_the_locator(
