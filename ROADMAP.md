@@ -1,6 +1,6 @@
 # Roadmap — Agentic QA Platform
 
-Last updated: 2026-10-27 (M1's exit met, #58; the heal-patch validator adds no navigation, #19); 2026-10-08 (M1 saves no screenshots, ADR-0033); 2026-10-01 (hosted compute: one Lambda MicroVM per run, ADR-0032). **Core first, then SaaS** (ADR-0016): prove the agent on the benchmark before building the platform around it. Each milestone is one vertical slice, one PR series, with an explicit exit criterion. No dates — quality over speed; milestones are sequential.
+Last updated: 2026-10-27 (M1's exit met, #58; the heal-patch validator adds no navigation, #19; the action tools refuse a meaning that holds a multi-word label, #258); 2026-10-08 (M1 saves no screenshots, ADR-0033); 2026-10-01 (hosted compute: one Lambda MicroVM per run, ADR-0032). **Core first, then SaaS** (ADR-0016): prove the agent on the benchmark before building the platform around it. Each milestone is one vertical slice, one PR series, with an explicit exit criterion. No dates — quality over speed; milestones are sequential.
 
 **Release checkpoints** (added after review): full v1 scope is unchanged, but two public, independently defensible releases ship along the way so the strongest hiring signal doesn't wait for the whole SaaS:
 - **Release 0.1 — "CLI + benchmark"** after M3: open-source CLI, frozen benchmark, local run viewer, measured test-split numbers.
@@ -59,7 +59,7 @@ Design: ADR-0024 (explore runs), ADR-0025 (compiled scripts), ADR-0026 (the brow
   - `env -u ANTHROPIC_API_KEY uv run python bench/harness/pilot.py conduit --out <dir> --repeat 3 --patches bench/harness/patches`, from `a93aacb9`: each script passed 3 identical replays on the clean app, and every scored bug pair matched the manifest. The one unscored pair is publish-article under `conduit-bug-005`. It ends `unscored_binding_blocked` because the plant covers the "New Article" link it clicks, as the LAB_NOTES watch list describes.
   - `conduit-benign-001` is `accepted`. Its original attempt passed through the submit button's css fallback (such a match now drifts under ADR-0025's #25 amendment), and the hand-written patch in `bench/harness/patches/` passed too.
   - `conduit-benign-002` is the exception. It moves the favorites count out of its contracted part, and a patch may change locators, never a contract. So its count stays unbound ("no match") and the run exits 1 on that pair. A heal ends it `inconclusive`, counted as a miss (ADR-0025's #229 amendment).
-  - post-comment's submit meaning still names its button's label. Enforcing label-free meanings is #234 (M2).
+  - post-comment's submit meaning still names its button's label. Enforcing label-free meanings is #234 (M2). Resolved 2026-10-27: `click`, `fill` and `select` refuse a meaning that holds a multi-word label, and post-comment, explored again, names its submit button by what it does (#258).
   - The sandbox gate is ADR-0032. The egress files' run at the final commit, and the round's cost, are in #58's pull request.
 
 ## M2 — Replay, heal & verdicts
