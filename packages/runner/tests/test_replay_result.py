@@ -322,26 +322,31 @@ def unevaluated(seq: int) -> tuple[AssertionResult, ...]:
 
 
 @pytest.mark.parametrize(
-    ("steps", "assertions", "expected"),
+    ("steps", "assertions", "events", "expected"),
     [
         # A step drifted, in a script with no check.
         (
             (StepResult(2, "drifted", misses=("no match",)),),
             (),
+            (),
             [("pass", "step"), ("pass", "step"), ("inconclusive", "step")],
         ),
-        # An interruption after the last step, so no check was evaluated.
-        ((), unevaluated(1), [("pass", "step"), ("pass", "step")]),
+        # An infrastructure event after the last step, so no check was
+        # evaluated.
+        ((), unevaluated(1), (EVENT,), [("pass", "step"), ("pass", "step")]),
+        # The same in a run with no check, which only the event shows stopped.
+        ((), (), (EVENT,), [("pass", "step"), ("pass", "step")]),
     ],
-    ids=["stopped-step", "interrupted"],
+    ids=["stopped-step", "interrupted", "interrupted-no-check"],
 )
 def test_what_never_ran_or_was_turned_off_gets_no_verdict(
     tmp_path: Path,
     steps: tuple[StepResult, ...],
     assertions: tuple[AssertionResult, ...],
+    events: tuple[InfrastructureEvent, ...],
     expected: list[tuple[str, str]],
 ) -> None:
-    end = ending(made(tmp_path), steps=steps)
+    end = ending(made(tmp_path), steps=steps, infrastructure_events=events)
     assert end.result is not None
     # What a stopped run held is no more established than an unevaluated
     # check; what it violated is.
