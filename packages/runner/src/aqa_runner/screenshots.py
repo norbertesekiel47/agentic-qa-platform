@@ -167,9 +167,10 @@ async def take_screenshot(session: BrowserSession) -> Screenshot:
 
 
 async def _live(session: BrowserSession) -> bytes:
+    # The bound covers the page's checks too, which a busy page holds back.
     async with (
-        session.observing_page() as page,
         asyncio.timeout(CAPTURE_SECONDS),
+        session.observing_page() as page,
         _devtools(page) as devtools,
     ):
         # https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-captureScreenshot
@@ -179,8 +180,8 @@ async def _live(session: BrowserSession) -> bytes:
 
 async def _rendered(session: BrowserSession) -> bytes:
     async with (
-        session.observing_page() as page,
         asyncio.timeout(CAPTURE_SECONDS),
+        session.observing_page() as page,
         _devtools(page) as devtools,
     ):
         # https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-getLayoutMetrics
