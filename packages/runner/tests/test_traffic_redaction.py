@@ -274,24 +274,35 @@ class ScanFailedError(Exception):
 
 
 class FailingScan(Redactor):
-    """A scan that fails on any text naming `marker`, `fail-scan` unless a
-    test changes it, and notes it."""
+    """A scan that raises `error` on any text naming `marker`, `fail-scan`
+    unless a test changes it, and notes it."""
 
-    def __init__(self) -> None:
+    def __init__(self, error: type[BaseException] = ScanFailedError) -> None:
         super().__init__([])
+        self.error = error
         self.marker = "fail-scan"
         self.failed = False
 
     def redact(self, text: str, *, limit: int | None = None) -> Redacted:
         if self.marker in text:
             self.failed = True
-            raise ScanFailedError("fake callback scan failure")
+            raise self.error("fake callback scan failure")
         return super().redact(text, limit=limit)
 
 
-@pytest.mark.parametrize("marker", ["fail-scan", "POST"], ids=["url", "method"])
-def test_a_failed_scan_records_nothing_of_its_request(app: App, marker: str) -> None:
-    scan = FailingScan()
+@pytest.mark.parametrize(
+    ("marker", "error"),
+    [
+        ("fail-scan", ScanFailedError),
+        ("POST", ScanFailedError),
+        ("fail-scan", asyncio.CancelledError),
+    ],
+    ids=["url", "method", "interrupted"],
+)
+def test_a_failed_scan_records_nothing_of_its_request(
+    app: App, marker: str, error: type[BaseException]
+) -> None:
+    scan = FailingScan(error)
 
     async def scenario() -> Window:
         async with browsing(app, scan) as session:
