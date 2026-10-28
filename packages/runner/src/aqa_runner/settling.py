@@ -146,8 +146,9 @@ class Traffic:
     is the session's. When it is the routing's continuation of a request,
     which a routed request's own handler error meets first, Playwright drops
     the error and that request stalls. A redirect hop isn't routed: it
-    reaches the server unrecorded (LAB_NOTES, 2026-10-05). Either way, once a
-    request's scan has failed, no network check is decided (`network_held`).
+    reaches the server unrecorded (LAB_NOTES, 2026-10-05). Either way, once
+    recording a request has failed, its scan or anything after it, no
+    network check is decided (`network_held`).
 
     The windows hold the page-chosen methods and URLs scanned with
     `redactor`, once per request, when it starts. Network checks read each
@@ -178,8 +179,9 @@ class Traffic:
         self._sent: weakref.WeakKeyDictionary[
             Request, tuple[PageRequest, PageRequest]
         ] = weakref.WeakKeyDictionary()
-        # Set once a request's scan fails, which leaves that request recorded
-        # nowhere; sticky, as no later record makes the traffic complete.
+        # Set once recording a request fails, which leaves it recorded in
+        # part or nowhere; sticky, as no later record makes the traffic
+        # complete.
         self._unrecorded = False
         # Set once the egress proxy's phase tells this session of each write
         # (`BrowserSession.watch`); sticky, as a tunnel stays open.
@@ -214,14 +216,14 @@ class Traffic:
 
     async def network_held(self, check: NetworkNone | NetworkSeen) -> bool:
         """Whether every window's complete responses establish `check`
-        (`aqa_runner.network.held`). Once a request's scan has failed, none
-        can, and this raises `network.UnrecordedRequestError`."""
+        (`aqa_runner.network.held`). Once recording a request has failed,
+        none can, and this raises `network.UnrecordedRequestError`."""
         if self._unrecorded:
             raise network.UnrecordedRequestError
         held = await network.held(
             check, [self._complete_responses[window] for window in self.windows]
         )
-        # A scan can fail while the search runs in its child.
+        # Recording a request can fail while the search runs in its child.
         if self._unrecorded:
             raise network.UnrecordedRequestError
         return held
@@ -261,33 +263,34 @@ class Traffic:
         )
 
     def _started(self, request: Request) -> None:
-        # A redirect finishes its hop and starts the next one as a new
-        # request, `redirected_from` the hop:
-        # https://playwright.dev/python/docs/api/class-request#request-redirected-from
-        hop = request.redirected_from
-        window = self._window if hop is None else self._request_windows[hop]
-        complete = PageRequest(request.method, request.url)
         try:
+            # A redirect finishes its hop and starts the next one as a new
+            # request, `redirected_from` the hop:
+            # https://playwright.dev/python/docs/api/class-request#request-redirected-from
+            hop = request.redirected_from
+            window = self._window if hop is None else self._request_windows[hop]
+            complete = PageRequest(request.method, request.url)
             sent = PageRequest(
                 str(self._redactor.redact(complete.method)),
                 recorded_url(self._redactor, complete.url),
             )
+            self._request_windows[request] = window
+            self._sent[request] = complete, sent
+            window.requests.add(sent)
+            if window.requests.total == len(window.requests.kept):
+                self._kept_requests[window].append(request)
+            # https://playwright.dev/python/docs/api/class-request#request-resource-type
+            if request.resource_type not in STREAMS:
+                self._open_requests.add(request)
+                window.open.add(id(request))
+            window.changed_at = time.monotonic()
         except BaseException:
-            # Whatever stopped the scan, an error or an interruption, leaves
-            # this request recorded nowhere, so no network check may be
-            # decided from the records any more.
+            # Whatever stopped the recording, its scan or anything after it,
+            # an error or an interruption, leaves this request recorded in
+            # part or nowhere, so no network check may be decided from the
+            # records any more.
             self._unrecorded = True
             raise
-        self._request_windows[request] = window
-        self._sent[request] = complete, sent
-        window.requests.add(sent)
-        if window.requests.total == len(window.requests.kept):
-            self._kept_requests[window].append(request)
-        # https://playwright.dev/python/docs/api/class-request#request-resource-type
-        if request.resource_type not in STREAMS:
-            self._open_requests.add(request)
-            window.open.add(id(request))
-        window.changed_at = time.monotonic()
 
     def _responded(self, response: Response) -> None:
         request = response.request

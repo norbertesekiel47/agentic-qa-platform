@@ -13,11 +13,12 @@ from urllib.parse import urlsplit
 import pytest
 from aqa_core.compiled import NetworkNone, NetworkSeen
 from aqa_core.config import ProjectConfig
-from aqa_runner import settling
+from aqa_runner import browser_session, settling
+from aqa_runner.document_origins import Records
 from aqa_runner.evaluation import AssertionResult, Evaluation, evaluate
 from aqa_runner.network import UnrecordedRequestError
-from aqa_runner.redaction import Redacted, Redactor
-from aqa_runner.settling import Window
+from aqa_runner.redaction import NO_SECRETS, Redacted, Redactor
+from aqa_runner.settling import PageRequest, Window
 from aqa_runner.text_search import any_url_matches
 
 from packages.runner.tests import executor_fixtures
@@ -348,6 +349,49 @@ def test_a_failed_scan_records_nothing_of_its_request(
     assert requests(window) == [("POST", "/did/plain")]
     assert responses(window) == [("POST", "/did/plain", 204)]
     assert window.open == set()
+
+
+class RecordFailedError(Exception):
+    pass
+
+
+def test_a_request_that_fails_to_record_leaves_network_checks_undecided(
+    app: App, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    failed: list[str] = []
+
+    # Recording fails after the request's scan, as its window adds it.
+    class FailingRecords(Records[PageRequest]):
+        def add(self, entry: PageRequest) -> None:
+            if entry.url.endswith("/did/fail-record"):
+                failed.append(entry.url)
+                raise RecordFailedError("fake record failure")
+            super().add(entry)
+
+    class FailingTraffic(settling.Traffic):
+        def next_window(self) -> Window:
+            window = super().next_window()
+            window.requests = FailingRecords()
+            return window
+
+    monkeypatch.setattr(browser_session, "Traffic", FailingTraffic)
+
+    async def scenario() -> None:
+        async with browsing(app, NO_SECRETS) as session:
+            await session.navigate(f"{app.origin}/page/start")
+            await session.press("a")
+            await session.page.evaluate(
+                """async () => {
+                    await fetch('/did/plain', {method: 'POST'});
+                    fetch('/did/fail-record', {method: 'POST'});
+                }"""
+            )
+            await until(lambda: bool(failed))
+            for kind in KINDS:
+                with pytest.raises(UnrecordedRequestError):
+                    await session.network_held(network(kind, "/did/plain$"))
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(
