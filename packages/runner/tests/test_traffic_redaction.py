@@ -12,15 +12,21 @@ from urllib.parse import urlsplit
 
 import pytest
 from aqa_core.compiled import NetworkNone, NetworkSeen
+from aqa_core.config import ProjectConfig
 from aqa_runner import settling
+from aqa_runner.evaluation import AssertionResult, Evaluation, evaluate
 from aqa_runner.network import UnrecordedRequestError
 from aqa_runner.redaction import Redacted, Redactor
 from aqa_runner.settling import Window
+from aqa_runner.text_search import any_url_matches
 
 from packages.runner.tests import executor_fixtures
+from packages.runner.tests.document_fixtures import until
+from packages.runner.tests.egress_fixtures import gate
 from packages.runner.tests.executor_fixtures import (
     FORM_TARGETS,
     App,
+    a_spec,
     compiled,
     run,
     serving_app,
@@ -314,6 +320,64 @@ def test_a_failed_scan_records_nothing_of_its_request(app: App) -> None:
     assert window.open == set()
     # The routing's continuation of that request met the error and dropped it.
     assert ("POST", "/did/fail-scan") not in app.seen
+
+
+@pytest.mark.parametrize(
+    ("kind", "pattern"),
+    [("network_seen", "/did/plain$"), ("network_none", "/did/fail-scan$")],
+)
+def test_a_scan_that_fails_while_a_network_check_matches_leaves_it_unevaluated(
+    app: App,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: NetworkKind,
+    pattern: str,
+) -> None:
+    scan = FailingScan()
+    evaluation = Evaluation(
+        targets={},
+        spec=a_spec(tmp_path, ProjectConfig(), start_url="/page/start"),
+        start=app.origin,
+        gate=gate(allowed=(app.origin,)),
+        budget=1,
+        redactor=scan,
+    )
+    matching, resumed = asyncio.Event(), asyncio.Event()
+
+    async def paused(url_pattern: str, urls: tuple[str, ...]) -> bool:
+        matching.set()
+        await resumed.wait()
+        return await any_url_matches(url_pattern, urls)
+
+    monkeypatch.setattr("aqa_runner.network.any_url_matches", paused)
+
+    async def scenario() -> AssertionResult:
+        async with browsing(app, scan) as session:
+            await session.navigate(f"{app.origin}/page/start")
+            window = await session.press("a")
+            await session.page.evaluate(
+                "async () => { await fetch('/did/plain', {method: 'POST'}); }"
+            )
+            assert await session.settle(window) == "idle"
+            check = asyncio.create_task(
+                evaluate(session, network(kind, pattern), evaluation)
+            )
+            await matching.wait()
+            await session.page.evaluate(
+                "() => { fetch('/did/fail-scan', {method: 'POST'}); }"
+            )
+            await until(lambda: scan.failed)
+            resumed.set()
+            return await check
+
+    assert asyncio.run(scenario()) == AssertionResult(
+        "a1",
+        "not_evaluated",
+        error=(
+            "a request's scan failed, so it went unrecorded and no network check "
+            "can be evaluated"
+        ),
+    )
 
 
 HELD_VALUE = "fake-held-secret-50"
