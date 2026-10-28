@@ -1,5 +1,5 @@
-"""Screenshots a run may save (ADR-0034; SECURITY §5): `take_screenshot`
-makes a `Screenshot`, which nothing else can make, and
+"""Screenshots a run may save (ADR-0034, ADR-0035; SECURITY §5):
+`take_screenshot` makes a `Screenshot`, which nothing else can make, and
 `RunRecord.write_screenshot` saves one.
 
 Until `fill_secret` hands the page a test secret's value in the browser
@@ -20,8 +20,13 @@ a snapshot, which the page can't steer:
   scanned again before that page is captured.
 The render has no canvas, web fonts, adopted style sheets, shadow-root
 `<style>`, inner scroll, select's chosen option or element with a `hidden`
-attribute, and a value the page draws into an image is drawn there too:
-ADR-0034's residuals, the last #250's OCR check."""
+attribute, and a value the page draws into an image is drawn there too
+(ADR-0034's residuals).
+
+In a run that binds a test secret, every screenshot, live or rendered, is
+OCR-checked before a `Screenshot` holds it (`aqa_runner.ocr`, ADR-0035),
+so a value the app's server shows before the first fill, or the page draws
+into an image, withholds it when OCR reads it whole."""
 
 import asyncio
 import html
@@ -39,6 +44,7 @@ from urllib.parse import urldefrag, urlsplit
 from playwright.async_api import CDPSession, Error, Page, Route
 from pydantic import AfterValidator, Base64Bytes, TypeAdapter, ValidationError
 
+from aqa_runner import ocr
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.redaction import Redactor
 
@@ -52,6 +58,12 @@ CAPTURE_SECONDS = 5.0
 # and render, half of CAPTURE_SECONDS (ADR-0034). A larger one is withheld
 # rather than left scrubbing on in a thread the bound has cut off.
 ARCHIVE_CHARS = 130_000
+
+# How long a screenshot's OCR check may take (ADR-0035). RapidOCR has no
+# deadline of its own and a thread can't be stopped, so an image with more
+# text than it reads in this bound is withheld before recognition
+# (`aqa_runner.ocr.TEXT_CAP`), and the bound is the backstop.
+OCR_SECONDS = 5.0
 
 # A field's value that shares this many consecutive characters with a bound
 # value, or all of a shorter one, is dropped from a render. A test secret
@@ -330,7 +342,11 @@ async def take_screenshot(session: BrowserSession) -> Screenshot:
     in an encoding Python can't decode; a part spells a bound value after
     the scrub; an element is editable in a way the snapshot doesn't hold;
     or the render's fields, frames and editable elements don't match the
-    snapshot's, or it spells a bound value."""
+    snapshot's, or it spells a bound value. In a run that binds a secret, it
+    is withheld too when the image's text, as OCR reads it, spells a bound
+    value, is over `aqa_runner.ocr.TEXT_CAP`, or takes over `OCR_SECONDS` to
+    read; an error of the OCR engine's, a missing model file's included,
+    propagates, so no `Screenshot` exists."""
     try:
         png = await _captured(session)
     except TimeoutError:
@@ -344,9 +360,30 @@ async def take_screenshot(session: BrowserSession) -> Screenshot:
         # Its message quotes the reply, which holds the page's text.
         reason = "DevTools replied in a shape the capture doesn't read"
     else:
+        if not session.redactor.empty:
+            await _checked(png, session.redactor)
         return Screenshot(png, session.redactor, _key=_CAPTURED)
     # Raised outside the handlers, so the error behind it isn't even its
     # context.
+    raise ScreenshotWithheldError(reason)
+
+
+async def _checked(png: bytes, redactor: Redactor) -> None:
+    """Withholds `png` when OCR reads a bound value in its text, or doesn't
+    finish reading it in `OCR_SECONDS`."""
+    try:
+        # In a thread, as the scrub is, so OCR holds up neither the event
+        # loop nor the egress proxy on it.
+        async with asyncio.timeout(OCR_SECONDS):
+            spelled = await asyncio.to_thread(ocr.spells_a_value, png, redactor)
+    except TimeoutError:
+        reason = f"the image's OCR took over {OCR_SECONDS} s"
+    except ocr.TooMuchTextError:
+        reason = "the image has more text than OCR reads in its bound"
+    else:
+        if not spelled:
+            return
+        reason = "the image's text spells a bound value"
     raise ScreenshotWithheldError(reason)
 
 

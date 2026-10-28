@@ -14,9 +14,9 @@ screenshot is scanned as it is written, and refused while a bound value's
 supported spelling is left; a journal line, and a document written with a
 check, is checked by its caller as the exact text written. A screenshot is
 written as its capture made it: only `aqa_runner.screenshots` makes one,
-from a render it scrubbed (ADR-0034). A record trusts the
-directories above its own and writes through no link below it (ADR-0026's
-#50 B amendment)."""
+from a render it scrubbed (ADR-0034), and OCR-checks it in a run that
+binds a secret (ADR-0035). A record trusts the directories above its own
+and writes through no link below it (ADR-0026's #50 B amendment)."""
 
 import json
 import os
@@ -248,7 +248,8 @@ class RunRecord:
     def write_screenshot(self, name: str, shot: Screenshot) -> Path:
         """Write `shot`'s PNG to the record as the file `name`, once, as
         `write` writes a document, unscanned: its capture scrubbed what it
-        shows (`aqa_runner.screenshots`), and only the capture makes one.
+        shows and OCR-checked it (`aqa_runner.screenshots`), and only the
+        capture makes one.
         A record whose scan isn't its session's refuses it with a
         ValueError before anything is written."""
         if shot.redactor is not self.redactor:
