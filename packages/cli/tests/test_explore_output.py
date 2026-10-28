@@ -44,7 +44,7 @@ from packages.cli.tests.test_explore_runs import (
     unstarted,
 )
 from packages.runner.tests.explore_graph_fixtures import REFUSED, Scripted, planned
-from packages.runner.tests.secret_fixtures import copies_found
+from packages.runner.tests.secret_fixtures import copies_found, hermetic_environment
 
 START = "http://127.0.0.1:4100"
 SENTINEL = "fake-os-detail-sentinel-4u49"
@@ -397,6 +397,10 @@ def test_a_marker_admission_refusal_prints_only_the_fixed_fallback(
 def test_the_run_line_falls_back_on_its_own_stream(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # `driver` is in GitHub's runners' CHROMEWEBDRIVER, where a run would
+    # refuse it (#215).
+    hermetic_environment(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
     # TEST_DRIVER's markers spell its value, which the printed path holds.
     monkeypatch.setenv("AQA_SECRET_TEST_DRIVER", "driver")
     spec = signed_in(tmp_path / "driver" / "qa", name="TEST_DRIVER")
@@ -487,6 +491,10 @@ def test_the_join_is_checked_on_what_each_stream_would_write(
 def test_a_fallback_is_written_escaped_as_it_was_checked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spec_id: str, stderr: str
 ) -> None:
+    # `driver` is in GitHub's runners' CHROMEWEBDRIVER, where a run would
+    # refuse it (#215).
+    hermetic_environment(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
     monkeypatch.setenv("AQA_SECRET_TEST_DRIVER", "driver")
     spec = signed_in(tmp_path / "qa", spec_id, name="TEST_DRIVER")
     scan = scan_of(spec, spec_id)

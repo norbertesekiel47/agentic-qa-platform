@@ -40,6 +40,7 @@ from packages.cli.tests.test_explore_output import (
 )
 from packages.cli.tests.test_explore_runs import KEY, explore, record_in, shop
 from packages.runner.tests.explore_graph_fixtures import Scripted, planned
+from packages.runner.tests.secret_fixtures import hermetic_environment
 
 NO_DRIVER = (
     "unreachable shop: the browser driver couldn't start, so nothing was explored\n"
@@ -218,10 +219,12 @@ def test_a_driver_that_fails_to_stop_leaves_the_run_result(
 def test_a_driver_start_refusal_with_a_marker_unsafe_binding_prints_only_the_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+    # `driver` is in this file's name, in the test's id, and in GitHub's
+    # runners' CHROMEWEBDRIVER, where a run would refuse it (#215).
+    hermetic_environment(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
     # TEST_DRIVER's markers spell its value, `driver`, as the diagnostic does.
     monkeypatch.setenv("AQA_SECRET_TEST_DRIVER", "driver")
-    # So does this file's name, in the test's id, which a run would refuse.
-    monkeypatch.delenv("PYTEST_CURRENT_TEST")
     monkeypatch.setenv("PLAYWRIGHT_NODEJS_PATH", f"/nonexistent/{SENTINEL}/node")
     spec = signed_in(tmp_path / "qa", name="TEST_DRIVER")
 
