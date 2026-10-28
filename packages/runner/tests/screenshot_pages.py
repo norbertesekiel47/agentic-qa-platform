@@ -259,6 +259,7 @@ CASES = {
     # The owner's tricks (plan-v1-value-removal.md), the first two M1's
     # measured attacks on Playwright's mask (ADR-0033).
     "plain": Case(STYLE + FIELD),
+    "textarea": Case(STYLE + "<textarea id=f aria-label=Secret></textarea>"),
     # After the field: the observer removes every node added after it.
     "m1-overlay-attacks": Case(STYLE + FIELD + M1_ATTACKS),
     "closed-shadow-root": Case(STYLE + FIELD + CLOSED_SHADOW, arm="arm()"),
