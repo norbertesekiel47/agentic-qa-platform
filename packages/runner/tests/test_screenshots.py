@@ -47,6 +47,7 @@ from packages.runner.tests.screenshot_pages import (
     RED,
     RED_VALUE,
     SCALED,
+    SPECIALS_VALUE,
     STYLE,
     TRIGGER,
     UNBOUND,
@@ -580,15 +581,19 @@ def test_a_part_in_an_encoding_the_scrub_cant_read_withholds_it(
     )
 
 
+@pytest.mark.parametrize(
+    "value", [RED_VALUE, SPECIALS_VALUE], ids=["raw", "entity-encoded"]
+)
 def test_a_spelling_the_scrubs_cut_leaves_withholds_it(
-    sites: Sites, tmp_path: Path
+    sites: Sites, tmp_path: Path, value: str
 ) -> None:
-    # Each of the scrub's two passes cuts the value out of the middle and
-    # joins what is left around it into the value again, so the value nested
-    # twice outlasts both.
-    middle = len(RED_VALUE) // 2
-    head, tail = RED_VALUE[:middle], RED_VALUE[middle:]
-    joined = head + head + RED_VALUE + tail + tail
+    # Each of the scrub's passes that finds the value cuts it out of the
+    # middle and joins what is left around it into the value again, so the
+    # value nested twice outlasts them. The archive writes the second's `&`
+    # and `<` as references, which only the decoded pass reads.
+    middle = len(value) // 2
+    head, tail = value[:middle], value[middle:]
+    joined = head + head + value + tail + tail
     script = f"document.body.append({json.dumps(joined)})"
 
     assert withholding(sites, tmp_path, script) == (
