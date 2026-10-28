@@ -15,6 +15,7 @@ import pytest
 from aqa_core.compiler import Provenance
 from aqa_core.coverage_plan import CoveragePlan
 from aqa_runner.browser_session import BrowserSession
+from aqa_runner.evaluation import MARGIN_SECONDS
 from aqa_runner.navigator import (
     AssertCheck,
     Click,
@@ -45,8 +46,9 @@ from packages.runner.tests.secret_fixtures import FAKE_VALUE
 # that returns an object or a handle never answers.
 STALL = "() => { Object.prototype.then = function () {}; }"
 UNSTALL = "() => { delete Object.prototype.then; }"
-# The bound at a `resolve_seconds` of 1: that and `MARGIN_SECONDS`.
-UNANSWERED = "the page didn't answer within 2 s"
+BUDGET = 1
+# The bound at a `resolve_seconds` of `BUDGET`: that and `MARGIN_SECONDS`.
+UNANSWERED = f"the page didn't answer within {BUDGET + MARGIN_SECONDS} s"
 
 
 def plan(check: dict[str, str]) -> CoveragePlan:
@@ -149,7 +151,7 @@ def test_an_action_the_page_stalls_before_its_intent_is_a_tool_error(
         tmp_path,
         scenario,
         page=case.page,
-        budget=1,
+        budget=BUDGET,
         secrets=[bound(app.origin, FAKE_VALUE)],
     ) == [
         None,
@@ -168,7 +170,7 @@ def test_describe_parts_the_page_stalls_is_a_tool_error(
         described = await capped(attempt.describe(call))
         return [described.text, described.parts]
 
-    assert on_app(app, tmp_path, scenario, budget=1) == [
+    assert on_app(app, tmp_path, scenario, budget=BUDGET) == [
         f"describe_parts did not run: {UNANSWERED}",
         "",
     ]
@@ -181,7 +183,7 @@ def test_assert_check_the_page_stalls_binds_nothing(app: App, tmp_path: Path) ->
         said = await capped(attempt.check(call))
         return [said, attempt.checks]
 
-    assert on_app(app, tmp_path, scenario, budget=1, plan=READS_SAVE) == [
+    assert on_app(app, tmp_path, scenario, budget=BUDGET, plan=READS_SAVE) == [
         f"assert_check did not run: {UNANSWERED}",
         {"a1": None},
     ]
@@ -196,7 +198,7 @@ def test_note_for_absence_the_page_stalls_notes_nothing(
         said = await capped(attempt.note(call))
         return [said, attempt.noted]
 
-    assert on_app(app, tmp_path, scenario, budget=1, plan=SAVE_GONE) == [
+    assert on_app(app, tmp_path, scenario, budget=BUDGET, plan=SAVE_GONE) == [
         f"note_for_absence did not run: {UNANSWERED}",
         frozenset(),
     ]
@@ -216,7 +218,7 @@ def test_finish_on_a_page_that_never_answers_compiles_nothing(
         finished = await capped(attempt.finish(Finish(steps=()), BY))
         return [bound_now, finished.script, finished.text]
 
-    assert on_app(app, tmp_path, scenario, budget=1, plan=READS_SAVE) == [
+    assert on_app(app, tmp_path, scenario, budget=BUDGET, plan=READS_SAVE) == [
         "a1 is bound, and on this page it is pass",
         None,
         f"finish compiled nothing: on this page a1 is not_evaluated: {UNANSWERED}",
