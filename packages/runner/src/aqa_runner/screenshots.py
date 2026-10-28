@@ -32,10 +32,11 @@ from dataclasses import InitVar, dataclass, field
 from email import message_from_bytes
 from email.message import Message
 from functools import partial
-from typing import Any, TypedDict, cast
+from typing import Annotated, NotRequired, TypedDict, cast
 from urllib.parse import urldefrag, urlsplit
 
 from playwright.async_api import CDPSession, Error, Page, Route
+from pydantic import AfterValidator, TypeAdapter, ValidationError
 
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.redaction import Redactor
@@ -164,6 +165,92 @@ class _Document(TypedDict):
     frames: list[_Document | None]
 
 
+# The parts of DevTools' replies a capture reads, checked as they arrive: a
+# reply in any other shape withholds the screenshot.
+# https://chromedevtools.github.io/devtools-protocol/tot/DOMSnapshot/#type-DocumentSnapshot
+class _Data(TypedDict):
+    data: str
+
+
+class _Viewport(TypedDict):
+    pageX: float
+    pageY: float
+
+
+class _Metrics(TypedDict):
+    cssVisualViewport: _Viewport
+
+
+class _Rare(TypedDict):
+    """Values of the nodes at `index`, one each."""
+
+    index: list[int]
+    value: list[int]
+
+
+class _Nodes(TypedDict):
+    """Each node's name, parent and attributes (name and value by turns)."""
+
+    nodeName: list[int]
+    parentIndex: list[int]
+    attributes: list[list[int]]
+    inputValue: NotRequired[_Rare]
+    textValue: NotRequired[_Rare]
+    contentDocumentIndex: NotRequired[_Rare]
+
+
+class _Layout(TypedDict):
+    nodeIndex: list[int]
+    styles: list[list[int]]
+
+
+class _DocumentSnapshot(TypedDict):
+    nodes: _Nodes
+    layout: _Layout
+
+
+class _Snapshot(TypedDict):
+    strings: list[str]
+    documents: list[_DocumentSnapshot]
+
+
+class _Shown(TypedDict):
+    """What RESTORE reports of a render."""
+
+    values: list[str]
+    text: str
+
+
+def _aligned(snapshot: _Snapshot) -> _Snapshot:
+    """`snapshot`, when its arrays of a node each are in step."""
+    for document in snapshot["documents"]:
+        nodes, layout = document["nodes"], document["layout"]
+        rare = (
+            nodes.get("inputValue"),
+            nodes.get("textValue"),
+            nodes.get("contentDocumentIndex"),
+        )
+        lengths = [
+            (len(nodes["parentIndex"]), len(nodes["nodeName"])),
+            (len(nodes["attributes"]), len(nodes["nodeName"])),
+            (len(layout["styles"]), len(layout["nodeIndex"])),
+            *((len(data["value"]), len(data["index"])) for data in rare if data),
+        ]
+        if any(one != other for one, other in lengths) or any(
+            len(attributes) % 2 for attributes in nodes["attributes"]
+        ):
+            raise ValueError("a DOM snapshot's arrays are out of step")
+    return snapshot
+
+
+_DATA = TypeAdapter(_Data)
+_METRICS = TypeAdapter(_Metrics)
+_SNAPSHOT: TypeAdapter[_Snapshot] = TypeAdapter(
+    Annotated[_Snapshot, AfterValidator(_aligned)]
+)
+_SHOWN: TypeAdapter[_Shown | None] = TypeAdapter(_Shown | None)
+
+
 class ScreenshotWithheldError(Exception):
     """A screenshot that wasn't taken, and why, in words of ours that
     never quote the page."""
@@ -189,8 +276,17 @@ async def take_screenshot(session: BrowserSession) -> Screenshot:
     until the session's first `fill_secret`, a render of its scrubbed
     snapshot from then on. On a page off the run's allowed origins it
     raises `PolicyEventError`, and after a frame change during the
-    snapshot `DocumentChangedError`, as every observation does. Any other
-    failure withholds it (`ScreenshotWithheldError`), so nothing is saved."""
+    snapshot `DocumentChangedError`, as every observation does.
+
+    It is withheld (`ScreenshotWithheldError`, with a reason that never
+    quotes the page, so nothing is saved) when the snapshot, its scrub or
+    its render takes over `CAPTURE_SECONDS`; a DevTools call or the render
+    fails; DevTools replies in a shape this module doesn't read; the archive
+    is over `ARCHIVE_CHARS`, isn't 7-bit MIME, names no page, or has a part
+    in an encoding Python can't decode; a part spells a bound value after
+    the scrub; an element is editable in a way the snapshot doesn't hold;
+    or the render's fields, frames and editable elements don't match the
+    snapshot's, or it spells a bound value."""
     try:
         png = await _captured(session)
     except TimeoutError:
@@ -202,6 +298,11 @@ async def take_screenshot(session: BrowserSession) -> Screenshot:
         # load or capture, failed. Its message isn't kept: it can hold the
         # page's URL, which can spell a value.
         raise ScreenshotWithheldError("a DevTools call or the render failed") from None
+    except ValidationError:
+        # Its message quotes the reply, which holds the page's text.
+        raise ScreenshotWithheldError(
+            "DevTools replied in a shape the capture doesn't read"
+        ) from None
     return Screenshot(png, session.redactor, _key=_CAPTURED)
 
 
@@ -218,7 +319,7 @@ async def _captured(session: BrowserSession) -> bytes:
         if not session.secret_filled:
             # https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-captureScreenshot
             shot = await devtools.send("Page.captureScreenshot", {"format": "png"})
-            return base64.b64decode(shot["data"])
+            return base64.b64decode(_DATA.validate_python(shot)["data"])
         # https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-getLayoutMetrics
         metrics = await devtools.send("Page.getLayoutMetrics")
         # https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-captureSnapshot
@@ -227,15 +328,16 @@ async def _captured(session: BrowserSession) -> bytes:
         dom = await devtools.send(
             "DOMSnapshot.captureSnapshot", {"computedStyles": [USER_MODIFY]}
         )
-    if len(archive["data"]) > ARCHIVE_CHARS:
+    mhtml = _DATA.validate_python(archive)["data"]
+    if len(mhtml) > ARCHIVE_CHARS:
         raise ScreenshotWithheldError(f"the archive is over {ARCHIVE_CHARS} characters")
-    viewport = metrics["cssVisualViewport"]
+    viewport = _METRICS.validate_python(metrics)["cssVisualViewport"]
     async with asyncio.timeout(CAPTURE_SECONDS):
         # In a thread, so a long scrub holds up neither the event loop nor
         # the egress proxy that runs on it. A Redactor's scans change
         # nothing it holds, so one runs in any thread.
         parts, main, plan = await asyncio.to_thread(
-            _prepared, archive["data"], dom, session.redactor
+            _prepared, mhtml, dom, session.redactor
         )
         return await _render(
             session, parts, main, plan, (viewport["pageX"], viewport["pageY"])
@@ -243,9 +345,11 @@ async def _captured(session: BrowserSession) -> bytes:
 
 
 def _prepared(
-    archive: str, dom: dict[str, Any], redactor: Redactor
+    archive: str, reply: object, redactor: Redactor
 ) -> tuple[_Parts, str, _Document]:
-    """The render's archive parts, its page's URL and its plan."""
+    """The render's archive parts, its page's URL and its plan, from the
+    archive and DevTools' DOM snapshot `reply`."""
+    dom = _SNAPSHOT.validate_python(reply)
     if _editing_unmarked(dom):
         raise ScreenshotWithheldError(
             "an element is editable in a way the snapshot doesn't hold "
@@ -375,17 +479,17 @@ def _cut(text: str, spans: list[tuple[int, int]]) -> str:
     return "".join(pieces)
 
 
-def _plan(dom: dict[str, Any], document: int, redactor: Redactor) -> _Document:
+def _plan(dom: _Snapshot, document: int, redactor: Redactor) -> _Document:
     """What a render must find of document `document`, taken before the
     scrub, in the order a DOM snapshot lists it, its flat tree's. Each
     field's value is dropped (made empty) when the scan finds a bound value
     in it or it shares `SHARED_RUN` characters with one; a frame whose
     document isn't in the snapshot is None."""
-    strings: list[str] = dom["strings"]
+    strings = dom["strings"]
     nodes = dom["documents"][document]["nodes"]
-    inputs, texts, documents = (
-        _rare(nodes, key) for key in ("inputValue", "textValue", "contentDocumentIndex")
-    )
+    inputs = _rare(nodes.get("inputValue"))
+    texts = _rare(nodes.get("textValue"))
+    documents = _rare(nodes.get("contentDocumentIndex"))
     plan: _Document = {"kinds": [], "values": [], "frames": []}
     for node, name in enumerate(nodes["nodeName"]):
         element = strings[name].lower()
@@ -412,17 +516,16 @@ def _plan(dom: dict[str, Any], document: int, redactor: Redactor) -> _Document:
     return plan
 
 
-def _rare(nodes: dict[str, Any], key: str) -> dict[int, int]:
-    data = nodes.get(key, {"index": [], "value": []})
-    return dict(zip(data["index"], data["value"], strict=True))
+def _rare(data: _Rare | None) -> dict[int, int]:
+    return {} if data is None else dict(zip(data["index"], data["value"], strict=True))
 
 
-def _editing_unmarked(dom: dict[str, Any]) -> bool:
+def _editing_unmarked(dom: _Snapshot) -> bool:
     """Whether a node the page draws is editable with no `contenteditable`
     attribute on it or an element around it: a designMode document, or
     editing a style the archive leaves out turned on. A render couldn't
     tell to empty it."""
-    strings: list[str] = dom["strings"]
+    strings = dom["strings"]
     for document in dom["documents"]:
         nodes = document["nodes"]
         layout = document["layout"]
@@ -433,7 +536,7 @@ def _editing_unmarked(dom: dict[str, Any]) -> bool:
     return False
 
 
-def _marked(nodes: dict[str, Any], strings: list[str], node: int) -> bool:
+def _marked(nodes: _Nodes, strings: list[str], node: int) -> bool:
     """Whether the nearest `contenteditable` attribute on `node` or around
     it turns editing on."""
     while node >= 0:
@@ -444,7 +547,7 @@ def _marked(nodes: dict[str, Any], strings: list[str], node: int) -> bool:
     return False
 
 
-def _attributes(nodes: dict[str, Any], strings: list[str], node: int) -> dict[str, str]:
+def _attributes(nodes: _Nodes, strings: list[str], node: int) -> dict[str, str]:
     """`node`'s attributes by name, as the render's DOM names them."""
     attributes = nodes["attributes"][node]
     return {
@@ -482,7 +585,9 @@ async def _render(
         await context.route("**/*", partial(_answer, parts))
         page = await context.new_page()
         await page.goto(main, wait_until="load")
-        shown = await page.evaluate(RESTORE, {"plan": plan, "scroll": scroll})
+        shown = _SHOWN.validate_python(
+            await page.evaluate(RESTORE, {"plan": plan, "scroll": scroll})
+        )
         if shown is None:
             raise ScreenshotWithheldError(
                 "the snapshot's fields, frames and editable elements don't match "

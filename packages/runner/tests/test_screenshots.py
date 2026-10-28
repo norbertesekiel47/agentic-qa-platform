@@ -805,6 +805,55 @@ def test_a_value_the_scrub_changes_the_markup_or_parse_of_is_never_shown(
     assert asyncio.run(scenario()) == reason
 
 
+@pytest.mark.parametrize(
+    ("method", "reply"),
+    [
+        ("Page.getLayoutMetrics", {"layoutViewport": {}}),
+        ("DOMSnapshot.captureSnapshot", {"strings": [], "documents": [{}]}),
+        # A rare value's places and values out of step.
+        (
+            "DOMSnapshot.captureSnapshot",
+            {
+                "strings": ["INPUT"],
+                "documents": [
+                    {
+                        "nodes": {
+                            "nodeName": [0],
+                            "parentIndex": [-1],
+                            "attributes": [[]],
+                            "inputValue": {"index": [0], "value": []},
+                        },
+                        "layout": {"nodeIndex": [], "styles": []},
+                    }
+                ],
+            },
+        ),
+    ],
+    ids=["metrics", "dom-snapshot", "rare-data"],
+)
+def test_a_devtools_reply_in_a_shape_the_capture_doesnt_read_withholds_it(
+    sites: Sites,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    reply: dict[str, Any],
+) -> None:
+    send = CDPSession.send
+
+    async def replying(
+        devtools: CDPSession, called: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        return reply if called == method else await send(devtools, called, params)
+
+    monkeypatch.setattr(CDPSession, "send", replying)
+
+    assert withholding(sites, tmp_path, "0") == (
+        "DevTools replied in a shape the capture doesn't read",
+        [],
+        0,
+    )
+
+
 def test_a_render_asks_nothing_of_the_network(sites: Sites) -> None:
     # A source only a page without script picks: the render asks for it,
     # the live page never does until it loads it itself, at the end.
