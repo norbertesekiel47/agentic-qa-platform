@@ -259,3 +259,25 @@ def test_an_endless_reset_body_fails_at_its_bound_holding_none_of_it() -> None:
 
     assert str(failed) == "the reset hook didn't answer within 0.5 s"
     assert peak < 4 * 2**20
+
+
+def test_a_failed_reset_names_its_kind() -> None:
+    async def scenario() -> list[ResetFailedError | None]:
+        reply = b"HTTP/1.1 500 Status\r\nContent-Length: 0\r\n\r\n"
+        closed = f"http://127.0.0.1:{unused_port()}"
+        async with raw_upstream() as silent, raw_upstream(reply) as rejecting:
+            silent_start = f"http://127.0.0.1:{silent.port}"
+            rejecting_start = f"http://127.0.0.1:{rejecting.port}"
+            return [
+                await outcome(gate(allowed=(silent_start,)), silent_start, 0.5),
+                await outcome(gate(allowed=(closed,)), closed),
+                await outcome(gate(allowed=(rejecting_start,)), rejecting_start),
+            ]
+
+    failures = asyncio.run(scenario())
+
+    assert [(None if f is None else f.kind) for f in failures] == [
+        "timeout",
+        "unreachable",
+        "rejected",
+    ]
