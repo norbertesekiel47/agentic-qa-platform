@@ -11,6 +11,7 @@ A version followed by an HTML comment, `renovate: NAME`, is tracked: it is the e
 | Language | Python | 3.14 | Matches existing tooling; flagship in the language most AI-engineer postings require (ADR-0005) |
 | Package/env | uv, and its build backend `uv_build` | 0.11.x | Fast, lockfile-based; one workspace (ADR-0027) |
 | Browser automation | Playwright for Python | 1.63.0<!-- renovate: playwright --> | Accessibility snapshots, tracing, robust locators |
+| Screenshot OCR | RapidOCR, with the PP-OCR models bundled in its wheel, on onnxruntime | 3.10.0<!-- renovate: rapidocr -->, onnxruntime 1.31.0<!-- renovate: onnxruntime --> | Reads screen text exactly enough for the run's scan to find a bound value in a screenshot, on CPU, from `uv sync` alone, no system package or download; about 273 MB installed, OpenCV and onnxruntime most of it (ADR-0035) |
 | Egress proxy framing | h11 | 0.16.0<!-- renovate: h11 --> | HTTP/1.1 parsing for the in-runner egress proxy, so each request is read and checked whole and each response is framed correctly, and for runner-side requests; already locked through httpcore (ADR-0026 amendment, 2026-10-01) |
 | Agent orchestration | LangGraph | 1.2.12<!-- renovate: langgraph --> | Run graph and checkpointing (interrupts deferred past v1; ADR-0006) |
 | Checkpointer | Local runs (M1): LangGraph's in-memory saver. Uploaded and hosted runs (M4 onward): a custom `BaseCheckpointSaver` over our API | — | Runners have no DB access (ADR-0008) |
