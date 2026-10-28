@@ -191,7 +191,9 @@ CASES = {
         control=None,
         withholds=True,
     ),
-    "blind-type-flip": Case(STYLE + FIELD + BLIND_FLIP, arm="arm()"),
+    "blind-type-flip": Case(
+        STYLE + FIELD + BLIND_FLIP, arm="arm()", control=None, withholds=True
+    ),
     "blind-editable": Case(
         EDITABLE_STYLE + EDITABLE + BLIND_EDITABLE,
         into="editable",
