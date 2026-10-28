@@ -14,7 +14,7 @@ from aqa_core.project import SecretDestination, secret_destinations
 from aqa_core.spec import Spec, secret_references
 from pydantic import SecretStr
 
-from aqa_runner.redaction import GAP, VALUE_WHITESPACE
+from aqa_runner.redaction import GAP, VALUE_WHITESPACE, Redactor
 
 # Where a test secret's value comes from, locally and in CI. The prefix keeps
 # a spec from pulling an unrelated variable, such as a cloud key, into a field.
@@ -56,9 +56,11 @@ class MissingSecretError(Exception):
 
 
 class SecretLoggedError(Exception):
-    """The environment turns on Playwright's protocol logging, which would
-    print a test secret's value as the fill sends it: an infrastructure
-    error, as a missing value is (exit code 12, API.md §7)."""
+    """The environment would have Playwright print a test secret's value: it
+    turns on Playwright's protocol logging, which would print a value as the
+    fill sends it, or holds a bound value where Playwright's driver could
+    print it. An infrastructure error, as a missing value is (exit code 12,
+    API.md §7)."""
 
     exit_code = 12
 
@@ -84,7 +86,16 @@ def bound_secrets(spec: Spec, start: str) -> dict[str, BoundSecret]:
     Nor are secrets bound where Playwright would log the messages that carry
     a value (`SecretLoggedError`): `DEBUGP` makes its Python client print
     every protocol message, and a `DEBUG` that turns on `pw:protocol` makes
-    its driver, which inherits the runner's environment, log them."""
+    its driver, which inherits the runner's environment, log them.
+
+    Nor are they bound while a variable outside `AQA_SECRET_*` holds a bound
+    value in its name or its value, spelled any way `Redactor.spells` finds
+    (`SecretLoggedError`, #215): the driver writes its own diagnostics to the
+    CLI's stderr unscanned, and node, which runs it, prints a `NODE_OPTIONS`
+    preload it can't find, path and all. The refusal names every such variable, writing
+    fixed words for one whose name holds a value, since no scan reads it. An
+    `AQA_SECRET_*` variable may hold any bound value: the driver inherits
+    each of them already, as it does a value's own."""
     destinations = secret_destinations(spec, start)
     if destinations and (logged := _protocol_logging(os.environ)) is not None:
         raise SecretLoggedError(
@@ -118,6 +129,18 @@ def bound_secrets(spec: Spec, start: str) -> dict[str, BoundSecret]:
         )
     if problems:
         raise MissingSecretError(problems, bound)
+    scan = Redactor(bound.values())
+    held = {
+        "a variable whose name holds one" if scan.spells(variable) else variable
+        for variable, value in os.environ.items()
+        if not variable.startswith(PREFIX) and scan.spells([variable, value])
+    }
+    if held:
+        raise SecretLoggedError(
+            f"a test secret's value is in the environment outside {PREFIX}* "
+            "variables, where Playwright's driver could print it; remove it from "
+            "these variables to run with test secrets: " + ", ".join(sorted(held))
+        )
     return bound
 
 

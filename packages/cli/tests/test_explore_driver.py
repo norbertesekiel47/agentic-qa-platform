@@ -220,6 +220,8 @@ def test_a_driver_start_refusal_with_a_marker_unsafe_binding_prints_only_the_fal
 ) -> None:
     # TEST_DRIVER's markers spell its value, `driver`, as the diagnostic does.
     monkeypatch.setenv("AQA_SECRET_TEST_DRIVER", "driver")
+    # So does this file's name, in the test's id, which a run would refuse.
+    monkeypatch.delenv("PYTEST_CURRENT_TEST")
     monkeypatch.setenv("PLAYWRIGHT_NODEJS_PATH", f"/nonexistent/{SENTINEL}/node")
     spec = signed_in(tmp_path / "qa", name="TEST_DRIVER")
 

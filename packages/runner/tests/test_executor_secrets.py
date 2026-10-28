@@ -39,6 +39,7 @@ from packages.runner.tests.secret_fixtures import (
     FAKE_VALUE,
     OTHER_FAKE_VALUE,
     copies_found,
+    hermetic_environment,
     secret_spec,
 )
 
@@ -790,6 +791,7 @@ UNWRITTEN = "steps.jsonl: a bound value's spelling is in it, so it isn't written
 def test_an_intent_line_spelling_a_bound_value_is_never_written_or_dispatched(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
+    hermetic_environment(monkeypatch)
     monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", value)
     spec = secret_spec(tmp_path, start_url="/page/form")
 

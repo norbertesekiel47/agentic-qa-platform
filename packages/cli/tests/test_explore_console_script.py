@@ -287,6 +287,34 @@ def test_a_start_failure_through_the_console_script_exits_13_with_its_one_line(
     assert child.stderr == f"unreachable shop: {said}\n"
 
 
+def test_a_node_options_path_holding_a_bound_value_exits_12_before_the_driver(
+    aqa: str, tmp_path: Path
+) -> None:
+    # Node would print the preload it can't find, path and all, to the
+    # stderr it shares with the CLI, where no scan reaches (#215).
+    value = "fake-preload-4u215"
+    spec = shop(tmp_path / "qa", account=ACCOUNT, config=SECRETS)
+    environ = environment(
+        tmp_path,
+        "none",
+        AQA_SECRET_TEST_DRIVER=value,
+        NODE_OPTIONS=f"--require /nonexistent/{value}/x.js",
+    )
+
+    child = explored(aqa, tmp_path, spec, environ)
+
+    # Refused before the driver started: it never ran, so never stopped.
+    assert child.events == ["armed none by aqa"]
+    assert child.returncode == 12, child.stderr
+    assert child.stdout == ""
+    assert child.stderr == (
+        "secret_unusable shop: nothing was explored\n"
+        "  a test secret's value is in the environment outside AQA_SECRET_* "
+        "variables, where Playwright's driver could print it; remove it from "
+        "these variables to run with test secrets: NODE_OPTIONS\n"
+    )
+
+
 # A terminal's Ctrl-C reaches the whole foreground process group, Playwright's
 # driver included (`group`); `cli` signals the CLI's process alone. The child
 # leads a session of its own, so the group is only the processes it started.
