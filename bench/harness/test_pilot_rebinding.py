@@ -152,6 +152,17 @@ class RebindingTests(unittest.TestCase):
             ):
                 self.apply(text)
 
+    def test_rebinding_passes_through_the_core_validator(self) -> None:
+        # The format reads :nth-child(), and a person may write one; a heal
+        # may not (aqa_core.heal_patch).
+        values = [{"css": "li:nth-child(2)", "scope": {"css": "app-payment-step"}}]
+        with self.assertRaisesRegex(
+            ValueError,
+            "^/targets/payment_error/locators/0/css: a heal finds no element by "
+            "its position among its siblings$",
+        ):
+            self.apply(patch(self.original, "/targets/payment_error/locators", values))
+
     def test_valid_rebinding_and_explicit_noop_preserve_the_original(self) -> None:
         before = self.original.model_dump_json()
         positive_target = "pay_button"

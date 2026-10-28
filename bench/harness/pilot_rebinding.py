@@ -7,6 +7,7 @@ from typing import Literal
 
 from aqa_core.compiled import CompiledScript, Locator
 from aqa_core.config import ProjectConfig
+from aqa_core.heal_patch import heal_patch_problems
 from aqa_core.project import parse_compiled
 from aqa_core.schema import StrictModel
 from aqa_core.spec import canonical_hash
@@ -28,7 +29,8 @@ def apply_rebinding(
     original: CompiledScript, text: str, config: ProjectConfig, *, source: Path
 ) -> CompiledScript:
     """Return a strictly validated candidate; never mutate the original or disk.
-    Invalid patch input raises ValueError; invalid compiled input raises SpecError.
+    Invalid patch input, or a change `aqa_core.heal_patch` refuses, raises
+    ValueError; invalid compiled input raises SpecError.
     `source` is only the diagnostic name for the reconstructed candidate."""
     json.loads(text, object_pairs_hook=_reject_duplicates)
     patch = Rebinding.model_validate_json(text)
@@ -46,11 +48,6 @@ def apply_rebinding(
             v.model_dump(mode="json") for v in operation.value
         ]
     candidate = parse_compiled(json.dumps(data), config, source=source)
-    protected = candidate.model_dump(mode="json")
-    for target, value in original.targets.items():
-        protected["targets"][target]["locators"] = value.model_dump(mode="json")[
-            "locators"
-        ]
-    if protected != original.model_dump(mode="json"):
-        raise ValueError("rebinding changed a protected compiled field")
+    if problems := heal_patch_problems(original, candidate):
+        raise ValueError("; ".join(problems))
     return candidate
