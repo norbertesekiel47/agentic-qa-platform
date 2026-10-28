@@ -274,20 +274,23 @@ class ScanFailedError(Exception):
 
 
 class FailingScan(Redactor):
-    """A scan that fails on any text naming `fail-scan`, and notes it."""
+    """A scan that fails on any text naming `marker`, `fail-scan` unless a
+    test changes it, and notes it."""
 
     def __init__(self) -> None:
         super().__init__([])
+        self.marker = "fail-scan"
         self.failed = False
 
     def redact(self, text: str, *, limit: int | None = None) -> Redacted:
-        if "fail-scan" in text:
+        if self.marker in text:
             self.failed = True
             raise ScanFailedError("fake callback scan failure")
         return super().redact(text, limit=limit)
 
 
-def test_a_failed_scan_records_nothing_of_its_request(app: App) -> None:
+@pytest.mark.parametrize("marker", ["fail-scan", "POST"], ids=["url", "method"])
+def test_a_failed_scan_records_nothing_of_its_request(app: App, marker: str) -> None:
     scan = FailingScan()
 
     async def scenario() -> Window:
@@ -295,10 +298,12 @@ def test_a_failed_scan_records_nothing_of_its_request(app: App) -> None:
             await session.navigate(f"{app.origin}/page/start")
             window = await session.press("a")
             await session.page.evaluate(
-                """async () => {
-                    await fetch('/did/plain', {method: 'POST'});
-                    fetch('/did/fail-scan', {method: 'POST'});
-                }"""
+                "async () => { await fetch('/did/plain', {method: 'POST'}); }"
+            )
+            # Only now: `POST` would have failed the kept request's scan too.
+            scan.marker = marker
+            await session.page.evaluate(
+                "() => { fetch('/did/fail-scan', {method: 'POST'}); }"
             )
             for _ in range(250):
                 if scan.failed:
