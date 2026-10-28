@@ -273,7 +273,9 @@ async def _replayed(
     """Admit `script` for `setup`, then run it in a browser session whose
     context has closed when this returns, and whose browser has when it
     raises, unless its caller launched it."""
-    runnable, checks, bound, redactor = _admitted(script, setup)
+    runnable, checks, bound, redactor = admitted(
+        script, setup.spec, setup.config, setup.start
+    )
     setup = replace(setup, record=setup.record.redacting(redactor))
     run = _Replay(
         setup,
@@ -441,30 +443,30 @@ async def _observed(session: BrowserSession, budget: float) -> Redacted | None:
         return None
 
 
-def _admitted(
-    script: CompiledScript, setup: RunSetup
+def admitted(
+    script: CompiledScript, spec: Spec, config: ProjectConfig, start: str
 ) -> tuple[
     list[Targeted | Untargeted], list[Assertion], Mapping[str, BoundSecret], Redactor
 ]:
-    """`script`'s steps and assertions, and the test secrets the run binds
-    with their scan, once nothing stops `script` before anything is opened:
-    it is compiled from the spec as it is, agrees with the project's subject
-    contracts and runs in M1 (`accepted`); every secret the spec references
-    has a value (`bound_secrets`); and no bound value is spelled where the
-    run would write or use it (`_spelling_bound_values`). Otherwise
-    `SpecError`, or `bound_secrets`' own error. The script's own problems
-    come first, so a spec error wins over a missing value (exit 5 before
-    12), and a stale script's other problems are moot."""
-    if script.spec_hash != setup.spec.spec_hash:
+    """`script`'s steps and assertions, and the test secrets a run of `spec`
+    from the start origin `start` binds with their scan, once nothing stops
+    `script` before anything is opened: it is compiled from the spec as it
+    is, agrees with `config`'s subject contracts and runs in M1
+    (`accepted`); every secret the spec references has a value
+    (`bound_secrets`); and no bound value is spelled where the run would
+    write or use it (`_spelling_bound_values`). Otherwise `SpecError`, or
+    `bound_secrets`' own error. The script's own problems come first, so a
+    spec error wins over a missing value (exit 5 before 12), and a stale
+    script's other problems are moot. Public so `aqa replay` admits every
+    spec before any run's reset (#239)."""
+    if script.spec_hash != spec.spec_hash:
         raise SpecError(["compiled from another version of the spec: explore it again"])
-    if problems := contract_problems(script, setup.config):
+    if problems := contract_problems(script, config):
         raise SpecError(problems)
-    runnable, checks = accepted(script, setup.spec)
-    bound = bound_secrets(setup.spec, setup.start)
+    runnable, checks = accepted(script, spec)
+    bound = bound_secrets(spec, start)
     redactor = Redactor(bound.values())
-    if problems := _spelling_bound_values(
-        setup.spec, runnable, script.targets, redactor
-    ):
+    if problems := _spelling_bound_values(spec, runnable, script.targets, redactor):
         raise SpecError(problems)
     return runnable, checks, bound, redactor
 
@@ -658,7 +660,7 @@ async def dispatched(
     record its completion with the locator that found its target. Replay's
     steps and the navigator's actions (`aqa_runner.navigator_tools`) go
     through here, each with inputs its caller admitted first: replay's
-    `_admitted`, the tools' argument scan.
+    `admitted`, the tools' argument scan.
 
     `record` must scan with `session`'s redactor, the run's, or this raises
     `ValueError` before any line: its reasons withhold by that scan. Each
