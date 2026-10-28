@@ -12,12 +12,12 @@ from typing import Literal, cast
 from aqa_core.coverage_plan import CoveragePlan, PlannedCheck, misfits, uncovered
 from aqa_core.model_costs import CostRecord
 from aqa_core.spec import UNHASHED_KEYS, Spec
-from aqa_core.text import has_text
+from aqa_core.text import SearchTimeoutError, has_text
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from aqa_runner.anthropic_client import MAX_OUTPUT_TOKENS
 from aqa_runner.model_router import ModelCallError, ModelRouter, Routed, Spend
-from aqa_runner.text_search import SearchTimeoutError, pattern_matches
+from aqa_runner.text_search import pattern_matches
 
 # The plan's system prompt. Static: a change to it changes every plan request,
 # so the plan's cassettes are re-recorded or edited with it (TESTING §4).

@@ -15,8 +15,9 @@ from typing import Any
 
 import pytest
 from aqa_core.compiled import TextVisible
+from aqa_core.text import SearchTimeoutError
 from aqa_runner import text_search
-from aqa_runner.text_search import SearchTimeoutError, text_matches, url_matches
+from aqa_runner.text_search import text_matches, url_matches
 
 from packages.runner.tests.test_browser_session import (
     RUNNER_SECRETS,
