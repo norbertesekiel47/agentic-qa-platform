@@ -226,6 +226,17 @@ def test_selection_is_leftmost_longest_within_a_secret_and_nonoverlapping() -> N
     assert Redactor([secret("fake' ")]).redact("fake''   ") == MARKER
 
 
+def test_spans_are_where_redact_puts_its_markers() -> None:
+    redactor = Redactor([secret("fake-tail", "LONG"), secret("fake", "SHORT")])
+    assert redactor.spans("fake fake-tailfake-tail %66AKE") == [
+        (0, 4),
+        (5, 14),
+        (14, 23),
+        (24, 30),
+    ]
+    assert redactor.spans("nothing bound here") == []
+
+
 @pytest.mark.parametrize("value", ["\u200b\u00ad", "\u200b\u200b", "\u00ad" * 4])
 def test_zero_length_matches_do_not_replace_text(value: str) -> None:
     redactor = Redactor([secret(value)])
