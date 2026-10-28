@@ -1040,6 +1040,22 @@ def test_a_script_replay_refuses_exits_5_unless_forced(
     assert len(client.requests) == 1
 
 
+def test_a_stale_script_replay_refuses_is_explored_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = shop(tmp_path / "qa")
+    press = {"seq": 2, "action": "press", "key": "Tab+a", "side_effect": False}
+    target = kept(spec, steps=[press], spec_hash="sha256:" + "0" * 64)
+    before = target.read_bytes()
+    client = Scripted(REFUSED)
+
+    result = unlaunched(monkeypatch, [str(spec), "--url", START], client)
+
+    assert result.exit_code == 3, result.output
+    assert len(client.requests) == 1
+    assert target.read_bytes() == before
+
+
 def test_a_repaired_script_is_kept_up_to_date(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
