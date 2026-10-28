@@ -6,6 +6,7 @@ from typing import Annotated
 import typer
 
 from aqa_cli.explore import explore
+from aqa_cli.replay import replay
 
 # Tracebacks never show local variables, which can hold provider keys and
 # test-secret values (AGENTS.md rule 9). This is Typer's default since 0.23;
@@ -38,3 +39,4 @@ def main(
 
 
 app.command()(explore)
+app.command()(replay)
