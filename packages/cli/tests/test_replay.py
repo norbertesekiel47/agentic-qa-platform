@@ -605,6 +605,27 @@ def test_a_record_that_takes_no_more_exits_15(
     )
 
 
+def test_an_egress_block_whose_record_cant_be_written_still_exits_6(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "qa"
+    page = "/page/fetches?to=http%3A%2F%2Fundeclared.example.test%2Fx"
+    spec = committed(shop(root, page=page), compiled([]))
+    monkeypatch.setattr(RunRecord, "write", refusing("write", failing="egress.json"))
+
+    result = replay(monkeypatch, on(app, spec))
+
+    assert result.exit_code == 6, result.output
+    record = record_in(root)
+    assert re.fullmatch(
+        rf"egress_blocked shop: {SECONDS}, \$0, run record: {record}\n"
+        "  the run record took no more lines, so the replay stopped\n"
+        f"  the egress record couldn't be saved to {record / 'egress.json'}\n",
+        result.stderr,
+    )
+    assert document(root)["error_code"] == "egress_blocked"
+
+
 def test_a_launch_that_fails_exits_10_naming_the_host_fix(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -89,8 +89,9 @@ async def strict_replay(run: StrictRun, playwright: Playwright) -> Replayed:
         }
         return Replayed("record_error", document, None)
     gate = EgressGate(egress_policy(spec, run.config, run.start))
+    proxy = EgressProxy(gate)
     replaying = Replaying(spec, run.config, run.start, gate)
-    opening = partial(_opened, playwright, replaying, record)
+    opening = partial(_opened, playwright, proxy, record)
     result: RunResult | None = None
     stops: list[Stop] = []
     try:
@@ -104,17 +105,22 @@ async def strict_replay(run: StrictRun, playwright: Playwright) -> Replayed:
         stops.append(Stop("unreachable", record.redactor.redact(str(error))))
     except OSError, RefusedWriteError:
         stops.append(Stop("record_error", record.redactor.redact(_UNWRITTEN)))
-    return _ended(ReplayEnd(record, spec, run.script, result, tuple(stops)))
+    # Read from the proxy and gate, not the result: a record that took no
+    # more lines, egress.json's included, loses the result, never a block.
+    blocks = proxy.egress_blocks(run.config.egress.expected_blocked)
+    events = tuple(gate.infrastructure_events)
+    end = ReplayEnd(record, spec, run.script, result, blocks, events, tuple(stops))
+    return _ended(end)
 
 
 @asynccontextmanager
 async def _opened(
-    playwright: Playwright, replaying: Replaying, record: RunRecord
+    playwright: Playwright, proxy: EgressProxy, record: RunRecord
 ) -> AsyncIterator[Opened]:
-    """What the replay runs in once its reset has passed: an egress proxy
-    on the run's gate, its first phase open, and Chromium for the replay to
-    launch its browser from."""
-    async with EgressProxy(replaying.gate) as proxy:
+    """What the replay runs in once its reset has passed: the run's egress
+    proxy, its first phase open, and Chromium for the replay to launch its
+    browser from."""
+    async with proxy:
         yield Opened(playwright.chromium, proxy, record)
 
 
