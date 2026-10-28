@@ -340,6 +340,16 @@ def test_a_value_shared_with_another_aqa_secret_variable_binds(
     }
 
 
+def test_an_aqa_secret_variable_whose_name_holds_a_bound_value_binds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Exempt in its name as in its value: the driver inherits it anyway.
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", OTHER_FAKE_VALUE)
+    monkeypatch.setenv(f"AQA_SECRET_COPY_OF_{OTHER_FAKE_VALUE}", "1")
+
+    assert list(bound_secrets(secret_spec(tmp_path), START)) == ["TEST_PASSWORD"]
+
+
 def test_a_variable_near_the_aqa_secret_prefix_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
