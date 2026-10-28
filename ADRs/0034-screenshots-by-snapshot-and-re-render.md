@@ -75,7 +75,7 @@ The prototype (reviews/171-prototype.md; Chromium 153.0.8010.12 headless shell, 
 
 Fallback fonts replace Source Sans, and the icon font shows boxes. The live page saw none of 31 event types, no mutation, no observer callback, and no change to focus, selection or value across 6 snapshots and 6 captures. A snapshot took 2-4 ms (median) on a 46- and a 15,005-node page, and waited out a busy main thread (1,397 ms on a page blocking 1.5 s). A variant B capture of Conduit took 505-555 ms, against 14-22 ms live.
 
-This build, at `e27cc6c1`, same browser and host:
+This build, at `ae646afd`, same browser and host:
 
 - **The suite.** `test_a_saved_screenshot_shows_no_bound_value_whatever_the_page_does` runs 43 cases: 39 pages, with 4 of them also at scale 2. They cover every reviewer attack above, the prototype's attacks on a snapshot and its scrub, and the owner's tricks. Each case saves 8 captures with the bound value filled, and every saved PNG holds 0 red pixels.
 - **Controls.** Each case first runs a control on the same page with an unbound value. For a field, the control fills another secret so that the render runs. For an editable element, nothing is filled, since a render empties every editable element. The controls show 1,812 to 20,462 red pixels.
