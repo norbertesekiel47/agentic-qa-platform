@@ -13,8 +13,9 @@ can't be read; and its test secrets bind (12). Then each runs in argument
 order (`aqa_runner.strict_replay`), on one driver.
 
 Every line printed goes through `aqa_cli.common.rendered`, scanned with
-every test secret the invocation bound. `--json`'s array is checked with
-the same secrets and printed as it is, or as `[]` when it spells one."""
+every test secret the invocation bound, and each run's record scans what
+it writes with the same secrets. `--json`'s array is checked with them and
+printed as it is, or as `[]` when it spells one."""
 
 import asyncio
 import json
@@ -175,7 +176,7 @@ async def _replayed(
         await register_identity_engine(playwright)
         for run in runs:
             began = time.monotonic()
-            replayed = await strict_replay(run, playwright)
+            replayed = await strict_replay(run, playwright, scan)
             if lines and not (quiet and replayed.outcome == "passed"):
                 seconds = time.monotonic() - began
                 _said(scan, run.spec.frontmatter.id, replayed, seconds)

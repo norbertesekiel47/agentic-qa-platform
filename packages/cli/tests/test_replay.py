@@ -644,6 +644,28 @@ def test_a_later_specs_stop_and_every_line_scan_with_every_bound_secret(
     assert copies_found(FIRST, texts=texts) + copies_found(SECOND, texts=texts) == []
 
 
+def test_each_runs_record_scans_with_every_value_the_invocation_bound(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FIRST)
+    monkeypatch.setenv("AQA_SECRET_OTHER_PASSWORD", SECOND)
+    # The first spec's page shows the value only the second spec binds.
+    monkeypatch.setitem(PAGES, "shows", f"<p>{SECOND}</p>")
+    root = tmp_path / "a"
+    first = shop(root, preconditions=ACCOUNT, config=SECRETS, page="/page/shows")
+    second = shop(tmp_path / "b", preconditions=OTHER_ACCOUNT, config=OTHER_SECRETS)
+    specs = (committed(first, compiled([])), committed(second, shop_script("shop")))
+
+    result = replay(monkeypatch, on(app, *specs))
+
+    assert result.exit_code == 0, result.output
+    record = record_in(root)
+    files = [path for path in record.rglob("*") if path.is_file()]
+    assert copies_found(SECOND, files=files) == []
+    snapshot = (record / "evidence" / "0" / "a11y_snapshot.yaml").read_text()
+    assert "[SECRET:OTHER_PASSWORD]" in snapshot
+
+
 def test_a_failed_reset_hook_exits_14_and_opens_no_browser(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
