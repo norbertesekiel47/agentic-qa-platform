@@ -59,6 +59,15 @@ TRIGGER = (
     'width:80px;height:20px;font:12px sans-serif;color:#000;border:1px solid #000">'
 )
 FRAME = f"<!doctype html>{STYLE}{FIELD}"
+# Frame pages that keep what a maxlength left of a fill: as the field's
+# `value` attribute, or as a button's label once its type flips.
+PARTIAL = f"<!doctype html>{STYLE}" + FIELD.replace(">", " maxlength=6>")
+FRAMES = {
+    "frame": FRAME,
+    "frame-prefix": PARTIAL + "<script>f.oninput=()=>f.defaultValue=f.value</script>",
+    "frame-flip": PARTIAL
+    + "<script>f.oninput=()=>setTimeout(()=>f.type='submit')</script>",
+}
 XHTML = (
     '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head>'
     f'{STYLE}</head><body><input id="f" aria-label="Secret"/>'
@@ -82,7 +91,9 @@ class Case:
     would hide the field there too. `binding` names the secret the value
     goes in as, and `partial` says its field takes only part of it.
     `withholds` says a capture may be withheld: the page changes its
-    fields between the snapshot's two calls."""
+    fields between the snapshot's two calls. `unseen` says the DOM snapshot
+    holds no frame's document, as for a cross-site frame in a process of
+    its own."""
 
     body: str
     into: Into = "field"
@@ -92,6 +103,7 @@ class Case:
     xhtml: bool = False
     partial: bool = False
     withholds: bool = False
+    unseen: bool = False
 
 
 CLONE_ON_SIGNAL = """<script>let c=null,armed=false;window.arm=()=>{c=document.getElementById('f').cloneNode();armed=true};
@@ -239,6 +251,22 @@ CASES = {
         + "<iframe id=fr src=OTHER/shot/frame style='border:0;width:600px;height:120px'></iframe>",
         into="cross-site",
     ),
+    # What a maxlength left of the value, in a frame the DOM snapshot
+    # doesn't hold: a field's `value` attribute, and a button's label.
+    "unseen-frame-prefix": Case(
+        STYLE
+        + "<iframe id=fr src=OTHER/shot/frame-prefix style='border:0;width:600px;height:120px'></iframe>",
+        into="cross-site",
+        partial=True,
+        unseen=True,
+    ),
+    "unseen-frame-partial-then-flip": Case(
+        STYLE
+        + "<iframe id=fr src=OTHER/shot/frame-flip style='border:0;width:600px;height:120px'></iframe>",
+        into="cross-site",
+        partial=True,
+        unseen=True,
+    ),
     "moving": Case(STYLE + MOVING + FIELD),
     "scroll-jitter": Case(
         STYLE + SCROLL + FIELD.replace(">", " style='position:absolute;top:1000px'>"),
@@ -277,8 +305,8 @@ async def serve_cases(page: Page, other: str) -> dict[str, str]:
 
     async def fulfil(route: Route) -> None:
         name = route.request.url.split("/shot/", 1)[1]
-        if name == "frame":
-            body, kind = FRAME, "text/html"
+        if name in FRAMES:
+            body, kind = FRAMES[name], "text/html"
         elif name == "x.xhtml" or CASES[name].xhtml:
             body, kind = (
                 XHTML if name == "x.xhtml" else CASES[name].body,

@@ -258,7 +258,11 @@ async def attack(
     if case.into == "cross-site":
         # fill_secret never fills another origin's frame, so the value gets
         # there as a page would put it.
-        await session.fill(await field(session, case), value)
+        if case.partial:
+            with pytest.raises(Error):
+                await session.fill(await field(session, case), value)
+        else:
+            await session.fill(await field(session, case), value)
     elif case.into != "page":
         if case.partial:
             with pytest.raises(SecretNotFilledError):
@@ -285,8 +289,22 @@ async def attack(
     [*((name, 1) for name in CASES), *((name, 2) for name in SCALED)],
 )
 def test_a_saved_screenshot_shows_no_bound_value_whatever_the_page_does(
-    sites: Sites, tmp_path: Path, name: str, scale: int
+    sites: Sites, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, scale: int
 ) -> None:
+    if CASES[name].unseen:
+        send = CDPSession.send
+
+        async def unseen(
+            devtools: CDPSession, method: str, params: dict[str, Any] | None = None
+        ) -> dict[str, Any]:
+            found = await send(devtools, method, params)
+            if method == "DOMSnapshot.captureSnapshot":
+                for document in found["documents"]:
+                    document["nodes"].pop("contentDocumentIndex", None)
+            return found
+
+        monkeypatch.setattr(CDPSession, "send", unseen)
+
     async def scenario() -> tuple[int, list[str], list[str], list[int]]:
         async with browsing(
             sites,

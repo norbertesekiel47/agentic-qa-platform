@@ -127,10 +127,17 @@ RESTORE = """({plan, scroll}) => {
     for (const element of emptied) element.replaceChildren();
     window.scrollTo({left: scroll[0], top: scroll[1], behavior: "instant"});
     const shown = (nodes) => nodes.filter((node) => node.isConnected);
+    // For DROP: nothing but our own scripts runs in a render.
+    window.renderedFields = shown(fields);
     return {
-        values: shown(fields).map((field) => field.value),
+        values: renderedFields.map((field) => field.value),
         text: shown(texts).map((text) => text.data).join(""),
     };
+}"""
+
+# Empties the fields RESTORE listed at these places, in the render.
+DROP = """(dropped) => {
+    for (const place of dropped) renderedFields[place].value = "";
 }"""
 
 _CAPTURED = object()
@@ -466,6 +473,16 @@ async def _render(
             session.redactor.finds(text) for text in (shown["text"], *shown["values"])
         ):
             raise ScreenshotWithheldError("the render spells a bound value")
+        # A value the snapshot didn't hold, from a frame it left out, or a
+        # field's `value` attribute, is dropped by the same rule.
+        await page.evaluate(
+            DROP,
+            [
+                place
+                for place, value in enumerate(shown["values"])
+                if session.redactor.overlaps(value, SHARED_RUN)
+            ],
+        )
         return await page.screenshot(type="png", animations="disabled", caret="hide")
     finally:
         await context.close()
