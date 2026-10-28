@@ -233,7 +233,7 @@ def _name(css: str, index: int) -> tuple[str, int]:
     return "".join(chars), index
 
 
-def _pseudo_classes(css: str) -> Iterator[str]:
+def pseudo_classes(css: str) -> Iterator[str]:
     """Each pseudo-class name in `css`, lowercased, as Playwright reads a css
     value: its CSS tokenizer (cssTokenizer.ts, a port of CSS Syntax Level 3,
     https://www.w3.org/TR/css-syntax-3/#tokenization) drops comments, reads
@@ -293,7 +293,7 @@ def _one_selector(css: str) -> str:
             f"{css!r} starts or ends with white space: write it trimmed "
             "(Playwright trims the end before CSS reads the value)"
         )
-    for name in _pseudo_classes(css):
+    for name in pseudo_classes(css):
         if name in PLAYWRIGHT_PSEUDO_CLASSES:
             raise ValueError(
                 f"{css!r} uses Playwright's own pseudo-class :{name}, which "
