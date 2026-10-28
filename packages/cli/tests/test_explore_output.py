@@ -778,6 +778,7 @@ def test_a_compiled_script_that_does_not_load_exits_5_unless_forced(
     client = Scripted(REFUSED)
 
     refused = unlaunched(monkeypatch, args, client)
+    requested_unforced = len(client.requests)
     forced = unlaunched(monkeypatch, [*args, "--force"], client)
 
     assert refused.exit_code == 5, refused.output
@@ -785,6 +786,7 @@ def test_a_compiled_script_that_does_not_load_exits_5_unless_forced(
         f"spec_error {spec}: the compiled script doesn't load, so nothing was "
         "explored: correct it, or pass --force to explore the spec again\n  "
     )
+    assert requested_unforced == 0
     assert forced.exit_code == 3, forced.output
     assert len(client.requests) == 1
 
@@ -967,6 +969,7 @@ def test_a_script_disagreeing_with_unchanged_contracts_exits_5_unless_forced(
     client = Scripted(REFUSED)
 
     refused = explore(monkeypatch, [str(spec)], client)
+    requested_unforced = len(client.requests)
     monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
     forced = explore(
         monkeypatch, [str(spec), "--url", "http://127.0.0.1:4100", "--force"], client
@@ -979,6 +982,7 @@ def test_a_script_disagreeing_with_unchanged_contracts_exits_5_unless_forced(
         "to explore the spec again\n"
         "  targets.name: carries a subject contract no row gives it\n"
     )
+    assert requested_unforced == 0
     assert forced.exit_code == 3, forced.output
     assert len(client.requests) == 1
 
