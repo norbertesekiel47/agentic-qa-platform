@@ -16,6 +16,7 @@ from aqa_core.compiler import Provenance
 from aqa_core.coverage_plan import CoveragePlan
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.evaluation import MARGIN_SECONDS
+from aqa_runner.locator_generation import TargetUses
 from aqa_runner.navigator import (
     AssertCheck,
     Click,
@@ -216,6 +217,24 @@ def test_note_for_absence_the_page_stalls_notes_nothing(
     async def scenario(attempt: Attempt) -> list[object]:
         call = NoteForAbsence(check_id="a1", ref=ref(attempt, "button", "Save"))
         await attempt.session.page.evaluate(STALL)
+        said = await capped(attempt.note(call))
+        return [said, attempt.noted]
+
+    assert on_app(app, tmp_path, scenario, budget=BUDGET, plan=SAVE_GONE) == [
+        f"note_for_absence did not run: {UNANSWERED}",
+        frozenset(),
+    ]
+
+
+def test_note_for_absence_whose_sighting_never_returns_notes_nothing(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def never(*_: object) -> None:
+        await asyncio.Event().wait()
+
+    async def scenario(attempt: Attempt) -> list[object]:
+        call = NoteForAbsence(check_id="a1", ref=ref(attempt, "button", "Save"))
+        monkeypatch.setattr(TargetUses, "see_for_negative_check", never)
         said = await capped(attempt.note(call))
         return [said, attempt.noted]
 
