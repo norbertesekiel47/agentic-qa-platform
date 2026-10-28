@@ -18,8 +18,8 @@ class WindowsOverflowError(Exception):
 
 
 class UnrecordedRequestError(Exception):
-    """A request's scan failed, so the session recorded nothing of it, and no
-    response record can establish a check."""
+    """Recording a request failed, so the session holds none or part of it,
+    and no response record can establish a check."""
 
 
 async def held(
