@@ -18,7 +18,7 @@ every test secret the invocation bound."""
 import asyncio
 import json
 import time
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Annotated, Final
 
@@ -27,8 +27,8 @@ from aqa_core.compiled import CompiledScript
 from aqa_core.config import ProjectConfig
 from aqa_core.project import SpecError, load_compiled
 from aqa_core.spec import Spec
-from aqa_runner.bound_secrets import MissingSecretError, SecretLoggedError
-from aqa_runner.executor import admitted
+from aqa_runner.bound_secrets import BoundSecret, MissingSecretError, SecretLoggedError
+from aqa_runner.executor import BoundValueSpelledError, admitted
 from aqa_runner.locator_generation import register_identity_engine
 from aqa_runner.publication import publication
 from aqa_runner.redaction import Redactor
@@ -100,7 +100,8 @@ def replay(
 
 def _admitted(paths: Sequence[Path], url: str | None) -> list[StrictRun]:
     """Each spec at `paths`, admitted for a strict run (module docstring),
-    or a stop, scanned with the test secrets the specs before it bound."""
+    or a stop, scanned with the test secrets the specs before it bound, and
+    its own once admission bound them."""
     runs: list[StrictRun] = []
     for path in paths:
         scan = _scan(runs)
@@ -112,6 +113,9 @@ def _admitted(paths: Sequence[Path], url: str | None) -> list[StrictRun]:
         script = _compiled(root, spec, config, scan)
         try:
             _, _, bound, _ = admitted(script, spec, config, start)
+        except BoundValueSpelledError as error:
+            scan = _scan(runs, error.bound.values())
+            stop("spec_error", spec_id, _REFUSED, error.problems, scan=scan)
         except SpecError as error:
             stop("spec_error", spec_id, _REFUSED, error.problems, scan=scan)
         except MissingSecretError as error:
@@ -145,8 +149,8 @@ def _compiled(
         stop("spec_error", spec_id, _UNLOADED, error.problems, scan=scan)
 
 
-def _scan(runs: Sequence[StrictRun]) -> Redactor:
-    return Redactor(secret for run in runs for secret in run.bound.values())
+def _scan(runs: Sequence[StrictRun], more: Iterable[BoundSecret] = ()) -> Redactor:
+    return Redactor([*(s for run in runs for s in run.bound.values()), *more])
 
 
 async def _replayed(
