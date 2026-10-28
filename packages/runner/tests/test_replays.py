@@ -51,9 +51,9 @@ class Replayed:
         return self.outcome
 
 
-def form_spec(tmp_path: Path, hook: str | None) -> Spec:
+def form_spec(tmp_path: Path, config: ProjectConfig, hook: str | None) -> Spec:
     """The form's spec, with `hook` as its reset hook when given."""
-    spec = fx.a_spec(tmp_path, ProjectConfig(), start_url="/page/form")
+    spec = fx.a_spec(tmp_path, config, start_url="/page/form")
     reset = None if hook is None else Reset(http=hook)
     preconditions = spec.frontmatter.preconditions.model_copy(update={"reset": reset})
     frontmatter = spec.frontmatter.model_copy(update={"preconditions": preconditions})
@@ -61,11 +61,17 @@ def form_spec(tmp_path: Path, hook: str | None) -> Spec:
 
 
 def replayed(
-    app: fx.App, tmp_path: Path, hook: str | None, *, every_locator: bool = False
+    app: fx.App,
+    tmp_path: Path,
+    hook: str | None,
+    *,
+    every_locator: bool = False,
+    config: ProjectConfig | None = None,
 ) -> Replayed:
     """SCRIPT replayed for the form's spec with reset hook `hook`, through an
     opening that starts a driver and a proxy on the run's gate."""
-    spec = form_spec(tmp_path, hook)
+    config = config or ProjectConfig()
+    spec = form_spec(tmp_path, config, hook)
     run_gate = gate(allowed=(app.origin,))
     record = RunRecord.create(tmp_path)
     entered: list[list[str]] = []
@@ -78,7 +84,7 @@ def replayed(
             yield Opened(playwright.chromium, proxy, record)
 
     async def scenario() -> RunResult | ResetFailedError:
-        replaying = Replaying(spec, ProjectConfig(), app.origin, run_gate)
+        replaying = Replaying(spec, config, app.origin, run_gate)
         script = fx.for_spec(SCRIPT, spec)
         try:
             # No replay test may hang the suite.
@@ -112,6 +118,18 @@ def test_a_rejected_reset_opens_nothing(app: fx.App, tmp_path: Path) -> None:
     assert str(run.outcome) == "the reset hook answered 500"
     assert run.entered == []
     assert app.paths() == ["/status/500"]
+
+
+def test_the_reset_is_bound_by_the_projects_resolve_seconds(
+    app: fx.App, tmp_path: Path
+) -> None:
+    config = ProjectConfig.model_validate({"budgets": {"resolve_seconds": 1}})
+
+    run = replayed(app, tmp_path, "POST /held/reset", config=config)
+
+    assert isinstance(run.outcome, ResetFailedError)
+    assert str(run.outcome) == "the reset hook didn't answer within 1 s"
+    assert run.entered == []
 
 
 def test_without_a_reset_hook_the_caller_opens_at_once(
