@@ -1,6 +1,6 @@
 # UX Spec — Agentic QA Platform
 
-Last updated: 2026-10-18 (`aqa explore`'s line and its withheld form, #53 P17). Covers the dashboard (9 screens), GitHub surfaces, CLI output, and the local report viewer.
+Last updated: 2026-10-27 (`aqa replay`'s line, `--json` and `--quiet`, #239); 2026-10-18 (`aqa explore`'s line and its withheld form, #53 P17). Covers the dashboard (9 screens), GitHub surfaces, CLI output, and the local report viewer.
 
 ## 1. Design direction
 
@@ -91,6 +91,7 @@ Agentic QA — 5 specs · 3 passed · 1 heal proposed · 1 expectation violated
 
 - Human mode: one line per spec with status icon, time, cost; heal proposals printed as unified diffs; final summary; `aqa report` hint.
 - `aqa explore` (M1): one line, `<outcome> <spec id>: <seconds>s, $<cost>`, then the compiled script's path when one was published, `run record: <path>` when the exit isn't 0, and `non-resumable` when an action's outcome is unknown; stdout on exit 0, stderr otherwise, followed on stderr by an unconfirmed script's warning, each reason indented, and where the egress record is. A line that would spell a bound test secret is withheld as `<outcome> <spec id>: the rest is withheld, since it would spell a bound value`, with `non-resumable` kept on a line of its own, alone when the two together would spell one (API.md §7).
+- `aqa replay` (M2, #239): one line per run as it ends, in `aqa explore`'s form with a cost of `$0`, the run record whenever it didn't pass, and its reasons on stderr; no status icon, summary or report hint yet (#249). `--json` prints the runs' `replay.json` documents in one array and nothing else; `--quiet` prints only the runs that didn't pass (API.md §7).
 - `--json` mode for scripting; `--quiet` for CI logs.
 - Errors are actionable ("Domain `staging.acme.dev` is not verified for hosted runs — run in CI or verify at <link>").
 
