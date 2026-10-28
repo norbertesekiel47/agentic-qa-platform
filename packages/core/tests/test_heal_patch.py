@@ -332,6 +332,37 @@ def test_a_heal_inserts_no_navigation() -> None:
     ]
 
 
+def test_a_heal_inserts_no_reload() -> None:
+    assert heal(inserted({"action": "reload", "side_effect": False})) == [
+        (
+            "/steps/3/action: a heal inserts no reload, which loads the page "
+            "again and could route around a path that is broken for its users"
+        )
+    ]
+
+
+def test_a_heal_inserts_no_fill_secret() -> None:
+    step = {
+        "action": "fill_secret",
+        "target": "password_input",
+        "secret": "TEST_PASSWORD",
+        "side_effect": False,
+    }
+    assert heal(inserted(step)) == [
+        (
+            "/steps/3/action: a heal inserts no fill_secret, which could steer "
+            "a bound secret into another field"
+        )
+    ]
+
+
+def test_a_heal_marks_no_inserted_step_as_meeting_a_condition() -> None:
+    step = {"action": "press", "key": "Tab", "side_effect": False, "satisfies": ["c1"]}
+    assert heal(inserted(step), base=required) == [
+        "/steps/3/satisfies: a heal marks no inserted step as meeting a condition"
+    ]
+
+
 def renamed(data: dict[str, Any]) -> None:
     """Names the cart's target with both characters a JSON pointer escapes."""
     data["targets"]["cart/~items"] = data["targets"].pop("cart_items")
