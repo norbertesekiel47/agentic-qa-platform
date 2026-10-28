@@ -397,6 +397,17 @@ type Locator = Annotated[
 ]
 
 
+def allowed_for_assertion(locator: Locator, *, checks_text: bool) -> bool:
+    """Whether the grammar lets `locator` find an assertion's target
+    (ADR-0025): by no label or placeholder, and by a role's name only when
+    no check reads the target's meaning's text, since a name and the
+    rendered text can share words without either accepting the other."""
+    if isinstance(locator, ByLabel | ByPlaceholder):
+        return False
+    named = isinstance(locator, ByRole) and locator.name is not None
+    return not (named and checks_text)
+
+
 class Target(StrictModel):
     """An element's meaning, the locators tried in order to find it, and, for
     a listed subject, the reviewed contract its element must meet."""

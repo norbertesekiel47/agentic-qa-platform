@@ -10,7 +10,11 @@ from aqa_core.compiled import (
     CompiledScript,
     Locator,
     Navigate,
+    NotVisible,
     Step,
+    TextInTarget,
+    VisibleUnoccluded,
+    allowed_for_assertion,
     css_tokens,
 )
 from aqa_core.project import locator_levels
@@ -52,18 +56,38 @@ def _positional(css: str) -> bool:
     return False
 
 
-def _written(path: str, locator: Locator) -> Iterator[str]:
-    """Problems with a locator the heal wrote at `path`, its scopes'
-    included: a css value that finds its element by position."""
+def _written(
+    path: str, locator: Locator, *, asserted: bool, checks_text: bool
+) -> Iterator[str]:
+    """Problems with a locator the heal wrote at `path`, at each of its
+    levels, since a scope finds the element as much as its locator does: a
+    css value that finds its element by position, and, for a target an
+    assertion reads, a kind the generator never gives one (ADR-0025)."""
     for where, level in locator_levels(path, locator, scope_key="/scope"):
         if isinstance(level, ByCss) and _positional(level.css):
             yield f"{where}/css: a heal finds no element by its position among its siblings"
+        if asserted and not allowed_for_assertion(level, checks_text=checks_text):
+            yield (
+                f"{where}: a heal finds no assertion's target by a label or "
+                "placeholder, or by a name when its text is checked"
+            )
 
 
 def _target_problems(script: CompiledScript, healed: CompiledScript) -> Iterator[str]:
     """Targets match by name: each keeps its meaning and contract. Only a
     locator the heal wrote, one its target didn't have, is held to the
-    grammar here, so a person's reviewed edit stands."""
+    grammar here, so a person's reviewed edit stands. A meaning's text is
+    checked when any target of it is, as the generator reads it."""
+    asserted = {
+        check.target
+        for check in script.assertions
+        if isinstance(check, TextInTarget | NotVisible | VisibleUnoccluded)
+    }
+    checked = {
+        script.targets[check.target].semantic
+        for check in script.assertions
+        if isinstance(check, TextInTarget)
+    }
     for name in healed.targets:
         if name not in script.targets:
             yield f"/targets/{_pointer(name)}: a heal adds no target"
@@ -82,7 +106,12 @@ def _target_problems(script: CompiledScript, healed: CompiledScript) -> Iterator
             )
         for index, locator in enumerate(rebound.locators):
             if locator not in target.locators:
-                yield from _written(f"{path}/locators/{index}", locator)
+                yield from _written(
+                    f"{path}/locators/{index}",
+                    locator,
+                    asserted=name in asserted,
+                    checks_text=target.semantic in checked,
+                )
 
 
 def _pointer(name: str) -> str:
