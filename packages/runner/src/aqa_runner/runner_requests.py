@@ -30,6 +30,11 @@ class RunnerResponse:
     body: bytes
 
 
+class UnsendableTargetError(ValueError):
+    """A URL whose path and query no request line carries. Its message
+    quotes the URL, query included."""
+
+
 class BodyTooLongError(Exception):
     """A response whose body ran past its request's `limit`: the read
     stopped there and the connection closed. The app's answer, not the
@@ -49,7 +54,8 @@ async def runner_request(
 ) -> RunnerResponse:
     """Send `method` to the absolute http or https `url` through `gate`, and
     read the response. Raises ValueError, before any connection, for a URL
-    whose origin isn't one or whose path and query no request line carries;
+    whose origin isn't one, or `UnsendableTargetError`, a ValueError, for
+    one whose path and query no request line carries;
     `EgressRefusedError` for an origin, scheme included, the run doesn't
     allow, or an address the IP policy refuses; and `EgressUpstreamError`,
     an infrastructure error, when the origin can't be reached, its
@@ -79,7 +85,7 @@ async def runner_request(
         # Built before connecting, so a target h11 refuses is never sent.
         request = h11.Request(method=method, target=target, headers=headers)
     except (h11.LocalProtocolError, UnicodeEncodeError) as error:
-        raise ValueError(
+        raise UnsendableTargetError(
             f"'{url}': '{target}' is not a request target: {error}"
         ) from error
     # An origin is its scheme, host and port. The gate judges host and port,

@@ -9,7 +9,7 @@ from aqa_core.project import path_on_origin
 from aqa_core.spec import Reset
 
 from aqa_runner.egress import EgressGate, EgressRefusedError, EgressUpstreamError
-from aqa_runner.runner_requests import runner_request
+from aqa_runner.runner_requests import UnsendableTargetError, runner_request
 
 # Why a reset failed: no answer within its bound, no connection the gate
 # allowed or kept, or an answer that isn't a 2xx.
@@ -31,8 +31,8 @@ async def reset(gate: EgressGate, hook: Reset, start: str, *, seconds: float) ->
     a whole 2xx response within `seconds` passes: a redirect isn't followed,
     and the body is read to its end but never kept. Otherwise raises
     `ResetFailedError`, a hook no request line carries included: loading
-    refuses one, but its `ValueError` would quote the URL (ADR-0023's
-    #237 amendment)."""
+    refuses one, but its `UnsendableTargetError` would quote the URL
+    (ADR-0023's #237 amendment)."""
     try:
         async with asyncio.timeout(seconds):
             response = await runner_request(
@@ -42,7 +42,7 @@ async def reset(gate: EgressGate, hook: Reset, start: str, *, seconds: float) ->
         raise ResetFailedError(
             "timeout", f"the reset hook didn't answer within {seconds:g} s"
         ) from None
-    except EgressRefusedError, EgressUpstreamError, ValueError:
+    except EgressRefusedError, EgressUpstreamError, UnsendableTargetError:
         raise ResetFailedError(
             "unreachable", "the reset hook couldn't be reached"
         ) from None

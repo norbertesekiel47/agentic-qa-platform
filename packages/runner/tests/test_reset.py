@@ -299,3 +299,12 @@ def test_an_unsendable_hook_is_unreachable_without_its_text() -> None:
         "unreachable",
         "the reset hook couldn't be reached",
     )
+
+
+def test_a_start_that_is_no_origin_raises_as_it_came_not_as_a_failed_reset() -> None:
+    start = "ftp://127.0.0.1:9"
+
+    with pytest.raises(ValueError, match="is not an origin"):
+        asyncio.run(
+            reset(gate(allowed=("http://127.0.0.1:9",)), HOOK, start, seconds=5)
+        )
