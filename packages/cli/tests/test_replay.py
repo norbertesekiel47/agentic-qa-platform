@@ -1003,7 +1003,10 @@ def test_json_with_quiet_is_a_usage_error(
     result = replay(monkeypatch, [str(spec), "--json", "--quiet"], driver=False)
 
     assert result.exit_code == 2, result.output
-    assert "--json" in result.stderr
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.stderr)
+    assert "Invalid value for '--json': not with --quiet" in " ".join(
+        re.sub(r"[│╭╮╰╯─]", " ", plain).split()
+    )
 
 
 def test_a_bound_value_is_in_no_line_or_document(
