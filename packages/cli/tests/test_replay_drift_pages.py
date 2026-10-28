@@ -115,6 +115,57 @@ OCCLUDED = Pinned(
         pytest.param(OCCLUDED, id="modal"),
         # An action's target must take the click: under the modal it can't.
         pytest.param(drifted("modal", "not actionable, not actionable"), id="covered"),
+        # An assertion's target drifts too: its check isn't evaluated.
+        pytest.param(
+            Pinned(
+                "moved",
+                BUTTON,
+                IN_VIEW,
+                "inconclusive",
+                3,
+                "a1: inconclusive, drift: strict replay doesn't heal"
+                " (not unanimous, no match)",
+                [
+                    (0, "pass", None, None),
+                    (
+                        "a1",
+                        "inconclusive",
+                        "drift: strict replay doesn't heal (not unanimous, no match)",
+                        None,
+                    ),
+                    ("console_errors", "pass", None, None),
+                    ("js_exceptions", "pass", None, None),
+                    ("http_5xx", "pass", None, None),
+                    ("broken_images", "pass", None, None),
+                ],
+            ),
+            id="moved-assertion",
+        ),
+        pytest.param(
+            Pinned(
+                "removed",
+                BUTTON,
+                IN_VIEW,
+                "inconclusive",
+                3,
+                "a1: inconclusive, drift: strict replay doesn't heal"
+                " (no match, no match)",
+                [
+                    (0, "pass", None, None),
+                    (
+                        "a1",
+                        "inconclusive",
+                        "drift: strict replay doesn't heal (no match, no match)",
+                        None,
+                    ),
+                    ("console_errors", "pass", None, None),
+                    ("js_exceptions", "pass", None, None),
+                    ("http_5xx", "pass", None, None),
+                    ("broken_images", "pass", None, None),
+                ],
+            ),
+            id="removed-assertion",
+        ),
     ],
 )
 def test_a_drifted_page_replays_to_its_pinned_outcome(
