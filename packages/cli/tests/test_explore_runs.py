@@ -194,15 +194,18 @@ def document(root: Path) -> dict[str, Any]:
 
 def kept(spec: Path, **update: Any) -> Path:
     """An up-to-date compiled script for the spec at `spec`, published as
-    explore publishes one, changed by `update`; its path."""
+    explore publishes one, changed by `update`, whose `steps` follow its
+    navigation; its path."""
     root = spec.parent
     loaded = load_project(root).specs["shop"]
     steps = [
         {"seq": 1, "action": "navigate", "url": "/page/shop", "side_effect": False}
     ]
-    script = compiled(steps, targets=update.pop("targets", None)).model_copy(
-        update={"spec_id": "shop", "spec_hash": loaded.spec_hash, **update}
-    )
+    script = compiled(
+        steps + update.pop("steps", []),
+        targets=update.pop("targets", None),
+        assertions=update.pop("assertions", None),
+    ).model_copy(update={"spec_id": "shop", "spec_hash": loaded.spec_hash, **update})
     target = root / ".compiled" / "shop.json"
     target.parent.mkdir(exist_ok=True)
     target.write_text(published_text(script))

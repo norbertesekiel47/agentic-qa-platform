@@ -449,7 +449,7 @@ def _admitted(
     """`script`'s steps and assertions, and the test secrets the run binds
     with their scan, once nothing stops `script` before anything is opened:
     it is compiled from the spec as it is, agrees with the project's subject
-    contracts and runs in M1 (`_accepted`); every secret the spec references
+    contracts and runs in M1 (`accepted`); every secret the spec references
     has a value (`bound_secrets`); and no bound value is spelled where the
     run would write or use it (`_spelling_bound_values`). Otherwise
     `SpecError`, or `bound_secrets`' own error. The script's own problems
@@ -459,7 +459,7 @@ def _admitted(
         raise SpecError(["compiled from another version of the spec: explore it again"])
     if problems := contract_problems(script, setup.config):
         raise SpecError(problems)
-    runnable, checks = _accepted(script, setup.spec)
+    runnable, checks = accepted(script, setup.spec)
     bound = bound_secrets(setup.spec, setup.start)
     redactor = Redactor(bound.values())
     if problems := _spelling_bound_values(
@@ -512,14 +512,15 @@ def _action(step: Targeted | Untargeted) -> dict[str, object]:
     )
 
 
-def _accepted(
+def accepted(
     script: CompiledScript, spec: Spec
 ) -> tuple[list[Targeted | Untargeted], list[Assertion]]:
     """`script`'s steps and assertions, or `SpecError` naming each step and
     check M1 can't run, before anything is opened (ADR-0024's #46
     amendment), and each `fill_secret` naming a secret `spec` doesn't
     reference, which has no binding in the run. Probe assertions and baseline
-    definitions must name probes declared by the spec."""
+    definitions must name probes declared by the spec. Public because a
+    script replay would refuse is never up to date (`aqa explore`, #216)."""
     referenced = {name for _, name in secret_references(spec.frontmatter)}
     runnable: list[Targeted | Untargeted] = []
     checks: list[Assertion] = []
