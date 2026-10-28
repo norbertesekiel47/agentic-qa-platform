@@ -19,7 +19,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anthropic
-from aqa_core.compiled import ByRole, Locator, Press
+from aqa_core.compiled import ByRole, Locator, Press, Target
 from aqa_core.project import contracts_fingerprint, load_compiled, load_project
 from aqa_core.spec import Reset
 from aqa_runner import browser_session, replays
@@ -309,6 +309,19 @@ class PilotReplayTests(unittest.TestCase):
                 self.assertEqual(self.receipt("attempt.json"), OUTCOME | expected)
         self.assertEqual(launch.call_count, 0)
         self.assertEqual(self.server.log, ["POST /reset"] * 2)
+
+    def test_a_target_resolves_by_its_first_locator_that_finds_it(self) -> None:
+        self.steps = [SEND]
+        pilot = self.pilot()
+        # The first locator finds nothing, so every locator would disagree.
+        locators = [{"css": "#missing"}, {"role": "button", "name": "Send"}]
+        send = Target.model_validate({"semantic": "send button", "locators": locators})
+        script = pilot.script.model_copy(update={"targets": {"send": send}})
+        attempt = self.observed(self.replay(replace(pilot, script=script)))
+        steps = attempt.observation.steps
+        found = [(step.seq, step.outcome, step.locator_index) for step in steps]
+        self.assertEqual(found, [(0, "completed", None), (1, "completed", 1)])
+        self.assertEqual(attempt.observation.outcome, "passed")
 
     def test_reset_runs_on_the_attempt_gate_before_the_first_navigation(self) -> None:
         self.config["base_url"] = f"http://pilot.test:{self.server.server_address[1]}"
