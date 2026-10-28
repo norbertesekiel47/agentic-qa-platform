@@ -149,9 +149,14 @@ class BrowserSession:
         policy: EgressPolicy,
         invariant_observers: Observers,
         redactor: Redactor,
+        settings: BrowserSettings,
     ) -> None:
         self.page = page
         self._redactor = redactor
+        # The settings the page runs under, which a screenshot's render copies
+        # (`aqa_runner.screenshots`).
+        self.settings = settings
+        self._secret_filled = False
         self._policy = policy
         # What each invariant saw on the page, from before its first
         # navigation (`aqa_runner.invariants.Observers.watch`).
@@ -181,6 +186,12 @@ class BrowserSession:
     def redactor(self) -> Redactor:
         """The scan for all secrets bound to this run."""
         return self._redactor
+
+    @property
+    def secret_filled(self) -> bool:
+        """Whether `fill_secret` has handed the page a test secret's value
+        in this session, whether or not the field kept it (SECURITY §5)."""
+        return self._secret_filled
 
     @property
     def document_changes(self) -> int:
@@ -689,6 +700,8 @@ class BrowserSession:
         None when the field didn't take the value."""
         await self._require_secret_binding(element, secret)
         window = self._traffic.next_window()
+        # Before the page has it: a fill that fails partway can leave part of it.
+        self._secret_filled = True
         filled = await element.evaluate(FILL, secret.value.get_secret_value())
         return window if filled else None
 
@@ -977,7 +990,7 @@ async def prepared_session(
             "Chromium's session couldn't be prepared after its sandbox check "
             f"({type(error).__name__})"
         ) from error
-    session = BrowserSession(page, egress.policy, observers, redactor)
+    session = BrowserSession(page, egress.policy, observers, redactor, settings)
     session.watch(egress)  # before any window of a step opens
     yield session
     await context.close()
