@@ -21,7 +21,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import anthropic
 from aqa_core.compiled import ByRole, Locator, Press
 from aqa_core.project import contracts_fingerprint, load_compiled, load_project
-from aqa_runner import browser_session
+from aqa_core.spec import Reset
+from aqa_runner import browser_session, replays
 from aqa_runner.anthropic_client import AnthropicClient
 from aqa_runner.egress import EgressGate, EgressPolicy
 from aqa_runner.egress_proxy import EgressProxy
@@ -30,7 +31,7 @@ from aqa_runner.locator_generation import Seen, generate_for_action
 from aqa_runner.model_router import ModelRouter
 from aqa_runner.run_record import RunRecord
 from langchain_anthropic import ChatAnthropic
-from pilot_inputs import PilotInput, ResetRequest, load_pilots
+from pilot_inputs import PilotInput, load_pilots
 from pilot_replay import (
     AttemptHealth,
     FailedAttempt,
@@ -393,10 +394,10 @@ class PilotReplayTests(unittest.TestCase):
             self.failed(attempt), ("script_refused", "completed", "closed")
         )
 
-        async def changing(*_: object) -> None:
+        async def changing(*_: object, **__: object) -> None:
             os.environ.update(surrogate)
 
-        with patch.dict(os.environ, SECRET), patch("pilot_replay._reset", changing):
+        with patch.dict(os.environ, SECRET), patch.object(replays, "reset", changing):
             attempt = self.replay(pilot)
         self.assertEqual(self.failed(attempt), closed)
         self.assertEqual(self.server.log, ["POST /reset"])
@@ -623,8 +624,14 @@ class PilotReplayTests(unittest.TestCase):
         self.assertEqual(self.failed(attempt), ("cleanup_failed", "failed", "unknown"))
 
     def test_an_unsendable_reset_is_unreachable_without_its_text(self) -> None:
-        reset = ResetRequest(f"{self.origin}/re set?fake-sensitive")
-        attempt = self.replay(replace(self.pilot(), reset=reset))
+        pilot = self.pilot()
+        # Loading refuses this hook (`ResetEndpoint`), so it is built past it.
+        hook = Reset.model_construct(http="POST /re set?fake-sensitive")
+        frontmatter = pilot.spec.frontmatter
+        conditions = frontmatter.preconditions.model_copy(update={"reset": hook})
+        frontmatter = frontmatter.model_copy(update={"preconditions": conditions})
+        spec = replace(pilot.spec, frontmatter=frontmatter)
+        attempt = self.replay(replace(pilot, spec=spec))
         unreachable = ("reset_unreachable", "completed", "closed")
         self.assertEqual(self.failed(attempt), unreachable)
         receipts = "".join(path.read_text() for path in attempt.record.glob("*"))

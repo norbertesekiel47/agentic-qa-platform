@@ -30,6 +30,7 @@ from aqa_core.compiler import assertion_for, contracts_by_meaning
 from aqa_core.coverage_plan import CoveragePlan, misfits, plan_hash, planned_checks
 from aqa_core.schema import Contract
 from aqa_core.spec import canonical_hash
+from aqa_runner import reset
 from aqa_runner.egress_proxy import EgressBlocks
 from aqa_runner.evaluation import AssertionOutcome, AssertionResult
 from aqa_runner.executor import RunResult, StepResult
@@ -577,8 +578,8 @@ class ProofTests(unittest.TestCase):
         report = self.pilot()
         owners = [
             (flags.LocalDocker, "compose"),
-            (pilot_replay, "replay"),
-            (pilot_replay, "runner_request"),
+            (pilot_replay, "replay_run"),
+            (reset, "runner_request"),
         ]
         calls = trapped(self, [*owners, *CLIENTS])
         code, receipt, stderr = self.prove(report)

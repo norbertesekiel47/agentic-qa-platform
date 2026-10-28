@@ -1,11 +1,13 @@
 """One pilot attempt (ADR-0023, #51): a fresh run record, egress gate, proxy
 and Playwright driver, the spec's reset hook sent on that gate, then the
-strict replay. Manifest answers never enter; the caller scores the result."""
+strict replay, the reset and the replay through the runner's `replay_run`
+(#237). Manifest answers never enter; the caller scores the result."""
 
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Literal
 
@@ -15,17 +17,13 @@ from aqa_runner.bound_secrets import (
     SecretLoggedError,
     bound_secrets,
 )
-from aqa_runner.egress import (
-    EgressGate,
-    EgressRefusedError,
-    EgressUpstreamError,
-    egress_policy,
-)
+from aqa_runner.egress import EgressGate, egress_policy
 from aqa_runner.egress_proxy import EgressProxy
-from aqa_runner.executor import RunResult, RunSetup, replay
+from aqa_runner.executor import RunResult
 from aqa_runner.locator_generation import register_identity_engine
+from aqa_runner.replays import Opened, Replaying, replay_run
+from aqa_runner.reset import ResetFailedError, ResetFailure
 from aqa_runner.run_record import RunRecord
-from aqa_runner.runner_requests import runner_request
 from pilot_inputs import PilotInput
 from pilot_results import Observation, observe
 from playwright.async_api import async_playwright
@@ -197,13 +195,35 @@ async def _waited(
     return True
 
 
+# The runner's reset failures, as the attempt's.
+_RESET_FAILURES: dict[ResetFailure, Failure] = {
+    "timeout": "reset_timeout",
+    "unreachable": "reset_unreachable",
+    "rejected": "reset_rejected",
+}
+
+
 async def _attempt(pilot: PilotInput, record: RunRecord, state: _State) -> RunResult:
-    """The attempt's own task, which opens, uses and closes its resources."""
+    """The attempt's own task, which resets the app on its own gate, then
+    opens, uses and closes its resources (`replay_run`, first-match)."""
     _check_secrets(pilot, state)
     gate = EgressGate(egress_policy(pilot.spec, pilot.config, pilot.start))
-    if pilot.reset is not None:
-        await _reset(gate, pilot.reset.url, pilot.config.budgets.resolve_seconds, state)
-    setup = RunSetup(pilot.spec, pilot.config, pilot.start, record)
+    replaying = Replaying(pilot.spec, pilot.config, pilot.start, gate)
+    opening = partial(_opened, pilot, gate, record, state)
+    try:
+        return await replay_run(pilot.script, replaying, opening, every_locator=False)
+    except ResetFailedError as error:
+        raise state.refuse(_RESET_FAILURES[error.kind]) from None
+
+
+@asynccontextmanager
+async def _opened(
+    pilot: PilotInput, gate: EgressGate, record: RunRecord, state: _State
+) -> AsyncIterator[Opened]:
+    """What the attempt replays in once its reset has passed: its driver and
+    proxy, each owned, with the selector engines registered. What replay
+    raises is told apart here, before anything closes."""
+    state.reset_completed = pilot.spec.frontmatter.preconditions.reset is not None
     async with (
         _owned(async_playwright(), "driver", state) as playwright,
         _owned(EgressProxy(gate), "proxy", state) as proxy,
@@ -211,13 +231,7 @@ async def _attempt(pilot: PilotInput, record: RunRecord, state: _State) -> RunRe
         try:
             await register_identity_engine(playwright)
             state.browser = "unknown"
-            result = await replay(
-                pilot.script,
-                setup,
-                chromium=playwright.chromium,
-                proxy=proxy,
-                gate=gate,
-            )
+            yield Opened(playwright.chromium, proxy, record)
         # Replay checks the script and binds secrets before its browser starts.
         except SpecError:
             state.browser = "unopened"
@@ -229,7 +243,6 @@ async def _attempt(pilot: PilotInput, record: RunRecord, state: _State) -> RunRe
             state.latch(error)
             raise
         state.browser = "closed"
-        return result
 
 
 def _check_secrets(pilot: PilotInput, state: _State) -> None:
@@ -242,23 +255,6 @@ def _check_secrets(pilot: PilotInput, state: _State) -> None:
         raise state.refuse("secret_unusable") from None
     except SpecError:
         raise state.refuse("script_refused") from None
-
-
-async def _reset(gate: EgressGate, url: str, seconds: float, state: _State) -> None:
-    """POST the spec's reset hook through the attempt's `gate`, so reset and
-    replay share its pins. Anything but a 2xx within `seconds` stops the
-    attempt. A URL no request line carries is unreachable too; its error
-    quotes the URL, so it is dropped."""
-    try:
-        async with asyncio.timeout(seconds):
-            response = await runner_request(gate, "POST", url)
-    except TimeoutError:
-        raise state.refuse("reset_timeout") from None
-    except (EgressRefusedError, EgressUpstreamError, ValueError):
-        raise state.refuse("reset_unreachable") from None
-    if not 200 <= response.status < 300:
-        raise state.refuse("reset_rejected")
-    state.reset_completed = True
 
 
 @asynccontextmanager
