@@ -19,6 +19,7 @@ from typing import Any
 import langsmith
 import pytest
 import typer.testing
+from aqa_cli import common
 from aqa_cli import explore as explore_module
 from aqa_cli.main import app as aqa
 from aqa_runner.egress_proxy import ListenerUnavailableError
@@ -474,7 +475,7 @@ def test_a_start_the_command_never_read_leaves_no_driver_running(
             await asyncio.sleep(0)
         raise failed
 
-    monkeypatch.setattr(explore_module, "_driver", failing)
+    monkeypatch.setattr(common, "_driver", failing)
     driver = Owning(mode)
 
     result, runner = invoke(

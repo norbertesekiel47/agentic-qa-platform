@@ -13,19 +13,21 @@ requires, and is one replay admits. Only a run that will call a model needs
 the provider's key. With `--plan-only`, one call on the navigator role writes
 the plan into the run record, with every response's cost record.
 
-Everything this module prints goes through `_rendered`, which scans the whole
-text with the run's test secrets once they are bound; a text that still spells
-one is never written, nor are a run's two streams if their join does (ADR-0026)."""
+Everything this module prints goes through `aqa_cli.common.rendered`, which
+scans the whole text with the run's test secrets once they are bound; a text
+that still spells one is never written, nor are a run's two streams if their
+join does (ADR-0026). None is bound with `--plan-only`, whose request leaves
+out the account and the reset hook, nor for a script kept up to date, with no
+run at all."""
 
 import asyncio
 import contextlib
 import os
-import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from decimal import Decimal
 from pathlib import Path
-from typing import Annotated, Any, Final, Literal, NoReturn
+from typing import Annotated, Final, Literal
 
 import typer
 from aqa_core.compiled import CompiledScript
@@ -37,8 +39,6 @@ from aqa_core.project import (
     contract_problems,
     contracts_fingerprint,
     load_compiled,
-    load_project,
-    start_origin,
     with_budgets,
 )
 from aqa_core.spec import Spec
@@ -61,28 +61,21 @@ from aqa_runner.model_router import ModelCallError, ModelRouter
 from aqa_runner.publication import publication
 from aqa_runner.redaction import NO_SECRETS, Redactor
 from aqa_runner.run_record import RunRecord
-from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Playwright, async_playwright
+from playwright.async_api import async_playwright
 
-# How a run this module stops ends (ADR-0024's outcomes), and its exit code
-# (API.md §7): a plan-only run that doesn't plan, or a run that stops before
-# exploring. A run that plans exits 0; one that explores, as it ended.
-Failure = Literal[
-    "gave_up",
-    "spec_error",
-    "no_response",
-    "record_error",
-    "secret_unusable",
-    "unreachable",
-]
-EXIT_CODES: Final[Mapping[Failure, int]] = {
-    "gave_up": 3,
-    "spec_error": 5,
-    "no_response": 11,
-    "secret_unusable": 12,
-    "unreachable": 13,
-    "record_error": 15,
-}
+from aqa_cli.common import (
+    WITHHELD,
+    Failure,
+    UnstartedError,
+    fallback,
+    reasons_in,
+    rendered,
+    resolve,
+    say,
+    started,
+    stop,
+)
+
 # What the run record says: "planned", a failure, "error", a fault of ours,
 # or "interrupted", Ctrl-C or a cancellation while planning. "error" and
 # "interrupted" are raised as they came.
@@ -109,16 +102,7 @@ _REFUSED: Final = (
     "replay refuses the compiled script, so nothing was explored: correct it, or "
     "pass --force to explore the spec again"
 )
-_NO_DRIVER: Final = "the browser driver couldn't start, so nothing was explored"
-_NO_LISTENER: Final = "the egress listener couldn't start, so nothing was explored"
-# What is written instead of a text that still spells a bound value after its
-# scans: the outcome and the spec id, then words no run supplies.
-_WITHHELD: Final = (
-    "{outcome} {spec_id}: the rest is withheld, since it would spell a bound value"
-)
-# Playwright 1.63's words when its driver exits before the handshake
-# (`PipeTransport.run`), raised as a bare Exception, with no class of its own.
-_CLOSED_EARLY: Final = ("Connection closed while reading from the driver",)
+_NO_LISTENER: Final = "the egress listener couldn't start"
 _UNCONFIRMED: Final = (
     "warning: {path} is unconfirmed: its path has side-effect steps, or "
     "loading its start URL may change the app, and the spec has no reset hook, "
@@ -126,104 +110,6 @@ _UNCONFIRMED: Final = (
     "explore it again, or explore it again with --force --confirm-repeat to let "
     "one confirmation repeat its side effects"
 )
-
-# Characters that would move the cursor, recolour the terminal or reorder text
-# when printed: C0 and C1 controls, line and paragraph separators, and every
-# bidi control (marks, embeddings, overrides and isolates). What the model
-# wrote is printed with them escaped.
-_INVISIBLE = re.compile(
-    r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]"
-)
-
-
-class _UnstartedError(Exception):
-    """The browser driver or the egress listener couldn't start (exit 13),
-    in fixed words: never the OS's."""
-
-
-def _visible(text: str) -> str:
-    return _INVISIBLE.sub(
-        lambda found: found.group().encode("unicode_escape").decode(), text
-    )
-
-
-def _say(
-    scan: Redactor, *lines: str, err: bool = False, withheld: Sequence[str] = ()
-) -> None:
-    """Write `_rendered`'s text to stdout, or to stderr with `err`, if any."""
-    if text := _rendered(scan, lines, withheld):
-        typer.echo(text, err=err)
-
-
-def _rendered(scan: Redactor, lines: Sequence[str], withheld: Sequence[str]) -> str:
-    """`lines` as one text: each line scanned whole with `scan`, so a bound
-    value a join spells is found, then escaped (`_visible`), and the escaped
-    text scanned whole again, since escaping and the line breaks can spell
-    one too (ADR-0026's A2 amendment, as `redaction.error_text`). A text
-    that still spells one, as a marker does when the value is in its
-    secret's name, is never returned; `_fallback` returns the `withheld`
-    lines instead, each escaped before its check, less any that spells one,
-    and only the last, the caller's status, if their join does.
-
-    `scan` holds the run's test secrets once `bound_secrets` gave them. It
-    is empty where none is bound: before then (usage, the spec, the
-    budgets); with `--plan-only`, which binds none and whose request leaves
-    out the account and the reset hook; and for a script kept up to date,
-    with no run at all."""
-    text: str = scan.redact("\n".join(_visible(scan.redact(line)) for line in lines))
-    return _fallback(scan, withheld) if scan.finds(text) else text
-
-
-def _fallback(scan: Redactor, withheld: Sequence[str]) -> str:
-    kept = [w for w in map(_visible, withheld) if not scan.finds(w)]
-    text = "\n".join(kept)
-    return kept[-1] if scan.finds(text) else text
-
-
-def _stop(
-    outcome: Failure,
-    subject: str,
-    why: str,
-    reasons: Sequence[str] = (),
-    *,
-    scan: Redactor = NO_SECRETS,
-) -> NoReturn:
-    """Print the outcome, what it concerns, why, and each reason to stderr,
-    scanned with `scan`, the run's once its test secrets are bound, and exit
-    with the outcome's code, whatever `_say` withholds. Once they are bound,
-    `subject` is the spec id."""
-    reasoned = (f"  {reason}" for reason in reasons)
-    withheld = (_WITHHELD.format(outcome=outcome, spec_id=subject),)
-    _say(scan, f"{outcome} {subject}: {why}", *reasoned, err=True, withheld=withheld)
-    raise typer.Exit(EXIT_CODES[outcome])
-
-
-def _spec_root(path: Path) -> Path:
-    """The spec root for the spec at `path`: the nearest directory, from the
-    spec's own up, that holds config.yaml (DATA_MODEL §9)."""
-    for directory in path.absolute().parents:
-        if (directory / "config.yaml").is_file():
-            return directory
-    raise SpecError(
-        [f"{path}: no config.yaml in its directory or above it, so no spec root"]
-    )
-
-
-def _resolve(path: Path, url: str | None) -> tuple[Path, Spec, ProjectConfig, str]:
-    """The spec root, the spec, its project's config and the start origin,
-    or a SpecError. Nothing here calls a model or starts a browser. The whole
-    project is read, so a spec id used twice is caught, and a problem in any
-    spec of the project stops the command (ADR-0024's #41 amendment)."""
-    if path.is_dir():
-        raise SpecError([f"{path}: a directory, not a file"])
-    root = _spec_root(path)
-    project = load_project(root)
-    found = [s for s in project.specs.values() if s.path.resolve() == path.resolve()]
-    if not found:
-        raise SpecError(
-            [f"{path}: not a spec of the project at {root}, whose specs are *.spec.md"]
-        )
-    return root, found[0], project.config, start_origin(url, project.config)
 
 
 def _router(config: ProjectConfig) -> ModelRouter:
@@ -287,7 +173,7 @@ def _write_interrupted(
         interruption.add_note(_UNWRITTEN)
         # A broken stderr raises OSError; a closed one, ValueError.
         with contextlib.suppress(OSError, ValueError):
-            _say(NO_SECRETS, _UNWRITTEN, err=True)
+            say(NO_SECRETS, _UNWRITTEN, err=True)
 
 
 def _cost(calls: Sequence[CostRecord]) -> Decimal:
@@ -368,23 +254,23 @@ def explore(
 def _plan(spec_path: Path, url: str | None) -> None:
     """Write the spec's coverage plan to a run record, and stop."""
     try:
-        root, spec, config, _ = _resolve(spec_path, url)
+        root, spec, config, _ = resolve(spec_path, url)
         router = _router(config)
     except SpecError as error:
-        _stop("spec_error", str(spec_path), "nothing was planned", error.problems)
+        stop("spec_error", str(spec_path), "nothing was planned", error.problems)
     spec_id = spec.frontmatter.id
     # Made before the call, so a spec root that can't hold the record stops
     # the run before anything is billed.
     try:
         record = RunRecord.create(root)
     except OSError:
-        _stop(
+        stop(
             "record_error",
             str(spec_path),
             "the run record could not be created; nothing was planned",
         )
     except ValueError as error:  # a .aqa or .aqa/runs that is a link
-        _stop("spec_error", str(spec_path), "nothing was planned", (str(error),))
+        stop("spec_error", str(spec_path), "nothing was planned", (str(error),))
     try:
         planned = asyncio.run(make_plan(router, spec))
     except (asyncio.CancelledError, KeyboardInterrupt) as interruption:
@@ -415,20 +301,20 @@ def _plan(spec_path: Path, url: str | None) -> None:
             reasons=(why,),
         )
         cost = _cost(error.records)
-        _stop("no_response", spec_id, why, (f"cost: ${cost}", f"run record: {path}"))
+        stop("no_response", spec_id, why, (f"cost: ${cost}", f"run record: {path}"))
     except ProviderError as error:
         why = f"the model gave no response: {error}"
         path = _write_record(
             record, spec, outcome="no_response", calls=(), plan=None, reasons=(why,)
         )
-        _stop("no_response", spec_id, why, (f"run record: {path}",))
+        stop("no_response", spec_id, why, (f"run record: {path}",))
     calls = planned.routed.calls
     judged = judge(planned, spec)
     if isinstance(judged, CoveragePlan):
         path = _write_record(
             record, spec, outcome="planned", calls=calls, plan=judged, reasons=()
         )
-        _say(
+        say(
             NO_SECRETS,
             f"planned {spec_id}: plan {plan_hash(judged)}, "
             f"{len(judged.expectations)} expectations covered, "
@@ -444,7 +330,7 @@ def _plan(spec_path: Path, url: str | None) -> None:
         plan=planned.plan,
         reasons=(why, *reasons),
     )
-    _stop(
+    stop(
         outcome,
         spec_id,
         why,
@@ -464,18 +350,18 @@ def _explore(
     date and not `force`, and say how it ended (module docstring)."""
     began = time.monotonic()
     try:
-        root, spec, config, start = _resolve(spec_path, url)
+        root, spec, config, start = resolve(spec_path, url)
         config = with_budgets(config, budgets)
         kept = None if force else _kept(root, spec, config)
     except SpecError as error:
-        _stop("spec_error", str(spec_path), "nothing was explored", error.problems)
+        stop("spec_error", str(spec_path), "nothing was explored", error.problems)
     spec_id = spec.frontmatter.id
     target = root / ".compiled" / f"{spec_id}.json"
     if kept is not None:
         # No run, so nothing is bound (D21: no key, no secret, no browser).
-        _say(NO_SECRETS, f"up to date {spec_id}: {target}")
+        say(NO_SECRETS, f"up to date {spec_id}: {target}")
         if not kept.confirmed:
-            _say(NO_SECRETS, _UNCONFIRMED.format(path=target), err=True)
+            say(NO_SECRETS, _UNCONFIRMED.format(path=target), err=True)
         return
     scan = NO_SECRETS  # until the run's test secrets are bound
     try:
@@ -486,15 +372,16 @@ def _explore(
         )
     except SpecError as error:
         why = "nothing was explored"
-        _stop("spec_error", spec_id, why, error.problems, scan=scan)
+        stop("spec_error", spec_id, why, error.problems, scan=scan)
     except MissingSecretError as error:
         why = "nothing was explored"
-        _stop("secret_unusable", spec_id, why, error.problems, scan=scan)
+        stop("secret_unusable", spec_id, why, error.problems, scan=scan)
     except SecretLoggedError as error:
         why = "nothing was explored"
-        _stop("secret_unusable", spec_id, why, (str(error),), scan=scan)
-    except _UnstartedError as error:
-        _stop("unreachable", spec_id, str(error), scan=scan)
+        stop("secret_unusable", spec_id, why, (str(error),), scan=scan)
+    except UnstartedError as error:
+        why = f"{error}, so nothing was explored"
+        stop("unreachable", spec_id, why, scan=scan)
     _said(scan, spec_id, explored, time.monotonic() - began, target)
 
 
@@ -510,26 +397,26 @@ def _kept(root: Path, spec: Spec, config: ProjectConfig) -> CompiledScript | Non
     try:
         at = publication(root, spec)
     except OSError:
-        _stop("record_error", str(spec.path), _UNREAD)
+        stop("record_error", str(spec.path), _UNREAD)
     if at.found is None:
         return None
     try:
         script = load_compiled(at.target, config)
     except OSError:
-        _stop("record_error", str(spec.path), _UNREAD)
+        stop("record_error", str(spec.path), _UNREAD)
     except SpecError as error:
-        _stop("spec_error", str(spec.path), _UNLOADED, error.problems)
+        stop("spec_error", str(spec.path), _UNLOADED, error.problems)
     if (script.spec_hash, script.compiled_by.subject_contracts) != (
         spec.spec_hash,
         contracts_fingerprint(config, spec.frontmatter.id),
     ):
         return None
     if problems := contract_problems(script, config):
-        _stop("spec_error", str(spec.path), _DISAGREES, problems)
+        stop("spec_error", str(spec.path), _DISAGREES, problems)
     try:
         accepted(script, spec)
     except SpecError as error:
-        _stop("spec_error", str(spec.path), _REFUSED, error.problems)
+        stop("spec_error", str(spec.path), _REFUSED, error.problems)
     return script
 
 
@@ -542,59 +429,21 @@ async def _explored(
     *,
     confirm_repeat: bool,
 ) -> Explored:
-    """Explore with Playwright's driver, started in this frame's own task,
-    which is cancelled and joined if still pending, and its driver stopped
-    however the run ends; a failed stop changes nothing. An egress listener
-    that can't open, for the attempt or the confirmation, is `_UnstartedError`,
+    """Explore with Playwright's driver (`started`). An egress listener
+    that can't open, for the attempt or the confirmation, is `UnstartedError`,
     exit 13; any other OSError goes on as it came."""
-    starting = asyncio.create_task(async_playwright().start())
-    try:
-        playwright = await _driver(starting)
-        return await explore_spec(
-            spec,
-            config,
-            root,
-            start,
-            Drivers(router, playwright),
-            confirm_repeat=confirm_repeat,
-        )
-    except ListenerUnavailableError:
-        raise _UnstartedError(_NO_LISTENER) from None
-    finally:
-        if not starting.done():
-            starting.cancel()
-            await asyncio.wait({starting})
-        if not starting.cancelled() and not starting.exception():
-            with contextlib.suppress(OSError, PlaywrightError):
-                await starting.result().stop()
-
-
-async def _driver(starting: asyncio.Task[Playwright]) -> Playwright:
-    """The driver `starting` started, or `_UnstartedError` (exit 13) for an
-    OSError (the spawn), Playwright's Error (the handshake) or `_CLOSED_EARLY`
-    (a driver that exited first), the start's failure read as a value; any
-    other, or a cancellation, goes on as it came. Playwright 1.63 also leaves
-    a failed spawn's error in a task nobody reads, which asyncio would log,
-    path and all: reports made meanwhile are held, those holding the caught
-    error dropped, and the rest passed on."""
-    loop = asyncio.get_running_loop()
-    previous = loop.get_exception_handler()
-    held: list[dict[str, Any]] = []
-    loop.set_exception_handler(lambda _, report: held.append(report))
-    try:
-        [started] = await asyncio.gather(starting, return_exceptions=True)
-        if isinstance(started, OSError | PlaywrightError) or (
-            type(started) is Exception and started.args == _CLOSED_EARLY
-        ):
-            held[:] = [r for r in held if r.get("exception") is not started]
-            raise _UnstartedError(_NO_DRIVER) from None
-        if isinstance(started, BaseException):
-            raise started
-        return started
-    finally:
-        loop.set_exception_handler(previous)
-        for report in held:
-            loop.call_exception_handler(report)
+    async with started(async_playwright().start()) as playwright:
+        try:
+            return await explore_spec(
+                spec,
+                config,
+                root,
+                start,
+                Drivers(router, playwright),
+                confirm_repeat=confirm_repeat,
+            )
+        except ListenerUnavailableError:
+            raise UnstartedError(_NO_LISTENER) from None
 
 
 def _said(
@@ -612,7 +461,7 @@ def _said(
     document = explored.document
     published = document.get("published")
     facts = [f"{seconds:.1f}s", f"${explored.cost}"]
-    withheld = [_WITHHELD.format(outcome=explored.outcome, spec_id=spec_id)]
+    withheld = [WITHHELD.format(outcome=explored.outcome, spec_id=spec_id)]
     if published is not None:
         facts.append(str(target))
     if explored.exit_code and explored.record is not None:
@@ -624,23 +473,16 @@ def _said(
     stdout, stderr = ([], status) if explored.exit_code else (status, [])
     if published == "unconfirmed":
         stderr.append(_UNCONFIRMED.format(path=target))
-    stderr.extend(f"  {reason}" for reason in _reasons(document))
+    stderr.extend(f"  {reason}" for reason in reasons_in(document))
     if document.get("egress") is not None and explored.record is not None:
         saved = "is" if explored.egress_saved else "couldn't be saved to"
         stderr.append(f"  the egress record {saved} {explored.record / 'egress.json'}")
-    out, err = _rendered(scan, stdout, withheld), _rendered(scan, stderr, withheld)
+    out, err = rendered(scan, stdout, withheld), rendered(scan, stderr, withheld)
     if out and err and scan.finds(f"{out}\n{err}"):
-        out = err = _fallback(scan, withheld)
+        out = err = fallback(scan, withheld)
         err = "" if scan.finds(f"{out}\n{err}") else err
     for text, to_stderr in ((out, False), (err, True)):
         if text:
             typer.echo(text, err=to_stderr)
     if explored.exit_code:
         raise typer.Exit(explored.exit_code)
-
-
-def _reasons(document: Mapping[str, object]) -> list[str]:
-    reasons = document.get("reasons", [])
-    if not isinstance(reasons, list) or not all(isinstance(r, str) for r in reasons):
-        raise TypeError("a run's document holds its reasons as a list of text")
-    return reasons
