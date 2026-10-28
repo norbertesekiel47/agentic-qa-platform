@@ -45,6 +45,7 @@ from packages.cli.tests.test_explore_runs import (
 )
 from packages.runner.tests.explore_graph_fixtures import REFUSED, Scripted, planned
 from packages.runner.tests.secret_fixtures import copies_found, hermetic_environment
+from packages.runner.tests.test_bound_secrets import ELSEWHERE
 
 START = "http://127.0.0.1:4100"
 SENTINEL = "fake-os-detail-sentinel-4u49"
@@ -726,6 +727,41 @@ def test_a_protocol_log_with_a_bound_secret_exits_12_before_any_model_call(
     assert "DEBUG" in result.stderr
     assert copies_found("fake-pass-4u49", texts=[result.stderr]) == []
     assert client.models == []
+
+
+def test_the_environments_refusal_prints_none_of_the_values_that_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # NODE_OPTIONS holds the bound value, and the spec's id is it (#215).
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "fake-id-4u215")
+    monkeypatch.setenv("NODE_OPTIONS", "--require /nonexistent/fake-id-4u215/x.js")
+    spec = signed_in(tmp_path / "qa", "fake-id-4u215")
+
+    result = unstarted(monkeypatch, [str(spec), "--url", START])
+
+    assert (result.exit_code, result.stdout) == (12, "")
+    assert result.stderr == (
+        "secret_unusable [SECRET:TEST_PASSWORD]: nothing was explored\n"
+        f"  {ELSEWHERE}NODE_OPTIONS\n"
+    )
+
+
+def test_variable_names_whose_join_spells_a_bound_value_are_not_printed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Neither name alone spells the value; the refusal's list joins them.
+    value = "FAKE_LOGIN, NODE_OPTIONS"
+    for name in ("AQA_SECRET_TEST_PASSWORD", "FAKE_LOGIN", "NODE_OPTIONS"):
+        monkeypatch.setenv(name, value)
+    spec = shop(tmp_path / "qa", preconditions=ACCOUNT, config=SECRETS)
+
+    result = unstarted(monkeypatch, [str(spec)])
+
+    assert (result.exit_code, result.stdout) == (12, "")
+    assert result.stderr == (
+        "secret_unusable shop: nothing was explored\n"
+        f"  {ELSEWHERE}[SECRET:TEST_PASSWORD]\n"
+    )
 
 
 def test_a_run_document_whose_reasons_are_not_text_is_a_runner_defect(

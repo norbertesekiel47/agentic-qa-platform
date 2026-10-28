@@ -60,9 +60,14 @@ class SecretLoggedError(Exception):
     turns on Playwright's protocol logging, which would print a value as the
     fill sends it, or holds a bound value where Playwright's driver could
     print it. An infrastructure error, as a missing value is (exit code 12,
-    API.md §7)."""
+    API.md §7). It carries the secrets that did bind, as `MissingSecretError`
+    does: none for protocol logging, refused before any value is read."""
 
     exit_code = 12
+
+    def __init__(self, message: str, bound: Mapping[str, BoundSecret]) -> None:
+        super().__init__(message)
+        self.bound = bound
 
 
 def bound_secrets(spec: Spec, start: str) -> dict[str, BoundSecret]:
@@ -92,15 +97,17 @@ def bound_secrets(spec: Spec, start: str) -> dict[str, BoundSecret]:
     value in its name or its value, spelled any way `Redactor.spells` finds
     (`SecretLoggedError`, #215): the driver writes its own diagnostics to the
     CLI's stderr unscanned, and node, which runs it, prints a `NODE_OPTIONS`
-    preload it can't find, path and all. The refusal names every such variable, writing
-    fixed words for one whose name holds a value, since no scan reads it. An
-    `AQA_SECRET_*` variable may hold any bound value: the driver inherits
-    each of them already, as it does a value's own."""
+    preload it can't find, path and all. The refusal names every such
+    variable, writing fixed words for one whose name holds a value, for a
+    caller that prints it unscanned; it carries what bound, for one that
+    scans. An `AQA_SECRET_*` variable may hold any bound value: the driver
+    inherits each of them already, as it does a value's own."""
     destinations = secret_destinations(spec, start)
     if destinations and (logged := _protocol_logging(os.environ)) is not None:
         raise SecretLoggedError(
             f"{logged}: Playwright would log every protocol message, a test "
-            "secret's value among them; unset it to run with test secrets"
+            "secret's value among them; unset it to run with test secrets",
+            {},
         )
     # Where the spec first references each secret, for the message.
     where: dict[str, str] = {}
@@ -140,7 +147,8 @@ def bound_secrets(spec: Spec, start: str) -> dict[str, BoundSecret]:
             f"a test secret's value is in the environment outside {PREFIX}* "
             "variables, where Playwright's driver could print it; unset these "
             "variables, or choose a test secret value none of them holds, to run "
-            "with test secrets: " + ", ".join(sorted(held))
+            "with test secrets: " + ", ".join(sorted(held)),
+            bound,
         )
     return bound
 
