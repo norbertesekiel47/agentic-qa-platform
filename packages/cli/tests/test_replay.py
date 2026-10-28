@@ -765,6 +765,27 @@ def test_a_launch_that_fails_exits_10_naming_the_host_fix(
     assert ADVICE not in result.output
 
 
+def test_a_selector_engine_left_unregistered_exits_10(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def skipped(_: object) -> None:
+        pass
+
+    monkeypatch.setattr(replay_module, "register_identity_engine", skipped)
+    root = tmp_path / "qa"
+    spec = committed(shop(root), shop_script("shop"))
+
+    result = replay(monkeypatch, on(app, spec))
+
+    assert result.exit_code == 10, result.output
+    assert re.fullmatch(
+        rf"no_sandbox shop: {SECONDS}, \$0, run record: {record_in(root)}\n"
+        "  the binding engine isn't registered: call register_identity_engine "
+        "before the browser session opens\n",
+        result.stderr,
+    )
+
+
 def test_a_spec_root_that_cant_hold_a_run_record_exits_15_before_the_reset(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
