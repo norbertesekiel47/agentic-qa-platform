@@ -133,6 +133,7 @@ def _admitted(paths: Sequence[Path], url: str | None) -> list[StrictRun]:
             scan = _scan(runs, error.bound.values())
             stop("secret_unusable", spec_id, _NOTHING, error.problems, scan=scan)
         except SecretLoggedError as error:
+            scan = _scan(runs, error.bound.values())
             stop("secret_unusable", spec_id, _NOTHING, (str(error),), scan=scan)
         runs.append(StrictRun(root, spec, config, start, script, bound))
     return runs

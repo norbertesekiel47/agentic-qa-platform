@@ -50,6 +50,7 @@ from packages.runner.tests.executor_fixtures import (
     shop_script,
 )
 from packages.runner.tests.secret_fixtures import FAKE_VALUE, copies_found
+from packages.runner.tests.test_bound_secrets import ELSEWHERE
 
 # How long a run took, as its line gives it.
 SECONDS = r"\d+\.\ds"
@@ -596,6 +597,25 @@ def test_a_missing_secret_prints_none_of_the_values_bound_beside_it(
         "AQA_SECRET_TEST_EMAIL is not set: set it to the value of test secret "
         f"TEST_EMAIL, which {tmp_path / 'qa'}/[SECRET:TEST_PASSWORD].spec.md "
         "references at preconditions.account.email\n"
+    )
+
+
+def test_the_environments_refusal_prints_none_of_the_values_that_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FIRST)
+    # NODE_OPTIONS holds the bound value, and the spec's id and path spell
+    # it (#215).
+    monkeypatch.setenv("NODE_OPTIONS", f"--require /nonexistent/{FIRST}/x.js")
+    spec = shop(tmp_path / "qa", preconditions=ACCOUNT, config=SECRETS)
+    spec = committed(renamed(spec, FIRST), compiled([]))
+
+    result = replay(monkeypatch, [str(spec)], driver=False)
+
+    assert result.exit_code == 12, result.output
+    assert result.stderr == (
+        "secret_unusable [SECRET:TEST_PASSWORD]: nothing was replayed\n"
+        f"  {ELSEWHERE}NODE_OPTIONS\n"
     )
 
 
