@@ -1,6 +1,6 @@
 # ADR-0033: M1 saves no screenshots; bound-field masking moves to M2
 
-- Status: Accepted (amended 2026-10-27: the capture and the record's binary writer exist, ADR-0034)
+- Status: Accepted (amended 2026-10-27: the capture and the record's binary writer exist, ADR-0034; 2026-10-28: the OCR check, ADR-0035)
 - Date: 2026-10-08
 
 ## Context
@@ -27,3 +27,6 @@ Option 3 (the maintainer, 2026-10-08). M1 has no screenshot capture and no binar
 ## Amendment (2026-10-27): the capture exists, and no run path saves one yet (#171)
 - **The mechanism is ADR-0034's.** Once `fill_secret` has handed the page a value in the browser session, a screenshot is a render of the page's scrubbed snapshot, captured with no script and no network; before that, the live page's. It meets this ADR's bar: the masking is in the capture, not in anything the page can reach. The hostile pages of both reviews of #171, M1's two attacks among them, show no bound value in 8 captures each.
 - **"No binary writer" no longer holds.** `RunRecord.write_screenshot` writes a `Screenshot`, which only `aqa_runner.screenshots.take_screenshot` makes. Still, no run path calls either until #251, after #250's OCR check, so the run record's pinned contents (`test_evidence.py`) stand.
+
+## Amendment (2026-10-28): the OCR check is in place (#250)
+- In a run that binds a test secret, `take_screenshot` OCR-checks every image it captures, live or rendered, from the first capture, before a `Screenshot` exists, and withholds one whose text spells a bound value (ADR-0035). A run that binds nothing runs no OCR. No run path saves a screenshot until #251, so `test_evidence.py`'s pinned contents still stand.

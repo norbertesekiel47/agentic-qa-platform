@@ -38,8 +38,9 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | [0030](0030-spec-yaml-parsing.md) | Reading specs and the project config: PyYAML narrowed to YAML 1.2's core schema | Accepted |
 | [0031](0031-renovate-weekly-dependency-updates.md) | Renovate for weekly dependency updates, and how a bump keeps TECH_STACK.md true | Accepted |
 | [0032](0032-hosted-compute-lambda-microvms.md) | Hosted compute: one Lambda MicroVM per run | Accepted |
-| [0033](0033-m1-saves-no-screenshots.md) | M1 saves no screenshots; bound-field masking moves to M2 | Accepted (amended 2026-10-27) |
-| [0034](0034-screenshots-by-snapshot-and-re-render.md) | Once a secret is filled, a screenshot is a render of a scrubbed snapshot | Accepted |
+| [0033](0033-m1-saves-no-screenshots.md) | M1 saves no screenshots; bound-field masking moves to M2 | Accepted (amended 2026-10-27, 2026-10-28) |
+| [0034](0034-screenshots-by-snapshot-and-re-render.md) | Once a secret is filled, a screenshot is a render of a scrubbed snapshot | Accepted (amended 2026-10-28) |
+| [0035](0035-ocr-check-before-images.md) | An OCR check before any image is saved, sent to a model or leaves the machine | Accepted; the engine is open with the maintainer |
 
 ## Template
 

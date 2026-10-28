@@ -1,6 +1,6 @@
 # ADR-0034: Once a secret is filled, a screenshot is a render of a scrubbed snapshot
 
-- Status: Accepted
+- Status: Accepted (amended 2026-10-28: #250's OCR check is inside `take_screenshot`, ADR-0035)
 - Date: 2026-10-27
 
 ## Context
@@ -88,7 +88,7 @@ After the review fixes (#171's Phase 5), the suite runs 55 cases: 51 pages, 4 of
 ## Consequences
 - **What is guaranteed.** In a session where a secret has been filled, a saved screenshot shows no text, attribute or field value in which the run's scan finds a bound value, raw or with HTML's references decoded. It shows no field value sharing 4 characters with one, and no editable element's content. A screenshot that can't meet that is withheld, and nothing is saved.
 - **Residuals, named and not fixed:**
-  - a value the page draws into an image (a `data:` or same-origin image), a font or anything else pixel-made: #250's OCR;
+  - a value the page draws into an image (a `data:` or same-origin image), a font or anything else pixel-made: #250's OCR. *Amended by ADR-0035:* a screenshot whose text OCR reads as a bound value is withheld; text OCR doesn't read stays a residual;
   - content the page shows only without script (`@media (scripting: none)`), and content a style the archive leaves out had hidden: the render shows it;
   - the render has no canvas, web fonts, adoptedStyleSheets, shadow-root `<style>`, inner scroll, or select's chosen option (restoring it would have cost about 10 more lines);
   - the render lacks what the archive leaves out that a page can still show: an element with a `hidden` attribute that the page's style shows; and it hides a frame on an opaque origin.
@@ -97,7 +97,7 @@ After the review fixes (#171's Phase 5), the suite runs 55 cases: 51 pages, 4 of
 - **A page can force withholding**: by changing its fields between the two snapshot calls, keeping its main thread busy, growing its archive past `ARCHIVE_CHARS`, or turning on designMode. A withheld screenshot is safe. #251 records the reason.
 - **Seams for later tickets:**
   - #251 calls `take_screenshot(session)`, then `record.write_screenshot(f"evidence/{seq}/<name>.png", shot)`, and records the reason when it catches `ScreenshotWithheldError`.
-  - #250 checks `shot.png` between the two, and before any model input.
+  - #250 checks `shot.png` between the two, and before any model input. *Amended by ADR-0035:* the check is inside `take_screenshot`, before a `Screenshot` exists, so #251 adds none.
   - No run path saves a screenshot until #251.
 - **Amends ADR-0033**: the capture and the record's binary writer exist.
 - **Cost.** A secret-filled capture took about 70-110 ms on the test pages and 0.5 s on Conduit in the prototype, against 14-22 ms live. There is no dependency, paid resource or model call.
