@@ -293,7 +293,7 @@ def test_editing_the_render_cant_reproduce_withholds_it(
     )
 
 
-@pytest.mark.parametrize("child", ["input", "iframe"])
+@pytest.mark.parametrize("child", ["input", "iframe", "option"])
 def test_fields_or_frames_the_render_doesnt_have_withhold_it(
     sites: Sites, tmp_path: Path, child: str
 ) -> None:

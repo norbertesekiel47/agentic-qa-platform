@@ -268,6 +268,14 @@ CASES = {
     "percent-encoded-text": Case(
         f"<p id=p style='{RED}'></p>", into="page", arm=PERCENT_ENCODED
     ),
+    # A select that shows the value as its chosen option's text, which the
+    # render restores the choice of.
+    "chosen-option": Case(
+        f"<select id=s style='{RED};appearance:none'><option></option>"
+        "<option value=b></option></select>",
+        into="page",
+        arm="s.options[1].text=VALUE;s.value='b'",
+    ),
     "canvas": Case(STYLE + CANVAS_DRAW, into="second", arm="arm()"),
     "blob-image": Case(STYLE + BLOB_IMAGE, into="second", arm="arm()"),
     # The owner's tricks (plan-v1-value-removal.md), the first two M1's
