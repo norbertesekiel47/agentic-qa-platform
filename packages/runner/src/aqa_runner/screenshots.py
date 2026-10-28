@@ -86,10 +86,9 @@ _SHADOW = re.compile(r'<template shadowmode="(?:open|closed)"')
 # script never showed; checks that the kinds of its fields, its frames and
 # its elements with a `contenteditable` attribute are the snapshot's, in
 # order, and gives each field its value or its checked state; hides each
-# frame it can't reach;
-# empties each such element and every editing host; and scrolls to the
-# live page's place. Null when they don't match; otherwise the values of
-# the fields and the text left.
+# frame it can't reach; empties each such element and every editing host;
+# and scrolls to the live page's place. Null when they don't match;
+# otherwise the values of the fields and the text left.
 RESTORE = """({plan, scroll}) => {
     const fields = [], texts = [], emptied = [];
     const walk = (document, plan) => {
