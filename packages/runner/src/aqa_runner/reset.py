@@ -30,7 +30,9 @@ async def reset(gate: EgressGate, hook: Reset, start: str, *, seconds: float) ->
     """POST `hook` to `start`, the run's start origin, through `gate`. Only
     a whole 2xx response within `seconds` passes: a redirect isn't followed,
     and the body is read to its end but never kept. Otherwise raises
-    `ResetFailedError`."""
+    `ResetFailedError`, a hook no request line carries included: loading
+    refuses one, but its `ValueError` would quote the URL (ADR-0023's
+    #237 amendment)."""
     try:
         async with asyncio.timeout(seconds):
             response = await runner_request(
@@ -40,7 +42,7 @@ async def reset(gate: EgressGate, hook: Reset, start: str, *, seconds: float) ->
         raise ResetFailedError(
             "timeout", f"the reset hook didn't answer within {seconds:g} s"
         ) from None
-    except EgressRefusedError, EgressUpstreamError:
+    except EgressRefusedError, EgressUpstreamError, ValueError:
         raise ResetFailedError(
             "unreachable", "the reset hook couldn't be reached"
         ) from None
