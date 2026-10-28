@@ -15,13 +15,13 @@ a snapshot, which the page can't steer:
 - What is left is rendered in a page of its own, with JavaScript off and
   every request answered from the archive or refused, at the session's
   viewport, scale and colour scheme and the live page's scroll. Its fields,
-  frames and editable elements must be the snapshot's, so a scrub that cut
-  markup is caught, and the field values and text it then shows are
-  scanned again before that page is captured.
+  frames, options and editable elements must be the snapshot's, so a scrub
+  that cut markup is caught, and the field values and text it then shows
+  are scanned again before that page is captured.
 The render has no canvas, web fonts, adopted style sheets, shadow-root
-`<style>`, inner scroll, select's chosen option or element with a `hidden`
-attribute, and a value the page draws into an image is drawn there too:
-ADR-0034's residuals, the last #250's OCR check."""
+`<style>`, inner scroll or element with a `hidden` attribute, and a value
+the page draws into an image is drawn there too: ADR-0034's residuals, the
+last #250's OCR check."""
 
 import asyncio
 import html
@@ -82,16 +82,17 @@ _SHADOW = re.compile(r'<template shadowmode="(?:open|closed)"')
 # In the render, before its capture: walks each document's flat tree, as a
 # DOM snapshot lists it (each shadow root's content, then what each slot
 # shows), and each frame's document; drops <noscript>, which a page with
-# script never showed; checks that the kinds of its fields, its frames and
-# its elements with a `contenteditable` attribute are the snapshot's, in
-# order, and gives each field its value or its checked state; hides each
-# frame it can't reach; empties each such element and every editing host;
-# and scrolls to the live page's place. Null when they don't match;
-# otherwise the values of the fields and the text left.
+# script never showed; checks that the kinds of its fields, its frames, its
+# options and its elements with a `contenteditable` attribute are the
+# snapshot's, in order, and gives each field its value or its checked state
+# and each option its chosen state; hides each frame it can't reach; empties
+# each such element and every editing host; and scrolls to the live page's
+# place. Null when they don't match; otherwise the values of the fields and
+# the text left.
 RESTORE = """({plan, scroll}) => {
     const fields = [], texts = [], emptied = [];
     const walk = (document, plan) => {
-        const kinds = [], inputs = [], frames = [];
+        const kinds = [], inputs = [], frames = [], options = [];
         const visit = (node) => {
             if (node.nodeType === Node.TEXT_NODE) texts.push(node);
             if (node.nodeType === Node.ELEMENT_NODE) {
@@ -107,6 +108,9 @@ RESTORE = """({plan, scroll}) => {
                 } else if (node.hasAttribute("contenteditable")) {
                     emptied.push(node);
                     kinds.push([name, "contenteditable"]);
+                } else if (name === "option") {
+                    options.push(node);
+                    kinds.push([name, null]);
                 }
                 if (node.isContentEditable && !node.parentElement?.isContentEditable) {
                     emptied.push(node);
@@ -129,6 +133,14 @@ RESTORE = """({plan, scroll}) => {
                 if (input.type === "checkbox" || input.type === "radio") {
                     input.checked = plan.checked[i];
                 } else if (!kept.includes(input.type)) input.value = plan.values[i];
+            });
+            options.forEach((option, i) => { option.selected = plan.selected[i]; });
+            // A select whose every option is unchosen picks its first, so
+            // one the page left blank is made blank again.
+            options.forEach((option, i) => {
+                if (option.selected && !plan.selected[i]) {
+                    option.closest("select").selectedIndex = -1;
+                }
             });
         }
         fields.push(...inputs);
@@ -166,13 +178,15 @@ type _Parts = dict[str, tuple[str, bytes]]
 
 class _Document(TypedDict):
     """What a render must find of a document, in walk order: the kind of
-    each field (its element and an input's `type` attribute), frame and
-    element with a `contenteditable` attribute (its element and that name);
-    each field's value and checked state; and each frame's document."""
+    each field (its element and an input's `type` attribute), frame, option
+    and element with a `contenteditable` attribute (its element and that
+    name); each field's value and checked state; whether each option is
+    chosen; and each frame's document."""
 
     kinds: list[tuple[str, str | None]]
     values: list[str]
     checked: list[bool]
+    selected: list[bool]
     frames: list[_Document | None]
 
 
@@ -197,7 +211,8 @@ class _Metrics(TypedDict):
 
 
 class _Flags(TypedDict):
-    """The nodes that are so: a checkbox or radio button that is checked."""
+    """The nodes that are so: a checkbox or radio button that is checked,
+    or an option that is chosen."""
 
     index: list[int]
 
@@ -218,6 +233,7 @@ class _Nodes(TypedDict):
     textValue: NotRequired[_Rare]
     contentDocumentIndex: NotRequired[_Rare]
     inputChecked: NotRequired[_Flags]
+    optionSelected: NotRequired[_Flags]
 
 
 class _Layout(TypedDict):
@@ -329,8 +345,8 @@ async def take_screenshot(session: BrowserSession) -> Screenshot:
     is over `ARCHIVE_CHARS`, isn't 7-bit MIME, names no page, or has a part
     in an encoding Python can't decode; a part spells a bound value after
     the scrub; an element is editable in a way the snapshot doesn't hold;
-    or the render's fields, frames and editable elements don't match the
-    snapshot's, or it spells a bound value."""
+    or the render's fields, frames, options and editable elements don't
+    match the snapshot's, or it spells a bound value."""
     try:
         png = await _captured(session)
     except TimeoutError:
@@ -531,7 +547,8 @@ def _plan(dom: _Snapshot, document: int, redactor: Redactor) -> _Document:
     texts = _rare(nodes.get("textValue"))
     documents = _rare(nodes.get("contentDocumentIndex"))
     checked = set(nodes.get("inputChecked", {"index": []})["index"])
-    plan = _Document(kinds=[], values=[], checked=[], frames=[])
+    selected = set(nodes.get("optionSelected", {"index": []})["index"])
+    plan = _Document(kinds=[], values=[], checked=[], selected=[], frames=[])
     heads: set[int] = set()
     omitted: set[int] = set()
     for node, name in enumerate(nodes["nodeName"]):
@@ -573,6 +590,9 @@ def _plan(dom: _Snapshot, document: int, redactor: Redactor) -> _Document:
                 )
             case _ if "contenteditable" in named:
                 plan["kinds"].append((element, "contenteditable"))
+            case "option":
+                plan["kinds"].append((element, None))
+                plan["selected"].append(node in selected)
     return plan
 
 

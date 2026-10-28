@@ -448,6 +448,37 @@ def test_a_render_keeps_a_buttons_label_and_what_is_checked(sites: Sites) -> Non
     assert rendered == live
 
 
+def test_a_render_keeps_each_selects_chosen_option(sites: Sites) -> None:
+    # The run chooses `s`'s red option; the page's script leaves `n` with no
+    # option chosen, so the red `W` it would show first stays hidden. The
+    # archive holds neither choice.
+    page = (
+        f"<!doctype html><meta charset=utf-8>{TRIGGER}"
+        f"<select id=s style='{RED}'><option></option><option value=b>WWWWWW</option>"
+        f"</select><select id=n style='{RED}'><option>W</option><option></option>"
+        "</select><script>n.value = 'none'</script>"
+    )
+
+    async def scenario() -> tuple[int, int]:
+        async with browsing(sites, redactor=Redactor(bound(sites.app))) as session:
+            scratch = await scratch_page(session)
+            await session.page.route(
+                "**/selects",
+                lambda route: route.fulfill(body=page, content_type="text/html"),
+            )
+            await session.navigate(f"{sites.app}/selects")
+            await session.select(await element(session, "#s"), "b")
+            live = await red_pixels(scratch, (await take_screenshot(session)).png)
+            trigger = await element(session, "#trigger")
+            await session.fill_secret(trigger, secret(sites, "TRIGGER"))
+            rendered = await red_pixels(scratch, (await take_screenshot(session)).png)
+            return live, rendered
+
+    live, rendered = asyncio.run(scenario())
+    assert live > 3000
+    assert rendered == live
+
+
 def test_a_value_sharing_four_characters_with_a_bound_value_is_dropped(
     sites: Sites,
 ) -> None:
