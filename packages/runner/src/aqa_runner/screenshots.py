@@ -642,7 +642,10 @@ async def _render(
                 if session.redactor.overlaps(value, SHARED_RUN)
             ],
         )
-        return await page.screenshot(type="png", animations="disabled", caret="hide")
+        # In CSS pixels, as the live page's capture is.
+        return await page.screenshot(
+            type="png", animations="disabled", caret="hide", scale="css"
+        )
     finally:
         await context.close()
 

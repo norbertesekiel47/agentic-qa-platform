@@ -374,6 +374,46 @@ def test_a_render_shows_text_and_images_that_spell_an_archive_reference(
     assert rendered == live
 
 
+def test_a_render_has_the_live_pages_size_scale_and_colour_scheme(
+    sites: Sites,
+) -> None:
+    # Only a dark colour scheme at scale 2 paints the page red.
+    page = (
+        f"<!doctype html><meta charset=utf-8>{TRIGGER}<style>"
+        "@media (prefers-color-scheme: dark) and (min-resolution: 2dppx)"
+        "{body{background:#f00}}</style>"
+    )
+    settings = BrowserSettings(
+        viewport=(640, 480), device_scale_factor=2, color_scheme="dark"
+    )
+
+    async def scenario() -> list[tuple[int, int, int]]:
+        async with browsing(
+            sites, redactor=Redactor(bound(sites.app)), settings=settings
+        ) as session:
+            scratch = await scratch_page(session)
+            await session.page.route(
+                "**/dark",
+                lambda route: route.fulfill(body=page, content_type="text/html"),
+            )
+            await session.navigate(f"{sites.app}/dark")
+            shots = [(await take_screenshot(session)).png]
+            trigger = await element(session, "#trigger")
+            await session.fill_secret(trigger, secret(sites, "TRIGGER"))
+            shots.append((await take_screenshot(session)).png)
+            # A PNG's width and height are the first fields of its header.
+            return [
+                (*struct.unpack(">II", png[16:24]), await red_pixels(scratch, png))
+                for png in shots
+            ]
+
+    # A live capture is in CSS pixels, whatever the scale it was drawn at.
+    live, rendered = asyncio.run(scenario())
+    assert live[:2] == (640, 480)
+    assert live[2] > 300_000
+    assert rendered == live
+
+
 def test_a_render_keeps_a_buttons_label_and_what_is_checked(sites: Sites) -> None:
     # The page checks by script, which the archive doesn't hold, and each red
     # square shows only while the control before it is checked.
