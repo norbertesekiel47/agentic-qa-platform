@@ -91,6 +91,127 @@ def test_a_heal_finds_no_assertion_target_by_what_it_could_claim(
     ]
 
 
+def claiming(text: str) -> Change:
+    """Makes a4, which checks the cart items' text, claim the literal `text`
+    instead of its pattern."""
+
+    def change(data: dict[str, Any]) -> None:
+        data["assertions"][3].pop("pattern")
+        data["assertions"][3]["text"] = text
+
+    return change
+
+
+def viewed(change: Change) -> Change:
+    """`change`, then another target of the cart items' meaning, as
+    `another_cart_view` adds it."""
+
+    def both(data: dict[str, Any]) -> None:
+        change(data)
+        another_cart_view(data)
+
+    return both
+
+
+LITERAL = claiming("Classic Hoodie M")
+SPELLS = (
+    "a heal finds no assertion's target by a string that spells its text check's claim"
+)
+
+
+# #261: nor by a string that holds what its claim says, however CSS spells it.
+@pytest.mark.parametrize(
+    ("base", "target", "locator", "path"),
+    [
+        (LITERAL, "cart_items", {"css": 'ul[aria-label="Classic Hoodie M"]'}, "/css"),
+        (
+            LITERAL,
+            "cart_items",
+            {"css": "ul[title*='classic hoodie m, size' i]"},
+            "/css",
+        ),
+        (LITERAL, "cart_items", {"css": r'ul[title="Classic\20 Hoodie\20 M"]'}, "/css"),
+        (LITERAL, "cart_items", {"css": r"ul[title=Classic\ Hoodie\ M]"}, "/css"),
+        (LITERAL, "cart_items", {"testid": "Classic Hoodie M"}, "/testid"),
+        (
+            LITERAL,
+            "cart_items",
+            {"testid": "cart-lines", "scope": {"css": '[title="Classic Hoodie M"]'}},
+            "/scope/css",
+        ),
+        (
+            viewed(LITERAL),
+            "cart_view",
+            {"css": 'ul[aria-label="Classic Hoodie M"]'},
+            "/css",
+        ),
+        (
+            viewed(claiming("returning@example.test")),
+            "cart_view",
+            {
+                "css": "ul",
+                "holds_value": {"step": 2, "value": "returning@example.test"},
+            },
+            "/holds_value/value",
+        ),
+    ],
+    ids=[
+        "attribute",
+        "in a longer value, any case",
+        "hex escapes",
+        "unquoted, escaped spaces",
+        "testid",
+        "scope",
+        "meaning",
+        "held value",
+    ],
+)
+def test_a_heal_finds_no_assertion_target_by_a_string_spelling_its_claim(
+    base: Change, target: str, locator: dict[str, Any], path: str
+) -> None:
+    assert heal(
+        lambda d: d["targets"][target].update(locators=[locator]), base=base
+    ) == [f"/targets/{target}/locators/0{path}: {SPELLS}"]
+
+
+# Structure, part of the claim, and a comment, which selects nothing; under
+# a literal claim and under a pattern.
+@pytest.mark.parametrize("base", [LITERAL, unchanged], ids=["literal", "pattern"])
+@pytest.mark.parametrize(
+    "locator",
+    [
+        {"css": "ul.cart-lines"},
+        {"testid": "cart-lines"},
+        {"css": "ul[aria-label*=Hoodie]"},
+        {"css": "ul.cart-lines /* Classic Hoodie M */"},
+    ],
+    ids=["css", "testid", "part", "comment"],
+)
+def test_a_heal_may_find_an_assertion_target_by_strings_without_its_claim(
+    base: Change, locator: dict[str, Any]
+) -> None:
+    assert (
+        heal(lambda d: d["targets"]["cart_items"].update(locators=[locator]), base=base)
+        == []
+    )
+
+
+def test_a_heal_may_keep_a_reviewed_locator_that_spells_the_claim() -> None:
+    def spelled(data: dict[str, Any]) -> None:
+        LITERAL(data)
+        data["targets"]["cart_items"]["locators"].insert(
+            0, {"css": 'ul[aria-label="Classic Hoodie M"]'}
+        )
+
+    assert (
+        heal(
+            lambda d: d["targets"]["cart_items"]["locators"][1].update(testid="cart"),
+            base=spelled,
+        )
+        == []
+    )
+
+
 # The Pay button's name, where no check reads its text; an action's label.
 @pytest.mark.parametrize(
     ("target", "locator"),

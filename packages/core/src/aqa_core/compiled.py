@@ -207,15 +207,20 @@ def _after_comments(css: str, index: int) -> int:
     return index
 
 
-def _after_string(css: str, index: int) -> int:
-    """Where the string opened by the quote at `index` ends: at the same
-    quote, or before a newline, which ends a string unclosed."""
+def _string(css: str, index: int) -> tuple[str, int]:
+    """The string opened by the quote at `index`, with its escapes decoded,
+    and where it ends: at the same quote, or before a newline, which ends a
+    string unclosed."""
     quote, index = css[index], index + 1
+    chars: list[str] = []
     while index < len(css) and css[index] not in (quote, "\n"):
-        index = _escape(css, index)[1] if css[index] == "\\" else index + 1
+        char, index = (
+            _escape(css, index) if css[index] == "\\" else (css[index], index + 1)
+        )
+        chars.append(char)
     if css[index : index + 1] == quote:
         index += 1
-    return index
+    return "".join(chars), index
 
 
 def _name(css: str, index: int) -> tuple[str, int]:
@@ -247,7 +252,7 @@ def css_tokens(css: str) -> Iterator[str]:
         if css.startswith("/*", index):
             index = _after_comments(css, index)
         elif css[index] in "\"'":
-            index = _after_string(css, index)
+            index = _string(css, index)[1]
         elif _starts_escape(css, index):
             index = _escape(css, index)[1]
         elif css[index] == ":":
@@ -255,6 +260,26 @@ def css_tokens(css: str) -> Iterator[str]:
             yield f":{name.lower()}"
         else:
             yield css[index]
+            index += 1
+
+
+def css_strings(css: str) -> Iterator[str]:
+    """Each string and each name in a css value, with its escapes decoded,
+    as Playwright's tokenizer reads them (see `css_tokens`): every text an
+    attribute value, an id, a class or a tag could spell. A comment gives
+    none."""
+    css = re.sub(r"\r\n?|\f", "\n", css)
+    index = 0
+    while index < len(css):
+        if css.startswith("/*", index):
+            index = _after_comments(css, index)
+        elif css[index] in "\"'":
+            string, index = _string(css, index)
+            yield string
+        elif _NAME_CHAR.match(css, index) or _starts_escape(css, index):
+            name, index = _name(css, index)
+            yield name
+        else:
             index += 1
 
 
