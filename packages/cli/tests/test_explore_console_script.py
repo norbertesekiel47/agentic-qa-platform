@@ -310,8 +310,9 @@ def test_a_node_options_path_holding_a_bound_value_exits_12_before_the_driver(
     assert child.stderr == (
         "secret_unusable shop: nothing was explored\n"
         "  a test secret's value is in the environment outside AQA_SECRET_* "
-        "variables, where Playwright's driver could print it; remove it from "
-        "these variables to run with test secrets: NODE_OPTIONS\n"
+        "variables, where Playwright's driver could print it; unset these "
+        "variables, or choose a test secret value none of them holds, to run "
+        "with test secrets: NODE_OPTIONS\n"
     )
 
 
