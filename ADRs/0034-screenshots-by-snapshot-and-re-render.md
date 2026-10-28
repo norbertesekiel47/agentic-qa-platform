@@ -1,6 +1,6 @@
 # ADR-0034: Once a secret is filled, a screenshot is a render of a scrubbed snapshot
 
-- Status: Accepted
+- Status: Accepted (amended 2026-10-28: the render restores each select's chosen option, #272)
 - Date: 2026-10-27
 
 ## Context
@@ -90,7 +90,7 @@ After the review fixes (#171's Phase 5), the suite runs 55 cases: 51 pages, 4 of
 - **Residuals, named and not fixed:**
   - a value the page draws into an image (a `data:` or same-origin image), a font or anything else pixel-made: #250's OCR;
   - content the page shows only without script (`@media (scripting: none)`), and content a style the archive leaves out had hidden: the render shows it;
-  - the render has no canvas, web fonts, adoptedStyleSheets, shadow-root `<style>`, inner scroll, or select's chosen option (restoring it would have cost about 10 more lines);
+  - the render has no canvas, web fonts, adoptedStyleSheets, shadow-root `<style>` or inner scroll. *Amended 2026-10-28:* a select's chosen option is restored (#272);
   - the render lacks what the archive leaves out that a page can still show: an element with a `hidden` attribute that the page's style shows; and it hides a frame on an opaque origin.
 - **Canvas pixels are absent from every secret-filled screenshot.** This limits #252's visual checks and `pixel_diff` (#254) in those runs: a baseline taken live won't match a render.
 - **A filled field renders empty**, and so does every editable element in a secret-filled session. A screenshot shows a filled password field as unfilled. Heal reads the accessibility tree for that.
@@ -101,3 +101,13 @@ After the review fixes (#171's Phase 5), the suite runs 55 cases: 51 pages, 4 of
   - No run path saves a screenshot until #251.
 - **Amends ADR-0033**: the capture and the record's binary writer exist.
 - **Cost.** A secret-filled capture took about 70-110 ms on the test pages and 0.5 s on Conduit in the prototype, against 14-22 ms live. There is no dependency, paid resource or model call.
+
+## Amendment (2026-10-28): the render restores each select's chosen option (#272)
+
+A render showed each select's default option, because the archive holds no choice. Measured on Chromium 153.0.8010.12: a chosen option drawn in red showed 3,247 red pixels live and 0 in the render.
+
+- **Options are in the match.** The DOM snapshot reports each chosen option (`optionSelected`). The plan lists every `<option>` the archive keeps as a kind, with whether it is chosen, so a scrub or reparse that moves an option is caught like a field, and an option a script put into a `<template>` withholds. An option with a `contenteditable` attribute stays that kind and is emptied.
+- **Only booleans reach the render.** The walk sets each option's `selected` and nothing else. A select the page left with no option chosen gets `selectedIndex = -1`, since it picks its first option once every option is unchosen. What a select shows is its chosen option's label or text: archive text, scrubbed and scanned like the rest, so the render shows no string it didn't already hold. The `chosen-option` case, whose chosen option's text is the bound value, proves it.
+- **The walk runs twice.** In a customizable select (`appearance: base-select`), choosing an option copies its content, as new nodes, into the `<selectedcontent>` before the options, which the walk has already passed. So an editable element in the copy would escape the emptying and the text scan. A second walk with the same plan checks, empties and scans the final DOM. Restoring a choice again leaves the copy's nodes in place, and a blank select's `<selectedcontent>` ends up empty after either walk.
+- **Measured.** With one walk, `chosen-option-copied` (the value split by an empty `<b>` in a chosen option's editable element) saved 8 of 8 captures, each with 5,180 red pixels. With two, all 8 hold none. `test_a_render_keeps_each_selects_chosen_option` shows a select the run chose and one the page left blank exactly as the live page does. The suite now runs 58 cases: 54 pages, 4 of them also at scale 2.
+- **Still withheld:** a customizable select whose chosen option holds different fields or editable elements from its default fails the first walk's match, as before.
