@@ -373,6 +373,38 @@ def test_a_render_shows_text_and_images_that_spell_an_archive_reference(
     assert rendered == live
 
 
+def test_a_render_keeps_a_buttons_label_and_what_is_checked(sites: Sites) -> None:
+    # The page checks by script, which the archive doesn't hold, and each red
+    # square shows only while the control before it is checked.
+    page = (
+        f"<!doctype html><meta charset=utf-8>{TRIGGER}"
+        "<style>.on{display:inline-block;width:50px;height:50px}"
+        ":checked+.on{background:#f00}</style>"
+        f"<input type=submit style='{RED}'><input type=checkbox id=c>"
+        "<span class=on></span><input type=radio name=r id=r><span class=on></span>"
+        "<input type=radio name=r checked><span class=on></span>"
+        "<script>c.checked = true; r.checked = true</script>"
+    )
+
+    async def scenario() -> tuple[int, int]:
+        async with browsing(sites, redactor=Redactor(bound(sites.app))) as session:
+            scratch = await scratch_page(session)
+            await session.page.route(
+                "**/controls",
+                lambda route: route.fulfill(body=page, content_type="text/html"),
+            )
+            await session.navigate(f"{sites.app}/controls")
+            live = await red_pixels(scratch, (await take_screenshot(session)).png)
+            trigger = await element(session, "#trigger")
+            await session.fill_secret(trigger, secret(sites, "TRIGGER"))
+            rendered = await red_pixels(scratch, (await take_screenshot(session)).png)
+            return live, rendered
+
+    live, rendered = asyncio.run(scenario())
+    assert live > 5000
+    assert rendered == live
+
+
 def test_a_value_sharing_four_characters_with_a_bound_value_is_dropped(
     sites: Sites,
 ) -> None:
