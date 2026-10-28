@@ -628,6 +628,18 @@ def test_every_reason_and_title_is_scanned_again_with_the_runs_scan(
     )
 
 
+def test_an_unresolved_read_only_intent_leaves_the_run_resumable(
+    tmp_path: Path,
+) -> None:
+    run = made(tmp_path)
+    run.record.step_intent(2, CLICK, side_effect=False, target_used="save")
+
+    end = ending(run, steps=(StepResult(2, "failed", error="the page crashed"),))
+
+    presented = document(end)
+    assert (presented["outcome"], presented["non_resumable"]) == ("inconclusive", [])
+
+
 def test_an_egress_block_decides_though_replay_raised_after_it(tmp_path: Path) -> None:
     run = made(tmp_path)
     side_effect_left_unresolved(run)
