@@ -1,4 +1,5 @@
 import json
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -254,6 +255,18 @@ def test_a_pattern_search_that_fails_refuses_the_locator(
             "failed"
         )
     ]
+
+
+def test_a_pattern_search_of_no_strings_starts_no_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        pytest.fail("a search of no strings must not start a process")
+
+    monkeypatch.setattr(subprocess, "run", unexpected)
+    # A universal selector, which spells nothing.
+    locator = {"css": "*"}
+    assert heal(lambda d: d["targets"]["cart_items"].update(locators=[locator])) == []
 
 
 # Structure, part of the claim, and a comment, which selects nothing; under
