@@ -72,7 +72,7 @@ A named element of the app under test, defined by its meaning together with its 
 _Avoid_: element, selector. Don't use "target" for the app or URL being tested; say "app under test".
 
 **Locator**:
-One way of finding a target on the page, such as by role and accessible name or by test ID. A target has several, tried in order until one gives the unique match its use needs: actionable for a step, present on the page for an assertion.
+One way of finding a target on the page, such as by role and accessible name or by test ID. A target has several, and in a replay every one must find the same element, the unique match its use needs: actionable for a step, present on the page for an assertion.
 _Avoid_: selector
 
 **Element ref**:
@@ -169,17 +169,17 @@ _Avoid_: step, which is an action the run dispatched
 ### Healing and verdicts
 
 **Drift**:
-A binding that doesn't resolve: within the wait budget, no locator gives the unique match its use needs, for a step or for an assertion. Drift sends the run to heal and says nothing yet about whether the app is broken.
+A binding that doesn't resolve: within the wait budget, its locators don't all find the same element with the unique match its use needs, for a step or for an assertion. Drift sends the run to heal and says nothing yet about whether the app is broken.
 
 **Heal**:
-The part of a run that handles drift: it re-observes the page, repairs bindings and non-side-effect steps, and classifies the outcome as a verdict.
+The part of a run that handles drift: it re-observes the page, repairs bindings, may insert replay-safe steps, and classifies the outcome as a verdict.
 _Avoid_: auto-fix
 
 **Verdict**:
 The classified outcome of a step: `pass`, `drift_consistent`, `expectation_violated` or `inconclusive`. Every verdict cites evidence.
 
 **`drift_consistent`**:
-The verdict that the UI changed, and that after repairing bindings and non-side-effect steps every assertion evaluates and passes and every invariant holds. It produces a heal proposal and claims nothing about why the UI changed.
+The verdict that the UI changed, and that after rebinding targets and inserting replay-safe steps every assertion evaluates and passes and every invariant holds. It produces a heal proposal and claims nothing about why the UI changed.
 _Avoid_: intentional change, expected change
 
 **`expectation_violated`**:
@@ -189,10 +189,10 @@ The verdict that an assertion whose target resolved evaluated false, or an invar
 The verdict when neither `drift_consistent` nor `expectation_violated` can be established within the budget. It goes to a human.
 
 **Heal patch**:
-The change a heal makes to a compiled script. It may touch only target locators and non-side-effect steps, never assertions, target meanings, side-effect steps, `side_effect` flags, browser settings, the coverage plan or invariants.
+The change a heal makes to a compiled script. It may only rebind target locators and insert replay-safe steps, never a `navigate`. It never removes, reorders or rewrites a step, and never touches assertions, target meanings, `side_effect` flags, browser settings, the coverage plan or invariants.
 
 **Heal proposal**:
-A heal patch awaiting a human decision, tied to the PR head commit and compiled-script version it was computed against. No heal patch is committed without a recorded human acceptance.
+A heal patch awaiting a human decision, tied to the compiled-script version it was computed against, and to the PR head commit when there is one. No heal patch is committed without a recorded human acceptance.
 _Avoid_: patch proposal, suggested fix
 
 **Stale**:
@@ -206,7 +206,7 @@ The report of an `expectation_violated` verdict: category, title, repro steps an
 _Avoid_: bug report, issue
 
 **Evidence**:
-What a verdict cites: before and after screenshots, an accessibility-snapshot diff, network and console logs, and the model's rationale.
+What a verdict cites: before and after screenshots, an accessibility-snapshot diff, network and console logs, and the model's rationale. Until masked screenshots land (#251), it has no screenshot, and says so.
 
 **Triage label**:
 A person's judgment on a verdict (correct, should have been `expectation_violated`, should have been `drift_consistent`, or not a bug). Triage labels are the ground truth for evaluating the healer.
