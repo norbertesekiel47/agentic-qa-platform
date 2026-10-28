@@ -41,6 +41,71 @@ def test_a_heal_may_rebind_any_targets_locators(target: str) -> None:
     assert heal(lambda d: d["targets"][target].update(locators=[{"css": "#x"}])) == []
 
 
+def another_cart_view(data: dict[str, Any]) -> None:
+    """Adds a target of the cart items' meaning, whose text a4 checks, that
+    only a visibility check reads."""
+    data["targets"]["cart_view"] = {
+        "semantic": data["targets"]["cart_items"]["semantic"],
+        "locators": [{"testid": "cart-view"}],
+    }
+    data["assertions"].append(
+        {
+            "id": "a7",
+            "expect_index": 2,
+            "check": "visible_unoccluded",
+            "target": "cart_view",
+            "min_size_px": [1, 1],
+            "in_viewport": True,
+        }
+    )
+
+
+# ADR-0025: an assertion's target is never found by what its claim says.
+@pytest.mark.parametrize(
+    ("base", "target", "locator", "path"),
+    [
+        # a4 checks the cart's text, which this name could hold.
+        (unchanged, "cart_items", {"role": "list", "name": "Classic Hoodie M"}, ""),
+        (unchanged, "pay_button", {"label": "Pay"}, ""),
+        (unchanged, "pay_button", {"placeholder": "Pay"}, ""),
+        (
+            unchanged,
+            "cart_items",
+            {"testid": "cart-lines", "scope": {"role": "region", "name": "Cart"}},
+            "/scope",
+        ),
+        (another_cart_view, "cart_view", {"role": "list", "name": "Cart"}, ""),
+    ],
+    ids=["named, text checked", "label", "placeholder", "named scope", "meaning"],
+)
+def test_a_heal_finds_no_assertion_target_by_what_it_could_claim(
+    base: Change, target: str, locator: dict[str, Any], path: str
+) -> None:
+    assert heal(
+        lambda d: d["targets"][target].update(locators=[locator]), base=base
+    ) == [
+        (
+            f"/targets/{target}/locators/0{path}: a heal finds no assertion's "
+            "target by a label or placeholder, or by a name when its text is checked"
+        )
+    ]
+
+
+# The Pay button's name, where no check reads its text; an action's label.
+@pytest.mark.parametrize(
+    ("target", "locator"),
+    [
+        ("pay_button", {"role": "button", "name": "Pay now"}),
+        ("email_input", {"label": "Email address"}),
+    ],
+    ids=["named, text unchecked", "action"],
+)
+def test_a_heal_may_find_a_target_by_what_its_uses_allow(
+    target: str, locator: dict[str, Any]
+) -> None:
+    assert heal(lambda d: d["targets"][target].update(locators=[locator])) == []
+
+
 def test_a_heal_never_changes_a_targets_meaning() -> None:
     assert heal(
         lambda d: d["targets"]["pay_button"].update(semantic="the cart's button")

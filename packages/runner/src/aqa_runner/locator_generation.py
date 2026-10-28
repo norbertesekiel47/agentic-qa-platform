@@ -30,6 +30,7 @@ from aqa_core.compiled import (
     HeldValue,
     Locator,
     Target,
+    allowed_for_assertion,
 )
 from aqa_core.schema import AriaRole, Contract
 from aqa_core.text import normalize
@@ -911,8 +912,7 @@ class TargetUses:
         (ADR-0025)."""
         if use == "action":
             return True
-        named = isinstance(locator, ByRole) and locator.name is not None
-        if isinstance(locator, ByLabel | ByPlaceholder) or (named and self.checks_text):
+        if not allowed_for_assertion(locator, checks_text=self.checks_text):
             return False
         return use == "assertion" or locator.scope is not None
 
