@@ -4,6 +4,7 @@ trusted saves nothing, and says why in words that never quote the page."""
 
 import asyncio
 import json
+import os
 import struct
 import time
 import zlib
@@ -551,4 +552,96 @@ def test_a_live_capture_devtools_hands_back_undecodable_withholds_it(
         "DevTools replied in a shape the capture doesn't read",
         [],
         0,
+    )
+
+
+SCRATCH_SIZES = (100_000, 130_000, 150_000, 200_000, 300_000, 400_000)
+SCRATCH_RUNS = 3
+
+
+def test_scratch_ci_scrub_rate(sites: Sites, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Throwaway (scratch/171-ci-scrub-rate, never merged): times end-to-end
+    # captures of the archive-cap test's page of text at several archive sizes
+    # on CI's runner, then fails with every timing so the log shows them.
+    monkeypatch.setattr(screenshots, "CAPTURE_SECONDS", 60.0)
+    monkeypatch.setattr(screenshots, "ARCHIVE_CHARS", 10_000_000)
+    marks: dict[str, float] = {}
+    lengths: list[int] = []
+    send = CDPSession.send
+
+    async def measuring(
+        devtools: CDPSession, method: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        found = await send(devtools, method, params)
+        if method == "Page.captureSnapshot":
+            lengths.append(len(found["data"]))
+        if method == "DOMSnapshot.captureSnapshot":
+            marks["snapshot"] = time.perf_counter()
+        return found
+
+    prepared = screenshots._prepared
+    render = screenshots._render
+
+    def timed_prepared(*args: Any) -> Any:
+        start = time.perf_counter()
+        try:
+            return prepared(*args)
+        finally:
+            marks["prepared"] = time.perf_counter() - start
+
+    async def timed_render(*args: Any) -> Any:
+        start = time.perf_counter()
+        try:
+            return await render(*args)
+        finally:
+            marks["render"] = time.perf_counter() - start
+
+    monkeypatch.setattr(CDPSession, "send", measuring)
+    monkeypatch.setattr(screenshots, "_prepared", timed_prepared)
+    monkeypatch.setattr(screenshots, "_render", timed_render)
+    paragraph = "<p>" + "the order ships once payment clears " * 12 + "</p>\n"
+
+    async def capture(size: int) -> str:
+        filler = paragraph * (int(size * 0.92) // len(paragraph))
+        async with browsing(sites, redactor=Redactor(bound(sites.app))) as session:
+            await serve_cases(session.page, sites.other)
+            await red_filled(session, sites)
+            await session.page.evaluate(
+                "(html) => document.body.insertAdjacentHTML('beforeend', html)", filler
+            )
+            marks.clear()
+            start = time.perf_counter()
+            try:
+                await take_screenshot(session)
+                outcome = "saved"
+            except ScreenshotWithheldError as error:
+                outcome = f"withheld: {error}"
+            total = time.perf_counter() - start
+        archive = lengths[-1]
+        return (
+            f"archive={archive} total={total:.3f}s"
+            f" snapshot={marks.get('snapshot', start) - start:.3f}s"
+            f" prepared={marks.get('prepared', -1):.3f}s"
+            f" render={marks.get('render', -1):.3f}s"
+            f" rate={total / archive * 1e6:.2f}s/M {outcome}"
+        )
+
+    rows = [
+        f"size={size} run={run} " + asyncio.run(capture(size))
+        for run in range(SCRATCH_RUNS)
+        for size in SCRATCH_SIZES
+    ]
+    cpu = Path("/proc/cpuinfo")
+    model = next(
+        (
+            line
+            for line in (cpu.read_text().splitlines() if cpu.exists() else [])
+            if line.startswith("model name")
+        ),
+        "model name: unknown",
+    )
+    pytest.fail(
+        "SCRATCH-CI-SCRUB-RATE\n"
+        + f"cpus={os.cpu_count()} {model}\n"
+        + "\n".join(f"SCRATCH {row}" for row in rows)
     )
