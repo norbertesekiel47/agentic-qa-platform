@@ -367,6 +367,25 @@ def test_a_compiled_script_that_cant_be_read_exits_15_before_the_driver(
     )
 
 
+def test_a_linked_compiled_script_exits_5_before_the_driver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "qa"
+    spec = committed(shop(root), shop_script("shop"))
+    # A repository can commit the compiled script as a link pointing anywhere.
+    target = root / ".compiled" / "shop.json"
+    elsewhere = target.rename(tmp_path / "elsewhere.json")
+    target.symlink_to(elsewhere)
+
+    result = replay(monkeypatch, [str(spec)], driver=False)
+
+    assert result.exit_code == 5, result.output
+    assert result.stderr == (
+        "spec_error shop: nothing was replayed\n"
+        f"  {target}: a link, and explore writes only in {root}\n"
+    )
+
+
 def unloadable(spec: Path) -> str:
     target = spec.parent / ".compiled" / "shop.json"
     target.parent.mkdir()

@@ -6,8 +6,9 @@ rolled up (`replay_result.rolled_up`).
 Every spec is admitted before any run, so before any reset hook is sent
 and before Playwright's driver starts, which must inherit no environment a
 test secret's binding refused (#215): it resolves; its compiled script,
-`<spec root>/.compiled/<spec id>.json`, exists and loads, and replay admits
-it (`executor.admitted`), each a spec error (exit 5), or 15 for a file that
+`<spec root>/.compiled/<spec id>.json`, read as explore reads it, with no
+link on the way (`publication`), exists and loads, and replay admits it
+(`executor.admitted`), each a spec error (exit 5), or 15 for a file that
 can't be read; and its test secrets bind (12). Then each runs in argument
 order (`aqa_runner.strict_replay`), on one driver.
 
@@ -22,10 +23,14 @@ from pathlib import Path
 from typing import Annotated, Final
 
 import typer
+from aqa_core.compiled import CompiledScript
+from aqa_core.config import ProjectConfig
 from aqa_core.project import SpecError, load_compiled
+from aqa_core.spec import Spec
 from aqa_runner.bound_secrets import MissingSecretError, SecretLoggedError
 from aqa_runner.executor import admitted
 from aqa_runner.locator_generation import register_identity_engine
+from aqa_runner.publication import publication
 from aqa_runner.redaction import Redactor
 from aqa_runner.replay_result import EXIT_CODES, rolled_up
 from aqa_runner.strict_replay import Replayed, StrictRun, strict_replay
@@ -104,14 +109,7 @@ def _admitted(paths: Sequence[Path], url: str | None) -> list[StrictRun]:
         except SpecError as error:
             stop("spec_error", str(path), _NOTHING, error.problems, scan=scan)
         spec_id = spec.frontmatter.id
-        try:
-            script = load_compiled(root / ".compiled" / f"{spec_id}.json", config)
-        except FileNotFoundError:
-            stop("spec_error", spec_id, _MISSING, scan=scan)
-        except OSError:
-            stop("record_error", spec_id, _UNREAD, scan=scan)
-        except SpecError as error:
-            stop("spec_error", spec_id, _UNLOADED, error.problems, scan=scan)
+        script = _compiled(root, spec, config, scan)
         try:
             _, _, bound, _ = admitted(script, spec, config, start)
         except SpecError as error:
@@ -122,6 +120,29 @@ def _admitted(paths: Sequence[Path], url: str | None) -> list[StrictRun]:
             stop("secret_unusable", spec_id, _NOTHING, (str(error),), scan=scan)
         runs.append(StrictRun(root, spec, config, start, script, bound))
     return runs
+
+
+def _compiled(
+    root: Path, spec: Spec, config: ProjectConfig, scan: Redactor
+) -> CompiledScript:
+    """`spec`'s compiled script, read as explore reads it, or a stop
+    scanned with `scan`: none, a link on the way (`publication`) and one
+    that doesn't load are spec errors, and one that can't be read is 15."""
+    spec_id = spec.frontmatter.id
+    try:
+        at = publication(root, spec)
+    except SpecError as error:
+        stop("spec_error", spec_id, _NOTHING, error.problems, scan=scan)
+    except OSError:
+        stop("record_error", spec_id, _UNREAD, scan=scan)
+    if at.found is None:
+        stop("spec_error", spec_id, _MISSING, scan=scan)
+    try:
+        return load_compiled(at.target, config)
+    except OSError:
+        stop("record_error", spec_id, _UNREAD, scan=scan)
+    except SpecError as error:
+        stop("spec_error", spec_id, _UNLOADED, error.problems, scan=scan)
 
 
 def _scan(runs: Sequence[StrictRun]) -> Redactor:
