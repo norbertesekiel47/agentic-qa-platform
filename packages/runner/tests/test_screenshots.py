@@ -142,7 +142,6 @@ def test_until_a_secret_is_filled_the_screenshot_is_the_live_page(
 def test_a_screenshot_waiting_on_the_first_fill_is_a_render(
     sites: Sites, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-
     async def scenario() -> int:
         paused, released = asyncio.Event(), asyncio.Event()
 
@@ -167,6 +166,31 @@ def test_a_screenshot_waiting_on_the_first_fill_is_a_render(
             released.set()
             await filling
             return await red_pixels(scratch, (await shooting).png)
+
+    assert asyncio.run(scenario()) == 0
+
+
+def test_a_fill_that_fails_partway_counts_as_filled(sites: Sites) -> None:
+    # The page's own execCommand takes the value in, then throws, so the
+    # fill's script fails with the value in the field.
+    breaking = (
+        "() => { const insert = Document.prototype.execCommand; "
+        "document.execCommand = function (...args) { "
+        "insert.apply(this, args); throw new Error('no'); }; }"
+    )
+
+    async def scenario() -> int:
+        async with browsing(sites, redactor=Redactor(bound(sites.app))) as session:
+            await serve_cases(session.page, sites.other)
+            scratch = await scratch_page(session)
+            await session.navigate(f"{sites.app}/shot/plain")
+            await session.page.evaluate(breaking)
+            with pytest.raises(SecretNotFilledError):
+                await session.fill_secret(
+                    await element(session, "#f"), secret(sites, "RED")
+                )
+            assert await session.page.evaluate("f.value") == RED_VALUE
+            return await red_pixels(scratch, (await take_screenshot(session)).png)
 
     assert asyncio.run(scenario()) == 0
 
