@@ -99,8 +99,10 @@ def search_found(returncode: int | None, stdout: bytes, stderr: bytes) -> bool:
 
 def any_has_pattern(texts: Sequence[str], pattern: str) -> bool:
     """Whether `has_pattern` finds `pattern` in any of `texts`, searched in
-    one child under one `SEARCH_SECONDS` bound. Raises `SearchTimeoutError`
-    when the search runs out of time."""
+    one child under one `SEARCH_SECONDS` bound. No texts start no child.
+    Raises `SearchTimeoutError` when the search runs out of time."""
+    if not texts:
+        return False
     # ASCII only, with every other character escaped, so the bytes say the
     # same to the child whatever its locale, a lone surrogate included.
     payload = json.dumps(["patterns", pattern, list(texts)]).encode("ascii")
