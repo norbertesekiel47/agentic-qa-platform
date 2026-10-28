@@ -274,6 +274,10 @@ CASES = {
     # measured attacks on Playwright's mask (ADR-0033).
     "plain": Case(STYLE + FIELD),
     "textarea": Case(STYLE + "<textarea id=f aria-label=Secret></textarea>"),
+    # A `type` attribute, which a textarea has no use for.
+    "textarea-with-a-type": Case(
+        STYLE + "<textarea id=f type=text aria-label=Secret></textarea>"
+    ),
     # After the field: the observer removes every node added after it.
     "m1-overlay-attacks": Case(STYLE + FIELD + M1_ATTACKS),
     "closed-shadow-root": Case(STYLE + FIELD + CLOSED_SHADOW, arm="arm()"),
