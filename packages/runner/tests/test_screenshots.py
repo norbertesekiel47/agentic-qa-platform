@@ -9,6 +9,7 @@ runs them: Linux in CI, macOS locally."""
 import asyncio
 import json
 import struct
+import time
 import zlib
 from collections.abc import Iterator
 from pathlib import Path
@@ -550,7 +551,61 @@ def test_a_page_that_holds_its_snapshot_back_past_the_bound_withholds_it(
             return found
 
     assert asyncio.run(scenario()) == (
-        "the page's snapshot or its render took over 0.5 s",
+        "the page's snapshot, its scrub or its render took over 0.5 s",
+        [],
+        0,
+    )
+
+
+def test_a_scrub_past_the_bound_withholds_it_and_holds_up_nothing_else(
+    sites: Sites, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(screenshots, "CAPTURE_SECONDS", 0.5)
+    ticks: list[int] = []
+    during: list[int] = []
+    spans = Redactor.spans
+
+    # The first scan of the scrub takes a second, as a large archive's does,
+    # and notes how often the event loop ran meanwhile.
+    def slow(redactor: Redactor, text: str) -> list[tuple[int, int]]:
+        if not during:
+            before = len(ticks)
+            time.sleep(1)
+            during.append(len(ticks) - before)
+        return spans(redactor, text)
+
+    monkeypatch.setattr(Redactor, "spans", slow)
+
+    async def scenario() -> tuple[str, list[Path], int]:
+        async def tick() -> None:
+            while True:
+                ticks.append(0)
+                await asyncio.sleep(0.01)
+
+        async with browsing(sites, redactor=Redactor(bound(sites.app))) as session:
+            await serve_cases(session.page, sites.other)
+            record = RunRecord.create(tmp_path).redacting(session.redactor)
+            await red_filled(session, sites)
+            ticking = asyncio.create_task(tick())
+            found = await withheld(session, record)
+            ticking.cancel()
+            return found
+
+    assert asyncio.run(scenario()) == (
+        "the page's snapshot, its scrub or its render took over 0.5 s",
+        [],
+        0,
+    )
+    assert during[0] > 0
+
+
+def test_an_archive_too_large_to_scrub_in_the_bound_withholds_it(
+    sites: Sites, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(screenshots, "ARCHIVE_CHARS", 1000)
+
+    assert withholding(sites, tmp_path, "0") == (
+        "the archive is over 1000 characters",
         [],
         0,
     )
