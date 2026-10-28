@@ -200,6 +200,39 @@ def test_a_scrub_past_the_bound_withholds_it_and_holds_up_nothing_else(
     assert during[0] > 0
 
 
+def test_an_archive_just_under_the_largest_a_capture_scrubs_is_saved(
+    sites: Sites, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lengths: list[int] = []
+    send = CDPSession.send
+
+    async def measuring(
+        devtools: CDPSession, method: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        found = await send(devtools, method, params)
+        if method == "Page.captureSnapshot":
+            lengths.append(len(found["data"]))
+        return found
+
+    monkeypatch.setattr(CDPSession, "send", measuring)
+    # A page of text, as the cap was measured on.
+    paragraph = "<p>" + "the order ships once payment clears " * 12 + "</p>\n"
+    filler = paragraph * (int(screenshots.ARCHIVE_CHARS * 0.92) // len(paragraph))
+
+    async def scenario() -> int:
+        async with browsing(sites, redactor=Redactor(bound(sites.app))) as session:
+            await serve_cases(session.page, sites.other)
+            scratch = await scratch_page(session)
+            await red_filled(session, sites)
+            await session.page.evaluate(
+                "(html) => document.body.insertAdjacentHTML('beforeend', html)", filler
+            )
+            return await red_pixels(scratch, (await take_screenshot(session)).png)
+
+    assert asyncio.run(scenario()) == 0
+    assert 0.95 < lengths[0] / screenshots.ARCHIVE_CHARS <= 1
+
+
 def test_an_archive_too_large_to_scrub_in_the_bound_withholds_it(
     sites: Sites, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
