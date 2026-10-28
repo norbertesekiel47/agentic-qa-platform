@@ -133,6 +133,9 @@ M1_ATTACKS = """<style>x-pw-glass{display:none!important}</style><script>new Mut
 # styled inline.
 CLOSED_SHADOW = f"""<div id=h></div><script>const r=h.attachShadow({{mode:'closed'}});r.innerHTML='<input id=g style="{RED}">';
 window.arm=()=>{{r.querySelector('input').value=f.value;f.remove()}}</script>"""
+SLOT = (
+    "<script>h.attachShadow({mode:'open'}).innerHTML='<p>x</p><slot></slot>'</script>"
+)
 MOVING = """<style>@keyframes j{from{margin-left:0}to{margin-left:400px}}#f{animation:j 200ms steps(2) infinite}</style>
 <script>(function t(){f.style.marginTop=(performance.now()%2>1?'60px':'0');requestAnimationFrame(t)})()</script>"""
 SCROLL = """<div style='height:3000px'></div><script>window.arm=()=>{(function t(){scrollTo(0,(performance.now()|0)%2?1000:0);requestAnimationFrame(t)})()}</script>"""
@@ -263,6 +266,8 @@ CASES = {
     # After the field: the observer removes every node added after it.
     "m1-overlay-attacks": Case(STYLE + FIELD + M1_ATTACKS),
     "closed-shadow-root": Case(STYLE + FIELD + CLOSED_SHADOW, arm="arm()"),
+    # A field of the page's own, shown through a shadow root's slot.
+    "slotted-field": Case(STYLE + "<div id=h>" + FIELD + "</div>" + SLOT),
     "same-origin-frame": Case(
         STYLE
         + "<iframe id=fr src=/shot/frame style='border:0;width:600px;height:120px'></iframe>",
