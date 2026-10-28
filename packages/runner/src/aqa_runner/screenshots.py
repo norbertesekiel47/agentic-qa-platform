@@ -168,9 +168,9 @@ type _Parts = dict[str, tuple[str, bytes]]
 
 class _Document(TypedDict):
     """What a render must find of a document, in walk order: the kind of
-    each field (its element and `type` attribute), frame and element with
-    a `contenteditable` attribute (its element and that name); each
-    field's value and checked state; and each frame's document."""
+    each field (its element and an input's `type` attribute), frame and
+    element with a `contenteditable` attribute (its element and that name);
+    each field's value and checked state; and each frame's document."""
 
     kinds: list[tuple[str, str | None]]
     values: list[str]
@@ -531,7 +531,8 @@ def _plan(dom: _Snapshot, document: int, redactor: Redactor) -> _Document:
             # https://chromedevtools.github.io/devtools-protocol/tot/DOMSnapshot/#type-NodeTreeSnapshot
             # A textarea's value is its textValue, not its inputValue.
             case "input" | "textarea":
-                plan["kinds"].append((element, named.get("type")))
+                kind = named.get("type") if element == "input" else None
+                plan["kinds"].append((element, kind))
                 held = (inputs if element == "input" else texts).get(node, -1)
                 value = strings[held] if held >= 0 else ""
                 shown = not (
