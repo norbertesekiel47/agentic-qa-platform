@@ -554,8 +554,8 @@ class TextInTarget(_TextCheck):
         (ADR-0025's #58 amendment): the value and the check's literal hold
         one another as whole words, so the target would be found by what
         its check verifies; or the check is a pattern, whatever the value,
-        since a pattern runs only inside a run's bounded text search, never
-        against a held value."""
+        since a pattern runs only inside a bounded text search, which the
+        loader never starts."""
         if self.text is None:
             return True
         return has_text(value, self.text) or has_text(self.text, value)
