@@ -16,6 +16,8 @@ from typing import Any
 
 import pytest
 from aqa_core.browser import BrowserSettings
+from aqa_core.config import RoleField
+from aqa_core.project import SecretDestination
 from aqa_runner import browser_session, screenshots
 from aqa_runner.bound_secrets import BoundSecret
 from aqa_runner.browser_session import BrowserSession
@@ -26,8 +28,9 @@ from aqa_runner.screenshots import (
     ScreenshotWithheldError,
     take_screenshot,
 )
-from aqa_runner.secret_fields import SecretNotFilledError
+from aqa_runner.secret_fields import SecretNotFilledError, field_matches
 from playwright.async_api import CDPSession, ElementHandle, Error, Page
+from pydantic import SecretStr
 
 from packages.runner.tests.document_fixtures import (
     APP,
@@ -37,7 +40,10 @@ from packages.runner.tests.document_fixtures import (
 )
 from packages.runner.tests.screenshot_pages import (
     CASES,
+    EDITABLE,
+    EDITABLE_STYLE,
     FIELD,
+    RED,
     RED_VALUE,
     SCALED,
     STYLE,
@@ -136,7 +142,6 @@ def test_until_a_secret_is_filled_the_screenshot_is_the_live_page(
 def test_a_screenshot_waiting_on_the_first_fill_is_a_render(
     sites: Sites, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    checked = browser_session.field_matches
 
     async def scenario() -> int:
         paused, released = asyncio.Event(), asyncio.Event()
@@ -144,7 +149,7 @@ def test_a_screenshot_waiting_on_the_first_fill_is_a_render(
         async def held(*args: Any) -> bool:
             paused.set()
             await released.wait()
-            return await checked(*args)
+            return await field_matches(*args)
 
         monkeypatch.setattr(browser_session, "field_matches", held)
         async with browsing(sites, redactor=Redactor(bound(sites.app))) as session:
@@ -397,6 +402,12 @@ def test_a_capture_changes_nothing_the_page_can_see(sites: Sites) -> None:
     assert asyncio.run(scenario()) == [{}, True, {}, True]
 
 
+# Why a render whose scrub cut markup, or that the page changed, is withheld.
+MISMATCHED = (
+    "the snapshot's fields, frames and editable elements don't match its render's"
+)
+
+
 async def withheld(
     session: BrowserSession, record: RunRecord
 ) -> tuple[str, list[Path], int]:
@@ -561,11 +572,7 @@ def test_fields_the_render_doesnt_have_withhold_it(
         "document.querySelector('template').append(document.createElement('input'))"
     )
 
-    assert withholding(sites, tmp_path, script) == (
-        "the snapshot's fields and frames don't match its render's",
-        [],
-        0,
-    )
+    assert withholding(sites, tmp_path, script) == (MISMATCHED, [], 0)
 
 
 def test_an_image_whose_bytes_spell_a_bound_value_withholds_it(
@@ -635,6 +642,70 @@ def test_an_archive_the_scrub_cant_read_withholds_it(
     monkeypatch.setattr(CDPSession, "send", handing_over)
 
     assert withholding(sites, tmp_path, "0") == (reason, [], 0)
+
+
+@pytest.mark.parametrize(
+    ("value", "body", "into", "script", "reason"),
+    [
+        # Cutting the value takes the attribute that made the element
+        # editable, so the render wouldn't empty it.
+        (
+            "contenteditable",
+            EDITABLE_STYLE + EDITABLE,
+            "#ce",
+            "const t = ce.firstChild; t.splitText(7); t.after(document.createElement('b'))",
+            MISMATCHED,
+        ),
+        # Cutting the value makes a hidden field a text field, which takes
+        # the newline out of what it shows.
+        (
+            "hidden",
+            STYLE + FIELD + "<input id=h type=hidden>",
+            "#f",
+            "h.value = 'hid\\nden'",
+            MISMATCHED,
+        ),
+        # The render's parser drops a NUL in text.
+        (
+            RED_VALUE,
+            STYLE + FIELD + f"<p id=p style='{RED}'></p>",
+            "#f",
+            f"p.textContent = {json.dumps(RED_VALUE[:4] + chr(0) + RED_VALUE[4:])}",
+            "the render spells a bound value",
+        ),
+    ],
+    ids=["value-contenteditable", "value-hidden-split-by-a-newline", "split-by-a-nul"],
+)
+def test_a_value_the_scrub_changes_the_markup_or_parse_of_is_never_shown(
+    sites: Sites, *, value: str, body: str, into: str, script: str, reason: str
+) -> None:
+    filled = BoundSecret(
+        "MARKUP",
+        SecretStr(value),
+        SecretDestination((sites.app,), RoleField(role="textbox", name="Secret")),
+    )
+
+    async def scenario() -> str | int:
+        redactor = Redactor([filled, *bound(sites.app)])
+        async with browsing(sites, redactor=redactor) as session:
+            scratch = await scratch_page(session)
+            await session.page.route(
+                "**/markup",
+                lambda route: route.fulfill(
+                    body=f"<!doctype html><meta charset=utf-8>{TRIGGER}{body}",
+                    content_type="text/html; charset=utf-8",
+                ),
+            )
+            await session.navigate(f"{sites.app}/markup")
+            await session.fill_secret(await element(session, into), filled)
+            await session.page.evaluate(script)
+            try:
+                shot = await take_screenshot(session)
+            except ScreenshotWithheldError as withheld:
+                return str(withheld)
+            return await red_pixels(scratch, shot.png)
+
+    assert asyncio.run(scenario()) == reason
 
 
 def test_a_render_asks_nothing_of_the_network(sites: Sites) -> None:

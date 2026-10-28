@@ -14,8 +14,10 @@ a snapshot, which the page can't steer:
   with one, and every editable element is emptied.
 - What is left is rendered in a page of its own, with JavaScript off and
   every request answered from the archive or refused, at the session's
-  viewport, scale and colour scheme and the live page's scroll, and that
-  page is captured.
+  viewport, scale and colour scheme and the live page's scroll. Its fields,
+  frames and editable elements must be the snapshot's, so a scrub that cut
+  markup is caught, and the field values and text it then shows are
+  scanned again before that page is captured.
 The render has no canvas, web fonts, adopted style sheets, shadow-root
 `<style>` or inner scroll, and a value the page draws into an image is
 drawn there too: ADR-0034's residuals, the last #250's OCR check."""
@@ -67,22 +69,33 @@ _SHADOW = re.compile(r'<template shadowmode="(?:open|closed)"')
 # In the render, before its capture: walks each document's flat tree, as a
 # DOM snapshot lists it (each shadow root's content, then what each slot
 # shows), and each frame's document; drops <noscript>, which a page with
-# script never showed; gives each field its value, by order, when the
-# fields and frames match the snapshot's; empties every editing host; and
-# scrolls to the live page's place. False when they don't match.
-RESTORE = """({fields, scroll}) => {
-    const editing = [];
+# script never showed; checks that the kinds of its fields, its frames and
+# its elements with a `contenteditable` attribute are the snapshot's, in
+# order, and gives each field its value; empties each such element and
+# every editing host; and scrolls to the live page's place. Null when they
+# don't match; otherwise the values of the fields and the text left.
+RESTORE = """({plan, scroll}) => {
+    const fields = [], texts = [], emptied = [];
     const walk = (document, plan) => {
-        const inputs = [], frames = [];
+        const kinds = [], inputs = [], frames = [];
         const visit = (node) => {
+            if (node.nodeType === Node.TEXT_NODE) texts.push(node);
             if (node.nodeType === Node.ELEMENT_NODE) {
-                const name = node.localName;
+                const name = node.localName.toLowerCase();
                 if (name === "noscript") return node.remove();
                 if (name === "template") return;
-                if (name === "input" || name === "textarea") inputs.push(node);
-                if (name === "iframe" || name === "frame") frames.push(node);
+                if (name === "input" || name === "textarea") {
+                    inputs.push(node);
+                    kinds.push([name, name === "input" ? node.getAttribute("type") : null]);
+                } else if (name === "iframe" || name === "frame") {
+                    frames.push(node);
+                    kinds.push([name, null]);
+                } else if (node.hasAttribute("contenteditable")) {
+                    emptied.push(node);
+                    kinds.push([name, "contenteditable"]);
+                }
                 if (node.isContentEditable && !node.parentElement?.isContentEditable) {
-                    editing.push(node);
+                    emptied.push(node);
                 }
             }
             let kids = node.shadowRoot?.childNodes ?? node.childNodes;
@@ -94,22 +107,26 @@ RESTORE = """({fields, scroll}) => {
         };
         visit(document);
         if (plan) {
-            if (inputs.length !== plan.values.length) return false;
-            if (frames.length !== plan.frames.length) return false;
+            if (JSON.stringify(kinds) !== JSON.stringify(plan.kinds)) return false;
             inputs.forEach((input, i) => {
                 if (input.type !== "file") input.value = plan.values[i];
             });
         }
+        fields.push(...inputs);
         return frames.every((frame, i) => {
             const inner = frame.contentDocument;
             const expected = plan ? plan.frames[i] : null;
             return inner ? walk(inner, expected) : expected === null;
         });
     };
-    if (!walk(document, fields)) return false;
-    for (const host of editing) host.replaceChildren();
+    if (!walk(document, plan)) return null;
+    for (const element of emptied) element.replaceChildren();
     window.scrollTo({left: scroll[0], top: scroll[1], behavior: "instant"});
-    return true;
+    const shown = (nodes) => nodes.filter((node) => node.isConnected);
+    return {
+        values: shown(fields).map((field) => field.value),
+        text: shown(texts).map((text) => text.data).join(""),
+    };
 }"""
 
 _CAPTURED = object()
@@ -118,11 +135,15 @@ _CAPTURED = object()
 type _Parts = dict[str, tuple[str, bytes]]
 
 
-class _Fields(TypedDict):
-    """A document's fields' values and its frames' fields, in walk order."""
+class _Document(TypedDict):
+    """What a render must find of a document, in walk order: the kind of
+    each field (its element and `type` attribute), frame and element with
+    a `contenteditable` attribute (its element and that name); each
+    field's value; and each frame's document."""
 
+    kinds: list[tuple[str, str | None]]
     values: list[str]
-    frames: list[_Fields | None]
+    frames: list[_Document | None]
 
 
 class ScreenshotWithheldError(Exception):
@@ -194,11 +215,11 @@ async def _captured(session: BrowserSession) -> bytes:
             "(designMode, or a style it leaves out)"
         )
     parts, main = _scrubbed(archive["data"], session.redactor)
-    fields = _fields(dom, 0, session.redactor)
+    plan = _plan(dom, 0, session.redactor)
     viewport = metrics["cssVisualViewport"]
     async with asyncio.timeout(CAPTURE_SECONDS):
         return await _render(
-            session, parts, main, fields, (viewport["pageX"], viewport["pageY"])
+            session, parts, main, plan, (viewport["pageX"], viewport["pageY"])
         )
 
 
@@ -322,35 +343,41 @@ def _cut(text: str, spans: list[tuple[int, int]]) -> str:
     return "".join(pieces)
 
 
-def _fields(dom: dict[str, Any], document: int, redactor: Redactor) -> _Fields:
-    """Document `document`'s fields' values in the order a DOM snapshot
-    lists them, its flat tree's, each dropped (made empty) when the scan
-    finds a bound value in it or it shares `SHARED_RUN` characters with
-    one; and each frame's, in the same order, None for a frame whose
-    document isn't in the snapshot."""
+def _plan(dom: dict[str, Any], document: int, redactor: Redactor) -> _Document:
+    """What a render must find of document `document`, taken before the
+    scrub, in the order a DOM snapshot lists it, its flat tree's. Each
+    field's value is dropped (made empty) when the scan finds a bound value
+    in it or it shares `SHARED_RUN` characters with one; a frame whose
+    document isn't in the snapshot is None."""
     strings: list[str] = dom["strings"]
     nodes = dom["documents"][document]["nodes"]
     inputs, texts, documents = (
         _rare(nodes, key) for key in ("inputValue", "textValue", "contentDocumentIndex")
     )
-    fields: _Fields = {"values": [], "frames": []}
+    plan: _Document = {"kinds": [], "values": [], "frames": []}
     for node, name in enumerate(nodes["nodeName"]):
-        match strings[name].casefold():
+        element = strings[name].lower()
+        named = _attributes(nodes, strings, node)
+        match element:
             # https://chromedevtools.github.io/devtools-protocol/tot/DOMSnapshot/#type-NodeTreeSnapshot
             # A textarea's value is its textValue, not its inputValue.
-            case "input" | "textarea" as kind:
-                held = (inputs if kind == "input" else texts).get(node, -1)
+            case "input" | "textarea":
+                plan["kinds"].append((element, named.get("type")))
+                held = (inputs if element == "input" else texts).get(node, -1)
                 value = strings[held] if held >= 0 else ""
                 shown = not (
                     redactor.finds(value) or redactor.overlaps(value, SHARED_RUN)
                 )
-                fields["values"].append(value if shown else "")
+                plan["values"].append(value if shown else "")
             case "iframe" | "frame":
+                plan["kinds"].append((element, None))
                 inner = documents.get(node)
-                fields["frames"].append(
-                    None if inner is None else _fields(dom, inner, redactor)
+                plan["frames"].append(
+                    None if inner is None else _plan(dom, inner, redactor)
                 )
-    return fields
+            case _ if "contenteditable" in named:
+                plan["kinds"].append((element, "contenteditable"))
+    return plan
 
 
 def _rare(nodes: dict[str, Any], key: str) -> dict[int, int]:
@@ -378,22 +405,27 @@ def _marked(nodes: dict[str, Any], strings: list[str], node: int) -> bool:
     """Whether the nearest `contenteditable` attribute on `node` or around
     it turns editing on."""
     while node >= 0:
-        attributes = nodes["attributes"][node]
-        named: dict[str, str] = {
-            strings[name].casefold(): strings[value]
-            for name, value in zip(attributes[::2], attributes[1::2], strict=True)
-        }
+        named = _attributes(nodes, strings, node)
         if "contenteditable" in named:
             return named["contenteditable"].casefold() != "false"
         node = nodes["parentIndex"][node]
     return False
 
 
+def _attributes(nodes: dict[str, Any], strings: list[str], node: int) -> dict[str, str]:
+    """`node`'s attributes by name, as the render's DOM names them."""
+    attributes = nodes["attributes"][node]
+    return {
+        strings[name]: strings[value]
+        for name, value in zip(attributes[::2], attributes[1::2], strict=True)
+    }
+
+
 async def _render(
     session: BrowserSession,
     parts: _Parts,
     main: str,
-    fields: _Fields,
+    plan: _Document,
     scroll: tuple[float, float],
 ) -> bytes:
     browser = session.page.context.browser
@@ -418,10 +450,18 @@ async def _render(
         await context.route("**/*", partial(_answer, parts))
         page = await context.new_page()
         await page.goto(main, wait_until="load")
-        if not await page.evaluate(RESTORE, {"fields": fields, "scroll": scroll}):
+        shown = await page.evaluate(RESTORE, {"plan": plan, "scroll": scroll})
+        if shown is None:
             raise ScreenshotWithheldError(
-                "the snapshot's fields and frames don't match its render's"
+                "the snapshot's fields, frames and editable elements don't match "
+                "its render's"
             )
+        # What the render's parser and fields made of the scrubbed text: a
+        # NUL it drops, or a newline a text field takes out, can join a value.
+        if any(
+            session.redactor.finds(text) for text in (shown["text"], *shown["values"])
+        ):
+            raise ScreenshotWithheldError("the render spells a bound value")
         return await page.screenshot(type="png", animations="disabled", caret="hide")
     finally:
         await context.close()
