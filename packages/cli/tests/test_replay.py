@@ -389,11 +389,19 @@ def test_an_invalid_spec_exits_5_before_the_driver(
     assert "colour: unknown key" in result.stderr
 
 
+@pytest.mark.parametrize("when", ["found", "loaded"])
 def test_a_compiled_script_that_cant_be_read_exits_15_before_the_driver(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, when: str
 ) -> None:
     spec = committed(shop(tmp_path / "qa"), shop_script("shop"))
-    (spec.parent / ".compiled" / "shop.json").chmod(0)
+    if when == "loaded":
+        # Found readable, then unreadable when it is loaded.
+        def unreadable(*_: object) -> NoReturn:
+            raise PermissionError(errno.EACCES, "fake unreadable script")
+
+        monkeypatch.setattr(replay_module, "load_compiled", unreadable)
+    else:
+        (spec.parent / ".compiled" / "shop.json").chmod(0)
 
     result = replay(monkeypatch, [str(spec)], driver=False)
 
