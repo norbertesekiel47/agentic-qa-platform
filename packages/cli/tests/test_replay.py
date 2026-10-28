@@ -21,12 +21,12 @@ from aqa_cli import replay as replay_module
 from aqa_cli.main import app as aqa
 from aqa_core.compiled import CompiledScript
 from aqa_core.project import load_project
-from aqa_runner import text_search
+from aqa_runner import executor, text_search
 from aqa_runner.anthropic_client import AnthropicClient
 from aqa_runner.loopback_server import LoopbackServer
 from aqa_runner.model_router import ModelRouter
 from aqa_runner.publication import published_text
-from aqa_runner.run_record import RunRecord
+from aqa_runner.run_record import RefusedWriteError, RunRecord
 from aqa_runner.sandbox import HOST_FIXES, OTHER_FIX
 from langchain_anthropic import ChatAnthropic
 from playwright._impl._browser_type import BrowserType
@@ -703,6 +703,28 @@ def test_a_record_that_takes_no_more_exits_15(
     assert re.fullmatch(
         rf"record_error shop: {SECONDS}, \$0, run record: {record_in(root)}\n"
         f"  {said}\n",
+        result.stderr,
+    )
+
+
+def test_a_refusal_that_reaches_the_replay_exits_15(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # None reaches it today: a refused journal line fails its step, and
+    # refused evidence and egress records are dropped.
+    async def refused(*_: object) -> None:
+        raise RefusedWriteError("fake refused write")
+
+    monkeypatch.setattr(executor, "capture_evidence", refused)
+    root = tmp_path / "qa"
+    spec = committed(shop(root), shop_script("shop"))
+
+    result = replay(monkeypatch, on(app, spec))
+
+    assert result.exit_code == 15, result.output
+    assert re.fullmatch(
+        rf"record_error shop: {SECONDS}, \$0, run record: {record_in(root)}\n"
+        "  the run record took no more lines, so the replay stopped\n",
         result.stderr,
     )
 
