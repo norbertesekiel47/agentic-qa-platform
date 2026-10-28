@@ -233,15 +233,14 @@ def _name(css: str, index: int) -> tuple[str, int]:
     return "".join(chars), index
 
 
-def pseudo_classes(css: str) -> Iterator[str]:
-    """Each pseudo-class name in `css`, lowercased, as Playwright reads a css
-    value: its CSS tokenizer (cssTokenizer.ts, a port of CSS Syntax Level 3,
-    https://www.w3.org/TR/css-syntax-3/#tokenization) drops comments, reads
-    strings whole and decodes escapes, and its parser lowercases the name
-    after a colon. A backslash outside a string escapes a colon or a quote
-    too, so neither is read as one. That is a later reading than
-    `_left_open`'s: Playwright's splitter, before it, counts quotes even in
-    comments and takes a backtick for one, which CSS doesn't."""
+def css_tokens(css: str) -> Iterator[str]:
+    """The tokens a css value's meaning turns on, in order, as Playwright
+    reads the value (its cssTokenizer.ts, a port of CSS Syntax Level 3,
+    https://www.w3.org/TR/css-syntax-3/#tokenization): each pseudo-class as
+    a colon and its name, lowercased with its escapes decoded, and every
+    other character as itself. A comment, a string and an escaped character
+    give no token, so an escaped colon starts no pseudo-class and an escaped
+    `+` is part of a name."""
     css = re.sub(r"\r\n?|\f", "\n", css)
     index = 0
     while index < len(css):
@@ -253,8 +252,9 @@ def pseudo_classes(css: str) -> Iterator[str]:
             index = _escape(css, index)[1]
         elif css[index] == ":":
             name, index = _name(css, _after_comments(css, index + 1))
-            yield name.lower()
+            yield f":{name.lower()}"
         else:
+            yield css[index]
             index += 1
 
 
@@ -293,10 +293,10 @@ def _one_selector(css: str) -> str:
             f"{css!r} starts or ends with white space: write it trimmed "
             "(Playwright trims the end before CSS reads the value)"
         )
-    for name in pseudo_classes(css):
-        if name in PLAYWRIGHT_PSEUDO_CLASSES:
+    for token in css_tokens(css):
+        if token.startswith(":") and token[1:] in PLAYWRIGHT_PSEUDO_CLASSES:
             raise ValueError(
-                f"{css!r} uses Playwright's own pseudo-class :{name}, which "
+                f"{css!r} uses Playwright's own pseudo-class {token}, which "
                 "Playwright evaluates instead of CSS: a css value is CSS only"
             )
     return css

@@ -129,6 +129,37 @@ def test_a_heal_writes_no_positional_pseudo_class(
     ]
 
 
+@pytest.mark.parametrize(
+    ("locator", "path"),
+    [
+        # :first-child and :last-child, spelled with a sibling combinator.
+        ({"css": "li:not(* ~ *)"}, "/targets/cart_items/locators/0/css"),
+        ({"css": "li:not(:has(~ *))"}, "/targets/cart_items/locators/0/css"),
+        (
+            {"testid": "cart-lines", "scope": {"css": "h2 + app-cart-summary"}},
+            "/targets/cart_items/locators/0/scope/css",
+        ),
+    ],
+    ids=["general sibling", "nested", "next sibling in a scope"],
+)
+def test_a_heal_finds_no_element_by_its_siblings(
+    locator: dict[str, Any], path: str
+) -> None:
+    assert heal(lambda d: d["targets"]["cart_items"].update(locators=[locator])) == [
+        f"{path}: a heal finds no element by its position among its siblings"
+    ]
+
+
+# An attribute's ~= operator, a quoted value and an escaped character.
+@pytest.mark.parametrize(
+    "css", ["ul[class~=cart-lines]", 'ul[title="a + b ~ c"]', r"ul.a\+b"]
+)
+def test_a_tilde_or_plus_that_combines_no_siblings_passes(css: str) -> None:
+    assert (
+        heal(lambda d: d["targets"]["cart_items"].update(locators=[{"css": css}])) == []
+    )
+
+
 def reviewed(data: dict[str, Any]) -> None:
     """Gives the Pay button a positional locator, as a person may write in a
     reviewed edit (ADR-0025, #52 amendment), before a locator of its own."""
