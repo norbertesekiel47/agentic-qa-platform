@@ -2,7 +2,7 @@
   "schema_version": 1,
   "spec_id": "post-comment",
   "spec_hash": "sha256:bd062a63f524f88682aeeeec7c75b63338d3f6dc97a75ae5d5975663849f6bb6",
-  "compiled_at": "2026-10-27T09:40:22.822947Z",
+  "compiled_at": "2026-10-28T02:57:53.509762Z",
   "compiled_by": {
     "mode": "explore",
     "models": {
@@ -23,36 +23,36 @@
     "color_scheme": "light"
   },
   "coverage": {
-    "plan_hash": "sha256:da8b080237f06ce72c23926e8800601d9922a0e3836625f8758c9db0aea9d5a1",
+    "plan_hash": "sha256:bf6eff223bf687a9463080ffc40e604fbb790afe65e36fb4ef408c0fb4bc0e72",
     "expectations": [
       {
         "expect_index": 0,
-        "subject": "the comments list under the article",
-        "claim": "The comment text \"Thanks for the warm welcome!\" is shown in the comments under the article",
+        "subject": "the comment list under the article",
+        "claim": "The comment with the text \"Thanks for the warm welcome!\" is shown in the comments section under the article",
         "assertions": [
           "a1"
         ]
       },
       {
         "expect_index": 1,
-        "subject": "the newly added comment under the article",
-        "claim": "The new comment's author is reader",
+        "subject": "the author of the newly added comment",
+        "claim": "The new comment shows reader as its author",
         "assertions": [
           "a2"
         ]
       },
       {
         "expect_index": 2,
-        "subject": "the comments list under the article",
-        "claim": "jake's earlier comment \"Glad to be here.\" is still shown",
+        "subject": "jake's earlier comment in the comment list under the article",
+        "claim": "The earlier comment \"Glad to be here.\" by jake is still shown under the article",
         "assertions": [
           "a3"
         ]
       },
       {
         "expect_index": 3,
-        "subject": "the number of comments stored for the article",
-        "claim": "The comment was saved once, so the total comment count is exactly 2",
+        "subject": "the number of comments on the article",
+        "claim": "The comment was saved once, so exactly 2 comments exist",
         "assertions": [
           "a4"
         ]
@@ -92,7 +92,7 @@
       ]
     },
     "t3": {
-      "semantic": "Sign in submit button",
+      "semantic": "Submit button of the sign-in form below the password field",
       "locators": [
         {
           "role": "button",
@@ -104,7 +104,7 @@
       ]
     },
     "t4": {
-      "semantic": "Welcome to Conduit article link in global feed",
+      "semantic": "Welcome to Conduit article link in the global feed",
       "locators": [
         {
           "css": "a[href=\"/article/welcome-to-conduit\"]"
@@ -127,7 +127,7 @@
       ]
     },
     "t6": {
-      "semantic": "Post Comment button below comment textbox",
+      "semantic": "Button below the comment textbox that submits the new comment",
       "locators": [
         {
           "role": "button",
@@ -147,7 +147,7 @@
       ]
     },
     "t8": {
-      "semantic": "the author name on the newly posted comment, the one just added by the signed-in user, in the comments under the article",
+      "semantic": "the author name of the newly posted comment, the one just added under the article",
       "locators": [
         {
           "css": "a[href=\"/profile/reader\"]:not(:has(img))"
