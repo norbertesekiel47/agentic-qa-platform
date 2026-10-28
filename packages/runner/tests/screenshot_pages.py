@@ -93,7 +93,8 @@ class Case:
     `withholds` says a capture may be withheld: the page changes its
     fields between the snapshot's two calls. `unseen` says the DOM snapshot
     holds no frame's document, as for a cross-site frame in a process of
-    its own."""
+    its own. `shown_live` says the control is the live page's, as an
+    editable case's is, since no render ever shows that field."""
 
     body: str
     into: Into = "field"
@@ -104,6 +105,7 @@ class Case:
     partial: bool = False
     withholds: bool = False
     unseen: bool = False
+    shown_live: bool = False
 
 
 CLONE_ON_SIGNAL = """<script>let c=null,armed=false;window.arm=()=>{c=document.getElementById('f').cloneNode();armed=true};
@@ -266,6 +268,30 @@ CASES = {
         into="cross-site",
         partial=True,
         unseen=True,
+    ),
+    # What Blink's archive leaves out, which a DOM snapshot lists: a hidden
+    # input, a frame in <head>, a <noscript> (with a field put in it), and an
+    # element with a `hidden` attribute, here shown by the page's own style.
+    "csrf-input": Case(
+        STYLE + "<form><input type=HIDDEN name=csrf value=tok>" + FIELD + "</form>"
+    ),
+    # Only after the fill, and not in the control: the session fills nothing
+    # while a frame in <head> is, or was, on its page.
+    "frame-in-head": Case(
+        STYLE + FIELD,
+        arm="document.head.append(document.createElement('iframe'))",
+        control=None,
+    ),
+    "noscript": Case(
+        STYLE
+        + FIELD
+        + f"<noscript><p style='{RED}'>Plain</p></noscript><script>"
+        + "document.querySelector('noscript').append(document.createElement('input'))"
+        + "</script>"
+    ),
+    "revealed-hidden": Case(
+        STYLE + "<style>[hidden]{display:block}</style><div hidden>" + FIELD + "</div>",
+        shown_live=True,
     ),
     "moving": Case(STYLE + MOVING + FIELD),
     "scroll-jitter": Case(
