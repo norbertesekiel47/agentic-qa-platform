@@ -467,6 +467,27 @@ def test_the_minutes_budget_expiring_during_the_confirmations_reset_begins_no_ph
     assert not compiled_file(tmp_path).parent.exists()
 
 
+def test_an_infrastructure_event_during_the_confirmations_reset_begins_no_phase(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def failing_aside(gate: Any, hook: Reset, start: str, **kwargs: Any) -> None:
+        await reset(gate, hook, start, **kwargs)
+        # A failure the gate recorded while the confirmation's reset passed.
+        gate.record_failure("127.0.0.1", 9, "fake: an address refused meanwhile")
+
+    # Only the confirmation's reset goes through replay_run.
+    monkeypatch.setattr(replays, "reset", failing_aside)
+
+    run = confirming(app, tmp_path, Scripted(planned(), *PATH))
+
+    assert (run.outcome, run.exit_code) == ("unreachable", 13)
+    document = written(run)
+    assert (document["phases"], document["confirmation"]) == ([CLEAN_PHASE], None)
+    assert [name for name in files(run) if name.startswith("confirmation")] == []
+    assert app.paths() == [*PASS, "/write/reset"]
+    assert not compiled_file(tmp_path).parent.exists()
+
+
 def test_a_confirmation_journal_that_takes_no_more_lines_exits_15_and_writes_nothing(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
