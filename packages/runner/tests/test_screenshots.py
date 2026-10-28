@@ -44,6 +44,7 @@ from packages.runner.tests.screenshot_pages import (
     EDITABLE,
     EDITABLE_STYLE,
     FIELD,
+    MARKED,
     RED,
     RED_VALUE,
     SCALED,
@@ -54,6 +55,7 @@ from packages.runner.tests.screenshot_pages import (
     Case,
     armed,
     bound,
+    green_pixels,
     red_pixels,
     serve_cases,
 )
@@ -329,7 +331,7 @@ def test_a_saved_screenshot_shows_no_bound_value_whatever_the_page_does(
 
         monkeypatch.setattr(CDPSession, "send", unseen)
 
-    async def scenario() -> tuple[int, list[str], list[str], list[int]]:
+    async def scenario() -> tuple[int, list[str], list[str], list[tuple[int, int]]]:
         async with browsing(
             sites,
             redactor=Redactor(bound(sites.app)),
@@ -347,17 +349,20 @@ def test_a_saved_screenshot_shows_no_bound_value_whatever_the_page_does(
                 for path in record.path.rglob("*")
                 if path.is_file()
             )
-            reds = [
-                await red_pixels(scratch, (record.path / file).read_bytes())
-                for file in saved
+            pixels = [
+                (await red_pixels(scratch, png), await green_pixels(scratch, png))
+                for png in ((record.path / file).read_bytes() for file in saved)
             ]
-            return shown, outcomes, saved, reds
+            return shown, outcomes, saved, pixels
 
-    shown, outcomes, saved, reds = asyncio.run(scenario())
+    shown, outcomes, saved, pixels = asyncio.run(scenario())
     assert shown > 0
     assert saved == sorted(outcome for outcome in outcomes if outcome != "withheld")
-    assert reds == [0] * len(saved)
-    if not CASES[name].withholds:
+    # No red, and the marker: what is saved is the page, not a blank.
+    assert pixels == [(0, MARKED)] * len(saved)
+    if CASES[name].withholds:
+        assert saved != []
+    else:
         assert outcomes == [f"shots/{repeat}.png" for repeat in range(REPEATS)]
 
 
