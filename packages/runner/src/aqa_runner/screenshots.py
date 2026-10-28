@@ -28,7 +28,7 @@ import base64
 import html
 import re
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import InitVar, dataclass, field
 from email import message_from_bytes
 from email.message import Message
@@ -308,20 +308,20 @@ async def take_screenshot(session: BrowserSession) -> Screenshot:
     try:
         png = await _captured(session)
     except TimeoutError:
-        raise ScreenshotWithheldError(
-            f"the page's snapshot, its scrub or its render took over {CAPTURE_SECONDS} s"
-        ) from None
+        reason = f"the page's snapshot, its scrub or its render took over {CAPTURE_SECONDS} s"
     except Error:
         # Playwright's general error type: a DevTools call, or the render's
-        # load or capture, failed. Its message isn't kept: it can hold the
-        # page's URL, which can spell a value.
-        raise ScreenshotWithheldError("a DevTools call or the render failed") from None
+        # load or capture, failed. Its message can hold the page's URL,
+        # which can spell a value.
+        reason = "a DevTools call or the render failed"
     except ValidationError:
         # Its message quotes the reply, which holds the page's text.
-        raise ScreenshotWithheldError(
-            "DevTools replied in a shape the capture doesn't read"
-        ) from None
-    return Screenshot(png, session.redactor, _key=_CAPTURED)
+        reason = "DevTools replied in a shape the capture doesn't read"
+    else:
+        return Screenshot(png, session.redactor, _key=_CAPTURED)
+    # Raised outside the handlers, so the error behind it isn't even its
+    # context.
+    raise ScreenshotWithheldError(reason)
 
 
 async def _captured(session: BrowserSession) -> bytes:
@@ -390,10 +390,9 @@ async def _devtools(page: Page) -> AsyncIterator[CDPSession]:
 def _scrubbed(archive: str, redactor: Redactor) -> tuple[_Parts, str]:
     """`archive`'s parts, each scrubbed and rewritten for a render, by the
     URLs a render asks for them by, and the page's own URL."""
-    try:
-        message = message_from_bytes(archive.encode("ascii"))
-    except UnicodeEncodeError:
-        raise ScreenshotWithheldError("the archive isn't 7-bit MIME") from None
+    if not archive.isascii():
+        raise ScreenshotWithheldError("the archive isn't 7-bit MIME")
+    message = message_from_bytes(archive.encode("ascii"))
     parts = [part for part in message.walk() if not part.is_multipart()]
     main = _header(parts[0], "Content-Location") if parts else None
     if main is None:
@@ -450,14 +449,11 @@ def _text(part: Message, body: bytes, kind: str) -> str:
     if declared is None and kind in ("text/html", "application/xhtml+xml"):
         named = _DECLARED.search(body[:1024])
         declared = None if named is None else named[1].decode("ascii")
-    try:
+    # An encoding Python doesn't have, one that isn't text's, or bytes it
+    # doesn't hold. The error is dropped, not chained: it holds the part.
+    with suppress(LookupError, UnicodeDecodeError):
         return body.decode(declared or "utf-8")
-    except LookupError, UnicodeDecodeError:
-        # An encoding Python doesn't have, one that isn't text's, or bytes
-        # it doesn't hold.
-        raise ScreenshotWithheldError(
-            "a part is in an encoding the scrub can't read"
-        ) from None
+    raise ScreenshotWithheldError("a part is in an encoding the scrub can't read")
 
 
 def _scrubbed_text(text: str, redactor: Redactor) -> str:
