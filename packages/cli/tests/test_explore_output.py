@@ -729,6 +729,26 @@ def test_a_protocol_log_with_a_bound_secret_exits_12_before_any_model_call(
     assert client.models == []
 
 
+def test_a_missing_secret_prints_none_of_the_values_bound_beside_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "fake-id-4u215")
+    monkeypatch.delenv("AQA_SECRET_TEST_EMAIL", raising=False)
+    # The password binds before the email is found missing, and the spec's
+    # id and path spell its value.
+    spec = signed_in(tmp_path / "qa", "fake-id-4u215", email="TEST_EMAIL")
+
+    result = unstarted(monkeypatch, [str(spec), "--url", START])
+
+    assert (result.exit_code, result.stdout) == (12, "")
+    assert result.stderr == (
+        "secret_unusable [SECRET:TEST_PASSWORD]: nothing was explored\n  "
+        "AQA_SECRET_TEST_EMAIL is not set: set it to the value of test secret "
+        f"TEST_EMAIL, which {tmp_path / 'qa'}/[SECRET:TEST_PASSWORD].spec.md "
+        "references at preconditions.account.email\n"
+    )
+
+
 def test_the_environments_refusal_prints_none_of_the_values_that_bound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
