@@ -503,14 +503,16 @@ def _unscoped_negative_checks(script: CompiledScript) -> Iterator[str]:
                 )
 
 
-def _levels(
-    where: str, locator: CompiledLocator
+def locator_levels(
+    where: str, locator: CompiledLocator, *, scope_key: str
 ) -> Iterator[tuple[str, CompiledLocator]]:
-    """`locator` and each scope under it, each with its key."""
+    """`locator` and each scope under it, each with its key: `where`, then
+    `scope_key` added once per level, as `.scope` names it in a loader's
+    problem and `/scope` in a JSON pointer."""
     level: CompiledLocator | None = locator
     while level is not None:
         yield where, level
-        where, level = f"{where}.scope", level.scope
+        where, level = f"{where}{scope_key}", level.scope
 
 
 def _held(script: CompiledScript) -> Iterator[tuple[str, str, HeldValue]]:
@@ -518,8 +520,8 @@ def _held(script: CompiledScript) -> Iterator[tuple[str, str, HeldValue]]:
     with its target's name and its key."""
     for name, target in script.targets.items():
         for position, locator in enumerate(target.locators):
-            for where, level in _levels(
-                f"targets.{name}.locators[{position}]", locator
+            for where, level in locator_levels(
+                f"targets.{name}.locators[{position}]", locator, scope_key=".scope"
             ):
                 if isinstance(level, ByCss) and level.holds_value is not None:
                     yield name, f"{where}.holds_value", level.holds_value
