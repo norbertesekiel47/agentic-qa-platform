@@ -11,7 +11,7 @@ import json
 import struct
 import time
 import zlib
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +30,7 @@ from aqa_runner.screenshots import (
     take_screenshot,
 )
 from aqa_runner.secret_fields import SecretNotFilledError, field_matches
-from playwright.async_api import CDPSession, ElementHandle, Error, Page
+from playwright.async_api import CDPSession, ElementHandle, Error, Page, Route
 from pydantic import SecretStr
 
 from packages.runner.tests.document_fixtures import (
@@ -922,15 +922,30 @@ def test_a_devtools_reply_in_a_shape_the_capture_doesnt_read_withholds_it(
     )
 
 
-def test_a_render_asks_nothing_of_the_network(sites: Sites) -> None:
+def test_a_render_asks_nothing_of_the_network(
+    sites: Sites, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # A source only a page without script picks: the render asks for it,
     # the live page never does until it loads it itself, at the end.
     picture = (
         "<picture><source media='(scripting: none)' srcset='/without-script.png'>"
         "<img src='data:image/gif;base64,R0lGODlhAQABAAAAACw='></picture>"
     )
+    answers: list[tuple[str, str]] = []
 
-    async def scenario() -> tuple[bool, bool]:
+    def noted(method: str) -> Callable[..., Awaitable[None]]:
+        answer = getattr(Route, method)
+
+        async def noting(route: Route, *args: Any, **kwargs: Any) -> None:
+            answers.append((method, route.request.url))
+            await answer(route, *args, **kwargs)
+
+        return noting
+
+    for method in ("fulfill", "abort", "continue_", "fallback"):
+        monkeypatch.setattr(Route, method, noted(method))
+
+    async def scenario() -> tuple[list[tuple[str, str]], bool, bool, bool]:
         async with browsing(sites, redactor=Redactor(bound(sites.app))) as session:
             await serve_cases(session.page, sites.other)
             await red_filled(session, sites)
@@ -938,7 +953,9 @@ def test_a_render_asks_nothing_of_the_network(sites: Sites) -> None:
                 "(picture) => document.body.insertAdjacentHTML('beforeend', picture)",
                 picture,
             )
+            answers.clear()
             await take_screenshot(session)
+            rendered = list(answers)
             asked = await asyncio.to_thread(
                 sites.saw, APP, "/without-script.png", within=1
             )
@@ -949,6 +966,55 @@ def test_a_render_asks_nothing_of_the_network(sites: Sites) -> None:
             loaded = await asyncio.to_thread(
                 sites.saw, APP, "/without-script.png", within=5
             )
-            return asked, loaded
+            served = ("fulfill", f"{sites.app}/shot/plain") in rendered
+            refused = [answer for answer in rendered if answer[0] != "fulfill"]
+            return refused, served, asked, loaded
 
-    assert asyncio.run(scenario()) == (False, True)
+    assert asyncio.run(scenario()) == (
+        [("abort", f"{sites.app}/without-script.png")],
+        True,
+        False,
+        True,
+    )
+
+
+def test_a_render_runs_no_script_its_archive_carries(
+    sites: Sites, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Blink's archive keeps no handler, so one is handed over in its place,
+    # with the plain page's two fields in the plain page's order.
+    page = (
+        '<!doctype html><input><input><img onload="document.body.style.background'
+        "='#f00'\" src='data:image/gif;base64,"
+        "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'>"
+    )
+    send = CDPSession.send
+
+    async def handing_over(
+        devtools: CDPSession, method: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        if method == "Page.captureSnapshot":
+            return {
+                "data": (
+                    'Content-Type: multipart/related; boundary="part"\r\n\r\n'
+                    "--part\r\nContent-Type: text/html\r\n"
+                    f"Content-Location: {sites.app}/shot/plain\r\n\r\n"
+                    f"{page}\r\n--part--\r\n"
+                )
+            }
+        return await send(devtools, method, params)
+
+    async def scenario() -> tuple[int, int]:
+        async with browsing(sites, redactor=Redactor(bound(sites.app))) as session:
+            await serve_cases(session.page, sites.other)
+            scratch = await scratch_page(session)
+            await scratch.set_content(page)
+            ran = await red_pixels(scratch, await scratch.screenshot())
+            await red_filled(session, sites)
+            monkeypatch.setattr(CDPSession, "send", handing_over)
+            shot = await take_screenshot(session)
+            return ran, await red_pixels(scratch, shot.png)
+
+    ran, rendered = asyncio.run(scenario())
+    assert ran > 0
+    assert rendered == 0
