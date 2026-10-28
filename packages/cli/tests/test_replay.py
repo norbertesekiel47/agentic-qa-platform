@@ -728,6 +728,27 @@ def test_an_egress_block_whose_record_cant_be_written_still_exits_6(
     assert document(root)["error_code"] == "egress_blocked"
 
 
+def test_a_document_that_spells_a_bound_value_isnt_written(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The spec's id is the bound value, and only the document holds it.
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "shop")
+    root = tmp_path / "qa"
+    spec = shop(root, preconditions=ACCOUNT, config=SECRETS, page="/page/form")
+    committed(spec, compiled([]))
+
+    result = replay(monkeypatch, on(app, spec))
+
+    assert result.exit_code == 15, result.output
+    record = record_in(root)
+    assert re.fullmatch(
+        rf"record_error \[SECRET:TEST_PASSWORD\]: {SECONDS}, \$0, run record: "
+        rf"{record}\n  replay.json could not be written to the run record\n",
+        result.stderr,
+    )
+    assert not (record / "replay.json").exists()
+
+
 def test_a_launch_that_fails_exits_10_naming_the_host_fix(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
