@@ -213,6 +213,28 @@ def test_a_screenshot_goes_only_to_a_record_with_its_sessions_scan(
     assert list(record.path.iterdir()) == []
 
 
+def test_a_record_never_writes_a_screenshot_twice(sites: Sites, tmp_path: Path) -> None:
+    redactor = Redactor(bound(sites.app))
+
+    async def scenario() -> tuple[Screenshot, Screenshot]:
+        async with browsing(sites, redactor=redactor) as session:
+            await serve_cases(session.page, sites.other)
+            await session.navigate(f"{sites.app}/shot/plain")
+            first = await take_screenshot(session)
+            await session.page.evaluate("document.body.style.background = '#f00'")
+            return first, await take_screenshot(session)
+
+    first, second = asyncio.run(scenario())
+    record = RunRecord.create(tmp_path).redacting(redactor)
+    record.write_screenshot("shots/0.png", first)
+
+    with pytest.raises(FileExistsError):
+        record.write_screenshot("shots/0.png", second)
+
+    assert first.png != second.png
+    assert (record.path / "shots/0.png").read_bytes() == first.png
+
+
 async def control(
     session: BrowserSession, sites: Sites, name: str, served: dict[str, str]
 ) -> bytes:
