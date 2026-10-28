@@ -661,6 +661,18 @@ def test_an_egress_block_decides_though_replay_raised_after_it(tmp_path: Path) -
     )
 
 
+def test_a_value_only_a_reasons_join_spells_is_scanned_out(tmp_path: Path) -> None:
+    joined = Redactor([fake_secret("TEST_PASSWORD", "inconclusive, fake", APP)])
+    end = ending(
+        made(tmp_path, joined),
+        steps=(StepResult(2, "failed", error="fake page crashed"),),
+    )
+
+    presented = document(end)
+
+    assert presented["reasons"] == ["step 2: [SECRET:TEST_PASSWORD] page crashed"]
+
+
 def test_a_replay_that_raised_still_records_its_outcome_reasons_and_non_resumable_steps(
     tmp_path: Path,
 ) -> None:
