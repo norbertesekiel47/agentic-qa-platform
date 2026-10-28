@@ -24,6 +24,7 @@ from aqa_core.compiled import (
 )
 from aqa_core.project import probe_url
 from aqa_core.spec import Spec
+from aqa_core.text import SearchTimeoutError
 from playwright.async_api import Error
 
 from aqa_runner import network, probes, reasons
@@ -33,7 +34,7 @@ from aqa_runner.egress import EgressGate, EgressRefusedError, EgressUpstreamErro
 from aqa_runner.locators import Absent, Miss, Resolved, Shown, Unresolved, Use
 from aqa_runner.reasons import Raised, UnansweredError
 from aqa_runner.redaction import Redacted, Redactor
-from aqa_runner.text_search import SearchTimeoutError, text_matches, url_matches
+from aqa_runner.text_search import text_matches, url_matches
 
 # How often resolution looks again for a target that hasn't resolved.
 LOOK_SECONDS = 0.1

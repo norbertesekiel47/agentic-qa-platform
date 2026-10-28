@@ -17,36 +17,14 @@ import sys
 from typing import Literal, cast
 
 from aqa_core.compiled import TextInTarget, TextVisible
-
-# The most one search may take, in seconds, starting the process included.
-SEARCH_SECONDS = 2
-
-# What the child runs. Matching is aqa_core.text's, so it means what the
-# format says; a URL is searched as it is, never normalized.
-_CHILD = """\
-import json, re, sys
-from aqa_core.text import has_pattern, has_text
-kind, needle, haystack = json.loads(sys.stdin.buffer.read())
-if kind == "text":
-    found = has_text(haystack, needle)
-elif kind == "pattern":
-    found = has_pattern(haystack, needle)
-elif kind == "url":
-    found = re.search(needle, haystack) is not None
-elif kind == "urls":
-    pattern = re.compile(needle)
-    found = any(pattern.search(url) is not None for url in haystack)
-else:
-    sys.exit(f"no search of kind {kind!r}")
-sys.stdout.write("1" if found else "0")
-"""
+from aqa_core.text import (
+    SEARCH_CHILD,
+    SEARCH_SECONDS,
+    SearchTimeoutError,
+    search_found,
+)
 
 type _Kind = Literal["text", "pattern", "url", "urls"]
-
-
-class SearchTimeoutError(Exception):
-    """A search ran past `SEARCH_SECONDS`, and was stopped: it established
-    neither a match nor its absence."""
 
 
 async def _search(kind: _Kind, needle: str, haystack: str | tuple[str, ...]) -> bool:
@@ -60,7 +38,7 @@ async def _search(kind: _Kind, needle: str, haystack: str | tuple[str, ...]) -> 
         sys.executable,
         "-I",
         "-c",
-        _CHILD,
+        SEARCH_CHILD,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -81,10 +59,7 @@ async def _search(kind: _Kind, needle: str, haystack: str | tuple[str, ...]) -> 
             with contextlib.suppress(ProcessLookupError):
                 child.kill()
             await child.wait()
-    if child.returncode != 0 or stdout not in (b"0", b"1"):
-        last = stderr.decode(errors="replace").strip().rsplit("\n", 1)[-1]
-        raise RuntimeError(f"the search process failed ({child.returncode}): {last}")
-    return stdout == b"1"
+    return search_found(child.returncode, stdout, stderr)
 
 
 async def text_matches(check: TextVisible | TextInTarget, rendered: str) -> bool:

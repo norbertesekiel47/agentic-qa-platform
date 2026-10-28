@@ -19,6 +19,7 @@ from aqa_core.compiled import (
     css_tokens,
 )
 from aqa_core.project import locator_levels
+from aqa_core.text import any_has_pattern
 
 # The child-indexed pseudo-classes, typed or not (Selectors Level 4, §13.3
 # and §13.4, https://www.w3.org/TR/selectors-4/#child-index). They find an
@@ -71,14 +72,15 @@ def _strings(level: Locator) -> Iterator[tuple[str, list[str]]]:
 
 
 def _spells(strings: list[str], claims: Sequence[TextInTarget]) -> bool:
-    """Whether one of `strings` holds a claim's literal as whole words: its
-    element would carry the text its check verifies by construction, so any
-    element carrying that text could pass the check (#261)."""
+    """Whether one of `strings` meets a claim as its check would: its element
+    would carry the text its check verifies by construction, so any element
+    carrying that text could pass the check (#261). A pattern is the
+    script's and `strings` the heal's, so it runs bounded (ADR-0024)."""
     return any(
-        claim.matches(string)
-        for claim in claims
+        any(claim.matches(string) for string in strings)
         if claim.pattern is None
-        for string in strings
+        else any_has_pattern(strings, claim.pattern)
+        for claim in claims
     )
 
 
