@@ -19,7 +19,7 @@ from aqa_core.coverage_plan import CoveragePlan, planned_checks
 from aqa_core.project import load_compiled, load_config, load_spec
 from aqa_core.schema import Contract
 from aqa_core.spec import Reset, Spec
-from aqa_runner import explore
+from aqa_runner import explore, replays
 from aqa_runner.egress import EgressGate, egress_policy
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.executor import RunResult, RunSetup, replay
@@ -167,6 +167,7 @@ def serving(case: Case) -> Iterator[Served]:
     with patch.dict(PAGES), patch.dict(os.environ), ExitStack() as stack:
         if case.lured:
             stack.enter_context(patch.object(explore, "reset", resetting))
+            stack.enter_context(patch.object(replays, "reset", resetting))
         else:
             PAGES["shop"] = hostile(case.page)
         if case.secret:

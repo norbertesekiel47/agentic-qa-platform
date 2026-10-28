@@ -22,9 +22,10 @@ each stop with its exit code (API.md §7):
    confirmed within the minutes budget: the reset hook, when the spec has
    one (14), then, in the record's `confirmation` part (15 when it can't be
    made), in a phase of its own, the path replayed with every locator in a
-   fresh browser and no model (`executor.replay`), which ends that phase
-   when it returns; otherwise the phase ends once the browser has closed
-   (10, 15, 3, 14). Once it passed, its runs can raise a flag, and one
+   fresh browser and no model, the reset and the replay through
+   `replays.replay_run` (#237), whose replay ends that phase when it
+   returns; otherwise the phase ends once the browser has closed (10, 15,
+   3, 14). Once it passed, its runs can raise a flag, and one
    raised with no reset before them is the run's warning.
    A failed confirmation, or a `restart` the turns ran, starts the next
    attempt in its own part (#56, `_again`, 15 when it can't be made),
@@ -45,8 +46,8 @@ each stop with its exit code (API.md §7):
    opened."""
 
 from asyncio import get_running_loop, timeout_at
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import AsyncExitStack, suppress
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from pathlib import Path
@@ -116,6 +117,7 @@ from aqa_runner.publication import (
     publish,
 )
 from aqa_runner.redaction import Redactor
+from aqa_runner.replays import Opened, Replaying, replay_run
 from aqa_runner.reset import ResetFailedError, reset
 from aqa_runner.run_record import (
     RefusedWriteError,
@@ -640,44 +642,67 @@ def _unconfirmable(spec: Spec, script: CompiledScript, start: str | None) -> boo
     return hook is None and effect
 
 
+class _UnopenedError(Exception):
+    """The confirmation stopped after its reset, before its phase began; a
+    stop it made is already kept."""
+
+
+@dataclass
+class _Opening:
+    """What the confirmation replays in, opened once its reset has passed
+    (`replays.replay_run`): unless the run was interrupted meanwhile, the
+    record's `confirmation` part, a phase of its own and a fresh browser on
+    `browser`, the confirmation's outer stack. `began` is that part once
+    its phase has begun."""
+
+    run: Run
+    proxy: EgressProxy
+    browser: AsyncExitStack
+    interrupted: Callable[[], bool]
+    began: RunRecord | None = None
+
+    @asynccontextmanager
+    async def __call__(self) -> AsyncIterator[Opened]:
+        run = self.run
+        if self.interrupted():
+            raise _UnopenedError
+        try:
+            part = run.record.part(phase_parts(run.attempts.made)[1])
+        except OSError, ValueError:  # in a directory just made: no spec's link
+            run.stopped("record_error", UNWRITTEN)
+            raise _UnopenedError from None
+        await self.proxy.begin_phase()
+        self.began = part
+        launched = await self.browser.enter_async_context(
+            launched_browser(run.playwright.chromium)
+        )
+        yield Opened(launched, self.proxy, part)
+
+
 async def _confirming(
     run: Run,
     proxy: EgressProxy,
     script: CompiledScript,
     interrupted: Callable[[], bool],
 ) -> Confirmation | None:
-    """Within the minutes budget, reset the app, when the spec has a hook,
-    then open a phase and replay `script` with every locator in a fresh
-    browser, into the record's `confirmation` part, with no model: the
-    confirmation's phase, None when it never began. The browser closes
-    after the budget's span has ended, as the attempt's does. Replay ends
-    the phase when it returns; otherwise this ends it once the browser has
-    closed, outside the span, so its traffic is the proxy's to give."""
-    began: RunRecord | None = None
+    """Within the minutes budget, replay `script` with every locator and no
+    model through `replays.replay_run`: the reset, when the spec has a hook,
+    then what `_Opening` opens. The confirmation's phase, None when it never
+    began. The browser closes after the budget's span has ended, as the
+    attempt's does. Replay ends the phase when it returns; otherwise this
+    ends it once the browser has closed, outside the span, so its traffic is
+    the proxy's to give."""
     result: executor.RunResult | None = None
     limit = timeout_at(run.deadline)
+    opening = _Opening(run, proxy, AsyncExitStack(), interrupted)
+    replaying = Replaying(run.spec, run.config, run.start, run.gate)
     try:
-        async with AsyncExitStack() as browser, limit:
-            if not await _reset(run) or interrupted():
-                return None
-            try:
-                part = run.record.part(phase_parts(run.attempts.made)[1])
-            except OSError, ValueError:  # in a directory just made: no spec's link
-                run.stopped("record_error", UNWRITTEN)
-                return None
-            await proxy.begin_phase()
-            began = part
-            launched = await browser.enter_async_context(
-                launched_browser(run.playwright.chromium)
-            )
-            result = await executor.replay(
-                script,
-                executor.RunSetup(run.spec, run.config, run.start, part),
-                chromium=launched,
-                proxy=proxy,
-                gate=run.gate,
-                every_locator=True,
-            )
+        async with opening.browser, limit:
+            result = await replay_run(script, replaying, opening, every_locator=True)
+    except ResetFailedError as error:
+        run.stopped("reset_unsafe", str(error))
+    except _UnopenedError:
+        return None
     # First: a TimeoutError is an OSError.
     except TimeoutError:
         if not limit.expired():
@@ -686,18 +711,18 @@ async def _confirming(
     except (SandboxUnavailableError, UnregisteredEngineError) as error:
         run.stopped("no_sandbox", str(error))
     except OSError, RefusedWriteError:
-        if began is None:
+        if opening.began is None:
             raise  # the phase's listener, which propagates as the attempt's does
         # A journal line the record couldn't take: nothing more may go.
         run.stopped("record_error", UNWRITTEN)
     finally:
-        if began is not None and result is None:
+        if opening.began is not None and result is None:
             # Replay didn't return, so the phase is this function's to end,
             # once the browser that held its context has closed; unless
             # replay's own end had ended it as a cancellation reached it.
             with suppress(RuntimeError):
                 await proxy.end_phase()
-    if began is None:
+    if (began := opening.began) is None:
         return None
     traffic = proxy.ended_traffic()
     _uncertain(run, traffic)
