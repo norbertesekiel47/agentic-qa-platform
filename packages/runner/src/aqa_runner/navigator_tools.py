@@ -401,14 +401,15 @@ class Attempt:
 
     async def describe(self, call: DescribeParts) -> Described:
         """`describe_parts`: list the parts of the element `call.ref` names
-        in the last observation, for the next turn's call. Nothing is
-        dispatched and no intent is written; a refusal is a tool error, with
-        no parts."""
+        in the last observation, for the next turn's call, within the bound
+        on a look (`evaluation.bounded`). Nothing is dispatched and no
+        intent is written; a refusal is a tool error, with no parts."""
         problem = self._unrunnable("describe_parts", call)
         if problem is None:
             try:
-                return await self.parts.describe(
-                    self.session, self.observation or "", call.ref
+                return await evaluation.bounded(
+                    self.parts.describe(self.session, self.observation or "", call.ref),
+                    self.budget,
                 )
             except _REFUSED as error:
                 reason = reasons.reason(error, self.session.redactor)
@@ -417,11 +418,12 @@ class Attempt:
 
     async def check(self, call: AssertCheck) -> Redacted:
         """`assert_check`: bind the planned check to the element `call.ref`
-        names, through its meaning's targets (`uses`), a `probe_equals`
-        check to the option it names (`_option`), or a check to none, then
-        evaluate it once on the page now. A binding is kept whatever its
-        outcome; a refusal binds nothing and changes no earlier binding. A
-        `probe_equals` check that didn't pass binds no other option (#213)."""
+        names, through its meaning's targets (`uses`) within the bound on a
+        look (`evaluation.bounded`), a `probe_equals` check to the option it
+        names (`_option`), or a check to none, then evaluate it once on the
+        page now. A binding is kept whatever its outcome; a refusal binds
+        nothing and changes no earlier binding. A `probe_equals` check that
+        didn't pass binds no other option (#213)."""
         if problem := self._unrunnable("assert_check", call):
             return self._said(problem)
         _, check = planned_checks(self.plan)[call.check_id]
@@ -431,7 +433,7 @@ class Attempt:
             reads = (
                 self._option(call, check)
                 if check.check == "probe_equals"
-                else await self._target(call, check)
+                else await evaluation.bounded(self._target(call, check), self.budget)
             )
         except _REFUSED as error:
             reason = reasons.reason(error, self.session.redactor)
@@ -446,7 +448,8 @@ class Attempt:
     async def note(self, call: NoteForAbsence) -> Redacted:
         """`note_for_absence`: generate, from the element `call.ref` names
         while it shows, the locators a later `assert_check` of the
-        not_visible check starts from, under the check's subject contract."""
+        not_visible check starts from, under the check's subject contract,
+        within the bound on a look (`evaluation.bounded`)."""
         if problem := self._unrunnable("note_for_absence", call):
             return self._said(problem)
         _, check = planned_checks(self.plan)[call.check_id]
@@ -457,9 +460,7 @@ class Attempt:
                 "check, and it notes only a not_visible check's element"
             )
         try:
-            seen = await self._seen(call.ref)
-            async with self.session.observing_page() as page:
-                await self.uses(meaning).see_for_negative_check(page, seen)
+            await evaluation.bounded(self._sighted(call.ref, meaning), self.budget)
         except _REFUSED as error:
             reason = reasons.reason(error, self.session.redactor)
             return self._said(f"note_for_absence did not run: {reason}")
@@ -709,6 +710,13 @@ class Attempt:
             async with self.session.observing_page() as page:
                 index = await uses.add(page, seen, "assertion")
         return uses.targets[index]
+
+    async def _sighted(self, ref: str, meaning: str) -> None:
+        """Note the element `ref` names where it shows, for `meaning`'s
+        not_visible check (`see_for_negative_check`)."""
+        seen = await self._seen(ref)
+        async with self.session.observing_page() as page:
+            await self.uses(meaning).see_for_negative_check(page, seen)
 
     async def _seen(self, ref: str) -> Seen:
         """The element `ref` names: a part of the last description, by a
