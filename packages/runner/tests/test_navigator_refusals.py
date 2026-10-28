@@ -320,10 +320,19 @@ def test_a_meaning_holding_a_one_word_name_runs(app: App, tmp_path: Path) -> Non
     [
         ('steps:\n  - Press "save  DRAFT"\n', True),
         ('  - The "Save draft" button is enabled\n', True),
-        # The spec quotes more than the name, so it doesn't quote the name.
+        # The spec quotes more, or less, than the name, so it doesn't quote
+        # the name.
         ('steps:\n  - Press "Save draft now"\n', False),
+        ('steps:\n  - Press "Save"\n', False),
+        ('steps:\n  - Press ""\n', False),
     ],
-    ids=["in-a-step", "in-an-expectation", "inside-a-longer-quote"],
+    ids=[
+        "in-a-step",
+        "in-an-expectation",
+        "inside-a-longer-quote",
+        "a-shorter-quote",
+        "an-empty-quote",
+    ],
 )
 def test_a_meaning_holding_a_name_the_spec_quotes_runs(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: str, ran: bool
