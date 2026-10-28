@@ -270,9 +270,10 @@ def css_tokens(css: str) -> Iterator[str]:
 
 def css_strings(css: str) -> Iterator[str]:
     """Each string and each name in a css value, with its escapes decoded,
-    as Playwright's tokenizer reads them (see `css_tokens`): every text an
-    attribute value, an id, a class or a tag could spell. A comment gives
-    none."""
+    as Playwright hands them to the browser (see `css_tokens`): every text
+    an attribute value, an id, a class or a tag could spell. A comment gives
+    none, and the names either side of one are one name: Playwright drops
+    the comment and writes its tokens back next to each other."""
     css = re.sub(r"\r\n?|\f", "\n", css)
     index = 0
     while index < len(css):
@@ -283,6 +284,11 @@ def css_strings(css: str) -> Iterator[str]:
             yield string
         elif _NAME_CHAR.match(css, index) or _starts_escape(css, index):
             name, index = _name(css, index)
+            while True:
+                more, end = _name(css, _after_comments(css, index))
+                if not more:
+                    break
+                name, index = name + more, end
             yield name
         else:
             index += 1

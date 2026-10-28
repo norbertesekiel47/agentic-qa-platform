@@ -191,6 +191,27 @@ def test_a_heal_finds_no_assertion_target_by_a_claim_split_by_a_line_continuatio
     ) == [f"/targets/cart_items/locators/0/css: {SPELLS}"]
 
 
+# Playwright drops a comment and writes the names either side of it as one,
+# so it executes ul[aria-label=Classic\ Hoodie\ M].
+@pytest.mark.parametrize("base", [LITERAL, unchanged], ids=["literal", "pattern"])
+@pytest.mark.parametrize(
+    "css",
+    [
+        r"ul[aria-label=Clas/**/sic\ Hoodie\ M]",
+        r"ul#Clas/* a */sic\ Hoodie\ M",
+        r"ul.Clas/**//**/sic\ Hoodie\ M",
+    ],
+    ids=["attribute", "id", "class"],
+)
+def test_a_heal_finds_no_assertion_target_by_a_claim_split_by_a_comment(
+    base: Change, css: str
+) -> None:
+    assert heal(
+        lambda d: d["targets"]["cart_items"].update(locators=[{"css": css}]),
+        base=base,
+    ) == [f"/targets/cart_items/locators/0/css: {SPELLS}"]
+
+
 def test_a_heal_finds_no_assertion_target_by_a_string_its_pattern_matches() -> None:
     # a4's own pattern, Classic Hoodie.*\bM\b.
     locator = {"css": 'ul[aria-label="Classic Hoodie M"]'}
