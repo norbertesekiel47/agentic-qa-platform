@@ -281,3 +281,21 @@ def test_a_failed_reset_names_its_kind() -> None:
         "unreachable",
         "rejected",
     ]
+
+
+def test_an_unsendable_hook_is_unreachable_without_its_text() -> None:
+    # Loading refuses this hook (`ResetEndpoint`), so it is built past it.
+    hook = Reset.model_construct(http="POST /re set?fake-sensitive")
+    start = f"http://127.0.0.1:{unused_port()}"
+
+    async def scenario() -> ResetFailedError:
+        with pytest.raises(ResetFailedError) as raised:
+            await reset(gate(allowed=(start,)), hook, start, seconds=5)
+        return raised.value
+
+    failed = asyncio.run(scenario())
+
+    assert (failed.kind, str(failed)) == (
+        "unreachable",
+        "the reset hook couldn't be reached",
+    )
