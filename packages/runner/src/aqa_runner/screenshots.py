@@ -83,7 +83,8 @@ _SHADOW = re.compile(r'<template shadowmode="(?:open|closed)"')
 # shows), and each frame's document; drops <noscript>, which a page with
 # script never showed; checks that the kinds of its fields, its frames and
 # its elements with a `contenteditable` attribute are the snapshot's, in
-# order, and gives each field its value; hides each frame it can't reach;
+# order, and gives each field its value or its checked state; hides each
+# frame it can't reach;
 # empties each such element and every editing host; and scrolls to the
 # live page's place. Null when they don't match; otherwise the values of
 # the fields and the text left.
@@ -121,8 +122,13 @@ RESTORE = """({plan, scroll}) => {
         visit(document);
         if (plan) {
             if (JSON.stringify(kinds) !== JSON.stringify(plan.kinds)) return false;
+            // Any other input's `value` is its attribute, which the archive
+            // holds, or a file's name.
+            const kept = ["hidden", "submit", "image", "reset", "button", "file"];
             inputs.forEach((input, i) => {
-                if (input.type !== "file") input.value = plan.values[i];
+                if (input.type === "checkbox" || input.type === "radio") {
+                    input.checked = plan.checked[i];
+                } else if (!kept.includes(input.type)) input.value = plan.values[i];
             });
         }
         fields.push(...inputs);
@@ -162,10 +168,11 @@ class _Document(TypedDict):
     """What a render must find of a document, in walk order: the kind of
     each field (its element and `type` attribute), frame and element with
     a `contenteditable` attribute (its element and that name); each
-    field's value; and each frame's document."""
+    field's value and checked state; and each frame's document."""
 
     kinds: list[tuple[str, str | None]]
     values: list[str]
+    checked: list[bool]
     frames: list[_Document | None]
 
 
@@ -185,10 +192,15 @@ class _Metrics(TypedDict):
     cssVisualViewport: _Viewport
 
 
-class _Rare(TypedDict):
-    """Values of the nodes at `index`, one each."""
+class _Flags(TypedDict):
+    """The nodes that are so: a checkbox or radio button that is checked."""
 
     index: list[int]
+
+
+class _Rare(_Flags):
+    """Values of the nodes at `index`, one each."""
+
     value: list[int]
 
 
@@ -201,6 +213,7 @@ class _Nodes(TypedDict):
     inputValue: NotRequired[_Rare]
     textValue: NotRequired[_Rare]
     contentDocumentIndex: NotRequired[_Rare]
+    inputChecked: NotRequired[_Flags]
 
 
 class _Layout(TypedDict):
@@ -493,7 +506,8 @@ def _plan(dom: _Snapshot, document: int, redactor: Redactor) -> _Document:
     inputs = _rare(nodes.get("inputValue"))
     texts = _rare(nodes.get("textValue"))
     documents = _rare(nodes.get("contentDocumentIndex"))
-    plan: _Document = {"kinds": [], "values": [], "frames": []}
+    checked = set(nodes.get("inputChecked", {"index": []})["index"])
+    plan = _Document(kinds=[], values=[], checked=[], frames=[])
     for node, name in enumerate(nodes["nodeName"]):
         element = strings[name].lower()
         named = _attributes(nodes, strings, node)
@@ -508,6 +522,7 @@ def _plan(dom: _Snapshot, document: int, redactor: Redactor) -> _Document:
                     redactor.finds(value) or redactor.overlaps(value, SHARED_RUN)
                 )
                 plan["values"].append(value if shown else "")
+                plan["checked"].append(node in checked)
             case "iframe" | "frame":
                 plan["kinds"].append((element, None))
                 inner = documents.get(node)
