@@ -40,9 +40,16 @@ from playwright.async_api import CDPSession, Error, Page, Route
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.redaction import Redactor
 
-# How long the live page's snapshot, and then its render, may take: a page
-# that keeps its main thread busy holds a snapshot back (ADR-0034).
+# How long the live page's snapshot, and then its scrub and render, may
+# take: a page that keeps its main thread busy holds a snapshot back
+# (ADR-0034).
 CAPTURE_SECONDS = 5.0
+
+# The largest archive a capture scrubs. The scan reads about a million
+# characters in 1.25 s (#171's host), so a larger one can't be scrubbed in
+# CAPTURE_SECONDS, and is withheld rather than left scrubbing on in a
+# thread the bound has cut off.
+ARCHIVE_CHARS = 5_000_000
 
 # A field's value that shares this many consecutive characters with a bound
 # value, or all of a shorter one, is dropped from a render. A test secret
@@ -188,7 +195,7 @@ async def take_screenshot(session: BrowserSession) -> Screenshot:
         png = await _captured(session)
     except TimeoutError:
         raise ScreenshotWithheldError(
-            f"the page's snapshot or its render took over {CAPTURE_SECONDS} s"
+            f"the page's snapshot, its scrub or its render took over {CAPTURE_SECONDS} s"
         ) from None
     except Error:
         # Playwright's general error type: a DevTools call, or the render's
@@ -220,18 +227,32 @@ async def _captured(session: BrowserSession) -> bytes:
         dom = await devtools.send(
             "DOMSnapshot.captureSnapshot", {"computedStyles": [USER_MODIFY]}
         )
+    if len(archive["data"]) > ARCHIVE_CHARS:
+        raise ScreenshotWithheldError(f"the archive is over {ARCHIVE_CHARS} characters")
+    viewport = metrics["cssVisualViewport"]
+    async with asyncio.timeout(CAPTURE_SECONDS):
+        # In a thread, so a long scrub holds up neither the event loop nor
+        # the egress proxy that runs on it. A Redactor's scans change
+        # nothing it holds, so one runs in any thread.
+        parts, main, plan = await asyncio.to_thread(
+            _prepared, archive["data"], dom, session.redactor
+        )
+        return await _render(
+            session, parts, main, plan, (viewport["pageX"], viewport["pageY"])
+        )
+
+
+def _prepared(
+    archive: str, dom: dict[str, Any], redactor: Redactor
+) -> tuple[_Parts, str, _Document]:
+    """The render's archive parts, its page's URL and its plan."""
     if _editing_unmarked(dom):
         raise ScreenshotWithheldError(
             "an element is editable in a way the snapshot doesn't hold "
             "(designMode, or a style it leaves out)"
         )
-    parts, main = _scrubbed(archive["data"], session.redactor)
-    plan = _plan(dom, 0, session.redactor)
-    viewport = metrics["cssVisualViewport"]
-    async with asyncio.timeout(CAPTURE_SECONDS):
-        return await _render(
-            session, parts, main, plan, (viewport["pageX"], viewport["pageY"])
-        )
+    parts, main = _scrubbed(archive, redactor)
+    return parts, main, _plan(dom, 0, redactor)
 
 
 @asynccontextmanager
