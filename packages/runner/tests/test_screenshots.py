@@ -217,12 +217,12 @@ async def control(
 ) -> bytes:
     """The case's page with `UNBOUND` where the bound value goes. Another
     secret is filled first, so the render runs, except on an editable
-    case, which a render empties: there nothing is filled, so the
-    screenshot is the live page's."""
+    case, which a render empties, and a `shown_live` one: there nothing is
+    filled, so the screenshot is the live page's."""
     case = CASES[name]
     served["value"] = UNBOUND
     await session.navigate(f"{sites.app}/shot/{name}")
-    if case.into != "editable":
+    if case.into != "editable" and not case.shown_live:
         trigger = await element(session, "#trigger")
         await session.fill_secret(trigger, secret(sites, "TRIGGER"))
     if case.into != "page":
@@ -820,14 +820,15 @@ def test_an_archive_the_scrub_cant_read_withholds_it(
             "const t = ce.firstChild; t.splitText(7); t.after(document.createElement('b'))",
             MISMATCHED,
         ),
-        # Cutting the value makes a hidden field a text field, which takes
-        # the newline out of what it shows.
+        # Cutting the value would make a hidden field a text field, which
+        # takes the newline out of what it shows, but Blink's archive leaves
+        # every hidden field out: the render shows nothing of it.
         (
             "hidden",
             STYLE + FIELD + "<input id=h type=hidden>",
             "#f",
             "h.value = 'hid\\nden'",
-            MISMATCHED,
+            0,
         ),
         # The render's parser drops a NUL in text.
         (
@@ -841,7 +842,7 @@ def test_an_archive_the_scrub_cant_read_withholds_it(
     ids=["value-contenteditable", "value-hidden-split-by-a-newline", "split-by-a-nul"],
 )
 def test_a_value_the_scrub_changes_the_markup_or_parse_of_is_never_shown(
-    sites: Sites, *, value: str, body: str, into: str, script: str, reason: str
+    sites: Sites, *, value: str, body: str, into: str, script: str, reason: str | int
 ) -> None:
     filled = BoundSecret(
         "MARKUP",
