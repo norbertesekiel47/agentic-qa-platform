@@ -11,6 +11,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Literal
 
 from aqa_core.compiled import (
@@ -29,7 +30,14 @@ from aqa_core.compiled import (
     VisibleUnoccluded,
 )
 from aqa_core.config import ProjectConfig
-from aqa_core.project import SpecError, contract_problems, path_on_origin, start_url
+from aqa_core.heal_patch import heal_patch_problems
+from aqa_core.project import (
+    SpecError,
+    contract_problems,
+    parse_compiled,
+    path_on_origin,
+    start_url,
+)
 from aqa_core.spec import Spec, secret_references
 from playwright.async_api import Browser, BrowserType, ElementHandle, Error
 
@@ -95,12 +103,14 @@ type ErrorCode = Literal["egress_blocked"]
 @dataclass(frozen=True)
 class RunSetup:
     """What a replay runs for: the spec and project config, the run's start
-    origin (`aqa_core.project.start_origin`), and the run's record."""
+    origin (`aqa_core.project.start_origin`), the run's record, and the
+    repair a drifted step goes to, if any (#242)."""
 
     spec: Spec
     config: ProjectConfig
     start: str
     record: RunRecord
+    repair: Repair | None = None
 
 
 @dataclass(frozen=True)
@@ -144,6 +154,38 @@ class StepResult:
 
 
 @dataclass(frozen=True)
+class Drift:
+    """The step a replay paused at, for its repair: its target didn't
+    resolve, so nothing was dispatched; each locator's miss; a deep copy of
+    the script in use, the committed one or an earlier repair's, so an edit
+    to it reaches nothing replay holds; and the live session, which the
+    repair observes through and dispatches nothing with."""
+
+    step: Targeted
+    misses: tuple[Miss, ...]
+    script: CompiledScript
+    session: BrowserSession
+
+
+# What a replay hands a drifted step to: the whole script to go on with.
+# Returning the script it was handed gives up.
+type Repair = Callable[[Drift], Awaitable[CompiledScript]]
+
+
+@dataclass(frozen=True)
+class Repaired:
+    """One drifted step's repair, as `repairs/<seq>.json` records it: the
+    step's seq and misses; why replay refused the script offered, each
+    problem scanned, none when it was taken; and the script the run went on
+    with, as replay parsed it, None when refused."""
+
+    seq: int
+    misses: tuple[Miss, ...]
+    problems: tuple[Redacted, ...]
+    script: CompiledScript | None
+
+
+@dataclass(frozen=True)
 class Evidence:
     """One step's evidence snapshot as a replay returns it: the step's seq,
     and the page's snapshot as its evidence keeps it, scanned, as plain
@@ -163,7 +205,8 @@ class RunResult:
     and ports in memory: what #53 prints or saves of them is its
     preflight's. `evidence` is the page a failure shows explore's next
     attempt (#56): the step's where an enabled invariant first became
-    violated, else the last step's."""
+    violated, else the last step's. `repairs` holds each drifted step's
+    repair, in order: a run that passed through one keeps its outcome."""
 
     run_id: str
     outcome: RunOutcome
@@ -176,6 +219,7 @@ class RunResult:
     error_code: ErrorCode | None
     policy_events_total: int
     evidence: Evidence | None = None
+    repairs: tuple[Repaired, ...] = ()
 
 
 async def replay(
@@ -250,8 +294,8 @@ async def replay(
 class _Replayed:
     """What a replay's browser left: its record and redactor, the hosts
     the project config expects blocked, and every step, assertion,
-    invariant and kept policy event, how many it recorded, and the
-    evidence a failure shows (`RunResult.evidence`)."""
+    invariant and kept policy event, how many it recorded, the evidence a
+    failure shows (`RunResult.evidence`), and each repair."""
 
     record: RunRecord
     redactor: Redactor
@@ -262,6 +306,7 @@ class _Replayed:
     policy_events: tuple[PolicyEvent, ...]
     policy_events_total: int
     evidence: Evidence
+    repairs: tuple[Repaired, ...]
 
 
 async def _replayed(
@@ -344,12 +389,29 @@ async def _replayed(
         # whatever the path did after; one the final checks first show
         # keeps the last step's, the page they ran on.
         violated = _violated(session, setup.spec)
-        for step in runnable:
-            if steps[-1].outcome != "completed" or interrupted():
-                break
+        pending = list(runnable)
+        repairs: list[Repaired] = []
+        while pending and steps[-1].outcome == "completed" and not interrupted():
+            step = pending[0]
             result = await _run(session, run, step, interrupted)
             if result is None:
                 break
+            if (
+                setup.repair is not None
+                and result.outcome == "drifted"
+                and not isinstance(step, Navigate | Reload | Press)
+            ):
+                drift = Drift(step, result.misses, script, session)
+                offered = await setup.repair(drift)
+                repaired = await _repaired(run, script, result, offered)
+                repairs.append(repaired)
+                if (patched := repaired.script) is not None:
+                    run = replace(
+                        run, evaluation=replace(run.evaluation, targets=patched.targets)
+                    )
+                    pending = list(patched.steps[len(steps) - 1 :])
+                    continue
+            pending.pop(0)
             kept = await _keep_with_evidence(session, run, steps, result)
             if not violated:
                 evidence, violated = kept, _violated(session, setup.spec)
@@ -376,6 +438,7 @@ async def _replayed(
         tuple(events.kept),
         events.total,
         evidence,
+        tuple(repairs),
     )
 
 
@@ -421,6 +484,7 @@ def _run_result(replayed: _Replayed, proxy: EgressProxy, gate: EgressGate) -> Ru
         "egress_blocked" if blocks.blocked else None,
         replayed.policy_events_total,
         replayed.evidence,
+        replayed.repairs,
     )
 
 
@@ -639,6 +703,54 @@ async def _run(
         ),
         lambda: _targeted(session, step, found.element, run.secrets),
     )
+
+
+async def _repaired(
+    run: _Replay,
+    committed: CompiledScript,
+    drifted: StepResult,
+    offered: CompiledScript,
+) -> Repaired:
+    """The repair of the step `drifted`, whose repair offered `offered`,
+    recorded in `repairs/<seq>.json`: taken, as the loader reads its JSON,
+    once nothing refuses it. The first of these to find problems refuses
+    it, and each problem is scanned: the loader's rules, which a
+    `model_copy` skips; the heal-patch validator, against `committed`, the
+    script replay was given, never a copy it handed out; and replay's own
+    admission (`accepted`). The validator searches text checks' patterns in
+    a child process, so it runs off the loop, which keeps the proxy
+    serving."""
+    seq, record = drifted.seq, run.setup.record
+    name = f"repairs/{seq}.json"
+    problems: Sequence[str]
+    try:
+        patched = parse_compiled(
+            offered.model_dump_json(), run.setup.config, source=Path(name)
+        )
+        problems = await asyncio.to_thread(heal_patch_problems, committed, patched)
+        if not problems:
+            accepted(patched, run.setup.spec)
+            taken = Repaired(seq, drifted.misses, (), patched)
+            record.write(name, _repair_record(taken))
+            return taken
+    except SpecError as error:
+        problems = error.problems
+    scanned = tuple(record.redactor.redact(problem) for problem in problems)
+    refused = Repaired(seq, drifted.misses, scanned, None)
+    record.write(name, _repair_record(refused))
+    return refused
+
+
+def _repair_record(repaired: Repaired) -> dict[str, object]:
+    script = repaired.script
+    return {
+        "seq": repaired.seq,
+        "misses": list(repaired.misses),
+        "problems": list(repaired.problems),
+        "script": None
+        if script is None
+        else script.model_dump(mode="json", exclude_none=True),
+    }
 
 
 def _untargeted(
