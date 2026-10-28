@@ -259,6 +259,111 @@ def test_an_argument_the_tool_cant_take_is_refused_before_its_intent(
     assert read_steps(app.record) == []
 
 
+# A form whose field, list and button each have a two-word name.
+LABELLED = """<label>Display name <input oninput="fetch('/did/fill')"></label>
+    <label>Shirt size <select onchange="fetch('/did/select')">
+        <option>S</option><option>M</option></select></label>
+    <button onclick="fetch('/write/save', {method: 'POST'})">Save draft</button>"""
+NAMES_LABEL = (
+    "did not run: its meaning holds the element's label; say what the element is "
+    "for and where it sits instead"
+)
+
+
+def test_a_meaning_holding_a_multi_word_name_is_refused_before_its_intent(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(PAGES, "labelled", LABELLED)
+
+    async def scenario(attempt: Attempt) -> list[ActionResult]:
+        calls: list[Action] = [
+            Click(
+                ref=ref(attempt, "button", "Save draft"),
+                meaning="the form's save draft button",
+            ),
+            Fill(
+                ref=ref(attempt, "textbox", "Display name"),
+                meaning="the form's DISPLAY  NAME field",
+                text="Ada",
+            ),
+            Select(
+                ref=ref(attempt, "combobox", "Shirt size"),
+                meaning="the form's shirt\nsize list",
+                option="M",
+            ),
+        ]
+        return [await attempt.act(call) for call in calls]
+
+    results = on_app(app, tmp_path, scenario, page="/page/labelled")
+
+    assert [(result.step, result.text) for result in results] == [
+        (None, f"{tool} {NAMES_LABEL}") for tool in ("click", "fill", "select")
+    ]
+    assert app.paths() == ["/page/labelled"]
+    assert app.record is not None
+    assert read_steps(app.record) == []
+
+
+def test_a_meaning_holding_a_one_word_name_runs(app: App, tmp_path: Path) -> None:
+    async def scenario(attempt: Attempt) -> ActionResult:
+        save = ref(attempt, "button", "Save")
+        return await attempt.act(Click(ref=save, meaning="the form's Save button"))
+
+    result = on_app(app, tmp_path, scenario)
+
+    assert result.text == "step 1 ran, and the page settled"
+    assert app.paths() == ["/page/form", "/write/save"]
+
+
+@pytest.mark.parametrize(
+    ("extra", "ran"),
+    [
+        ('steps:\n  - Press "save  DRAFT"\n', True),
+        ('  - The "Save draft" button is enabled\n', True),
+        # The spec quotes more than the name, so it doesn't quote the name.
+        ('steps:\n  - Press "Save draft now"\n', False),
+    ],
+    ids=["in-a-step", "in-an-expectation", "inside-a-longer-quote"],
+)
+def test_a_meaning_holding_a_name_the_spec_quotes_runs(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: str, ran: bool
+) -> None:
+    monkeypatch.setitem(PAGES, "labelled", LABELLED)
+
+    async def scenario(attempt: Attempt) -> ActionResult:
+        button = ref(attempt, "button", "Save draft")
+        return await attempt.act(Click(ref=button, meaning="the Save draft button"))
+
+    result = on_app(app, tmp_path, scenario, page="/page/labelled", extra=extra)
+
+    if ran:
+        assert result.text == "step 1 ran, and the page settled"
+        assert app.paths() == ["/page/labelled", "/write/save"]
+    else:
+        assert result.text == f"click {NAMES_LABEL}"
+        assert app.paths() == ["/page/labelled"]
+
+
+@pytest.mark.parametrize(
+    "meaning",
+    ["the autosave drafts button", "the save-draft button"],
+    ids=["inside-longer-words", "hyphenated"],
+)
+def test_a_meaning_holding_a_name_only_as_part_of_other_words_runs(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, meaning: str
+) -> None:
+    monkeypatch.setitem(PAGES, "labelled", LABELLED)
+
+    async def scenario(attempt: Attempt) -> ActionResult:
+        button = ref(attempt, "button", "Save draft")
+        return await attempt.act(Click(ref=button, meaning=meaning))
+
+    result = on_app(app, tmp_path, scenario, page="/page/labelled")
+
+    assert result.text == "step 1 ran, and the page settled"
+    assert app.paths() == ["/page/labelled", "/write/save"]
+
+
 @pytest.mark.parametrize("secret_bound", [False, True], ids=["unbound", "bound"])
 def test_a_tool_on_a_page_off_the_allowed_origins_returns_a_policy_error(
     app: App, tmp_path: Path, secret_bound: bool

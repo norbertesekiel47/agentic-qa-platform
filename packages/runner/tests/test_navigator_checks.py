@@ -241,12 +241,17 @@ async def saved(attempt: Attempt) -> None:
     await attempt.act(Click(ref=ref(attempt, "button", "Save"), meaning=SAVE))
 
 
-async def clicked(attempt: Attempt, name: str, role: str = "button") -> None:
-    """Click the page's element called `name`, then observe the page."""
-    await attempt.act(
-        Click(ref=ref(attempt, role, name), meaning=f"the page's {name} {role}")
-    )
+async def clicked(
+    attempt: Attempt, name: str, meaning: str, role: str = "button"
+) -> None:
+    """Click the page's element called `name`, under `meaning`, then observe
+    the page."""
+    await attempt.act(Click(ref=ref(attempt, role, name), meaning=meaning))
     await attempt.observe()
+
+
+# What the pages' buttons that remove the header's link are for.
+UNLINKS = "the page's button that removes the header's link"
 
 
 async def noted_link(attempt: Attempt) -> str:
@@ -416,7 +421,7 @@ def test_note_for_absence_binds_the_agents_element_where_it_was_seen(
         unknown = await attempt.note(NoteForAbsence(check_id="a9", ref=link))
         wrong = await attempt.note(NoteForAbsence(check_id="a2", ref=link))
         note = await noted_link(attempt)
-        await clicked(attempt, "Sign in now")
+        await clicked(attempt, "Sign in now", UNLINKS)
         gone = await attempt.check(AssertCheck(check_id="a1", ref=None))
         own = ref(attempt, "link", "Sign in")
         await attempt.check(AssertCheck(check_id="a2", ref=own))
@@ -464,7 +469,11 @@ def test_a_contracted_negative_check_binds_only_inside_its_region(
         outside = await attempt.note(NoteForAbsence(check_id="a1", ref=lower))
         unseen = await attempt.check(AssertCheck(check_id="a1", ref=None))
         note = await attempt.note(NoteForAbsence(check_id="a1", ref=banner))
-        await clicked(attempt, "Hide it")
+        await clicked(
+            attempt,
+            "Hide it",
+            "the page's button that hides the banner's favorite button",
+        )
         gone = await attempt.check(AssertCheck(check_id="a1", ref=None))
         return [outside, unseen, note, gone, attempt.uses(FAVORITE).targets]
 
@@ -507,7 +516,7 @@ def test_a_negative_checks_sighting_never_tries_or_keeps_a_bound_value(
     async def scenario(attempt: Attempt) -> list[object]:
         handed.clear()
         note = await noted_link(attempt)
-        await clicked(attempt, "Sign in now")
+        await clicked(attempt, "Sign in now", UNLINKS)
         gone = await attempt.check(AssertCheck(check_id="a1", ref=None))
         return [note, gone, attempt.uses(LINK).targets]
 
@@ -534,13 +543,17 @@ async def still_shown(attempt: Attempt, _: pytest.MonkeyPatch) -> None:
 
 async def header_removed(attempt: Attempt, _: pytest.MonkeyPatch) -> None:
     await noted_link(attempt)
-    await clicked(attempt, "Drop the header")
+    await clicked(
+        attempt, "Drop the header", "the page's button that removes the header"
+    )
 
 
 async def banner_removed(attempt: Attempt, _: pytest.MonkeyPatch) -> None:
     (banner,) = favorite_buttons(attempt)
     await attempt.note(NoteForAbsence(check_id="a1", ref=banner))
-    await clicked(attempt, "Drop the banner")
+    await clicked(
+        attempt, "Drop the banner", "the page's button that removes the banner"
+    )
 
 
 async def look_broken(attempt: Attempt, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -679,7 +692,7 @@ def test_finish_judges_every_check_as_the_confirmation_will(
 
     async def scenario(attempt: Attempt) -> list[object]:
         await attempt.check(AssertCheck(check_id="a1", ref=paragraph(attempt)))
-        await clicked(attempt, "Next", "link")
+        await clicked(attempt, "Next", "the page's Next link", "link")
         await attempt.check(AssertCheck(check_id="a2", ref=paragraph(attempt)))
         targets = attempt.uses(STATUS).targets
         refused = told(await attempt.finish(Finish(steps=(1,)), BY))
@@ -963,7 +976,9 @@ def test_after_a_terminal_failure_no_tool_does_any_work(
         await attempt.note(
             NoteForAbsence(check_id="a2", ref=ref(attempt, "link", "Sign in"))
         )
-        await clicked(attempt, "Sign in now")
+        await clicked(
+            attempt, "Sign in now", "the page's button that signs the reader in"
+        )
         calls.clear()
         await attempt.check(AssertCheck(check_id="a1", ref=paragraph(attempt)))
         checked = set(calls)
