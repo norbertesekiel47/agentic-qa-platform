@@ -94,9 +94,12 @@ def made(
 
 def ending(made: Made, **changes: Any) -> ReplayEnd:
     """How `made`'s run ended: replay returned, steps 0 and 1 completed, a1
-    passed and every invariant held, with no stop, plus the steps,
-    assertions and stops `changes` adds and the result fields it sets."""
+    passed and every invariant held, with no block, event or stop, plus the
+    steps, assertions and stops `changes` adds, the blocks and events it
+    gives, and the result fields it sets."""
     stops = changes.pop("stops", ())
+    blocks = changes.pop("blocks", CLEAN)
+    events = changes.pop("infrastructure_events", ())
     result = RunResult(
         made.record.run_id,
         "passed",
@@ -116,7 +119,7 @@ def ending(made: Made, **changes: Any) -> ReplayEnd:
         assertions=result.assertions + changes.pop("assertions", ()),
         **changes,
     )
-    return ReplayEnd(made.record, made.spec, made.script, result, stops)
+    return ReplayEnd(made.record, made.spec, made.script, result, blocks, events, stops)
 
 
 def side_effect_left_unresolved(made: Made) -> dict[str, Any]:
@@ -126,7 +129,7 @@ def side_effect_left_unresolved(made: Made) -> dict[str, Any]:
 
 # What makes each outcome hold, and nothing more decisive.
 CAUSES: dict[str, Callable[[Made], dict[str, Any]]] = {
-    "egress_blocked": lambda _: {"egress_blocks": CDN, "error_code": "egress_blocked"},
+    "egress_blocked": lambda _: {"blocks": CDN},
     "non_resumable": side_effect_left_unresolved,
     "no_sandbox": lambda _: {
         "stops": (Stop("no_sandbox", NO_SECRETS.redact(SANDBOX)),)
@@ -196,7 +199,7 @@ def test_each_pair_of_outcomes_resolves_by_precedence(
 def test_a_replay_that_returned_no_result_never_passes(tmp_path: Path) -> None:
     run = made(tmp_path)
 
-    end = ReplayEnd(run.record, run.spec, run.script, None)
+    end = ReplayEnd(run.record, run.spec, run.script, None, CLEAN, ())
 
     assert final_outcome(end) == "inconclusive"
 
@@ -363,8 +366,7 @@ def test_what_never_ran_or_was_turned_off_gets_no_verdict(
 def test_an_egress_blocked_run_has_no_verdict_and_no_finding(tmp_path: Path) -> None:
     blocked = ending(
         made(tmp_path),
-        egress_blocks=CDN,
-        error_code="egress_blocked",
+        blocks=CDN,
         assertions=(AssertionResult("a2", "failed", locator_index=0),),
         invariants=VIOLATED,
     )
@@ -626,6 +628,23 @@ def test_every_reason_and_title_is_scanned_again_with_the_runs_scan(
     )
 
 
+def test_an_egress_block_decides_though_replay_raised_after_it(tmp_path: Path) -> None:
+    run = made(tmp_path)
+    side_effect_left_unresolved(run)
+    stops = (Stop("record_error", NO_SECRETS.redact(UNWRITTEN)),)
+
+    raised = ReplayEnd(run.record, run.spec, run.script, None, CDN, (), stops)
+
+    keys = ("outcome", "exit_code", "error_code", "reasons", "non_resumable")
+    assert tuple(document(raised)[key] for key in keys) == (
+        "egress_blocked",
+        6,
+        "egress_blocked",
+        [UNWRITTEN],
+        [2],
+    )
+
+
 def test_a_replay_that_raised_still_records_its_outcome_reasons_and_non_resumable_steps(
     tmp_path: Path,
 ) -> None:
@@ -635,7 +654,9 @@ def test_a_replay_that_raised_still_records_its_outcome_reasons_and_non_resumabl
     run.record.step_intent(1, CLICK, side_effect=True, target_used="save")
     stops = (Stop("record_error", NO_SECRETS.redact(UNWRITTEN)),)
 
-    presented = document(ReplayEnd(run.record, run.spec, run.script, None, stops))
+    raised = ReplayEnd(run.record, run.spec, run.script, None, CLEAN, (), stops)
+
+    presented = document(raised)
 
     assert presented.pop("run_id") == run.record.run_id
     assert presented == {

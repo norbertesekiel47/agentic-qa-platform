@@ -166,5 +166,7 @@ def _said(scan: Redactor, spec_id: str, replayed: Replayed, seconds: float) -> N
     lines = [f"{replayed.outcome} {spec_id}: {', '.join(facts)}"]
     lines.extend(f"  {reason}" for reason in reasons_in(document))
     if document.get("error_code") == "egress_blocked" and replayed.record is not None:
-        lines.append(f"  the egress record is {replayed.record / 'egress.json'}")
+        egress = replayed.record / "egress.json"
+        saved = "is" if egress.is_file() else "couldn't be saved to"
+        lines.append(f"  the egress record {saved} {egress}")
     say(scan, *lines, err=failed, withheld=withheld)

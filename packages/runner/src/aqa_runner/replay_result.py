@@ -29,6 +29,8 @@ from typing import Final, Literal
 from aqa_core.compiled import Assertion, CompiledScript, VisibleUnoccluded
 from aqa_core.spec import InvariantName, Spec
 
+from aqa_runner.egress import InfrastructureEvent
+from aqa_runner.egress_proxy import EgressBlocks
 from aqa_runner.evaluation import AssertionResult
 from aqa_runner.executor import RunResult, StepResult
 from aqa_runner.invariants import InvariantResult
@@ -94,12 +96,17 @@ class ReplayEnd:
     """What a strict run knows once replay returned or raised: its record,
     whose scan decides what is withheld and which holds the intents the run
     left unresolved; the spec and the compiled script it replayed; replay's
-    result, None when replay raised; and each cause it stopped on."""
+    result, None when replay raised; the egress blocks and the gate's
+    infrastructure events as the run left them, which hold whether or not
+    replay returned or its record took them, as explore's do; and each
+    cause it stopped on."""
 
     record: RunRecord
     spec: Spec
     script: CompiledScript
     result: RunResult | None
+    blocks: EgressBlocks
+    infrastructure_events: tuple[InfrastructureEvent, ...]
     stops: tuple[Stop, ...] = ()
 
 
@@ -110,14 +117,12 @@ def final_outcome(end: ReplayEnd) -> Outcome:
     holding: set[Outcome] = {stop.outcome for stop in end.stops}
     if _non_resumable(end):
         holding.add("non_resumable")
-    result = end.result
-    if result is None:
+    if end.blocks.blocked:
+        holding.add("egress_blocked")
+    if end.infrastructure_events:
+        holding.add("unreachable")
+    if end.result is None:
         holding.add("inconclusive")
-    else:
-        if result.egress_blocks.blocked:
-            holding.add("egress_blocked")
-        if result.infrastructure_events:
-            holding.add("unreachable")
     verdicts = {judged.verdict for judged in _judged(end)}
     if "expectation_violated" in verdicts:
         holding.add("expectation_violated")
@@ -139,8 +144,7 @@ def present(end: ReplayEnd) -> dict[str, object]:
     non-resumable step is listed whatever the outcome."""
     outcome = final_outcome(end)
     withheld = not end.record.redactor.empty
-    result = end.result
-    events = () if result is None else result.infrastructure_events
+    events = end.infrastructure_events
     judged = _judged(end)
     return {
         "schema_version": 1,
@@ -150,7 +154,7 @@ def present(end: ReplayEnd) -> dict[str, object]:
         "outcome": outcome,
         "exit_code": EXIT_CODES[outcome],
         "withheld": withheld,
-        "error_code": None if result is None else result.error_code,
+        "error_code": "egress_blocked" if end.blocks.blocked else None,
         "reasons": list(_reasons(end, judged)),
         "non_resumable": _non_resumable(end),
         "infrastructure_events": {
@@ -188,7 +192,7 @@ def _judged(end: ReplayEnd) -> list[_Judged]:
     establishes nothing; a violation is established. A run with no result,
     or with an egress block, has none at all."""
     result = end.result
-    if result is None or result.egress_blocks.blocked:
+    if result is None or end.blocks.blocked:
         return []
     stopped = result.steps[-1].outcome != "completed" or any(
         assertion.stopped_at is not None for assertion in result.assertions
