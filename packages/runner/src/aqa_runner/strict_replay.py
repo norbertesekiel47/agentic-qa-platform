@@ -73,16 +73,19 @@ class Replayed:
     record: Path | None
 
 
-async def strict_replay(run: StrictRun, playwright: Playwright) -> Replayed:
+async def strict_replay(
+    run: StrictRun, playwright: Playwright, scan: Redactor
+) -> Replayed:
     """Replay `run` once in a new record under its spec root, launching its
     browser from `playwright`, whose selector engines are registered, and
-    write its `replay.json` (module docstring)."""
+    write its `replay.json` (module docstring). The record scans with
+    `scan`, every test secret the caller bound, `run`'s among them, so no
+    run's record keeps a value another spec binds."""
     spec = run.spec
-    redactor = Redactor(run.bound.values())
     try:
-        record = RunRecord.create(run.root).redacting(redactor)
+        record = RunRecord.create(run.root).redacting(scan)
     except OSError, ValueError:  # ValueError: a .aqa or .aqa/runs that is a link
-        return Replayed("record_error", unrecorded(spec, redactor, _UNMADE), None)
+        return Replayed("record_error", unrecorded(spec, scan, _UNMADE), None)
     gate = EgressGate(egress_policy(spec, run.config, run.start))
     proxy = EgressProxy(gate)
     replaying = Replaying(spec, run.config, run.start, gate)

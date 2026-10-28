@@ -216,11 +216,13 @@ async def replay(
     `MissingSecretError`, Playwright's protocol logging `SecretLoggedError`,
     and a binding the run doesn't allow `SpecError`. A bound value's
     spelling in the start path, a step's action or a target's name or
-    locators raises `SpecError` too (`_spelling_bound_values`). When the run
-    binds a test secret, filled or not, every reason keeps nothing of
-    Playwright's messages and names no origin of ours (`Evaluation.reason`),
-    the invariants keep no text, and `egress.json` names no host or port
-    (ADR-0026's #50 D and #53 P9+P10 amendments).
+    locators raises `SpecError` too (`_spelling_bound_values`). The run
+    scans with the record's scan when that covers every secret it binds, as
+    `aqa replay`'s covers every spec's, and with its own secrets' otherwise.
+    When that scan holds a test secret, filled or not, every reason keeps
+    nothing of Playwright's messages and names no origin of ours
+    (`Evaluation.reason`), the invariants keep no text, and `egress.json`
+    names no host or port (ADR-0026's #50 D and #53 P9+P10 amendments).
 
     After every step it keeps, it saves the step's evidence in the record,
     which scans what it writes with the session's redactor
@@ -276,7 +278,10 @@ async def _replayed(
     runnable, checks, bound, redactor = admitted(
         script, setup.spec, setup.config, setup.start
     )
-    setup = replace(setup, record=setup.record.redacting(redactor))
+    if all(map(setup.record.redactor.covers, bound.values())):
+        redactor = setup.record.redactor
+    else:
+        setup = replace(setup, record=setup.record.redacting(redactor))
     run = _Replay(
         setup,
         {
