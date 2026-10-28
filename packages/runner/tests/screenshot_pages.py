@@ -158,6 +158,10 @@ BLIND_EDITABLE = """<script>window.arm=()=>{setInterval(()=>{ce.style.display=ce
 HANG = """<script>window.arm=()=>{setInterval(()=>{const e=Date.now()+1500;while(Date.now()<e){}},2000)}</script>"""
 SPLIT = """<script>window.arm=()=>{const t=ce.firstChild;t.splitText(4);t.after(document.createElement('b'))}</script>"""
 SPLIT_COMMENT = """<script>window.arm=()=>{const t=ce.firstChild;t.splitText(4);t.after(document.createComment(''))}</script>"""
+# A customizable select: choosing an option copies its content, as new
+# nodes, into the <selectedcontent> before the options.
+CHOSEN_COPY = f"""<select id=s style='appearance:base-select'><button><selectedcontent></selectedcontent></button><option value=a><div contenteditable style='{RED}'></div></option>
+<option value=b><div id=d contenteditable style='{RED}'></div></option></select><script>window.arm=(v)=>{{d.replaceChildren(v.slice(0,4),document.createElement('b'),v.slice(4));s.value='b'}}</script>"""
 CANVAS_DRAW = """<canvas id=c width=500 height=70></canvas><input id=f2 aria-label=Secret style='position:absolute;top:400px'>
 <script>window.arm=()=>{const x=c.getContext('2d');x.font='bold 48px sans-serif';x.fillStyle='#f00';x.fillText(f2.value,0,50)}</script>"""
 BLOB_IMAGE = """<img id=i><input id=f2 aria-label=Secret style='position:absolute;top:400px'><script>window.arm=()=>{const c=document.createElement('canvas');
@@ -275,6 +279,11 @@ CASES = {
         "<option value=b></option></select>",
         into="page",
         arm="s.options[1].text=VALUE;s.value='b'",
+    ),
+    # The value split by an empty <b>, which the scrub doesn't find, in an
+    # option's editable element, chosen after the fill.
+    "chosen-option-copied": Case(
+        EDITABLE_STYLE + EDITABLE + CHOSEN_COPY, into="editable", arm="arm(VALUE)"
     ),
     "canvas": Case(STYLE + CANVAS_DRAW, into="second", arm="arm()"),
     "blob-image": Case(STYLE + BLOB_IMAGE, into="second", arm="arm()"),

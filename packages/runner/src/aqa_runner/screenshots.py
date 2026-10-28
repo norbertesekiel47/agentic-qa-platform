@@ -85,10 +85,11 @@ _SHADOW = re.compile(r'<template shadowmode="(?:open|closed)"')
 # script never showed; checks that the kinds of its fields, its frames, its
 # options and its elements with a `contenteditable` attribute are the
 # snapshot's, in order, and gives each field its value or its checked state
-# and each option its chosen state; hides each frame it can't reach; empties
-# each such element and every editing host; and scrolls to the live page's
-# place. Null when they don't match; otherwise the values of the fields and
-# the text left.
+# and each option its chosen state; walks again, since a choice can copy an
+# option's content; hides each frame it can't reach; empties each such
+# element and every editing host; and scrolls to the live page's place. Null
+# when they don't match; otherwise the values of the fields and the text
+# left.
 RESTORE = """({plan, scroll}) => {
     const fields = [], texts = [], emptied = [];
     const walk = (document, plan) => {
@@ -153,6 +154,11 @@ RESTORE = """({plan, scroll}) => {
             return true;
         });
     };
+    if (!walk(document, plan)) return null;
+    // A choice the walk restored copies the option's content, as new nodes,
+    // into a <selectedcontent> it had passed. Restoring again changes
+    // nothing, so a second walk lists, empties and scans the final DOM.
+    fields.length = texts.length = emptied.length = 0;
     if (!walk(document, plan)) return null;
     for (const element of emptied) element.replaceChildren();
     window.scrollTo({left: scroll[0], top: scroll[1], behavior: "instant"});
