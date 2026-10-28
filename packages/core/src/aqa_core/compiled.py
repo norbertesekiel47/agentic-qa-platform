@@ -210,10 +210,15 @@ def _after_comments(css: str, index: int) -> int:
 def _string(css: str, index: int) -> tuple[str, int]:
     """The string opened by the quote at `index`, with its escapes decoded,
     and where it ends: at the same quote, or before a newline, which ends a
-    string unclosed."""
+    string unclosed. A backslash before a newline continues the string and
+    stands for nothing
+    (https://www.w3.org/TR/css-syntax-3/#consume-string-token)."""
     quote, index = css[index], index + 1
     chars: list[str] = []
     while index < len(css) and css[index] not in (quote, "\n"):
+        if css.startswith("\\\n", index):
+            index += 2
+            continue
         char, index = (
             _escape(css, index) if css[index] == "\\" else (css[index], index + 1)
         )

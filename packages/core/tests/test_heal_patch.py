@@ -175,6 +175,22 @@ def test_a_heal_finds_no_assertion_target_by_a_string_spelling_its_claim(
     ) == [f"/targets/{target}/locators/0{path}: {SPELLS}"]
 
 
+# In a string, CSS reads a backslash before a line break as nothing, once
+# \r\n, \r and \f are line breaks too (CSS Syntax 3, §3.3 and §4.3.5), so
+# Playwright executes ul[aria-label="Classic Hoodie M"].
+@pytest.mark.parametrize("base", [LITERAL, unchanged], ids=["literal", "pattern"])
+@pytest.mark.parametrize(
+    "newline", ["\n", "\r\n", "\r", "\f"], ids=["LF", "CRLF", "CR", "FF"]
+)
+def test_a_heal_finds_no_assertion_target_by_a_claim_split_by_a_line_continuation(
+    base: Change, newline: str
+) -> None:
+    locator = {"css": f'ul[aria-label="Clas\\{newline}sic Hoodie M"]'}
+    assert heal(
+        lambda d: d["targets"]["cart_items"].update(locators=[locator]), base=base
+    ) == [f"/targets/cart_items/locators/0/css: {SPELLS}"]
+
+
 def test_a_heal_finds_no_assertion_target_by_a_string_its_pattern_matches() -> None:
     # a4's own pattern, Classic Hoodie.*\bM\b.
     locator = {"css": 'ul[aria-label="Classic Hoodie M"]'}
