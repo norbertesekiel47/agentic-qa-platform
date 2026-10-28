@@ -35,7 +35,8 @@ from aqa_runner.browser_session import one_key
 
 class UnusableSecretError(ValueError):
     """`<source>: unusable test secret`: a referenced test secret is unset,
-    too short or unencodable, or protocol logging is on (API.md §7's 12)."""
+    too short or unencodable, protocol logging is on, or a bound value is in
+    another variable (API.md §7's 12)."""
 
 
 @dataclass(frozen=True)

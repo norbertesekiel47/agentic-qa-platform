@@ -213,8 +213,9 @@ async def replay(
     Before its session is prepared, so after a caller's launch but before
     its own, it binds the test secrets the spec references
     (`aqa_runner.bound_secrets.bound_secrets`): a missing value raises
-    `MissingSecretError`, Playwright's protocol logging `SecretLoggedError`,
-    and a binding the run doesn't allow `SpecError`. A bound value's
+    `MissingSecretError`, Playwright's protocol logging or a bound value
+    elsewhere in the environment `SecretLoggedError`, and a binding the run
+    doesn't allow `SpecError`. A bound value's
     spelling in the start path, a step's action or a target's name or
     locators raises `SpecError` too (`_spelling_bound_values`). The run
     scans with the record's scan when that covers every secret it binds, as
