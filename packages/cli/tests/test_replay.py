@@ -803,6 +803,24 @@ def test_json_gives_a_run_whose_record_cant_be_made_the_same_fields(
     assert list(first) == list(second)
 
 
+# Bound values a text scan of JSON would break or withhold whole: JSON's
+# literals, and a value its marker, `[SECRET:TEST_PASSWORD]`, spells.
+@pytest.mark.parametrize("value", ["null", "true", "pass"])
+def test_json_prints_valid_json_that_spells_no_bound_value(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", value)
+    spec = shop(tmp_path / "qa", preconditions=ACCOUNT, config=SECRETS)
+    committed(spec, compiled([]))
+
+    result = replay(monkeypatch, [*on(app, spec), "--json"])
+
+    assert (result.exit_code, result.stdout) == (15, "[]\n")
+    assert result.stderr == (
+        "the runs' documents are withheld, since they would spell a bound value\n"
+    )
+
+
 def test_json_prints_an_empty_array_for_a_stop_before_any_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

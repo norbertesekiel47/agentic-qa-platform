@@ -12,8 +12,9 @@ link on the way (`publication`), exists and loads, and replay admits it
 can't be read; and its test secrets bind (12). Then each runs in argument
 order (`aqa_runner.strict_replay`), on one driver.
 
-Everything printed goes through `aqa_cli.common.rendered`, scanned with
-every test secret the invocation bound."""
+Every line printed goes through `aqa_cli.common.rendered`, scanned with
+every test secret the invocation bound. `--json`'s array is checked with
+the same secrets and printed as it is, or as `[]` when it spells one."""
 
 import asyncio
 import json
@@ -51,6 +52,9 @@ _MISSING: Final = "no compiled script: explore it first"
 _UNREAD: Final = "the compiled script could not be read, so nothing was replayed"
 _UNLOADED: Final = "the compiled script doesn't load, so nothing was replayed"
 _REFUSED: Final = "replay refuses the compiled script, so nothing was replayed"
+_UNPRINTABLE: Final = (
+    "the runs' documents are withheld, since they would spell a bound value"
+)
 
 
 def replay(
@@ -93,7 +97,13 @@ def replay(
             typer.echo("[]")
         raise
     if as_json:
-        say(scan, *json.dumps([e.document for e in ended], indent=2).splitlines())
+        # Checked, never scanned: a marker in place of a value would break
+        # the JSON, so an array that spells one is printed as none.
+        text = json.dumps([e.document for e in ended], indent=2)
+        if scan.finds(text):
+            text = "[]"
+            say(scan, _UNPRINTABLE, err=True)
+        typer.echo(text)
     if code := EXIT_CODES[rolled_up(e.outcome for e in ended)]:
         raise typer.Exit(code)
 
