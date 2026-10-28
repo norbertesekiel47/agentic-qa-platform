@@ -19,7 +19,7 @@ from aqa_core.compiled import (
     css_tokens,
 )
 from aqa_core.project import locator_levels
-from aqa_core.text import any_has_pattern
+from aqa_core.text import SearchTimeoutError, any_has_pattern
 
 # The child-indexed pseudo-classes, typed or not (Selectors Level 4, §13.3
 # and §13.4, https://www.w3.org/TR/selectors-4/#child-index). They find an
@@ -71,17 +71,31 @@ def _strings(level: Locator) -> Iterator[tuple[str, list[str]]]:
             yield "holds_value/value", [level.holds_value.value]
 
 
-def _spells(strings: list[str], claims: Sequence[TextInTarget]) -> bool:
-    """Whether one of `strings` meets a claim as its check would: its element
-    would carry the text its check verifies by construction, so any element
-    carrying that text could pass the check (#261). A pattern is the
-    script's and `strings` the heal's, so it runs bounded (ADR-0024)."""
-    return any(
-        any(claim.matches(string) for string in strings)
-        if claim.pattern is None
-        else any_has_pattern(strings, claim.pattern)
-        for claim in claims
-    )
+def _spelling(strings: list[str], claims: Sequence[TextInTarget]) -> str | None:
+    """Why an assertion's target may not be found by `strings`, or None: one
+    of them meets a claim as its check would, so its element would carry the
+    text the check verifies by construction, and any element carrying that
+    text could pass it (#261). A pattern is the script's and `strings` the
+    heal's, so it runs bounded (ADR-0024), and a search out of time refuses
+    them as well."""
+    try:
+        spelled = any(
+            any(claim.matches(string) for string in strings)
+            if claim.pattern is None
+            else any_has_pattern(strings, claim.pattern)
+            for claim in claims
+        )
+    except SearchTimeoutError:
+        return (
+            "a heal finds no assertion's target by a string where the search "
+            "for its text check's pattern ran out of time"
+        )
+    if spelled:
+        return (
+            "a heal finds no assertion's target by a string that spells its "
+            "text check's claim"
+        )
+    return None
 
 
 def _written(
@@ -103,11 +117,8 @@ def _written(
                 "placeholder, or by a name when its text is checked"
             )
         for field, strings in _strings(level):
-            if _spells(strings, claims):
-                yield (
-                    f"{where}/{field}: a heal finds no assertion's target by a "
-                    "string that spells its text check's claim"
-                )
+            if reason := _spelling(strings, claims):
+                yield f"{where}/{field}: {reason}"
 
 
 def _claims(script: CompiledScript) -> dict[str, list[TextInTarget]]:

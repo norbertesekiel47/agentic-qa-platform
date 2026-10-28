@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from aqa_core import text
 from aqa_core.compiled import CompiledScript
 from aqa_core.heal_patch import heal_patch_problems
 from aqa_core.project import parse_compiled
@@ -179,6 +180,27 @@ def test_a_heal_finds_no_assertion_target_by_a_string_its_pattern_matches() -> N
     locator = {"css": 'ul[aria-label="Classic Hoodie M"]'}
     assert heal(lambda d: d["targets"]["cart_items"].update(locators=[locator])) == [
         f"/targets/cart_items/locators/0/css: {SPELLS}"
+    ]
+
+
+def test_a_pattern_out_of_time_refuses_the_locator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Shorter than the 2 s rule, which the runner's test_text_search measures.
+    monkeypatch.setattr(text, "SEARCH_SECONDS", 0.5)
+    # Exponential for re: each extra "a" doubles the work before the "b" fails it.
+    catastrophic = "(a+)+$"
+    assert heal(
+        lambda d: d["targets"]["cart_items"].update(
+            locators=[{"testid": "a" * 40 + "b"}]
+        ),
+        base=lambda d: d["assertions"][3].update(pattern=catastrophic),
+    ) == [
+        (
+            "/targets/cart_items/locators/0/testid: a heal finds no assertion's "
+            "target by a string where the search for its text check's pattern "
+            "ran out of time"
+        )
     ]
 
 
