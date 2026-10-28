@@ -25,12 +25,15 @@ from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Self
+from typing import TYPE_CHECKING, Self
 
 from aqa_core.model_costs import CostRecord
 
 from aqa_runner.redaction import NO_SECRETS, Redactor
 from aqa_runner.settling import Settled
+
+if TYPE_CHECKING:
+    from aqa_runner.screenshots import Screenshot
 
 # Where a run's step intents and completions go, one JSON line each.
 STEPS = "steps.jsonl"
@@ -239,6 +242,22 @@ class RunRecord:
         """Write `text`, scanned, to the record as the file `name`, once, as
         `write` writes a document."""
         return self._create(name, self.redactor.redact(text))
+
+    def write_screenshot(self, name: str, shot: Screenshot) -> Path:
+        """Write `shot`'s PNG to the record as the file `name`, once, as
+        `write` writes a document, unscanned: its capture scrubbed what it
+        shows (`aqa_runner.screenshots`), and only the capture makes one.
+        A record whose scan isn't its session's refuses it with a
+        ValueError before anything is written."""
+        if shot.redactor is not self.redactor:
+            raise ValueError(
+                "a screenshot goes only to a record that scans with its "
+                "session's redactor"
+            )
+        written = self._place(name)
+        with written.open("xb") as file:
+            file.write(shot.png)
+        return written
 
     def step_intent(
         self,

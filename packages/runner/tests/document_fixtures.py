@@ -18,7 +18,12 @@ from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit
 
 import pytest
-from aqa_runner.browser_session import BrowserSession, open_browser_session
+from aqa_core.browser import BrowserSettings
+from aqa_runner.browser_session import (
+    PINNED_SETTINGS,
+    BrowserSession,
+    open_browser_session,
+)
 from aqa_runner.egress import Connection, EgressGate
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.locator_generation import register_identity_engine
@@ -336,7 +341,11 @@ def run_gate(sites: Sites) -> EgressGate:
 
 @asynccontextmanager
 async def browsing(
-    sites: Sites, egress: EgressGate | None = None, *, redactor: Redactor = NO_SECRETS
+    sites: Sites,
+    egress: EgressGate | None = None,
+    *,
+    redactor: Redactor = NO_SECRETS,
+    settings: BrowserSettings = PINNED_SETTINGS,
 ) -> AsyncIterator[BrowserSession]:
     """A session of the run `run_gate` describes, through `egress` when a
     test reads the gate's records."""
@@ -345,7 +354,7 @@ async def browsing(
         async with (
             EgressProxy(egress or run_gate(sites)) as proxy,
             open_browser_session(
-                playwright.chromium, egress=proxy, redactor=redactor
+                playwright.chromium, egress=proxy, redactor=redactor, settings=settings
             ) as session,
         ):
             yield session
