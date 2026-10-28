@@ -375,6 +375,7 @@ def _explore(
         stop("spec_error", spec_id, why, error.problems, scan=scan)
     except MissingSecretError as error:
         why = "nothing was explored"
+        scan = Redactor(error.bound.values())
         stop("secret_unusable", spec_id, why, error.problems, scan=scan)
     except SecretLoggedError as error:
         why = "nothing was explored"
