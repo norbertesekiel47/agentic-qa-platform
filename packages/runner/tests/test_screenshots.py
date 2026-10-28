@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 from aqa_core.browser import BrowserSettings
-from aqa_runner import screenshots
+from aqa_runner import browser_session, screenshots
 from aqa_runner.bound_secrets import BoundSecret
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.redaction import Redactor
@@ -131,6 +131,39 @@ def test_until_a_secret_is_filled_the_screenshot_is_the_live_page(
             return before, after
 
     assert asyncio.run(scenario()) == (2500, 0)
+
+
+def test_a_screenshot_waiting_on_the_first_fill_is_a_render(
+    sites: Sites, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checked = browser_session.field_matches
+
+    async def scenario() -> int:
+        paused, released = asyncio.Event(), asyncio.Event()
+
+        async def held(*args: Any) -> bool:
+            paused.set()
+            await released.wait()
+            return await checked(*args)
+
+        monkeypatch.setattr(browser_session, "field_matches", held)
+        async with browsing(sites, redactor=Redactor(bound(sites.app))) as session:
+            await serve_cases(session.page, sites.other)
+            scratch = await scratch_page(session)
+            await session.navigate(f"{sites.app}/shot/plain")
+            filling = asyncio.create_task(
+                session.fill_secret(await element(session, "#f"), secret(sites, "RED"))
+            )
+            await paused.wait()
+            # Queued on the session's lock, which the fill holds through its
+            # binding checks.
+            shooting = asyncio.create_task(take_screenshot(session))
+            await asyncio.sleep(0.2)
+            released.set()
+            await filling
+            return await red_pixels(scratch, (await shooting).png)
+
+    assert asyncio.run(scenario()) == 0
 
 
 def test_a_screenshot_goes_only_to_a_record_with_its_sessions_scan(
