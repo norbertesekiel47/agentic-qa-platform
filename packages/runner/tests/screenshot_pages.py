@@ -181,6 +181,14 @@ CASES = {
         arm="const d=document.getElementById('fr').contentDocument;d.body.append(d.adoptNode(document.getElementById('f')))",
     ),
     "busy-main-thread": Case(STYLE + FIELD + HANG, arm="arm()"),
+    # A frame on an opaque origin, which a render can't reach into: what it
+    # holds, an editable element here, can't be checked or emptied.
+    "sandboxed-frame": Case(
+        STYLE
+        + FIELD
+        + """<iframe sandbox style='border:0;width:600px;height:120px'
+        srcdoc="<div contenteditable style='font:bold 48px sans-serif;color:#f00'>Plain</div>"></iframe>""",
+    ),
     # The prototype's attacks on a snapshot and its scrub (scratchpad
     # proto-171; reviews/171-prototype.md).
     "blind-clone": Case(
