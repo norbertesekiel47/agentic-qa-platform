@@ -238,9 +238,12 @@ def heal_patch_problems(script: CompiledScript, healed: CompiledScript) -> list[
     have been read by `aqa_core.project.parse_compiled`, so the loader's
     rules already hold for it.
 
-    Nothing here runs: the heal step must still show that, after the patch,
-    every assertion evaluates and passes and every invariant holds, and that
-    an inserted step is replay-safe, not only flagged so (DATA_MODEL §7)."""
+    Nothing here runs the script: the heal step must still show that, after
+    the patch, every assertion evaluates and passes and every invariant
+    holds, and that an inserted step is replay-safe, not only flagged so
+    (DATA_MODEL §7). A text check's pattern is searched in a child process,
+    though, so a call can block for up to `aqa_core.text.SEARCH_SECONDS`
+    a search (ADR-0024)."""
     before = script.model_dump(mode="json")
     after = healed.model_dump(mode="json")
     problems = [
