@@ -1027,6 +1027,7 @@ def test_a_script_replay_refuses_exits_5_unless_forced(
     client = Scripted(REFUSED)
 
     refused = unlaunched(monkeypatch, [str(spec)], client)
+    requested_unforced = len(client.requests)
     monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
     forced = unlaunched(monkeypatch, [str(spec), "--url", START, "--force"], client)
 
@@ -1036,6 +1037,7 @@ def test_a_script_replay_refuses_exits_5_unless_forced(
         "explored: correct it, or pass --force to explore the spec again\n"
         f"  {problem}\n"
     )
+    assert requested_unforced == 0
     assert forced.exit_code == 3, forced.output
     assert len(client.requests) == 1
 
