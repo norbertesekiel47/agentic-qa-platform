@@ -71,9 +71,10 @@ _SHADOW = re.compile(r'<template shadowmode="(?:open|closed)"')
 # shows), and each frame's document; drops <noscript>, which a page with
 # script never showed; checks that the kinds of its fields, its frames and
 # its elements with a `contenteditable` attribute are the snapshot's, in
-# order, and gives each field its value; empties each such element and
-# every editing host; and scrolls to the live page's place. Null when they
-# don't match; otherwise the values of the fields and the text left.
+# order, and gives each field its value; hides each frame it can't reach;
+# empties each such element and every editing host; and scrolls to the
+# live page's place. Null when they don't match; otherwise the values of
+# the fields and the text left.
 RESTORE = """({plan, scroll}) => {
     const fields = [], texts = [], emptied = [];
     const walk = (document, plan) => {
@@ -115,8 +116,11 @@ RESTORE = """({plan, scroll}) => {
         fields.push(...inputs);
         return frames.every((frame, i) => {
             const inner = frame.contentDocument;
-            const expected = plan ? plan.frames[i] : null;
-            return inner ? walk(inner, expected) : expected === null;
+            if (inner) return walk(inner, plan ? plan.frames[i] : null);
+            // On an opaque origin (sandboxed): nothing in it can be checked
+            // or emptied, so it isn't shown.
+            frame.style.setProperty("visibility", "hidden", "important");
+            return true;
         });
     };
     if (!walk(document, plan)) return null;
