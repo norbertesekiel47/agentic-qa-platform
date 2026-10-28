@@ -9,10 +9,12 @@ exploring (#53) adds its own documents, a line in `costs.jsonl` per priced
 model call, and a part per phase, a record of its own (ADR-0024's #53 P5
 amendment).
 
-Every file but the two journals, `steps.jsonl` and `costs.jsonl`, is
-scanned as it is written, and refused while a bound value's supported
-spelling is left; a journal line, and a document written with a check, is
-checked by its caller as the exact text written. A record trusts the
+Every file but the two journals, `steps.jsonl` and `costs.jsonl`, and a
+screenshot is scanned as it is written, and refused while a bound value's
+supported spelling is left; a journal line, and a document written with a
+check, is checked by its caller as the exact text written. A screenshot is
+written as its capture made it: only `aqa_runner.screenshots` makes one,
+from a render it scrubbed (ADR-0034). A record trusts the
 directories above its own and writes through no link below it (ADR-0026's
 #50 B amendment)."""
 

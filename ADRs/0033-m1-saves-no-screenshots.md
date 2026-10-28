@@ -1,6 +1,6 @@
 # ADR-0033: M1 saves no screenshots; bound-field masking moves to M2
 
-- Status: Accepted
+- Status: Accepted (amended 2026-10-27: the capture and the record's binary writer exist, ADR-0034)
 - Date: 2026-10-08
 
 ## Context
@@ -23,3 +23,7 @@ Option 3 (the maintainer, 2026-10-08). M1 has no screenshot capture and no binar
 - **M2's masking has to be established where the capture happens,** not by an overlay the page can reach: a mechanism that sets the final geometry and the mask in one trusted capture step, or keeps the page's rendering frozen through it. It has to defeat both measured attacks and hold for a field that moves away and back during the capture, closed shadow roots, re-rendering, frames, scrolling, fractional geometry and device scale, under sandboxed Chromium, with no path that saves an unmasked image. Checks before and after the capture, retries, and masking a rectangle afterwards are not proof.
 - **The run record's contents are pinned:** `test_evidence.py`'s `test_the_run_record_holds_only_the_steps_and_each_steps_evidence` lists every file a hostile replay leaves, so a step that saved anything else would fail it.
 - No dependency, paid resource or model call.
+
+## Amendment (2026-10-27): the capture exists, and no run path saves one yet (#171)
+- **The mechanism is ADR-0034's.** Once `fill_secret` has handed the page a value in the browser session, a screenshot is a render of the page's scrubbed snapshot, captured with no script and no network; before that, the live page's. It meets this ADR's bar: the masking is in the capture, not in anything the page can reach. The hostile pages of both reviews of #171, M1's two attacks among them, show no bound value in 8 captures each.
+- **"No binary writer" no longer holds.** `RunRecord.write_screenshot` writes a `Screenshot`, which only `aqa_runner.screenshots.take_screenshot` makes. Still, no run path calls either until #251, after #250's OCR check, so the run record's pinned contents (`test_evidence.py`) stand.
