@@ -340,6 +340,19 @@ def test_a_value_shared_with_another_aqa_secret_variable_binds(
     }
 
 
+def test_a_variable_near_the_aqa_secret_prefix_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
+    monkeypatch.setenv("AQA_SECRETARY", FAKE_VALUE)
+    monkeypatch.setenv("AQA_OTHER", FAKE_VALUE)
+
+    with pytest.raises(SecretLoggedError) as refused:
+        bound_secrets(secret_spec(tmp_path), START)
+
+    assert str(refused.value) == ELSEWHERE + "AQA_OTHER, AQA_SECRETARY"
+
+
 def test_a_spec_that_references_no_secret_binds_none_whatever_is_logged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
