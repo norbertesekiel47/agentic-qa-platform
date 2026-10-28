@@ -47,7 +47,12 @@ from aqa_runner.locators import (
     resolve_every,
 )
 from aqa_runner.locators import resolve as resolve_target
-from aqa_runner.page_scripts import CONTAINS, FILL, TRANSFORMED
+from aqa_runner.page_scripts import (
+    CONTAINS,
+    FILL,
+    SERVICE_WORKERS_REFUSED,
+    TRANSFORMED,
+)
 from aqa_runner.redaction import NO_SECRETS, Redacted, Redactor
 from aqa_runner.routing import install_routes
 from aqa_runner.sandbox import (
@@ -68,24 +73,6 @@ from aqa_runner.settling import ConsoleEntry, NetworkEntry, Settled, Traffic, Wi
 
 # The settings every run uses unless the caller passes its own (ADR-0025).
 PINNED_SETTINGS = BrowserSettings()
-
-# Run in every document of the session before its own scripts. Playwright's
-# `service_workers="block"` replaces only `navigator.serviceWorker.register`,
-# with one that resolves, so a page could still call the prototype's method
-# or delete the replacement (ADR-0026 amendment, 2026-10-02). This makes the
-# method itself, and the instance's, refuse, and neither can be replaced.
-SERVICE_WORKERS_REFUSED = """(() => {
-    if (typeof ServiceWorkerContainer === "undefined") return;
-    const refuse = () => Promise.reject(
-        new DOMException("Service workers are blocked", "SecurityError")
-    );
-    const lock = (target) => Object.defineProperty(target, "register", {
-        value: refuse, writable: false, configurable: false,
-    });
-    // The prototype first: reading navigator.serviceWorker can throw.
-    lock(ServiceWorkerContainer.prototype);
-    lock(navigator.serviceWorker);
-})();"""
 
 # An element's rendered text, or nothing when the page doesn't render it,
 # worked out in one evaluation so the page can't change between the two.

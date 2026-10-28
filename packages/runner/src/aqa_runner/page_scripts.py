@@ -1,6 +1,7 @@
 """Scripts the browser session runs inside a page's documents: whether a
-frame's element is inside what a click lands in, or is transformed, and a
-fill that never goes through the page's keyboard."""
+frame's element is inside what a click lands in, or is transformed; a fill
+that never goes through the page's keyboard; and the refusal of service
+workers that every document runs first."""
 
 # Whether `owner`, a frame's element, is inside what a click on `element`
 # lands in, run in the element's own frame, where both are. That is the
@@ -76,3 +77,21 @@ FILL = """(element, value) => {
     else document.execCommand("insertText", false, value);
     return (element.isContentEditable ? element.textContent : element.value) === value;
 }"""
+
+# Run in every document of the session before its own scripts. Playwright's
+# `service_workers="block"` replaces only `navigator.serviceWorker.register`,
+# with one that resolves, so a page could still call the prototype's method
+# or delete the replacement (ADR-0026 amendment, 2026-10-02). This makes the
+# method itself, and the instance's, refuse, and neither can be replaced.
+SERVICE_WORKERS_REFUSED = """(() => {
+    if (typeof ServiceWorkerContainer === "undefined") return;
+    const refuse = () => Promise.reject(
+        new DOMException("Service workers are blocked", "SecurityError")
+    );
+    const lock = (target) => Object.defineProperty(target, "register", {
+        value: refuse, writable: false, configurable: false,
+    });
+    // The prototype first: reading navigator.serviceWorker can throw.
+    lock(ServiceWorkerContainer.prototype);
+    lock(navigator.serviceWorker);
+})();"""
