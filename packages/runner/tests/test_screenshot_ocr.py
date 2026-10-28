@@ -4,10 +4,17 @@ rendered, is withheld, and the record saves nothing."""
 
 import asyncio
 import html
+import math
+import os
+import time
 from base64 import b64encode
 from collections.abc import Iterator
+from importlib.metadata import version
+from itertools import batched
 from pathlib import Path
+from typing import Any
 
+import numpy as np
 import pytest
 from aqa_core.project import SecretDestination
 from aqa_runner import ocr, screenshots
@@ -17,6 +24,7 @@ from aqa_runner.redaction import NO_SECRETS, Redactor
 from aqa_runner.run_record import RunRecord
 from aqa_runner.screenshots import ScreenshotWithheldError, take_screenshot
 from pydantic import SecretStr
+from rapidocr.main import RapidOCR, RapidOCRError
 
 from packages.runner.tests.document_fixtures import Sites, browsing, serving_sites
 from packages.runner.tests.screenshot_pages import (
@@ -235,3 +243,204 @@ def test_a_missing_model_file_saves_nothing_and_downloads_nothing(
     assert [path.name for path in tmp_path.rglob("*") if path.is_file()] == [
         ".gitignore"
     ]
+
+
+# Throwaway (m2/250-calibration, never merged): times the OCR check's stages
+# on CI's runner, to set `ocr.TEXT_CAP` there as `ARCHIVE_CHARS` was set
+# (LAB_NOTES, 2026-10-28), then fails with every timing so the log shows them.
+SCRATCH_IMAGES = Path(__file__).parent / "ocr_calibration"
+# Each target batched length, and the font size and line height of the
+# 1280x800 page of lines whose length is the first at or over it.
+SCRATCH_TARGETS = {
+    300: (12, 1.3),
+    500: (12, 1.3),
+    1_000: (12, 1.3),
+    2_000: (12, 1.3),
+    9_000: (7, 1.15),
+}
+SCRATCH_RUNS = 3
+SCRATCH_LINES = """([px, height, count]) => {
+    document.body.style.cssText = `margin:8px;font:${px}px sans-serif;line-height:${height}`;
+    document.body.replaceChildren(...Array.from({length: count}, (_, place) => {
+        const line = document.createElement("div");
+        line.style.cssText = "white-space:nowrap;overflow:hidden";
+        line.textContent = Array.from(
+            {length: 30}, (_, word) => `order ${place * 30 + word} ships once payment clears`,
+        ).join(" ");
+        return line;
+    }));
+}"""
+
+
+def scratch_engine() -> RapidOCR:
+    """An engine configured as `aqa_runner.ocr` configures its own."""
+    return RapidOCR(
+        params={
+            "Det.model_path": str(ocr.MODELS / ocr.DETECT),
+            "Cls.model_path": str(ocr.MODELS / ocr.CLASSIFY),
+            "Rec.model_path": str(ocr.MODELS / ocr.RECOGNISE),
+            "Global.log_level": "critical",
+        }
+    )
+
+
+def scratch_detected(
+    engine: RapidOCR, png: bytes
+) -> tuple[list[np.ndarray[Any, Any]], float]:
+    """`png`'s detected lines, as `ocr.spells_a_value` detects them, and the
+    seconds that took, decoding included."""
+    start = time.perf_counter()
+    image, record = engine.preprocess_img(engine.load_img(png))
+    try:
+        crops, _ = engine.detect_and_crop(image, record)
+    except RapidOCRError:
+        crops = []
+    return crops, time.perf_counter() - start
+
+
+def scratch_length(crops: list[np.ndarray[Any, Any]]) -> float:
+    """The batched length, as `ocr.spells_a_value` counts it: each line at
+    least 320/48, in sorted batches of six, each as wide as its widest."""
+    widths = sorted(max(320 / 48, crop.shape[1] / crop.shape[0]) for crop in crops)
+    batches = batched(widths, 6, strict=False)
+    length: float = sum(len(batch) * batch[-1] for batch in batches)
+    return length
+
+
+def scratch_read(
+    engine: RapidOCR, crops: list[np.ndarray[Any, Any]]
+) -> tuple[float, float]:
+    """The seconds classification and recognition take on `crops`."""
+    if not crops:
+        return 0.0, 0.0
+    start = time.perf_counter()
+    rotated, _ = engine.cls_and_rotate(crops)
+    classified = time.perf_counter()
+    engine.recognize_txt(rotated)
+    return classified - start, time.perf_counter() - classified
+
+
+def scratch_pages(sites: Sites, engine: RapidOCR) -> dict[str, bytes]:
+    """For each target, the live capture of the page of lines whose batched
+    length is the first at or over it (the most lines that fit, if none)."""
+
+    async def scenario() -> dict[str, bytes]:
+        pages: dict[str, bytes] = {}
+        async with browsing(sites) as session:
+            await session.page.route(
+                "**/lines",
+                lambda route: route.fulfill(
+                    body="<!doctype html><body></body>", content_type="text/html"
+                ),
+            )
+            await session.navigate(f"{sites.app}/lines")
+
+            async def lines(px: int, height: float, count: int) -> bytes:
+                await session.page.evaluate(SCRATCH_LINES, [px, height, count])
+                return (await take_screenshot(session)).png
+
+            for target, (px, height) in SCRATCH_TARGETS.items():
+                most = int((800 - 16) // (px * height))
+                found: tuple[int, bytes] | None = None
+                low, high = 1, most
+                while low <= high:
+                    count = (low + high) // 2
+                    png = await lines(px, height, count)
+                    if scratch_length(scratch_detected(engine, png)[0]) >= target:
+                        found, high = (count, png), count - 1
+                    else:
+                        low = count + 1
+                if found is None:
+                    found = (most, await lines(px, height, most))
+                pages[f"text-{target} {px}px {found[0]} lines"] = found[1]
+        return pages
+
+    return asyncio.run(scenario())
+
+
+def test_scratch_ci_ocr_timings(
+    sites: Sites, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    redactor = Redactor(bound(sites.app))
+    login = (SCRATCH_IMAGES / "control-login-1440.png").read_bytes()
+    # The first check with a models directory builds its engine and loads
+    # the models, inside the bound, as a run's first check does; the second
+    # is warm. Links to the same files make a directory no check has used.
+    models = tmp_path / "models"
+    models.mkdir()
+    for name in (ocr.DETECT, ocr.CLASSIFY, ocr.RECOGNISE):
+        (models / name).symlink_to(ocr.MODELS / name)
+    monkeypatch.setattr(ocr, "MODELS", models)
+    start = time.perf_counter()
+    ocr.spells_a_value(login, redactor)
+    first = time.perf_counter() - start
+    start = time.perf_counter()
+    ocr.spells_a_value(login, redactor)
+    warm = time.perf_counter() - start
+
+    engine = scratch_engine()
+    images = {
+        path.name: path.read_bytes() for path in sorted(SCRATCH_IMAGES.glob("*.png"))
+    } | scratch_pages(sites, engine)
+    rows = [
+        (
+            f"{'image':38} {'length':>7} {'lines':>5} {'detect s':>11}"
+            f" {'classify s':>11} {'recognise s':>13} {'ms/unit':>11}"
+        )
+    ]
+    detects: dict[str, float] = {}
+    units: dict[str, float] = {}
+    for name, png in images.items():
+        runs: list[tuple[float, float, float, float]] = []
+        for _ in range(SCRATCH_RUNS):
+            crops, detect = scratch_detected(engine, png)
+            length = scratch_length(crops)
+            classify, recognise = scratch_read(engine, crops)
+            per_unit = (classify + recognise) * 1000 / length if length else 0.0
+            runs.append((detect, classify, recognise, per_unit))
+        detect_s, classify_s, recognise_s, per_unit_s = zip(*runs, strict=True)
+        detects[name], units[name] = max(detect_s), max(per_unit_s)
+        rows.append(
+            f"{name:38} {length:7.0f} {len(crops):5}"
+            f" {min(detect_s):5.3f}-{max(detect_s):5.3f}"
+            f" {min(classify_s):5.3f}-{max(classify_s):5.3f}"
+            f" {min(recognise_s):6.3f}-{max(recognise_s):6.3f}"
+            f" {min(per_unit_s):5.2f}-{max(per_unit_s):5.2f}"
+        )
+    slowest_detect = max(detects, key=detects.__getitem__)
+    slowest_unit = max(units, key=units.__getitem__)
+    cap = math.floor(
+        (screenshots.OCR_SECONDS / 2 - detects[slowest_detect])
+        / units[slowest_unit]
+        * 1000
+    )
+    cpu = Path("/proc/cpuinfo")
+    model = next(
+        (
+            line
+            for line in (cpu.read_text().splitlines() if cpu.exists() else [])
+            if line.startswith("model name")
+        ),
+        "model name: unknown",
+    )
+    report = [
+        "SCRATCH-CI-OCR-TIMINGS",
+        f"cpus={os.cpu_count()} {model}",
+        (
+            f"rapidocr={version('rapidocr')} onnxruntime={version('onnxruntime')}"
+            f" TEXT_CAP={ocr.TEXT_CAP} OCR_SECONDS={screenshots.OCR_SECONDS}"
+            f" runs={SCRATCH_RUNS} (each range is min-max over the runs)"
+        ),
+        (
+            "first check of control-login-1440.png (engine built, models loaded):"
+            f" {first:.3f} s; warm: {warm:.3f} s"
+        ),
+        *(f"SCRATCH {row}" for row in rows),
+        f"slowest detect: {detects[slowest_detect]:.3f} s ({slowest_detect})",
+        f"slowest ms/unit: {units[slowest_unit]:.2f} ({slowest_unit})",
+        (
+            "TEXT_CAP = floor((OCR_SECONDS/2 - slowest detect) / slowest ms/unit)"
+            f" = {cap}"
+        ),
+    ]
+    pytest.fail("\n".join(report))
