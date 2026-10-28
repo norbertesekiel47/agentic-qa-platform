@@ -599,6 +599,10 @@ def test_infrastructure_events_are_named_only_in_a_run_that_binds_no_secret(
     presented = document(end)
 
     assert (presented["outcome"], presented["exit_code"]) == ("unreachable", 13)
+    # Every verdict passed, so the event alone says why, in fixed words.
+    assert presented["reasons"] == [
+        "an allowed host or the egress proxy couldn't be reached"
+    ]
     assert presented["withheld"] == (redactor is BOUND)
     assert presented["infrastructure_events"] == {"count": 1, "events": events}
 
