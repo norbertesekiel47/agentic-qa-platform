@@ -57,15 +57,15 @@ Design: ADR-0024 (explore runs), ADR-0025 (compiled scripts), ADR-0026 (the brow
   *Met 2026-10-27 (#58), except for `conduit-benign-002`:*
   - `aqa explore` compiled and confirmed all five pilot specs. The scripts are committed in `bench/apps/conduit/qa/.compiled/`. `bench/harness/test_pilot_compiled.py` checks each one against its spec, its subject contracts, its UTC browser and REVIEW.md's "Not acceptable" proxies.
   - `env -u ANTHROPIC_API_KEY uv run python bench/harness/pilot.py conduit --out <dir> --repeat 3 --patches bench/harness/patches`, from `a93aacb9`: each script passed 3 identical replays on the clean app, and every scored bug pair matched the manifest. The one unscored pair is publish-article under `conduit-bug-005`. It ends `unscored_binding_blocked` because the plant covers the "New Article" link it clicks, as the LAB_NOTES watch list describes.
-  - `conduit-benign-001` is `accepted`. Its original attempt passed through the submit button's css fallback (#25 decides what such a match means), and the hand-written patch in `bench/harness/patches/` passed too.
-  - `conduit-benign-002` is the exception. It moves the favorites count out of its contracted part, and a patch may change locators, never a contract. So its count stays unbound ("no match") and the run exits 1 on that pair. #229 (M2) decides how a heal treats it.
+  - `conduit-benign-001` is `accepted`. Its original attempt passed through the submit button's css fallback (such a match now drifts under ADR-0025's #25 amendment), and the hand-written patch in `bench/harness/patches/` passed too.
+  - `conduit-benign-002` is the exception. It moves the favorites count out of its contracted part, and a patch may change locators, never a contract. So its count stays unbound ("no match") and the run exits 1 on that pair. A heal ends it `inconclusive`, counted as a miss (ADR-0025's #229 amendment).
   - post-comment's submit meaning still names its button's label. Enforcing label-free meanings is #234 (M2).
   - The sandbox gate is ADR-0032. The egress files' run at the final commit, and the round's cost, are in #58's pull request.
 
 ## M2 — Replay, heal & verdicts
 - `strict` replay built on M1's executor: verdicts and full deterministic visual checks (`visible_unoccluded`, `pixel_diff`, `contrast_min`); `verified` mode behind a flag.
-- Define how specs with `visual: model` expectations compile and confirm before verified mode ships (M1 rejects them as a spec error).
-- **Before any verdict ships:** decide what a fallback-locator match means (verdict, safeguards for side-effect steps, benign scoring), before M3's numbers (#25).
+- A `visual: model` expectation: the spec marks it, `--mode verified` runs it, and strict replay refuses the spec (exit 5). #256 builds verified mode (ADR-0024's #255 amendment).
+- A target resolves only when every locator finds the same element; otherwise its step drifts. So a fallback-locator match alone is never a plain pass, and no side-effect step acts through a fallback (ADR-0025's #25 amendment).
 - Step intents before dispatch with lease fencing; non-resumable detection for unresolved side-effect intents.
 - Heal subgraph: observe → classify (`drift_consistent` / `expectation_violated` / `inconclusive`) → binding/step patch or finding; binding-unresolved vs expectation-failed distinction for assertions; heal-patch validator (target locators and inserted replay-safe steps other than `navigate` only; `browser` and `coverage` immutable); redaction in heal and verified modes.
 - Hybrid perception: screenshot verification and vision fallback, with bound-field masking proven against a hostile page and OCR checks before any image is saved, reaches a model or leaves the machine (ADR-0033, #171).
