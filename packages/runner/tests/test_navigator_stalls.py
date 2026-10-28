@@ -26,6 +26,7 @@ from aqa_runner.navigator import (
     NoteForAbsence,
     Select,
 )
+from aqa_runner.navigator_parts import Parts
 from aqa_runner.navigator_tools import Action, Attempt
 
 from packages.runner.tests.executor_fixtures import App, serving_app
@@ -158,6 +159,26 @@ def test_an_action_the_page_stalls_before_its_intent_is_a_tool_error(
         f"{case.tool} did not run: {UNANSWERED}",
         [],
         "step 1 ran, and the page settled",
+    ]
+
+
+def test_an_action_whose_last_parts_never_let_go_is_a_tool_error(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def never(_: Parts) -> None:
+        await asyncio.Event().wait()
+
+    async def scenario(attempt: Attempt) -> list[object]:
+        await attempt.describe(DescribeParts(ref=ref(attempt, "combobox", "Size")))
+        monkeypatch.setattr(Parts, "void", never)
+        call = Click(ref=ref(attempt, "button", "Save"), meaning=SAVE)
+        acted = await capped(attempt.act(call))
+        return [acted.step, acted.text, journal(attempt)]
+
+    assert on_app(app, tmp_path, scenario, budget=BUDGET) == [
+        None,
+        f"click did not run: {UNANSWERED}",
+        [],
     ]
 
 

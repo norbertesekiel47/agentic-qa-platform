@@ -319,18 +319,18 @@ class Attempt:
         )
 
     async def act(self, call: Action) -> ActionResult:
-        """Run `call`, once the last description's parts are let go: nothing
-        once the attempt has ended; then its arguments checked
-        (`_unrunnable`, `_unfit`), and everything else before its intent
-        (`_prepared`), within the bound on a look (`evaluation.bounded`);
-        nothing either once the run is `interrupted` by then; then its
+        """Run `call`, once the last description's parts are let go within
+        the bound on a look (`evaluation.bounded`): nothing once the attempt
+        has ended; then its arguments checked (`_unrunnable`, `_unfit`), and
+        everything else before its intent (`_prepared`), within that bound
+        again; nothing either once the run is `interrupted` by then; then its
         intent, action, settling and completion. A record that can't write
         its line raises, as does a cancellation."""
-        await self.parts.void()
         tool = TOOL_NAMES[type(call)]
-        if problem := self._unrunnable(tool, call) or self._unfit(call):
-            return self._refused(problem)
         try:
+            await evaluation.bounded(self.parts.void(), self.budget)
+            if problem := self._unrunnable(tool, call) or self._unfit(call):
+                return self._refused(problem)
             target, action = await evaluation.bounded(self._prepared(call), self.budget)
         except _REFUSED as error:
             reason = reasons.reason(error, self.session.redactor)
