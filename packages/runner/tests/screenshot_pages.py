@@ -1,8 +1,9 @@
 """Pages the screenshot tests load (#171, ADR-0034): the hostile pages the
 reviewers and the prototype aimed at a capture, and the owner's tricks,
 each drawing the field that gets the bound value in pure red, which
-nothing else on the page is, and a marker in pure green; and the oracle
-that counts red or green pixels in a saved PNG. Imported by its path, as pytest names the runner's test modules
+nothing else on the page is, and a marker in pure green; the oracle that
+counts red or green pixels in a saved PNG; and the steps the screenshot
+tests share. Imported by its path, as pytest names the runner's test modules
 (TESTING.md §1, Shared egress fixtures)."""
 
 import base64
@@ -13,8 +14,11 @@ from typing import Literal
 from aqa_core.config import RoleField
 from aqa_core.project import SecretDestination
 from aqa_runner.bound_secrets import BoundSecret
-from playwright.async_api import Page, Route
+from aqa_runner.browser_session import BrowserSession
+from playwright.async_api import ElementHandle, Page, Route
 from pydantic import SecretStr
+
+from packages.runner.tests.document_fixtures import Sites
 
 # The values the tests bind, each saying it is fake (AGENTS.md rule 9).
 RED_VALUE = "Zq7fakeSECx"
@@ -385,6 +389,31 @@ async def serve_cases(page: Page, other: str) -> dict[str, str]:
 
     await page.route("**/shot/**", fulfil)
     return current
+
+
+def secret(sites: Sites, name: str) -> BoundSecret:
+    """The secret `bound` binds as `name` on the app's origin."""
+    return next(held for held in bound(sites.app) if held.name == name)
+
+
+async def element(session: BrowserSession, selector: str) -> ElementHandle:
+    """The element `selector` finds in the page's top document."""
+    return await session.page.locator(selector).element_handle()
+
+
+async def scratch_page(session: BrowserSession) -> Page:
+    """A page of its own in the session's browser, to decode PNGs in."""
+    browser = session.page.context.browser
+    assert browser is not None
+    return await browser.new_page()
+
+
+async def red_filled(
+    session: BrowserSession, sites: Sites, page: str = "plain"
+) -> None:
+    """The case page `page` with the red value filled into its field."""
+    await session.navigate(f"{sites.app}/shot/{page}")
+    await session.fill_secret(await element(session, "#f"), secret(sites, "RED"))
 
 
 def armed(script: str, value: str) -> str:
