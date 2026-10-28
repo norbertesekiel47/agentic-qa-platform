@@ -41,8 +41,8 @@ from packages.runner.tests.navigator_fixtures import (
 from packages.runner.tests.secret_fixtures import FAKE_VALUE
 
 # The page's own stall: Playwright awaits a thenable that an evaluation in
-# the page's world returns, and once every object is one that never
-# settles, each read returning an object or a handle waits forever.
+# the page returns, and once every object is one that never settles, a read
+# that returns an object or a handle never answers.
 STALL = "() => { Object.prototype.then = function () {}; }"
 UNSTALL = "() => { delete Object.prototype.then; }"
 # The bound at a `resolve_seconds` of 1: that and `MARGIN_SECONDS`.
