@@ -1144,3 +1144,11 @@ Maintainer decision (2026-10-27): keep it fail-closed. A click lured off the all
 ## Amendment (2026-10-27): the confirmation replays through `replay_run` (#237)
 
 - **One replay entry point.** `_confirming` now replays through `aqa_runner.replays.replay_run(..., every_locator=True)`, and the bench pilot uses the same function first-match (ADR-0023's #237 amendment). `replay_run` sends the spec's hook through the run's gate (14 when it fails). Only once the hook has passed does it enter the confirmation's opening (`explore._Opening`): the `confirmation` part, `begin_phase()` and the browser on `_confirming`'s outer stack. Then it calls `executor.replay`. This keeps the #53 P16b step 4 order and the #204 amendment's phase end. Nothing about the gate, the proxy or the record changes: the confirmation still shares the run's gate, proxy and Playwright.
+
+## Amendment (2026-10-27): replay's admission joins the up-to-date check (#216)
+
+Settles what the #53 P17 amendment's "Up to date" bullet left open (#53 P17's review, C3). That predicate could keep a compiled script that replay's admission refuses, such as one with a multi-key press or a probe the spec doesn't declare, so `aqa explore` printed `up to date` for a script replay would refuse with exit 5.
+
+- **One admission.** The executor's check of what M1 can run is public as `aqa_runner.executor.accepted(script, spec)`, unchanged. Replay calls it as before, and the up-to-date check calls it after `contract_problems`.
+- **A refused script is a spec error (5), not stale** (coordinator, for the maintainer's O4). `aqa explore` prints `replay refuses the compiled script, so nothing was explored: correct it, or pass --force to explore the spec again`, with each of the admission's problems indented, as for a script that disagrees with unchanged contracts. Exploring again on its own would overwrite a hand-repaired script without asking. With `--force` the spec is explored again.
+- **Limits.** The check still binds no test secret, so replay's secret checks (`bound_secrets`, the bound values' spellings) stay outside it. Tests: `packages/cli/tests/test_explore_output.py::test_a_script_replay_refuses_exits_5_unless_forced`.
