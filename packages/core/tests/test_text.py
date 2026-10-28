@@ -1,8 +1,15 @@
 """Text as compiled scripts compare it: private-use glyphs stripped and
-whitespace collapsed (DATA_MODEL §7; ADR-0025; LAB_NOTES 2026-09-29)."""
+whitespace collapsed (DATA_MODEL §7; ADR-0025; LAB_NOTES 2026-09-29); and
+the child process that bounds a search of it in time (ADR-0024)."""
 
 import pytest
-from aqa_core.text import has_pattern, has_text, normalize, search_found
+from aqa_core.text import (
+    any_has_pattern,
+    has_pattern,
+    has_text,
+    normalize,
+    search_found,
+)
 
 
 @pytest.mark.parametrize(
@@ -111,3 +118,16 @@ def test_a_search_child_that_failed_raises(returncode: int, stdout: bytes) -> No
         )
 
     assert str(raised.value) == f"the search process failed ({returncode}): MemoryError"
+
+
+# Text that isn't ASCII, and a lone surrogate, reach the bounded search as
+# they are.
+@pytest.mark.parametrize(
+    ("texts", "pattern"),
+    [(("cart", "Caf\u00e9 \u2713"), "\u00e9 \u2713$"), (("x\ud800y",), "\\ud800")],
+    ids=["not ASCII", "lone surrogate"],
+)
+def test_a_bounded_pattern_search_reads_each_text_as_it_is(
+    texts: tuple[str, ...], pattern: str
+) -> None:
+    assert any_has_pattern(texts, pattern) is True
