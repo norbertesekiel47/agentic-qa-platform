@@ -103,13 +103,15 @@ INTERRUPTED = (
 )
 
 # What a call refused before its intent raises, Playwright's general error
-# type included (a page that broke a look).
+# type included (a page that broke a look), and a page that didn't answer
+# its reads within the bound (`evaluation.bounded`).
 _REFUSED = (
     RefError,
     PolicyEventError,
     DocumentChangedError,
     LocatorError,
     SecretRefusedError,
+    UnansweredError,
     Error,
 )
 
@@ -320,15 +322,16 @@ class Attempt:
         """Run `call`, once the last description's parts are let go: nothing
         once the attempt has ended; then its arguments checked
         (`_unrunnable`, `_unfit`), and everything else before its intent
-        (`_prepared`); nothing either once the run is `interrupted` by then;
-        then its intent, action, settling and completion. A record that
-        can't write its line raises, as does a cancellation."""
+        (`_prepared`), within the bound on a look (`evaluation.bounded`);
+        nothing either once the run is `interrupted` by then; then its
+        intent, action, settling and completion. A record that can't write
+        its line raises, as does a cancellation."""
         await self.parts.void()
         tool = TOOL_NAMES[type(call)]
         if problem := self._unrunnable(tool, call) or self._unfit(call):
             return self._refused(problem)
         try:
-            target, action = await self._prepared(call)
+            target, action = await evaluation.bounded(self._prepared(call), self.budget)
         except _REFUSED as error:
             reason = reasons.reason(error, self.session.redactor)
             return self._refused(f"{tool} did not run: {reason}")
