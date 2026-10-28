@@ -146,7 +146,8 @@ class Traffic:
     is the session's. When it is the routing's continuation of a request,
     which a routed request's own handler error meets first, Playwright drops
     the error and that request stalls. A redirect hop isn't routed: it
-    reaches the server unrecorded (LAB_NOTES, 2026-10-05).
+    reaches the server unrecorded (LAB_NOTES, 2026-10-05). Either way, once a
+    request's scan has failed, no network check is decided (`network_held`).
 
     The windows hold the page-chosen methods and URLs scanned with
     `redactor`, once per request, when it starts. Network checks read each
@@ -262,10 +263,17 @@ class Traffic:
         hop = request.redirected_from
         window = self._window if hop is None else self._request_windows[hop]
         complete = PageRequest(request.method, request.url)
-        sent = PageRequest(
-            str(self._redactor.redact(complete.method)),
-            recorded_url(self._redactor, complete.url),
-        )
+        try:
+            sent = PageRequest(
+                str(self._redactor.redact(complete.method)),
+                recorded_url(self._redactor, complete.url),
+            )
+        except BaseException:
+            # Whatever stopped the scan, an error or an interruption, leaves
+            # this request recorded nowhere, so no network check may be
+            # decided from the records any more.
+            self._unrecorded = True
+            raise
         self._request_windows[request] = window
         self._sent[request] = complete, sent
         window.requests.add(sent)

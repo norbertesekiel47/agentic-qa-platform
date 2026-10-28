@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 import pytest
 from aqa_core.compiled import NetworkNone, NetworkSeen
 from aqa_runner import settling
+from aqa_runner.network import UnrecordedRequestError
 from aqa_runner.redaction import Redacted, Redactor
 from aqa_runner.settling import Window
 
@@ -283,7 +284,7 @@ class FailingScan(Redactor):
 def test_a_failed_scan_records_nothing_of_its_request(app: App) -> None:
     scan = FailingScan()
 
-    async def scenario() -> tuple[Window, list[bool], list[bool]]:
+    async def scenario() -> Window:
         async with browsing(app, scan) as session:
             await session.navigate(f"{app.origin}/page/start")
             window = await session.press("a")
@@ -298,18 +299,16 @@ def test_a_failed_scan_records_nothing_of_its_request(app: App) -> None:
                     break
                 await asyncio.sleep(0.02)
             assert scan.failed
-            plain = [
-                await session.network_held(network(k, "/did/plain$")) for k in KINDS
-            ]
-            failed = [
-                await session.network_held(network(k, "/did/fail-scan$")) for k in KINDS
-            ]
-            return window, plain, failed
+            # Even the kept response's match decides nothing now.
+            for kind in KINDS:
+                with pytest.raises(UnrecordedRequestError):
+                    await session.network_held(network(kind, "/did/plain$"))
+                with pytest.raises(UnrecordedRequestError):
+                    await session.network_held(network(kind, "/did/fail-scan$"))
+            return window
 
-    window, plain, failed = asyncio.run(scenario())
+    window = asyncio.run(scenario())
 
-    assert plain == [True, False]
-    assert failed == [False, True]
     assert requests(window) == [("POST", "/did/plain")]
     assert responses(window) == [("POST", "/did/plain", 204)]
     assert window.open == set()
