@@ -129,6 +129,7 @@ def _admitted(paths: Sequence[Path], url: str | None) -> list[StrictRun]:
         except SpecError as error:
             stop("spec_error", spec_id, _REFUSED, error.problems, scan=scan)
         except MissingSecretError as error:
+            scan = _scan(runs, error.bound.values())
             stop("secret_unusable", spec_id, _NOTHING, error.problems, scan=scan)
         except SecretLoggedError as error:
             stop("secret_unusable", spec_id, _NOTHING, (str(error),), scan=scan)
