@@ -467,12 +467,12 @@ def admitted(
     is, agrees with `config`'s subject contracts and runs in M1
     (`accepted`); every secret the spec references has a value
     (`bound_secrets`); and no bound value is spelled where the run would
-    write or use it (`_spelling_bound_values`, else
-    `BoundValueSpelledError`). Otherwise `SpecError`, or `bound_secrets`'
-    own error. The script's own problems come first, so a
-    spec error wins over a missing value (exit 5 before 12), and a stale
-    script's other problems are moot. Public so `aqa replay` admits every
-    spec before any run's reset (#239)."""
+    write or use it (`_spelling_bound_values`), which raises
+    `BoundValueSpelledError`. Otherwise `SpecError`, or `bound_secrets`'
+    own error. The script's own problems come first, so a spec error wins
+    over a missing value (exit 5 before 12), and a stale script's other
+    problems are moot. Public so `aqa replay` admits every spec before any
+    run's reset (#239)."""
     if script.spec_hash != spec.spec_hash:
         raise SpecError(["compiled from another version of the spec: explore it again"])
     if problems := contract_problems(script, config):
