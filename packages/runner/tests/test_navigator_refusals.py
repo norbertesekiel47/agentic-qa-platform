@@ -353,6 +353,33 @@ def test_a_meaning_holding_a_name_the_spec_quotes_runs(
         assert app.paths() == ["/page/labelled"]
 
 
+def test_a_fill_secret_whose_meaning_holds_a_multi_word_name_runs(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ADR-0025's #234 amendment refuses labels in click, fill and select.
+    monkeypatch.setitem(
+        PAGES, "account", '<label>Account password <input type="password"></label>'
+    )
+
+    async def scenario(attempt: Attempt) -> ActionResult:
+        field = ref(attempt, "textbox", "Account password")
+        return await attempt.act(
+            FillSecret(
+                ref=field, meaning="the Account password field", name="TEST_PASSWORD"
+            )
+        )
+
+    result = on_app(
+        app,
+        tmp_path,
+        scenario,
+        page="/page/account",
+        secrets=[bound(app.origin, FAKE_VALUE)],
+    )
+
+    assert result.text == "step 1 ran, and the page settled"
+
+
 @pytest.mark.parametrize(
     "meaning",
     ["the autosave drafts button", "the save-draft button"],
