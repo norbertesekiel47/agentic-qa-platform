@@ -2,7 +2,7 @@
 whitespace collapsed (DATA_MODEL §7; ADR-0025; LAB_NOTES 2026-09-29)."""
 
 import pytest
-from aqa_core.text import has_pattern, has_text, normalize
+from aqa_core.text import has_pattern, has_text, normalize, search_found
 
 
 @pytest.mark.parametrize(
@@ -97,3 +97,17 @@ def test_pattern_searches_without_added_flags(
     rendered: str, pattern: str, found: bool
 ) -> None:
     assert has_pattern(rendered, pattern) is found
+
+
+# A search child that failed is an error, never a miss: one that exits
+# non-zero whatever it printed, and one that exits 0 without a 0 or a 1.
+@pytest.mark.parametrize(
+    ("returncode", "stdout"), [(1, b"1"), (0, b"found")], ids=["status", "output"]
+)
+def test_a_search_child_that_failed_raises(returncode: int, stdout: bytes) -> None:
+    with pytest.raises(RuntimeError) as raised:
+        search_found(
+            returncode, stdout, b"Traceback (most recent call last):\nMemoryError\n"
+        )
+
+    assert str(raised.value) == f"the search process failed ({returncode}): MemoryError"
