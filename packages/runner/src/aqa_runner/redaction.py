@@ -109,13 +109,27 @@ class Redactor:
         matches = self._matches(text)
         pieces: list[str] = []
         cursor = 0
-        for start in sorted(matches):
-            if start >= cursor:
-                end, marker = matches[start]
-                pieces.extend((text[cursor:start], marker))
-                cursor = end
+        for start, end in self._chosen(matches):
+            pieces.extend((text[cursor:start], matches[start][1]))
+            cursor = end
         pieces.append(text[cursor:])
         return Redacted("".join(pieces)[:limit], _key=_SCANNED)
+
+    def spans(self, text: str) -> list[tuple[int, int]]:
+        """Where `redact` puts a marker in `text`: each match's start and
+        end, in order, none overlapping, for a caller that must cut a value
+        out of text it can't mark (#171)."""
+        return self._chosen(self._matches(text))
+
+    @staticmethod
+    def _chosen(matches: dict[int, tuple[int, str]]) -> list[tuple[int, int]]:
+        """The matches a scan replaces: leftmost first, skipping any that
+        starts inside the one before."""
+        chosen: list[tuple[int, int]] = []
+        for start in sorted(matches):
+            if not chosen or start >= chosen[-1][1]:
+                chosen.append((start, matches[start][0]))
+        return chosen
 
     def _matches(self, text: str) -> dict[int, tuple[int, str]]:
         """Each match's start, with its end and its marker."""
