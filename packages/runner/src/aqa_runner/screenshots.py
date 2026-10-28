@@ -70,6 +70,10 @@ ARCHIVE_PATH = "/.aqa-archive/"
 _REFERENCE = re.compile(r"&(#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};?)")
 # The encoding Blink names in each HTML part's <meta>.
 _DECLARED = re.compile(rb"""charset=["']?([A-Za-z0-9._:-]+)""")
+# A reference to another part of the archive, as Blink writes one in an
+# attribute or a style sheet's url(): quoted, and to one of its own
+# Content-IDs. Text that only reads like one is left alone.
+_REFERENCED = re.compile(r'(?<=")cid:(?=[^"\s]*@mhtml\.blink")')
 # A shadow root as Blink writes one into an archive. A render's parser
 # attaches it, open, so the render's script reaches into it.
 _SHADOW = re.compile(r'<template shadowmode="(?:open|closed)"')
@@ -393,9 +397,8 @@ def _scrubbed(archive: str, redactor: Redactor) -> tuple[_Parts, str]:
             _header(part, "Content-Location"),
         ):
             if url:
-                served.setdefault(
-                    urldefrag(url.replace("cid:", prefix)).url, (kind, body)
-                )
+                asked = prefix + url[4:] if url.startswith("cid:") else url
+                served.setdefault(urldefrag(asked).url, (kind, body))
     return served, urldefrag(main).url
 
 
@@ -420,7 +423,7 @@ def _scrubbed_part(part: Message, redactor: Redactor, prefix: str) -> tuple[str,
             raise ScreenshotWithheldError("a binary part spells a bound value")
         return kind, body
     text = _scrubbed_text(_text(part, body, kind), redactor)
-    text = _SHADOW.sub('<template shadowrootmode="open"', text.replace("cid:", prefix))
+    text = _SHADOW.sub('<template shadowrootmode="open"', _REFERENCED.sub(prefix, text))
     if redactor.finds(text) or redactor.finds(html.unescape(text)):
         raise ScreenshotWithheldError(
             "a bound value's spelling is left in a part after the scrub"
