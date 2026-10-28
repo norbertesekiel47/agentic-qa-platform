@@ -269,8 +269,8 @@ def test_a_pattern_search_of_no_strings_starts_no_process(
     assert heal(lambda d: d["targets"]["cart_items"].update(locators=[locator])) == []
 
 
-# Structure, part of the claim, and a comment, which selects nothing; under
-# a literal claim and under a pattern.
+# Structure, part of the claim, and the claim quoted in a comment, which
+# Playwright drops; under a literal claim and under a pattern.
 @pytest.mark.parametrize("base", [LITERAL, unchanged], ids=["literal", "pattern"])
 @pytest.mark.parametrize(
     "locator",
@@ -278,7 +278,7 @@ def test_a_pattern_search_of_no_strings_starts_no_process(
         {"css": "ul.cart-lines"},
         {"testid": "cart-lines"},
         {"css": "ul[aria-label*=Hoodie]"},
-        {"css": "ul.cart-lines /* Classic Hoodie M */"},
+        {"css": 'ul.cart-lines /* "Classic Hoodie M" */'},
     ],
     ids=["css", "testid", "part", "comment"],
 )
