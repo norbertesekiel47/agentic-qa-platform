@@ -78,7 +78,7 @@ The agent reads arbitrary page content. A malicious or compromised page may say 
     - the MHTML archive and the fields' values are scrubbed with the run's scan, raw and with HTML's character references decoded;
     - a field value sharing four consecutive characters with a bound value is dropped;
     - every editable element is emptied.
-    - The screenshot is withheld, with nothing written, when a part can't be decoded or still spells a value, when editing can't be reproduced or the fields don't match the render, when the snapshot or the render passes its bound, or when a DevTools call fails.
+    - The screenshot is withheld, with nothing written, when the archive is too large, or a part can't be decoded or still spells a value; when editing can't be reproduced, the fields don't match the render, or the render still spells a value; when the snapshot, or its scrub and render, pass their bound; or when a DevTools call fails or replies in a shape the capture doesn't read.
     - Before the first fill, and in a run that binds nothing, the screenshot is the live page's; a value the app's server shows before then is reflection (#250).
     - Best-effort, not guaranteed: a value the page draws into an image, a canvas or a font, and content a page shows only without script. A secret-filled screenshot has no canvas.
     - `RunRecord.write_screenshot` writes only a `Screenshot`, which only the capture makes. No run path saves one until #251.

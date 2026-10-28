@@ -19,8 +19,9 @@ a snapshot, which the page can't steer:
   markup is caught, and the field values and text it then shows are
   scanned again before that page is captured.
 The render has no canvas, web fonts, adopted style sheets, shadow-root
-`<style>` or inner scroll, and a value the page draws into an image is
-drawn there too: ADR-0034's residuals, the last #250's OCR check."""
+`<style>`, inner scroll, select's chosen option or element with a `hidden`
+attribute, and a value the page draws into an image is drawn there too:
+ADR-0034's residuals, the last #250's OCR check."""
 
 import asyncio
 import base64
@@ -289,11 +290,11 @@ class Screenshot:
 
 
 async def take_screenshot(session: BrowserSession) -> Screenshot:
-    """A screenshot of the session's page, at its viewport: the live page's
-    until the session's first `fill_secret`, a render of its scrubbed
-    snapshot from then on. On a page off the run's allowed origins it
-    raises `PolicyEventError`, and after a frame change during the
-    snapshot `DocumentChangedError`, as every observation does.
+    """A screenshot of the session's page, at its viewport in CSS pixels:
+    the live page's until the session's first `fill_secret`, a render of
+    its scrubbed snapshot from then on. On a page off the run's allowed
+    origins it raises `PolicyEventError`, and after a frame change during
+    the snapshot `DocumentChangedError`, as every observation does.
 
     It is withheld (`ScreenshotWithheldError`, with a reason that never
     quotes the page, so nothing is saved) when the snapshot, its scrub or
