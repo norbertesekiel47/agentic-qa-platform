@@ -808,6 +808,9 @@ def test_an_intent_line_spelling_a_bound_value_is_never_written_or_dispatched(
 def test_a_completion_line_spelling_a_bound_value_leaves_the_intent_unresolved(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # A common word, which a run refuses anywhere else in its environment
+    # (#215).
+    hermetic_environment(monkeypatch)
     # Only a completion line says "completed".
     monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "completed")
     spec = secret_spec(tmp_path, start_url="/page/form")

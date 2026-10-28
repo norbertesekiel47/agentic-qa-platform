@@ -33,6 +33,7 @@ from packages.runner.tests.secret_fixtures import (
     BOUND_AT_START,
     FAKE_VALUE,
     OTHER_FAKE_VALUE,
+    hermetic_environment,
     secret_spec,
 )
 
@@ -451,6 +452,9 @@ def test_an_owned_message_is_one_line_of_at_most_the_reason_bound(
 def test_a_bound_value_in_an_infrastructure_events_host_is_scanned(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # A proxy setting such as NO_PROXY would hold this value, and a run
+    # refuses it anywhere else in its environment (#215).
+    hermetic_environment(monkeypatch)
     # The fixture app's loopback address is both the allowed host and, here,
     # a bound value.
     monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "127.0.0.1")

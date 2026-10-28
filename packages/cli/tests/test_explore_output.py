@@ -373,6 +373,10 @@ def marker_refusal() -> str:
 def test_a_marker_admission_refusal_prints_only_the_fixed_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # A variable such as AWS_SECRET_ACCESS_KEY would hold this value, and a
+    # run refuses it anywhere else in its environment (#215).
+    hermetic_environment(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
     # TEST_PASSWORD's markers, [SECRET:TEST_PASSWORD], spell its value.
     monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "SECRET")
     spec = signed_in(tmp_path / "qa")
@@ -453,6 +457,10 @@ def test_the_two_streams_are_checked_as_a_merged_log_reads_them(
 def test_the_join_is_checked_on_what_each_stream_would_write(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
+    # `password` is in variables such as PGPASSWORD's name, where a run
+    # would refuse it (#215).
+    hermetic_environment(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
     # A non-resumable run's line ends with `non-resumable`, which the
     # warning's `warning:` joins into the password; both fallbacks keep the
     # fact. Otherwise the password, which its own markers spell, is in the
@@ -567,6 +575,10 @@ def test_a_withheld_summary_keeps_its_non_resumable_line(
 def test_the_non_resumable_line_stands_alone_when_the_other_spells_a_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # A common word, which a run refuses anywhere else in its environment
+    # (#215).
+    hermetic_environment(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
     monkeypatch.setenv("AQA_SECRET_TEST_SHOP", "shop")
     spec = signed_in(tmp_path / "qa", name="TEST_SHOP")
     done = ended("egress_blocked", 6, non_resumable=INTENT)
