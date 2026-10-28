@@ -558,6 +558,38 @@ def test_network_overflow_errors_only_when_kept_responses_cannot_decide(
         assert result.outcome == "errored"
 
 
+@pytest.mark.parametrize("kind", ["network_seen", "network_none"])
+def test_network_checks_after_a_failed_request_scan_are_not_evaluated(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    # As a session stands once a request's scan has failed: test_traffic_redaction
+    # fails one for real.
+    class UnrecordedTraffic(settling.Traffic):
+        def __init__(self, page: Page, redactor: Redactor) -> None:
+            super().__init__(page, redactor)
+            self._unrecorded = True
+
+    monkeypatch.setattr(browser_session, "Traffic", UnrecordedTraffic)
+    result = run(
+        app,
+        tmp_path,
+        compiled(
+            [CLICK], targets=FORM_TARGETS, assertions=[NETWORK | {"check": kind}, AFTER]
+        ),
+    ).result
+
+    assert [a.outcome for a in result.assertions] == ["not_evaluated"] * 2
+    assert result.assertions[0].error == (
+        "a request's scan failed, so it went unrecorded and no network check can be "
+        "evaluated"
+    )
+    assert (
+        result.assertions[1].error
+        == "not evaluated after network's look at the page raised"
+    )
+    assert result.outcome == "errored"
+
+
 def test_network_search_timeout_leaves_later_assertions_evaluable(
     app: App, tmp_path: Path
 ) -> None:
