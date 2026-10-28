@@ -7,7 +7,7 @@ P19b), lists up to `PARTS` element descendants of a ref's element, in
 document order and at most `DEPTH` deep, each under a ref `p<g>.<k>` (the
 attempt's g-th description) with its tag, its stable classes and its
 rendered text. The page chooses each of those, so each is scanned as the
-page wrote it, then stripped of its gaps (`bound_secrets.GAP`) and
+page wrote it, then stripped of its gaps (`redaction.GAP`) and
 normalized, then scanned again, and the text is cut to `TEXT_CHARS` only
 after both scans.
 The list is read in the page's world, so it is the page's word. A
@@ -29,11 +29,10 @@ from playwright.async_api import ElementHandle, Error, JSHandle
 from pydantic import Field, StrictInt, StringConstraints, TypeAdapter, ValidationError
 
 from aqa_runner.binding import within
-from aqa_runner.bound_secrets import GAP
 from aqa_runner.browser_session import RENDERED_TEXT, BrowserSession, RefError
 from aqa_runner.document_origins import DocumentChangedError
 from aqa_runner.locator_generation import Seen, stable
-from aqa_runner.redaction import Redacted, Redactor
+from aqa_runner.redaction import GAP, Redacted, Redactor
 from aqa_runner.snapshot_refs import LINE, key_parts
 
 # What one description holds at most: its parts, how deep they sit under

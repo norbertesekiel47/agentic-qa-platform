@@ -20,7 +20,7 @@ from aqa_core.project import SecretDestination
 from aqa_core.schema import Contract
 from aqa_core.text import normalize
 from aqa_runner import reasons
-from aqa_runner.bound_secrets import GAP, BoundSecret
+from aqa_runner.bound_secrets import BoundSecret
 from aqa_runner.browser_session import BrowserSession, RefError, open_browser_session
 from aqa_runner.document_origins import DocumentChangedError
 from aqa_runner.locator_generation import (
@@ -31,7 +31,7 @@ from aqa_runner.locator_generation import (
 )
 from aqa_runner.navigator import Prefix, Turn, navigator_request
 from aqa_runner.navigator_parts import Parts
-from aqa_runner.redaction import NO_SECRETS, Redactor
+from aqa_runner.redaction import GAP, NO_SECRETS, Redactor
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import JSHandle, async_playwright
 from pydantic import SecretStr
