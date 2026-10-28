@@ -32,7 +32,9 @@ def hermetic_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     """Drop every variable but `RUN_NEEDS` and the test secrets, for a test
     that binds a common word: a run refuses a bound value anywhere else in
     its environment (#215), such as `true` in GitHub Actions' `CI`, or in
-    PYTEST_CURRENT_TEST, which holds the test's id."""
+    PYTEST_CURRENT_TEST, which holds the test's id. Only a call from the
+    test's body drops that one: pytest sets it again once fixtures are set
+    up."""
     for name in list(os.environ):
         if name not in RUN_NEEDS and not name.startswith(PREFIX):
             monkeypatch.delenv(name)
