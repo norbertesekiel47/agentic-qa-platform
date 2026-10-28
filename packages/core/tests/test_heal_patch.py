@@ -241,6 +241,21 @@ def test_a_pattern_out_of_time_refuses_the_locator(
     ]
 
 
+def test_a_pattern_search_that_fails_refuses_the_locator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A child that dies before it answers, as one out of memory would.
+    monkeypatch.setattr(text, "SEARCH_CHILD", "raise SystemExit('out of memory')")
+    locator = {"css": "ul.cart-lines"}
+    assert heal(lambda d: d["targets"]["cart_items"].update(locators=[locator])) == [
+        (
+            "/targets/cart_items/locators/0/css: a heal finds no assertion's "
+            "target by a string where the search for its text check's pattern "
+            "failed"
+        )
+    ]
+
+
 # Structure, part of the claim, and a comment, which selects nothing; under
 # a literal claim and under a pattern.
 @pytest.mark.parametrize("base", [LITERAL, unchanged], ids=["literal", "pattern"])

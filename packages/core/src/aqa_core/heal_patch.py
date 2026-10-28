@@ -76,8 +76,9 @@ def _spelling(strings: list[str], claims: Sequence[TextInTarget]) -> str | None:
     of them meets a claim as its check would, so its element would carry the
     text the check verifies by construction, and any element carrying that
     text could pass it (#261). A pattern is the script's and `strings` the
-    heal's, so it runs bounded (ADR-0024), and a search out of time refuses
-    them as well."""
+    heal's, so it runs bounded (ADR-0024), and a search that runs out of
+    time or fails refuses them as well: it found neither a match nor its
+    absence."""
     try:
         spelled = any(
             any(claim.matches(string) for string in strings)
@@ -89,6 +90,11 @@ def _spelling(strings: list[str], claims: Sequence[TextInTarget]) -> str | None:
         return (
             "a heal finds no assertion's target by a string where the search "
             "for its text check's pattern ran out of time"
+        )
+    except RuntimeError:
+        return (
+            "a heal finds no assertion's target by a string where the search "
+            "for its text check's pattern failed"
         )
     if spelled:
         return (
