@@ -139,6 +139,7 @@ async def evaluate(
         EgressRefusedError,
         EgressUpstreamError,
         network.WindowsOverflowError,
+        network.UnrecordedRequestError,
         UnsupportedVisualFrameError,
     ) as error:
         return AssertionResult(

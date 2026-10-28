@@ -177,6 +177,9 @@ class Traffic:
         self._sent: weakref.WeakKeyDictionary[
             Request, tuple[PageRequest, PageRequest]
         ] = weakref.WeakKeyDictionary()
+        # Set once a request's scan fails, which leaves that request recorded
+        # nowhere; sticky, as no later record makes the traffic complete.
+        self._unrecorded = False
         # Set once the egress proxy's phase tells this session of each write
         # (`BrowserSession.watch`); sticky, as a tunnel stays open.
         self.heard = False
@@ -210,7 +213,10 @@ class Traffic:
 
     async def network_held(self, check: NetworkNone | NetworkSeen) -> bool:
         """Whether every window's complete responses establish `check`
-        (`aqa_runner.network.held`)."""
+        (`aqa_runner.network.held`). Once a request's scan has failed, none
+        can, and this raises `network.UnrecordedRequestError`."""
+        if self._unrecorded:
+            raise network.UnrecordedRequestError
         return await network.held(
             check, [self._complete_responses[window] for window in self.windows]
         )
