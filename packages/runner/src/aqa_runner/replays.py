@@ -51,6 +51,7 @@ async def replay_run(
     opening: Callable[[], AbstractAsyncContextManager[Opened]],
     *,
     every_locator: bool,
+    repair: executor.Repair | None = None,
 ) -> executor.RunResult:
     """Send the spec's reset hook, when it has one, through the run's gate
     within `resolve_seconds` (`aqa_runner.reset.reset`), then enter
@@ -68,7 +69,7 @@ async def replay_run(
     async with opening() as opened:
         return await executor.replay(
             script,
-            executor.RunSetup(spec, config, start, opened.record),
+            executor.RunSetup(spec, config, start, opened.record, repair),
             chromium=opened.chromium,
             proxy=opened.proxy,
             gate=replaying.gate,
