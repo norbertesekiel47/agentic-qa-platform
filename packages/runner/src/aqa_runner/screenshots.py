@@ -47,12 +47,11 @@ from aqa_runner.redaction import Redactor
 # (ADR-0034).
 CAPTURE_SECONDS = 5.0
 
-# The largest archive a capture scrubs. A page of text whose archive is
-# this size took 2.4 s to scrub and render on #171's host under load (the
-# scrub about 4 s a million characters), half of CAPTURE_SECONDS, which
-# leaves a slower host room. A larger one is withheld rather than left
-# scrubbing on in a thread the bound has cut off.
-ARCHIVE_CHARS = 400_000
+# The largest archive a capture scrubs. On CI's runner, the slowest host
+# measured, a page of text this size takes up to 2.4 s to snapshot, scrub
+# and render, half of CAPTURE_SECONDS (ADR-0034). A larger one is withheld
+# rather than left scrubbing on in a thread the bound has cut off.
+ARCHIVE_CHARS = 130_000
 
 # A field's value that shares this many consecutive characters with a bound
 # value, or all of a shorter one, is dropped from a render. A test secret
