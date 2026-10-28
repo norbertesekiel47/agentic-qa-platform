@@ -503,3 +503,35 @@ The link that holds no image (above) finds post-comment's author name link on Co
 - **Why it stays honest.** Replay types the same value at the same step, so the scope finds the same card on the clean app. If the comment never posts, no card holds the value: the scope is `no scope`, so the check is `binding_unresolved`, and post-comment's row 0 (`text_in_target` on the comment list) still fails as `expectation_violated`. A negative check under such a scope is absent only where the card stands, never because it is missing. The every-locator confirmation applies as to any locator, and a rebinding may replace the locator like any other, while the fill step it names stays.
 - **Limit** (review, session 24). A scope holds a value only while the page's text holds it. A held target used after a reload or a navigation, once the typed text is gone from the page, finds no scope: a check of it is `binding_unresolved` and an action on it drifts. So the scope suits what the run typed and the page then shows, such as a posted comment, not what a reload clears, such as an unsent field's value, which is no text at all. `finish` evaluates every bound check on the page the attempt ends on, so a check whose held text is already gone there compiles nothing.
 - **Consequences.** The retry runs only where generating found nothing, so no committed script or cassette changes. `TargetUses` takes the values as a callable (`typed`), read at each new target, so its `add` keeps its signature. No dependency, paid resource or tenant surface changes. Tests: `packages/core/tests/test_compiled.py` (the shape), `test_parse_compiled.py` (each refusal, and each way a check reads the value), `test_compiler.py` (the renumbered step, and a step `finish` drops), and `packages/runner/tests/test_held_values.py` (two cards by one author: the posted one found as typed, by case and spacing and by whole words of it; no card, both cards, more than it holds and part of a word give `no scope`; a negative check under the scope, absent only while the card stands; each also with every locator. Generating: the link two cards share, scoped by the first value typed earlier that one card holds, and refused with no value or with every held scope dropped. Through an attempt on a page that posts the comment: the author's name link bound under `div.card` holding the nearest value typed, and `finish` compiling it; and the comment's text, which its check reads, never scoped by it, so the check is refused; a catastrophic pattern check refused at once; the nearest step's value taken before a nearer scope; a test secret and a blank fill never held, with no copy of the secret in any file or the script). `test_parse_compiled.py` also covers another target's check, which may read the value, and a `select` or `fill_secret` use before the fill, which is refused.
+
+## Amendment (2026-10-27): a target resolves only when every locator agrees (#25)
+
+Maintainer decision (2026-10-27): drift unless every locator agrees. This settles the three questions "Locator grammar" left to M2. DATA_MODEL §7 holds the rules.
+
+- A target counts as resolved only when every locator finds the same element, as the #53 P11 amendment already plans for `aqa replay`. Otherwise the step drifts, and heal rebinds it.
+- So a match through a fallback alone is never a plain pass, and no side-effect step acts through a fallback.
+- Under conduit-benign-001 the submit button now drifts instead of passing through `button[type=submit]`.
+
+## Amendment (2026-10-27): the visual checks (#253)
+
+Maintainer decision (2026-10-27). DATA_MODEL §7 holds the fields.
+
+- **`contrast_min`** is computed from styles, in M2. Its fields are `target` and `min_ratio`.
+- **`pixel_diff`** comes after #251. Its fields are `target`, `baseline`, `baseline_sha256`, `max_diff_ratio` and `pixel_threshold`. Its baselines live in the repo, pinned by sha256 (PRD §8 Q4), and heal can never change one.
+- **`visible_unoccluded`** stays as M1 built it (ADR-0024's #48 amendment).
+- #254 builds both checks.
+
+## Amendment (2026-10-27): a contracted subject that a benign change moves (#229)
+
+Maintainer decision (2026-10-27): inconclusive, counted as a miss.
+
+- Heal never changes a contract. When a benign change moves a contracted subject (conduit-benign-002), heal ends `inconclusive`, and its reason says a reviewed config edit is needed.
+- The manifest keeps `drift_consistent`, so the pair counts as a miss in M3's numbers.
+- M2 has no build work for it beyond #245's `inconclusive` path.
+
+## Amendment (2026-10-27): the action tools refuse a meaning that names a multi-word label (#234)
+
+Maintainer decision (2026-10-27). This enforces "Meanings" in the navigator's tools; #258 builds it.
+
+- A `click`, `fill` or `select` whose meaning contains the element's accessible name returns a tool error, when that name is more than one word and the spec doesn't quote it.
+- No committed cassette re-records. post-comment is re-explored once, about USD 0.15, and the check kept in #234's comment returns to `bench/harness/test_pilot_compiled.py`.

@@ -31,3 +31,12 @@ Two refinements; the decision itself stands.
 
 3. **Expectation coverage.** Every `expect` item compiles to ≥ 1 check that actually establishes it (UI, target content, URL, the browser's network traffic, read-only state probes, deterministic visual checks); unsupported clauses fail compilation by name. A weaker proxy (e.g., "no confirmation heading" for "no order created") is never substituted.
 4. **Targets vs assertions.** The compiled format separates *targets* (an element's meaning + locators) from *assertions*. Heals may change target locators and non-side-effect steps only — never assertions, target meanings, side-effect steps, or replay-safety flags. An assertion whose target won't resolve is drift (binding repair); a resolved check that evaluates false is `expectation_violated`.
+
+## Amendment (2026-10-27): no added navigation in a heal (#19)
+
+Maintainer decision (2026-10-27). This narrows the addendum's item 4, "non-side-effect steps", and DATA_MODEL §7's heal-patch rules.
+
+- **What a heal may do.** Rebind a target's locators, and insert replay-safe steps. An inserted step can't be `navigate`.
+- **What it may not.** Remove, reorder or rewrite an existing step.
+- **Why.** A route-around passes every check while the app is broken for its users.
+- #241's validator and #246 enforce it.

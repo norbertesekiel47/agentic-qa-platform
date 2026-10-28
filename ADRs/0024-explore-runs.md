@@ -1109,3 +1109,34 @@ In #58's first live round, read-article and login each spent their 40-turn budge
   - decoy-success's committed cassette repeats one refused `assert_check` from turn 3 to turn 12 (`this check's subject binds only inside section#status-area, and this element is outside it`). Under the rule its replay stops before turn 8, so its last five responses go unused. The case was recorded again as `s24-injection/007` (#58's re-record receipts, above). The other cassettes replay unchanged.
   - No dependency, paid resource or tenant surface changes, and no request changes.
   - Tests: `packages/runner/tests/test_explore_turns.py`. They cover five refusals in a row on fresh refs, with and without the turns running out too, and each kind of refusal: arguments that don't fit, a finish that compiled nothing, a check tool's, a refused restart, an unknown tool, a malformed call and no call. A click refused for an element that left the page, naming each turn's fresh ref, still counts. `test_explore_attempts.py` covers five refused restarts on the run's one attempt, which end the run `gave_up` (3), and a restart that runs, which starts the count again. They also cover another target, other arguments or a call that ran between refusals, which starts the count again, and calls that ran, which never count.
+
+## Amendment (2026-10-27): strict replay's run document, roll-up and exit codes (#238)
+
+Maintainer decision (2026-10-27). API.md §7 and DATA_MODEL §7 hold the rules.
+
+- **The run document.** One `replay.json` per run, written once as `explore.json` is. It holds the step verdicts, their evidence references, findings and heal proposals.
+- **The roll-up.** One precedence table, applied per run and across specs: `6 > 4 > 10 > 14 > 13 > 15 > 11 > 1 > 3 > 7 > 0`. Spec errors (5) and unusable test secrets (12) are found before any run.
+- **Drift in `aqa replay`,** which never heals, is `inconclusive`, exit 3. Strict replay's heal budget is zero.
+- **Exit 2.** "Heal proposals pending" moves to exit 7, and 2 stays the CLI framework's usage error for every command. That settles the overlap the #41 amendment left open (above, "The command").
+
+## Amendment (2026-10-27): heal's local contract (#243)
+
+Maintainer decision (2026-10-27). DATA_MODEL §7 and §9 hold the rules.
+
+- **Budget.** Two per-run keys, `heal_turns` (default 6) and `heal_model_usd` (default 0.30), in DATA_MODEL §9.
+- **Observation before screenshots.** Until #251 lands, heal observes the accessibility tree, the console log and the network log. Each verdict's evidence records that no screenshot was available.
+- **Local heal proposals.** A JSON Patch stored in `replay.json` (#238), with an `ah_`-prefixed id for `aqa heal apply`. The staleness check compares the compiled script's git blob SHA, plus the PR head SHA when there is one.
+- **Model inputs.** The healer reads the target's meaning, its locators and the redacted snapshot. It never sees the assertion's claim, and it gets no PR context in M2. It returns element refs, and the deterministic checks decide the verdict.
+
+## Amendment (2026-10-27): verified mode and `visual: model` expectations (#255)
+
+Maintainer decision (2026-10-27): the spec marks it, and `--mode verified` runs it. This settles what "Confirmation replay" left to M2 for model-assisted checks.
+
+- Strict replay refuses a spec with a `visual: model` expectation, exit 5.
+- Explore checks such an expectation with the verifier role. The confirmation replay stays strict and confirms only the target's binding.
+- Verified mode has its own budget, and its cost is reported apart from strict's.
+- It's built after #251 (#256), and it isn't on M2's exit path. Until then, explore refuses such a spec as M1 does.
+
+## Amendment (2026-10-27): a click lured off the allowed origins stays non-resumable (#230)
+
+Maintainer decision (2026-10-27): keep it fail-closed. A click lured off the allowed origins ends explore as non-resumable (exit 4), as #57's suite pins today (the #57 amendment above). A successful reset doesn't let a new attempt follow. ARCHITECTURE §3.3 now says so. M2 has no build work for this decision.
