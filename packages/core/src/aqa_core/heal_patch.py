@@ -9,7 +9,6 @@ from aqa_core.compiled import (
     ByCss,
     CompiledScript,
     Locator,
-    Navigate,
     NotVisible,
     Step,
     TextInTarget,
@@ -141,19 +140,34 @@ def _existing_steps(steps: Sequence[Step], healed: Sequence[Step]) -> Iterator[s
         yield "/steps: a heal reorders no step"
 
 
+# The actions a heal never inserts, each with why. Either load could stand in
+# for the interaction a user can't complete (#19).
+_NOT_INSERTED = {
+    "navigate": "a heal inserts no navigation, which could route around a path "
+    "that is broken for its users",
+    "reload": "a heal inserts no reload, which loads the page again and could "
+    "route around a path that is broken for its users",
+    "fill_secret": "a heal inserts no fill_secret, which could steer a bound "
+    "secret into another field",
+}
+
+
 def _inserted_steps(steps: Sequence[Step], healed: Sequence[Step]) -> Iterator[str]:
-    """A step with a new `seq` is inserted: replay-safe by its flag, and no
-    navigation (#19). A path indexes the step in `healed`."""
+    """A step with a new `seq` is inserted: replay-safe by its flag, not one
+    of the actions above, and meeting no required condition, which stays
+    with the step that met it. A path indexes the step in `healed`."""
     existing = {step.seq for step in steps}
     for index, step in enumerate(healed):
         if step.seq in existing:
             continue
         if step.side_effect:
             yield f"/steps/{index}/side_effect: a heal inserts only replay-safe steps"
-        if isinstance(step, Navigate):
+        if step.action in _NOT_INSERTED:
+            yield f"/steps/{index}/action: {_NOT_INSERTED[step.action]}"
+        if step.satisfies:
             yield (
-                f"/steps/{index}/action: a heal inserts no navigation, which could "
-                "route around a path that is broken for its users"
+                f"/steps/{index}/satisfies: a heal marks no inserted step as "
+                "meeting a condition"
             )
 
 
