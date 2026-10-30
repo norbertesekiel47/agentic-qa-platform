@@ -451,6 +451,30 @@ def test_a_repaired_script_that_spells_a_bound_value_is_refused(
     assert held(tmp_path, FAKE_VALUE, run) == []
 
 
+def misfilled(drift: Drift) -> CompiledScript:
+    """The script `drift` handed over, rebound, with the toggle's meaning a
+    list holding the bound value: `model_copy` checks no field's type."""
+    moved = rebound(drift.script)
+    toggle = moved.targets["toggle"].model_copy(update={"semantic": [FAKE_VALUE]})
+    return moved.model_copy(update={"targets": {**moved.targets, "toggle": toggle}})
+
+
+def test_a_repaired_script_holding_a_value_its_field_doesnt_allow_is_refused_unquoted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Every warning is an error in this suite, so a serializer's warning,
+    # which quotes the value, would reach this test as an exception.
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
+
+    run = repairing(tmp_path, misfilled, spec_at=secret_spec_at)
+
+    problem = (
+        "repairs/1.json: a field holds a value its type doesn't allow, so it isn't read"
+    )
+    assert repairs(run) == [(1, MISSES, (problem,), None)]
+    assert held(tmp_path, FAKE_VALUE, run) == []
+
+
 def test_a_refusals_problems_are_scanned_before_they_are_recorded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

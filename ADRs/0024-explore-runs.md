@@ -1179,7 +1179,7 @@ The seam heal builds on: #244 supplies only the repair, and strict `aqa replay` 
 - **The seam.** `replays.replay_run(..., repair=)` hands the repair to `executor.replay` on `RunSetup.repair`, its last field, with a default, since `replay` is at Ruff's argument limit. A `Repair` takes a `Drift` and returns the whole script to go on with. A `Drift` holds deep copies of the drifted step and of the script in use, each locator's miss, and the live `BrowserSession`, which the repair observes through and dispatches nothing with. Returning the script it was handed gives up. JSON Patch stays the proposal's stored form (the #243 amendment): #244 diffs the committed script against the last taken script.
 - **When.** A step whose target drifted, in a run nothing has interrupted (no egress block or infrastructure event), goes to the repair once. A re-run that drifts again stops the run as drift; a later step that drifts gets its own repair, handed the script in use.
 - **The checks,** in order; the first with problems refuses the repair:
-  1. the loader (`parse_compiled` of the offered JSON), whose rules `model_copy` skips;
+  1. the loader (`parse_compiled` of the offered JSON), whose rules `model_copy` skips. A field holding a value its type doesn't allow is refused as the script is serialized, with a fixed problem, since the serializer's warning quotes the value;
   2. the heal-patch validator (#241), against replay's own deep copy of the committed script, which nothing handed to a repair holds (the session holds the script's browser settings), and off the event loop so the proxy keeps serving;
   3. no step inserted before a step that already ran, since the run goes on after those;
   4. replay's admission (`accepted`);
