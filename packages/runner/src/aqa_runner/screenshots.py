@@ -695,8 +695,8 @@ async def _render(
         )
         if shown is None:
             raise ScreenshotWithheldError(
-                "the snapshot's fields, frames and editable elements don't match "
-                "its render's"
+                "the snapshot's fields, frames, options and editable elements "
+                "don't match its render's"
             )
         # What the render's parser and fields made of the scrubbed text: a
         # NUL it drops, or a newline a text field takes out, can join a value.

@@ -50,7 +50,8 @@ def sites(monkeypatch: pytest.MonkeyPatch) -> Iterator[Sites]:
 
 # Why a render whose scrub cut markup, or that the page changed, is withheld.
 MISMATCHED = (
-    "the snapshot's fields, frames and editable elements don't match its render's"
+    "the snapshot's fields, frames, options and editable elements don't match "
+    "its render's"
 )
 
 
