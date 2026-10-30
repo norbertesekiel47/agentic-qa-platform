@@ -113,6 +113,8 @@ RESTORE = """({plan, scroll}) => {
                     frames.push(node);
                     kinds.push([name, null]);
                 } else if (node.hasAttribute("contenteditable")) {
+                    // An option among them isn't chosen: a customizable
+                    // select would copy its content where it isn't editable.
                     emptied.push(node);
                     kinds.push([name, "contenteditable"]);
                 } else if (name === "option") {
