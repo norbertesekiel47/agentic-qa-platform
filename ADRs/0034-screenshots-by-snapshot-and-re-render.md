@@ -47,7 +47,7 @@
   - the page's checks and snapshot, or then the scrub and render, take over `CAPTURE_SECONDS` (5 s);
   - any DevTools or Playwright call fails, or DevTools replies in a shape the capture doesn't read;
   - any node the page draws is editable with no `contenteditable` around it (designMode, or editing turned on by an adopted style sheet or a shadow-root `<style>`, which a render can't reproduce);
-  - the render's fields, frames and editable elements don't match the snapshot's;
+  - the render's fields, frames, options and editable elements don't match the snapshot's;
   - the render's field values or text spell a bound value.
   - A page off the allowed origins raises `PolicyEventError`, and a frame change during the snapshot raises `DocumentChangedError`, as every observation does.
 - **A `Screenshot` can't be forged.** Only `take_screenshot` makes a `Screenshot`: its constructor refuses without the module's key. `RunRecord.write_screenshot(name, shot)` writes it once, only to a record whose scan is the session's. A record therefore never holds an image no capture scrubbed.
