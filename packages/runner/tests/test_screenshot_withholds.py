@@ -307,6 +307,44 @@ def test_fields_or_frames_the_render_doesnt_have_withhold_it(
     assert withholding(sites, tmp_path, script) == (MISMATCHED, [], 0)
 
 
+@pytest.mark.parametrize(
+    "script",
+    [
+        # The archive's parser drops a select in a select, so the inner one's
+        # option has no select in the render.
+        (
+            "const outer = document.createElement('select'); "
+            "const inner = document.createElement('select'); "
+            "inner.append(new Option('N')); outer.append(inner); "
+            "document.body.append(outer)"
+        ),
+        # The render's choice copies the chosen option's content into the
+        # <selectedcontent>, which on the page holds a copy taken before the
+        # page added an editable element to that option.
+        (
+            "document.body.insertAdjacentHTML('beforeend', \"<select id=s "
+            "style='appearance:base-select'><button><selectedcontent>"
+            "</selectedcontent></button><option>A</option><option value=b>B</option>"
+            "</select>\"); s.value = 'b'; "
+            "s.options[1].append(Object.assign(document.createElement('div'), "
+            "{contentEditable: 'true'}))"
+        ),
+        # Emptying the editable element takes the chosen option out, and the
+        # select chooses another.
+        (
+            "document.body.insertAdjacentHTML('beforeend', '<select id=s>"
+            "<option>A</option><div contenteditable><option value=x>X</option>"
+            "</div></select>'); s.value = 'x'"
+        ),
+    ],
+    ids=["option-in-a-nested-select", "chosen-option-changed", "chosen-option-emptied"],
+)
+def test_options_the_render_holds_or_chooses_otherwise_withhold_it(
+    sites: Sites, tmp_path: Path, script: str
+) -> None:
+    assert withholding(sites, tmp_path, script) == (MISMATCHED, [], 0)
+
+
 def test_an_image_whose_bytes_spell_a_bound_value_withholds_it(
     sites: Sites, tmp_path: Path
 ) -> None:
@@ -406,8 +444,44 @@ def test_an_archive_the_scrub_cant_read_withholds_it(
             f"p.textContent = {json.dumps(RED_VALUE[:4] + chr(0) + RED_VALUE[4:])}",
             "the render spells a bound value",
         ),
+        # Cutting the value makes a customizable select of two chosen options
+        # single, where a choice copies an option's content into its
+        # <selectedcontent>: here the value, split by an empty <b>, which the
+        # scrub doesn't find.
+        (
+            "multiple",
+            STYLE
+            + FIELD
+            + "<select id=s multiple style='appearance:base-select'><button>"
+            + "<selectedcontent><div contenteditable></div></selectedcontent></button>"
+            + f"<option value=a><div contenteditable style='{RED}'></div></option>"
+            + f"<option value=b><div id=d contenteditable style='{RED}'></div></option>"
+            + "</select>",
+            "#f",
+            (
+                "d.replaceChildren(f.value.slice(0, 4), document.createElement('b'), "
+                "f.value.slice(4)); for (const option of s.options) option.selected = true"
+            ),
+            MISMATCHED,
+        ),
+        # Cutting the value makes a list a drop-down.
+        (
+            "multiple",
+            STYLE
+            + FIELD
+            + "<select multiple><option>A</option><option>B</option></select>",
+            "#f",
+            "0",
+            MISMATCHED,
+        ),
     ],
-    ids=["value-contenteditable", "value-hidden-split-by-a-newline", "split-by-a-nul"],
+    ids=[
+        "value-contenteditable",
+        "value-hidden-split-by-a-newline",
+        "split-by-a-nul",
+        "value-multiple-copied",
+        "value-multiple",
+    ],
 )
 def test_a_value_the_scrub_changes_the_markup_or_parse_of_is_never_shown(
     sites: Sites, *, value: str, body: str, into: str, script: str, reason: str | int
