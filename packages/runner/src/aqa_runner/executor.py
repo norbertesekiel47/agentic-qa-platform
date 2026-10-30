@@ -744,19 +744,19 @@ async def _repaired(
     once nothing refuses it, or given up, with neither problems nor a
     script, when the loader reads it as `in_use`, the script the repair was
     handed a copy of. The first of these to find problems refuses it, and
-    each problem is scanned: its JSON, which must hold only values
-    its fields' types allow (refused unquoted) and no bound value's
-    spelling; the loader's rules, which a `model_copy` skips; the
-    heal-patch validator, against `committed`, replay's own copy of the
-    script it was given, which no repair holds; its first steps must be
-    those that ran, `ran`, unchanged, since the run goes on after them;
-    replay's own admission (`accepted`); and the record, which checks the
-    document as written and refuses one that spells a bound value, so
-    nothing runs that isn't recorded. The refusal is recorded through the
-    same check, which raises `RefusedWriteError` when the document still
-    spells a value once its problems are scanned: a miss or a scan's
-    marker can. The validator searches text checks' patterns in a child
-    process, so it runs off the loop, which keeps the proxy serving."""
+    each problem is scanned: its JSON, which must hold only values its
+    fields' types allow (refused unquoted) and no bound value's spelling;
+    the loader's rules, which a `model_copy` skips; the heal-patch
+    validator, against `committed`, replay's own copy of the script it was
+    given, which no repair holds; its first steps must be those that ran,
+    `ran`, unchanged, since the run goes on after them; replay's own
+    admission (`accepted`); and the record, which checks the document as
+    written and refuses one that spells a bound value, so nothing runs
+    that isn't recorded. The refusal is recorded through the same check,
+    which raises `RefusedWriteError` when the document still spells a
+    value once its problems are scanned: a miss or a scan's marker can.
+    The validator searches text checks' patterns in a child process, so it
+    runs off the loop, which keeps the proxy serving."""
     seq, record = drifted.seq, run.setup.record
     name = f"repairs/{seq}.json"
     clean = require_clean(record.redactor, name)
