@@ -346,6 +346,35 @@ def test_options_the_render_holds_or_chooses_otherwise_withhold_it(
     assert withholding(sites, tmp_path, script) == (MISMATCHED, [], 0)
 
 
+@pytest.mark.parametrize(
+    ("options", "choice"),
+    [
+        ("<option id=o contenteditable></option><option>B</option>", ""),
+        (
+            "<option>A</option><option id=o value=c contenteditable></option>",
+            "s.value = 'c'",
+        ),
+    ],
+    ids=["first-option", "chosen-option"],
+)
+def test_a_copy_of_an_editable_options_content_withholds_it(
+    sites: Sites, tmp_path: Path, options: str, choice: str
+) -> None:
+    # A customizable select copies its chosen option's content into its
+    # <selectedcontent>, where a copy of an editable option's content isn't
+    # editable, so a render can't empty it. Here the option holds the value
+    # split by a hidden letter, which the render's scan reads.
+    script = (
+        "document.body.insertAdjacentHTML('beforeend', \"<select id=s "
+        f"style='appearance:base-select;{RED}'><button><selectedcontent>"
+        f'</selectedcontent></button>{options}</select>"); '
+        "o.innerHTML = f.value.slice(0, 4) + '<span style=display:none>x</span>' "
+        f"+ f.value.slice(4); {choice}"
+    )
+
+    assert withholding(sites, tmp_path, script) == (MISMATCHED, [], 0)
+
+
 def test_an_image_whose_bytes_spell_a_bound_value_withholds_it(
     sites: Sites, tmp_path: Path
 ) -> None:
