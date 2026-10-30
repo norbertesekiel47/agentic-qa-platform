@@ -171,7 +171,7 @@ class Drift:
 
 
 # What a replay hands a drifted step to: the whole script to go on with.
-# Returning the script it was handed gives up.
+# Returning the script it was handed gives up, and the step stays drifted.
 type Repair = Callable[[Drift], Awaitable[CompiledScript]]
 
 
@@ -180,7 +180,8 @@ class Repaired:
     """One drifted step's repair, as `repairs/<seq>.json` records it: the
     step's seq and misses; why replay refused the script offered, each
     problem scanned, none when it was taken; and the script the run went on
-    with, as replay parsed it, None when refused."""
+    with, as replay parsed it, None when refused. A repair that offers the
+    script it was handed gives up: neither problems nor a script."""
 
     seq: int
     misses: tuple[Miss, ...]
@@ -280,8 +281,8 @@ async def replay(
     interrupted, goes to that repair (`Drift`), once. The script it offers
     is checked and recorded before the run goes on with it (`_repaired`),
     the drifted step first, which keeps no evidence of its drift; a refused
-    one ends the run as drift. What the repair raises leaves as any
-    failure here does."""
+    one, or the script it was handed, ends the run as drift. What the
+    repair raises leaves as any failure here does."""
     try:
         replayed = await _replayed(
             script, setup, gate, every_locator, chromium=chromium, proxy=proxy
@@ -425,7 +426,9 @@ async def _replayed(
                 )
                 offered = await setup.repair(drift)
                 ran = in_use.steps[: len(steps) - 1]
-                repaired = await _repaired(run, committed, result, offered, ran)
+                repaired = await _repaired(
+                    run, committed, result, offered, ran, in_use=in_use
+                )
                 repairs.append(repaired)
                 if (patched := repaired.script) is not None:
                     run = replace(
@@ -733,11 +736,15 @@ async def _repaired(
     drifted: StepResult,
     offered: CompiledScript,
     ran: Sequence[Step],
+    *,
+    in_use: CompiledScript,
 ) -> Repaired:
     """The repair of the step `drifted`, whose repair offered `offered`,
     recorded in `repairs/<seq>.json`: taken, as the loader reads its JSON,
-    once nothing refuses it. The first of these to find problems refuses
-    it, and each problem is scanned: its JSON, which must hold only values
+    once nothing refuses it, or given up, with neither problems nor a
+    script, when the loader reads it as `in_use`, the script the repair was
+    handed a copy of. The first of these to find problems refuses it, and
+    each problem is scanned: its JSON, which must hold only values
     its fields' types allow (refused unquoted) and no bound value's
     spelling; the loader's rules, which a `model_copy` skips; the
     heal-patch validator, against `committed`, replay's own copy of the
@@ -762,6 +769,10 @@ async def _repaired(
         # escapes `/` and `~` (RFC 6901), a spelling no scan finds.
         clean(text)
         patched = parse_compiled(text, run.setup.config, source=Path(name))
+        if patched.model_dump(mode="json") == in_use.model_dump(mode="json"):
+            gave_up = Repaired(seq, drifted.misses, (), None)
+            record.write(name, _repair_record(gave_up), check=clean)
+            return gave_up
         problems = await asyncio.to_thread(heal_patch_problems, committed, patched)
         if not problems:
             problems = _ran_problems(patched, ran)
