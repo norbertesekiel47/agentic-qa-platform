@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from aqa_core.compiled import Click, CompiledScript, Press, Target
+from aqa_core.compiled import Click, CompiledScript, Fill, Press, Target
 from aqa_core.project import load_config, load_spec
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.evaluation import AssertionResult
@@ -400,6 +400,34 @@ def test_a_later_repair_that_rewrites_an_inserted_step_that_ran_is_refused(
         (1, "completed", ()),
         (2, "drifted", ("no match",)),
     ]
+
+
+# The toggle bound where the moved page has it and clicked, then filled,
+# which a button refuses.
+CLICKED_THEN_FILLED = DETAILS.model_copy(
+    update={
+        "targets": {**DETAILS.targets, "toggle": Target.model_validate(MOVED_TOGGLE)},
+        "steps": (
+            *DETAILS.steps,
+            Fill(seq=2, action="fill", target="toggle", value="x", side_effect=False),
+        ),
+    }
+)
+
+
+def test_a_step_that_completes_or_fails_never_goes_to_the_repair(
+    tmp_path: Path,
+) -> None:
+    run = repairing(tmp_path, lambda drift: drift.script, script=CLICKED_THEN_FILLED)
+
+    assert run.handed == []
+    assert [(step.seq, step.outcome) for step in run.result.steps] == [
+        (0, "completed"),
+        (1, "completed"),
+        (2, "failed"),
+    ]
+    assert run.result.repairs == ()
+    assert not (run.record / "repairs").exists()
 
 
 # A fetch to a host the run doesn't allow, awaited until the proxy refuses it.
