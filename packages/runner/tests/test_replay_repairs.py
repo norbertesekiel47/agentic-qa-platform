@@ -34,6 +34,12 @@ from packages.runner.tests.drift_fixtures import (
     serving,
 )
 from packages.runner.tests.egress_fixtures import gate
+from packages.runner.tests.secret_fixtures import (
+    BOUND_AT_START,
+    FAKE_VALUE,
+    OTHER_FAKE_VALUE,
+    copies_found,
+)
 from packages.runner.tests.test_every_locator import around
 
 # How the toggle drifts on the moved page: its role locator still finds it,
@@ -62,17 +68,21 @@ class Repairing:
     before: dict[str, Any]
 
 
+def shipping_spec(root: Path) -> Path:
+    return order_spec(root, SHIPPING)
+
+
 def repairing(
     tmp_path: Path,
     offer: Callable[[Drift], CompiledScript],
     *,
-    html: str | None = None,
     script: CompiledScript = DETAILS,
+    spec_at: Callable[[Path], Path] = shipping_spec,
 ) -> Repairing:
-    """`script` replayed with every locator on the moved page, or on `html`,
-    for the order spec, with a repair that notes each drift and offers what
-    `offer` gives for it."""
-    path = order_spec(tmp_path / "qa", SHIPPING)
+    """`script` replayed with every locator on the moved page, for the spec
+    `spec_at` writes under a spec root, with a repair that notes each drift
+    and offers what `offer` gives for it."""
+    path = spec_at(tmp_path / "qa")
     config = load_config(path.parent / "config.yaml")
     spec = load_spec(path, config)
     # Deep, so a repair that edits in place can't reach the shared fixture.
@@ -85,7 +95,7 @@ def repairing(
         handed.append(drift)
         return offer(drift)
 
-    with serving(html or page("moved")) as app:
+    with serving(page("moved")) as app:
         run_gate = gate(allowed=(app.origin,))
 
         @asynccontextmanager
@@ -348,3 +358,72 @@ def test_a_repair_that_inserts_a_step_before_one_that_ran_is_refused(
         (1, "completed", ()),
         (2, "drifted", MISSES),
     ]
+
+
+def secret_spec_at(root: Path) -> Path:
+    """The order spec, whose account's password is the test secret
+    TEST_PASSWORD, which its config binds at the start origin."""
+    path = order_spec(root, SHIPPING)
+    (root / "config.yaml").write_text(
+        f"budgets: {{ resolve_seconds: 1 }}\nsecrets: {{ {BOUND_AT_START} }}\n"
+    )
+    account = "{ email: reader@example.test, password: { secret: TEST_PASSWORD } }"
+    path.write_text(
+        path.read_text().replace(
+            "preconditions:\n", f"preconditions:\n  account: {account}\n"
+        )
+    )
+    return path
+
+
+def held(tmp_path: Path, value: str, run: Repairing) -> list[str]:
+    """Where a copy of `value` is: any file under `tmp_path` (the spec root
+    with the run's record), or the run's result."""
+    files = [path for path in tmp_path.rglob("*") if path.is_file()]
+    return copies_found(value, files=files, texts=[repr(run.result)])
+
+
+def test_a_repaired_script_that_spells_a_bound_value_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
+    named = [
+        fx.by_role("button", FAKE_VALUE),
+        {"css": "button", "scope": {"css": "#order"}},
+    ]
+
+    run = repairing(
+        tmp_path,
+        lambda drift: rebound(drift.script, locators=named),
+        spec_at=secret_spec_at,
+    )
+
+    problem = "repairs/1.json: a bound value's spelling is in it, so it isn't written"
+    assert repairs(run) == [(1, MISSES, (problem,), None)]
+    assert document(run, 1) == {
+        "seq": 1,
+        "misses": ["not unanimous", "no match"],
+        "problems": [problem],
+        "script": None,
+    }
+    assert held(tmp_path, FAKE_VALUE, run) == []
+
+
+def test_a_refusals_problems_are_scanned_before_they_are_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A value with no `~` or `/`, which a JSON pointer would escape.
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", OTHER_FAKE_VALUE)
+
+    def adding_a_named_target(drift: Drift) -> CompiledScript:
+        targets = {
+            **drift.script.targets,
+            OTHER_FAKE_VALUE: drift.script.targets["toggle"],
+        }
+        return drift.script.model_copy(update={"targets": targets})
+
+    run = repairing(tmp_path, adding_a_named_target, spec_at=secret_spec_at)
+
+    problem = "/targets/[SECRET:TEST_PASSWORD]: a heal adds no target"
+    assert repairs(run) == [(1, MISSES, (problem,), None)]
+    assert held(tmp_path, OTHER_FAKE_VALUE, run) == []

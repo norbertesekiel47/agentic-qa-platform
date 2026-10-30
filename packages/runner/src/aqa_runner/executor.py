@@ -271,7 +271,14 @@ async def replay(
 
     After every step it keeps, it saves the step's evidence in the record,
     which scans what it writes with the session's redactor
-    (`aqa_runner.evidence`)."""
+    (`aqa_runner.evidence`).
+
+    With `setup.repair`, a step whose target drifted, in a run nothing has
+    interrupted, goes to that repair (`Drift`), once. The script it offers
+    is checked and recorded before the run goes on with it (`_repaired`),
+    the drifted step first, which keeps no evidence of its drift; a refused
+    one ends the run as drift. What the repair raises leaves as any
+    failure here does."""
     try:
         replayed = await _replayed(
             script, setup, gate, every_locator, chromium=chromium, proxy=proxy
@@ -726,11 +733,16 @@ async def _repaired(
     `model_copy` skips; the heal-patch validator, against `committed`, the
     script replay was given, never a copy it handed out; its first steps
     must be those that ran, by seq in `ran`, since the run goes on after
-    them; and replay's own admission (`accepted`). The validator searches
-    text checks' patterns in a child process, so it runs off the loop,
-    which keeps the proxy serving."""
+    them; replay's own admission (`accepted`); and the record, which
+    checks the document as written and refuses one that spells a bound
+    value, so nothing runs that isn't recorded. The refusal is recorded
+    through the same check, which raises `RefusedWriteError` only when a
+    scan's marker spells a value. The validator searches text checks'
+    patterns in a child process, so it runs off the loop, which keeps the
+    proxy serving."""
     seq, record = drifted.seq, run.setup.record
     name = f"repairs/{seq}.json"
+    clean = require_clean(record.redactor, name)
     problems: Sequence[str]
     try:
         patched = parse_compiled(
@@ -744,13 +756,15 @@ async def _repaired(
         if not problems:
             accepted(patched, run.setup.spec)
             taken = Repaired(seq, drifted.misses, (), patched)
-            record.write(name, _repair_record(taken))
+            record.write(name, _repair_record(taken), check=clean)
             return taken
     except SpecError as error:
         problems = error.problems
+    except RefusedWriteError as error:
+        problems = [str(error)]
     scanned = tuple(record.redactor.redact(problem) for problem in problems)
     refused = Repaired(seq, drifted.misses, scanned, None)
-    record.write(name, _repair_record(refused))
+    record.write(name, _repair_record(refused), check=clean)
     return refused
 
 
