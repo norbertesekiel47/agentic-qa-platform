@@ -156,10 +156,11 @@ class StepResult:
 @dataclass(frozen=True)
 class Drift:
     """The step a replay paused at, for its repair: its target didn't
-    resolve, so nothing was dispatched; each locator's miss; a deep copy of
-    the script in use, the committed one or an earlier repair's, so an edit
-    to it reaches nothing replay holds; and the live session, which the
-    repair observes through and dispatches nothing with."""
+    resolve, so nothing was dispatched; each locator's miss; deep copies of
+    that step and of the script in use, the committed one or an earlier
+    repair's, so an edit to either reaches nothing replay holds; and the
+    live session, which the repair observes through and dispatches nothing
+    with."""
 
     step: Targeted
     misses: tuple[Miss, ...]
@@ -396,6 +397,9 @@ async def _replayed(
         # whatever the path did after; one the final checks first show
         # keeps the last step's, the page they ran on.
         violated = _violated(session, setup.spec)
+        # Repairs are checked against replay's own copy of the script: the
+        # session, which a repair is handed, holds `script.browser`.
+        committed = script.model_copy(deep=True)
         pending, in_use = list(runnable), script
         repairs: list[Repaired] = []
         while pending and steps[-1].outcome == "completed" and not interrupted():
@@ -414,10 +418,12 @@ async def _replayed(
                 and not interrupted()
             ):
                 handed = in_use.model_copy(deep=True)
-                drift = Drift(step, result.misses, handed, session)
+                drift = Drift(
+                    step.model_copy(deep=True), result.misses, handed, session
+                )
                 offered = await setup.repair(drift)
                 ran = [done.seq for done in steps[1:]]
-                repaired = await _repaired(run, script, result, offered, ran)
+                repaired = await _repaired(run, committed, result, offered, ran)
                 repairs.append(repaired)
                 if (patched := repaired.script) is not None:
                     run = replace(
@@ -730,16 +736,16 @@ async def _repaired(
     recorded in `repairs/<seq>.json`: taken, as the loader reads its JSON,
     once nothing refuses it. The first of these to find problems refuses
     it, and each problem is scanned: the loader's rules, which a
-    `model_copy` skips; the heal-patch validator, against `committed`, the
-    script replay was given, never a copy it handed out; its first steps
-    must be those that ran, by seq in `ran`, since the run goes on after
-    them; replay's own admission (`accepted`); and the record, which
-    checks the document as written and refuses one that spells a bound
-    value, so nothing runs that isn't recorded. The refusal is recorded
-    through the same check, which raises `RefusedWriteError` only when a
-    scan's marker spells a value. The validator searches text checks'
-    patterns in a child process, so it runs off the loop, which keeps the
-    proxy serving."""
+    `model_copy` skips; the heal-patch validator, against `committed`,
+    replay's own copy of the script it was given, which no repair holds;
+    its first steps must be those that ran, by seq in `ran`, since the run
+    goes on after them; replay's own admission (`accepted`); and the
+    record, which checks the document as written and refuses one that
+    spells a bound value, so nothing runs that isn't recorded. The refusal
+    is recorded through the same check, which raises `RefusedWriteError`
+    only when a scan's marker spells a value. The validator searches text
+    checks' patterns in a child process, so it runs off the loop, which
+    keeps the proxy serving."""
     seq, record = drifted.seq, run.setup.record
     name = f"repairs/{seq}.json"
     clean = require_clean(record.redactor, name)
