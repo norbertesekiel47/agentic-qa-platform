@@ -34,6 +34,7 @@ from packages.runner.tests.drift_fixtures import (
     serving,
 )
 from packages.runner.tests.egress_fixtures import gate
+from packages.runner.tests.test_every_locator import around
 
 # How the toggle drifts on the moved page: its role locator still finds it,
 # its toolbar-scoped css locator finds nothing.
@@ -296,3 +297,54 @@ def test_a_later_drift_gets_its_own_repair_handed_the_script_in_use(
     ]
     assert [(r.seq, r.problems) for r in run.result.repairs] == [(1, ()), (2, ())]
     assert run.result.outcome == "passed"
+
+
+# A fetch to a host the run doesn't allow, awaited until the proxy refuses it.
+FETCH_UNDECLARED = "() => fetch('http://undeclared.example.test:8080/x').catch(() => 0)"
+
+
+def test_no_repair_is_asked_for_once_an_egress_block_interrupted_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The block lands during the toggle's first lookup, before it drifts.
+    fired = around(monkeypatch, "role=button", (1, FETCH_UNDECLARED, "() => 0"))
+
+    run = repairing(tmp_path, lambda drift: rebound(drift.script))
+
+    assert fired == [1]
+    assert run.handed == []
+    assert outcomes(run) == [(0, "completed", ()), (1, "drifted", MISSES)]
+    assert (run.result.outcome, run.result.error_code) == ("errored", "egress_blocked")
+
+
+# A Tab pressed (seq 1), then the toggle clicked (seq 2).
+TAB_FIRST = DETAILS.model_copy(
+    update={
+        "steps": (
+            Press(seq=1, action="press", key="Tab", side_effect=False),
+            Click(seq=2, action="click", target="toggle", side_effect=False),
+        )
+    }
+)
+
+
+def inserting_before_the_tab(drift: Drift) -> CompiledScript:
+    """The script `drift` handed over, rebound, with a replay-safe `press`
+    inserted before seq 1, which already ran."""
+    press = Press(seq=3, action="press", key="Tab", side_effect=False)
+    moved = rebound(drift.script)
+    return moved.model_copy(update={"steps": (press, *moved.steps)})
+
+
+def test_a_repair_that_inserts_a_step_before_one_that_ran_is_refused(
+    tmp_path: Path,
+) -> None:
+    run = repairing(tmp_path, inserting_before_the_tab, script=TAB_FIRST)
+
+    problem = "/steps: a repair inserts no step before a step that already ran"
+    assert repairs(run) == [(2, MISSES, (problem,), None)]
+    assert outcomes(run) == [
+        (0, "completed", ()),
+        (1, "completed", ()),
+        (2, "drifted", MISSES),
+    ]

@@ -397,23 +397,26 @@ async def _replayed(
             if result is None:
                 break
             # One repair per drifted step: a step that drifts again after its
-            # repair stops the run, so a repair is never asked twice.
+            # repair stops the run, so a repair is never asked twice. None
+            # once the run is interrupted, which stops it anyway.
             if (
                 setup.repair is not None
                 and result.outcome == "drifted"
                 and not isinstance(step, Navigate | Reload | Press)
                 and all(repaired.seq != step.seq for repaired in repairs)
+                and not interrupted()
             ):
                 handed = in_use.model_copy(deep=True)
                 drift = Drift(step, result.misses, handed, session)
                 offered = await setup.repair(drift)
-                repaired = await _repaired(run, script, result, offered)
+                ran = [done.seq for done in steps[1:]]
+                repaired = await _repaired(run, script, result, offered, ran)
                 repairs.append(repaired)
                 if (patched := repaired.script) is not None:
                     run = replace(
                         run, evaluation=replace(run.evaluation, targets=patched.targets)
                     )
-                    pending, in_use = list(patched.steps[len(steps) - 1 :]), patched
+                    pending, in_use = list(patched.steps[len(ran) :]), patched
                     continue
             pending.pop(0)
             kept = await _keep_with_evidence(session, run, steps, result)
@@ -714,16 +717,18 @@ async def _repaired(
     committed: CompiledScript,
     drifted: StepResult,
     offered: CompiledScript,
+    ran: list[int],
 ) -> Repaired:
     """The repair of the step `drifted`, whose repair offered `offered`,
     recorded in `repairs/<seq>.json`: taken, as the loader reads its JSON,
     once nothing refuses it. The first of these to find problems refuses
     it, and each problem is scanned: the loader's rules, which a
     `model_copy` skips; the heal-patch validator, against `committed`, the
-    script replay was given, never a copy it handed out; and replay's own
-    admission (`accepted`). The validator searches text checks' patterns in
-    a child process, so it runs off the loop, which keeps the proxy
-    serving."""
+    script replay was given, never a copy it handed out; its first steps
+    must be those that ran, by seq in `ran`, since the run goes on after
+    them; and replay's own admission (`accepted`). The validator searches
+    text checks' patterns in a child process, so it runs off the loop,
+    which keeps the proxy serving."""
     seq, record = drifted.seq, run.setup.record
     name = f"repairs/{seq}.json"
     problems: Sequence[str]
@@ -732,6 +737,10 @@ async def _repaired(
             offered.model_dump_json(), run.setup.config, source=Path(name)
         )
         problems = await asyncio.to_thread(heal_patch_problems, committed, patched)
+        if not problems and [step.seq for step in patched.steps[: len(ran)]] != ran:
+            problems = [
+                "/steps: a repair inserts no step before a step that already ran"
+            ]
         if not problems:
             accepted(patched, run.setup.spec)
             taken = Repaired(seq, drifted.misses, (), patched)
