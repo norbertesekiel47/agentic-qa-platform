@@ -83,23 +83,29 @@ _SHADOW = re.compile(r'<template shadowmode="(?:open|closed)"')
 # DOM snapshot lists it (each shadow root's content, then what each slot
 # shows), and each frame's document; drops <noscript>, which a page with
 # script never showed; checks that the kinds of its fields, its frames, its
-# options and its elements with a `contenteditable` attribute are the
-# snapshot's, in order, and gives each field its value or its checked state
-# and each option its chosen state; walks again, since a choice can copy an
-# option's content; hides each frame it can't reach; empties each such
-# element and every editing host; and scrolls to the live page's place. Null
-# when they don't match; otherwise the values of the fields and the text
-# left.
+# options (with their select and whether it takes several) and its elements
+# with a `contenteditable` attribute are the snapshot's, in order, and gives
+# each field its value or its checked state and each option its chosen
+# state; walks again, without choosing, since a choice can copy an option's
+# content; hides each frame it can't reach; empties each such element and
+# every editing host; checks each option's chosen state; and scrolls to the
+# live page's place. Null when they don't match; otherwise the values of the
+# fields and the text left.
 RESTORE = """({plan, scroll}) => {
-    const fields = [], texts = [], emptied = [];
-    const walk = (document, plan) => {
+    const fields = [], texts = [], emptied = [], chosen = [];
+    const walk = (document, plan, choosing) => {
         const kinds = [], inputs = [], frames = [], options = [];
-        const visit = (node) => {
+        let selects = 0;
+        // `owner`: the kind of an option in `node`, as `_plan` gives it.
+        const visit = (node, owner) => {
             if (node.nodeType === Node.TEXT_NODE) texts.push(node);
             if (node.nodeType === Node.ELEMENT_NODE) {
                 const name = node.localName.toLowerCase();
                 if (name === "noscript") return node.remove();
                 if (name === "template") return;
+                if (name === "select") {
+                    owner = `${selects++}${node.hasAttribute("multiple") ? " multiple" : ""}`;
+                }
                 if (name === "input" || name === "textarea") {
                     inputs.push(node);
                     kinds.push([name, name === "input" ? node.getAttribute("type") : null]);
@@ -111,7 +117,7 @@ RESTORE = """({plan, scroll}) => {
                     kinds.push([name, "contenteditable"]);
                 } else if (name === "option") {
                     options.push(node);
-                    kinds.push([name, null]);
+                    kinds.push([name, owner]);
                 }
                 if (node.isContentEditable && !node.parentElement?.isContentEditable) {
                     emptied.push(node);
@@ -122,11 +128,11 @@ RESTORE = """({plan, scroll}) => {
                 const assigned = node.assignedNodes();
                 if (assigned.length > 0) kids = assigned;
             }
-            for (const kid of [...kids]) visit(kid);
+            for (const kid of [...kids]) visit(kid, owner);
         };
-        visit(document);
-        if (plan) {
-            if (JSON.stringify(kinds) !== JSON.stringify(plan.kinds)) return false;
+        visit(document, null);
+        if (plan && JSON.stringify(kinds) !== JSON.stringify(plan.kinds)) return false;
+        if (plan && choosing) {
             // Any other input's `value` is its attribute, which the archive
             // holds, or a file's name.
             const kept = ["hidden", "submit", "image", "reset", "button", "file"];
@@ -143,24 +149,30 @@ RESTORE = """({plan, scroll}) => {
                     option.closest("select").selectedIndex = -1;
                 }
             });
+        } else if (plan) {
+            options.forEach((option, i) => chosen.push([option, plan.selected[i]]));
         }
         fields.push(...inputs);
         return frames.every((frame, i) => {
             const inner = frame.contentDocument;
-            if (inner) return walk(inner, plan ? plan.frames[i] : null);
+            if (inner) return walk(inner, plan ? plan.frames[i] : null, choosing);
             // On an opaque origin (sandboxed): nothing in it can be checked
             // or emptied, so it isn't shown.
             frame.style.setProperty("visibility", "hidden", "important");
             return true;
         });
     };
-    if (!walk(document, plan)) return null;
+    if (!walk(document, plan, true)) return null;
     // A choice the walk restored copies the option's content, as new nodes,
-    // into a <selectedcontent> it had passed. Restoring again changes
-    // nothing, so a second walk lists, empties and scans the final DOM.
+    // into a <selectedcontent> it had passed, so a second walk checks, lists,
+    // empties and scans the final DOM. It chooses nothing: in a select that
+    // takes the choices otherwise than the page's did, each copies anew.
     fields.length = texts.length = emptied.length = 0;
-    if (!walk(document, plan)) return null;
+    if (!walk(document, plan, false)) return null;
     for (const element of emptied) element.replaceChildren();
+    // Emptying an element that holds an option takes the option out, and its
+    // select chooses again.
+    if (chosen.some(([option, planned]) => option.selected !== planned)) return null;
     window.scrollTo({left: scroll[0], top: scroll[1], behavior: "instant"});
     const shown = (nodes) => nodes.filter((node) => node.isConnected);
     // For DROP: nothing but our own scripts runs in a render.
@@ -185,9 +197,11 @@ type _Parts = dict[str, tuple[str, bytes]]
 class _Document(TypedDict):
     """What a render must find of a document, in walk order: the kind of
     each field (its element and an input's `type` attribute), frame, option
-    and element with a `contenteditable` attribute (its element and that
-    name); each field's value and checked state; whether each option is
-    chosen; and each frame's document."""
+    (its element and its select's place among the document's, with
+    ` multiple` when that select has the attribute) and element with a
+    `contenteditable` attribute (its element and that name); each field's
+    value and checked state; whether each option is chosen; and each frame's
+    document."""
 
     kinds: list[tuple[str, str | None]]
     values: list[str]
@@ -557,6 +571,9 @@ def _plan(dom: _Snapshot, document: int, redactor: Redactor) -> _Document:
     plan = _Document(kinds=[], values=[], checked=[], selected=[], frames=[])
     heads: set[int] = set()
     omitted: set[int] = set()
+    # The kind of an option in each node under a select, by the flat tree.
+    owners: dict[int, str] = {}
+    selects = 0
     for node, name in enumerate(nodes["nodeName"]):
         element = strings[name].lower()
         named = _attributes(nodes, strings, node)
@@ -575,6 +592,11 @@ def _plan(dom: _Snapshot, document: int, redactor: Redactor) -> _Document:
         ):
             omitted.add(node)
             continue
+        if element == "select":
+            owners[node] = f"{selects}{' multiple' if 'multiple' in named else ''}"
+            selects += 1
+        elif parent in owners:
+            owners[node] = owners[parent]
         match element:
             # https://chromedevtools.github.io/devtools-protocol/tot/DOMSnapshot/#type-NodeTreeSnapshot
             # A textarea's value is its textValue, not its inputValue.
@@ -597,7 +619,7 @@ def _plan(dom: _Snapshot, document: int, redactor: Redactor) -> _Document:
             case _ if "contenteditable" in named:
                 plan["kinds"].append((element, "contenteditable"))
             case "option":
-                plan["kinds"].append((element, None))
+                plan["kinds"].append((element, owners.get(node)))
                 plan["selected"].append(node in selected)
     return plan
 
