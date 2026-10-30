@@ -389,19 +389,23 @@ async def _replayed(
         # whatever the path did after; one the final checks first show
         # keeps the last step's, the page they ran on.
         violated = _violated(session, setup.spec)
-        pending = list(runnable)
+        pending, in_use = list(runnable), script
         repairs: list[Repaired] = []
         while pending and steps[-1].outcome == "completed" and not interrupted():
             step = pending[0]
             result = await _run(session, run, step, interrupted)
             if result is None:
                 break
+            # One repair per drifted step: a step that drifts again after its
+            # repair stops the run, so a repair is never asked twice.
             if (
                 setup.repair is not None
                 and result.outcome == "drifted"
                 and not isinstance(step, Navigate | Reload | Press)
+                and all(repaired.seq != step.seq for repaired in repairs)
             ):
-                drift = Drift(step, result.misses, script, session)
+                handed = in_use.model_copy(deep=True)
+                drift = Drift(step, result.misses, handed, session)
                 offered = await setup.repair(drift)
                 repaired = await _repaired(run, script, result, offered)
                 repairs.append(repaired)
@@ -409,7 +413,7 @@ async def _replayed(
                     run = replace(
                         run, evaluation=replace(run.evaluation, targets=patched.targets)
                     )
-                    pending = list(patched.steps[len(steps) - 1 :])
+                    pending, in_use = list(patched.steps[len(steps) - 1 :]), patched
                     continue
             pending.pop(0)
             kept = await _keep_with_evidence(session, run, steps, result)
