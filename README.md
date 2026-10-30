@@ -19,7 +19,7 @@ Explore, compile and strict replay run locally, against [Conduit](bench/apps/con
 
 ![aqa replay passes read-article on the clean app at $0, then catches two planted bugs: a date one day early fails expectation 2, and a TypeError violates the js_exceptions invariant](docs/media/aqa-demo.gif)
 
-*Recorded in real time from `85a48d4e`. The commands are under [Try it](#try-it).*
+*The terminal parts were recorded in real time from `85a48d4e`; the captions and title cards were added afterwards. The commands are under [Try it](#try-it).*
 
 - **`aqa explore <spec>`** turns a plain-English spec into a compiled script. A LangGraph loop writes a coverage plan from the spec alone, before it sees the page. A stateless navigator then drives sandboxed Chromium over the accessibility tree. A replay with no model calls must reproduce the path before the script is marked confirmed; a path with side effects and no reset hook is written unconfirmed and says so ([ADR-0024](ADRs/0024-explore-runs.md), [ADR-0025](ADRs/0025-compiled-targets-checks-flags.md)). The five pilot scripts it compiled are in [`bench/apps/conduit/qa/.compiled/`](bench/apps/conduit/qa/.compiled/).
 - **`aqa replay <spec>`** replays a compiled script in strict mode, with no model call and no heal, and writes a verdict for each step, check and invariant.
