@@ -297,8 +297,15 @@ def test_a_repair_is_checked_against_the_script_as_replay_was_given_it(
 def test_a_step_that_drifts_again_after_its_repair_stops_the_run(
     tmp_path: Path,
 ) -> None:
-    # The script handed over, offered unchanged, so the step drifts again.
-    run = repairing(tmp_path, lambda drift: drift.script)
+    # A rebinding whose css locator still finds nothing on the moved page,
+    # so the step drifts again, as it did.
+    still_missing = [
+        fx.by_role("button", "Show details"),
+        {"css": "button.details", "scope": {"css": "#order"}},
+    ]
+    run = repairing(
+        tmp_path, lambda drift: rebound(drift.script, locators=still_missing)
+    )
 
     assert [drift.step.seq for drift in run.handed] == [1]
     assert outcomes(run) == [(0, "completed", ()), (1, "drifted", MISSES)]
@@ -306,6 +313,21 @@ def test_a_step_that_drifts_again_after_its_repair_stops_the_run(
         AssertionResult("a1", "not_evaluated", stopped_at=1),
         AssertionResult("a2", "not_evaluated", stopped_at=1),
     )
+
+
+def test_a_repair_that_offers_the_script_it_was_handed_gives_up(
+    tmp_path: Path,
+) -> None:
+    run = repairing(tmp_path, lambda drift: drift.script)
+
+    assert outcomes(run) == [(0, "completed", ()), (1, "drifted", MISSES)]
+    assert repairs(run) == [(1, MISSES, (), None)]
+    assert document(run, 1) == {
+        "seq": 1,
+        "misses": ["not unanimous", "no match"],
+        "problems": [],
+        "script": None,
+    }
 
 
 # DETAILS, then a click on the footer's contact button, found by a class the
