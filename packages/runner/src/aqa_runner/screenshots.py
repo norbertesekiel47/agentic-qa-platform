@@ -88,11 +88,12 @@ _SHADOW = re.compile(r'<template shadowmode="(?:open|closed)"')
 # each field its value or its checked state and each option its chosen
 # state; walks again, without choosing, since a choice can copy an option's
 # content; hides each frame it can't reach; empties each such element and
-# every editing host; checks each option's chosen state; and scrolls to the
-# live page's place. Null when they don't match; otherwise the values of the
-# fields and the text left.
+# every editing host; checks each option's chosen state, and that no select
+# shows a copy of an editable option; and scrolls to the live page's place.
+# Null when they don't match; otherwise the values of the fields and the
+# text left.
 RESTORE = """({plan, scroll}) => {
-    const fields = [], texts = [], emptied = [], chosen = [];
+    const fields = [], texts = [], emptied = [], chosen = [], copies = [];
     const walk = (document, plan, choosing) => {
         const kinds = [], inputs = [], frames = [], options = [];
         let selects = 0;
@@ -106,6 +107,13 @@ RESTORE = """({plan, scroll}) => {
                 if (name === "select") {
                     owner = `${selects++}${node.hasAttribute("multiple") ? " multiple" : ""}`;
                 }
+                if (name === "option") options.push(node);
+                // A select copies its chosen option's content here, as nodes
+                // that aren't editable even when the option is.
+                if (name === "selectedcontent"
+                    && node.closest("select")?.selectedOptions[0]?.isContentEditable) {
+                    copies.push(node);
+                }
                 if (name === "input" || name === "textarea") {
                     inputs.push(node);
                     kinds.push([name, name === "input" ? node.getAttribute("type") : null]);
@@ -113,12 +121,9 @@ RESTORE = """({plan, scroll}) => {
                     frames.push(node);
                     kinds.push([name, null]);
                 } else if (node.hasAttribute("contenteditable")) {
-                    // An option among them isn't chosen: a customizable
-                    // select would copy its content where it isn't editable.
                     emptied.push(node);
                     kinds.push([name, "contenteditable"]);
                 } else if (name === "option") {
-                    options.push(node);
                     kinds.push([name, owner]);
                 }
                 if (node.isContentEditable && !node.parentElement?.isContentEditable) {
@@ -169,12 +174,14 @@ RESTORE = """({plan, scroll}) => {
     // into a <selectedcontent> it had passed, so a second walk checks, lists,
     // empties and scans the final DOM. It chooses nothing: in a select that
     // takes the choices otherwise than the page's did, each copies anew.
-    fields.length = texts.length = emptied.length = 0;
+    fields.length = texts.length = emptied.length = copies.length = 0;
     if (!walk(document, plan, false)) return null;
     for (const element of emptied) element.replaceChildren();
     // Emptying an element that holds an option takes the option out, and its
     // select chooses again.
     if (chosen.some(([option, planned]) => option.selected !== planned)) return null;
+    // The emptying doesn't reach a copy of an editable option's content.
+    if (copies.some((copy) => copy.hasChildNodes())) return null;
     window.scrollTo({left: scroll[0], top: scroll[1], behavior: "instant"});
     const shown = (nodes) => nodes.filter((node) => node.isConnected);
     // For DROP: nothing but our own scripts runs in a render.
@@ -368,7 +375,8 @@ async def take_screenshot(session: BrowserSession) -> Screenshot:
     in an encoding Python can't decode; a part spells a bound value after
     the scrub; an element is editable in a way the snapshot doesn't hold;
     or the render's fields, frames, options and editable elements don't
-    match the snapshot's, or it spells a bound value."""
+    match the snapshot's, it shows a copy of an editable option's content,
+    or it spells a bound value."""
     try:
         png = await _captured(session)
     except TimeoutError:
@@ -573,8 +581,8 @@ def _plan(dom: _Snapshot, document: int, redactor: Redactor) -> _Document:
     plan = _Document(kinds=[], values=[], checked=[], selected=[], frames=[])
     heads: set[int] = set()
     omitted: set[int] = set()
-    # The kind of an option in each node under a select, by the flat tree.
-    owners: dict[int, str] = {}
+    # The kind of an option in each node, by the flat tree.
+    owners: dict[int, str | None] = {}
     selects = 0
     for node, name in enumerate(nodes["nodeName"]):
         element = strings[name].lower()
@@ -594,11 +602,10 @@ def _plan(dom: _Snapshot, document: int, redactor: Redactor) -> _Document:
         ):
             omitted.add(node)
             continue
+        owners[node] = owners.get(parent)
         if element == "select":
             owners[node] = f"{selects}{' multiple' if 'multiple' in named else ''}"
             selects += 1
-        elif parent in owners:
-            owners[node] = owners[parent]
         match element:
             # https://chromedevtools.github.io/devtools-protocol/tot/DOMSnapshot/#type-NodeTreeSnapshot
             # A textarea's value is its textValue, not its inputValue.
@@ -621,8 +628,9 @@ def _plan(dom: _Snapshot, document: int, redactor: Redactor) -> _Document:
             case _ if "contenteditable" in named:
                 plan["kinds"].append((element, "contenteditable"))
             case "option":
-                plan["kinds"].append((element, owners.get(node)))
-                plan["selected"].append(node in selected)
+                plan["kinds"].append((element, owners[node]))
+        if element == "option":
+            plan["selected"].append(node in selected)
     return plan
 
 
