@@ -252,6 +252,48 @@ def test_a_repair_that_edits_the_script_it_was_handed_is_checked_against_the_com
     assert run.committed.model_dump(mode="json") == run.before
 
 
+def rewriting_the_step_in_place(drift: Drift) -> CompiledScript:
+    """The script `drift` handed over, rebound, holding the step it handed
+    over with its fields written in place: a frozen model's storage is
+    still writable."""
+    vars(drift.step).update(
+        target="summary", side_effect=True, side_effect_basis="network: POST /order"
+    )
+    return rebound(drift.script).model_copy(update={"steps": (drift.step,)})
+
+
+def test_a_repair_that_rewrites_the_step_it_was_handed_in_place_is_refused(
+    tmp_path: Path,
+) -> None:
+    run = repairing(tmp_path, rewriting_the_step_in_place)
+
+    problems = (
+        "/steps/0/side_effect: a heal rewrites no existing step",
+        "/steps/0/side_effect_basis: a heal rewrites no existing step",
+        "/steps/0/target: a heal rewrites no existing step",
+    )
+    assert repairs(run) == [(1, MISSES, problems, None)]
+    assert run.committed.model_dump(mode="json") == run.before
+
+
+def retiming_the_session(drift: Drift) -> CompiledScript:
+    """The script `drift` handed over, rebound, with the browser settings
+    the live session holds, their time zone written in place."""
+    vars(drift.session.settings)["timezone"] = "Asia/Tokyo"
+    return rebound(drift.script).model_copy(update={"browser": drift.session.settings})
+
+
+def test_a_repair_is_checked_against_the_script_as_replay_was_given_it(
+    tmp_path: Path,
+) -> None:
+    # The session holds the settings the run opened with, the committed
+    # script's own: what the repair writes there reaches no check.
+    run = repairing(tmp_path, retiming_the_session)
+
+    problem = "/browser: a heal changes nothing but target locators and inserted steps"
+    assert repairs(run) == [(1, MISSES, (problem,), None)]
+
+
 def test_a_step_that_drifts_again_after_its_repair_stops_the_run(
     tmp_path: Path,
 ) -> None:
