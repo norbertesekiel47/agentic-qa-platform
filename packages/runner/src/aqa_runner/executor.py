@@ -26,6 +26,7 @@ from aqa_core.compiled import (
     ProbeEqualsBaseline,
     Reload,
     Select,
+    Step,
     Target,
     VisibleUnoccluded,
 )
@@ -423,7 +424,7 @@ async def _replayed(
                     step.model_copy(deep=True), result.misses, handed, session
                 )
                 offered = await setup.repair(drift)
-                ran = [done.seq for done in steps[1:]]
+                ran = in_use.steps[: len(steps) - 1]
                 repaired = await _repaired(run, committed, result, offered, ran)
                 repairs.append(repaired)
                 if (patched := repaired.script) is not None:
@@ -731,7 +732,7 @@ async def _repaired(
     committed: CompiledScript,
     drifted: StepResult,
     offered: CompiledScript,
-    ran: list[int],
+    ran: Sequence[Step],
 ) -> Repaired:
     """The repair of the step `drifted`, whose repair offered `offered`,
     recorded in `repairs/<seq>.json`: taken, as the loader reads its JSON,
@@ -741,7 +742,7 @@ async def _repaired(
     spelling; the loader's rules, which a `model_copy` skips; the
     heal-patch validator, against `committed`, replay's own copy of the
     script it was given, which no repair holds; its first steps must be
-    those that ran, by seq in `ran`, since the run goes on after them;
+    those that ran, `ran`, unchanged, since the run goes on after them;
     replay's own admission (`accepted`); and the record, which checks the
     document as written and refuses one that spells a bound value, so
     nothing runs that isn't recorded. The refusal is recorded through the
@@ -762,10 +763,8 @@ async def _repaired(
         clean(text)
         patched = parse_compiled(text, run.setup.config, source=Path(name))
         problems = await asyncio.to_thread(heal_patch_problems, committed, patched)
-        if not problems and [step.seq for step in patched.steps[: len(ran)]] != ran:
-            problems = [
-                "/steps: a repair inserts no step before a step that already ran"
-            ]
+        if not problems:
+            problems = _ran_problems(patched, ran)
         if not problems:
             accepted(patched, run.setup.spec)
             taken = Repaired(seq, drifted.misses, (), patched)
@@ -783,6 +782,21 @@ async def _repaired(
     refused = Repaired(seq, drifted.misses, scanned, None)
     record.write(name, _repair_record(refused), check=clean)
     return refused
+
+
+def _ran_problems(patched: CompiledScript, ran: Sequence[Step]) -> list[str]:
+    """Why `patched` doesn't begin with `ran`, the steps that ran, as the
+    script in use holds them. The validator reads only the committed
+    script, so this also keeps an earlier repair's inserted steps that ran
+    as they ran: what the record holds as run must be what ran."""
+    kept = patched.steps[: len(ran)]
+    if [step.seq for step in kept] != [step.seq for step in ran]:
+        return ["/steps: a repair inserts no step before a step that already ran"]
+    return [
+        f"/steps/{index}: a repair rewrites no step that already ran"
+        for index, (now, was) in enumerate(zip(kept, ran, strict=True))
+        if now.model_dump(mode="json") != was.model_dump(mode="json")
+    ]
 
 
 def _repair_record(repaired: Repaired) -> dict[str, object]:

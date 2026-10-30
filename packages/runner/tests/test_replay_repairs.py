@@ -351,6 +351,35 @@ def test_a_later_drift_gets_its_own_repair_handed_the_script_in_use(
     assert run.result.outcome == "passed"
 
 
+def rewriting_an_inserted_step_that_ran(drift: Drift) -> CompiledScript:
+    """For the toggle, the script `drift` handed over, rebound, with a Tab
+    pressed first; for the contact button, rebound too, with that press,
+    which ran, made an Enter."""
+    rebinding = rebinding_each(drift)
+    key = "Tab" if drift.step.seq == 1 else "Enter"
+    press = Press(seq=3, action="press", key=key, side_effect=False)
+    kept = rebinding.steps if drift.step.seq == 1 else rebinding.steps[1:]
+    return rebinding.model_copy(update={"steps": (press, *kept)})
+
+
+def test_a_later_repair_that_rewrites_an_inserted_step_that_ran_is_refused(
+    tmp_path: Path,
+) -> None:
+    run = repairing(tmp_path, rewriting_an_inserted_step_that_ran, script=TWO_CLICKS)
+
+    problem = "/steps/0: a repair rewrites no step that already ran"
+    assert [(r.seq, r.problems) for r in run.result.repairs] == [
+        (1, ()),
+        (2, (problem,)),
+    ]
+    assert outcomes(run) == [
+        (0, "completed", ()),
+        (3, "completed", ()),
+        (1, "completed", ()),
+        (2, "drifted", ("no match",)),
+    ]
+
+
 # A fetch to a host the run doesn't allow, awaited until the proxy refuses it.
 FETCH_UNDECLARED = "() => fetch('http://undeclared.example.test:8080/x').catch(() => 0)"
 
