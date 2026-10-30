@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from aqa_core.compiled import CompiledScript, Press, Target
+from aqa_core.compiled import Click, CompiledScript, Press, Target
 from aqa_core.project import load_config, load_spec
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.evaluation import AssertionResult
@@ -222,3 +222,77 @@ def test_a_refused_repair_ends_the_run_as_drift_with_its_problems_recorded(
         "script": None,
     }
     assert repairs(run) == [(1, MISSES, (problem,), None)]
+
+
+def adding_a_target(drift: Drift) -> CompiledScript:
+    """The script `drift` handed over, with a target added in place: a
+    frozen model's `targets` is still a plain dict."""
+    drift.script.targets["extra"] = drift.script.targets["toggle"]
+    return drift.script
+
+
+def test_a_repair_that_edits_the_script_it_was_handed_is_checked_against_the_committed_one(
+    tmp_path: Path,
+) -> None:
+    run = repairing(tmp_path, adding_a_target)
+
+    problem = "/targets/extra: a heal adds no target"
+    assert repairs(run) == [(1, MISSES, (problem,), None)]
+    assert run.committed.model_dump(mode="json") == run.before
+
+
+def test_a_step_that_drifts_again_after_its_repair_stops_the_run(
+    tmp_path: Path,
+) -> None:
+    # The script handed over, offered unchanged, so the step drifts again.
+    run = repairing(tmp_path, lambda drift: drift.script)
+
+    assert [drift.step.seq for drift in run.handed] == [1]
+    assert outcomes(run) == [(0, "completed", ()), (1, "drifted", MISSES)]
+    assert run.result.assertions == (
+        AssertionResult("a1", "not_evaluated", stopped_at=1),
+        AssertionResult("a2", "not_evaluated", stopped_at=1),
+    )
+
+
+# DETAILS, then a click on the footer's contact button, found by a class the
+# button doesn't have, so it drifts too.
+CONTACT = {"semantic": "the contact button", "locators": [{"css": "button.contact"}]}
+TWO_CLICKS = DETAILS.model_copy(
+    update={
+        "targets": {**DETAILS.targets, "contact": Target.model_validate(CONTACT)},
+        "steps": (
+            *DETAILS.steps,
+            Click(seq=2, action="click", target="contact", side_effect=False),
+        ),
+    }
+)
+
+
+def rebinding_each(drift: Drift) -> CompiledScript:
+    """The script `drift` handed over, with the drifted step's target bound
+    as the moved page has it."""
+    if drift.step.seq == 1:
+        return rebound(drift.script)
+    footer = {**CONTACT, "locators": [{"css": "button", "scope": {"css": "footer"}}]}
+    targets = {**drift.script.targets, "contact": Target.model_validate(footer)}
+    return drift.script.model_copy(update={"targets": targets})
+
+
+def test_a_later_drift_gets_its_own_repair_handed_the_script_in_use(
+    tmp_path: Path,
+) -> None:
+    run = repairing(tmp_path, rebinding_each, script=TWO_CLICKS)
+
+    assert [(drift.step.seq, drift.misses) for drift in run.handed] == [
+        (1, MISSES),
+        (2, ("no match",)),
+    ]
+    assert run.handed[1].script.targets["toggle"] == Target.model_validate(MOVED_TOGGLE)
+    assert outcomes(run) == [
+        (0, "completed", ()),
+        (1, "completed", ()),
+        (2, "completed", ()),
+    ]
+    assert [(r.seq, r.problems) for r in run.result.repairs] == [(1, ()), (2, ())]
+    assert run.result.outcome == "passed"
