@@ -40,6 +40,7 @@ from aqa_core.project import (
 )
 from aqa_core.spec import Spec, secret_references
 from playwright.async_api import Browser, BrowserType, ElementHandle, Error
+from pydantic_core import PydanticSerializationError
 
 from aqa_runner import probes, reasons
 from aqa_runner.bound_secrets import BoundSecret, bound_secrets
@@ -736,10 +737,11 @@ async def _repaired(
     recorded in `repairs/<seq>.json`: taken, as the loader reads its JSON,
     once nothing refuses it. The first of these to find problems refuses
     it, and each problem is scanned: the loader's rules, which a
-    `model_copy` skips; the heal-patch validator, against `committed`,
-    replay's own copy of the script it was given, which no repair holds;
-    its first steps must be those that ran, by seq in `ran`, since the run
-    goes on after them; replay's own admission (`accepted`); and the
+    `model_copy` skips, a field's type among them, refused unquoted; the
+    heal-patch validator, against `committed`, replay's own copy of the
+    script it was given, which no repair holds; its first steps must be
+    those that ran, by seq in `ran`, since the run goes on after them;
+    replay's own admission (`accepted`); and the
     record, which checks the document as written and refuses one that
     spells a bound value, so nothing runs that isn't recorded. The refusal
     is recorded through the same check, which raises `RefusedWriteError`
@@ -751,9 +753,10 @@ async def _repaired(
     clean = require_clean(record.redactor, name)
     problems: Sequence[str]
     try:
-        patched = parse_compiled(
-            offered.model_dump_json(), run.setup.config, source=Path(name)
-        )
+        # A field of a type `model_copy` let through makes the serializer
+        # warn, quoting its value: raised here, and its text never kept.
+        text = offered.model_dump_json(warnings="error")
+        patched = parse_compiled(text, run.setup.config, source=Path(name))
         problems = await asyncio.to_thread(heal_patch_problems, committed, patched)
         if not problems and [step.seq for step in patched.steps[: len(ran)]] != ran:
             problems = [
@@ -764,6 +767,10 @@ async def _repaired(
             taken = Repaired(seq, drifted.misses, (), patched)
             record.write(name, _repair_record(taken), check=clean)
             return taken
+    except PydanticSerializationError:
+        problems = [
+            f"{name}: a field holds a value its type doesn't allow, so it isn't read"
+        ]
     except SpecError as error:
         problems = error.problems
     except RefusedWriteError as error:
