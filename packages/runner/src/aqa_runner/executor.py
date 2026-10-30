@@ -736,18 +736,19 @@ async def _repaired(
     """The repair of the step `drifted`, whose repair offered `offered`,
     recorded in `repairs/<seq>.json`: taken, as the loader reads its JSON,
     once nothing refuses it. The first of these to find problems refuses
-    it, and each problem is scanned: the loader's rules, which a
-    `model_copy` skips, a field's type among them, refused unquoted; the
+    it, and each problem is scanned: its JSON, which must hold only values
+    its fields' types allow (refused unquoted) and no bound value's
+    spelling; the loader's rules, which a `model_copy` skips; the
     heal-patch validator, against `committed`, replay's own copy of the
     script it was given, which no repair holds; its first steps must be
     those that ran, by seq in `ran`, since the run goes on after them;
-    replay's own admission (`accepted`); and the
-    record, which checks the document as written and refuses one that
-    spells a bound value, so nothing runs that isn't recorded. The refusal
-    is recorded through the same check, which raises `RefusedWriteError`
-    only when a scan's marker spells a value. The validator searches text
-    checks' patterns in a child process, so it runs off the loop, which
-    keeps the proxy serving."""
+    replay's own admission (`accepted`); and the record, which checks the
+    document as written and refuses one that spells a bound value, so
+    nothing runs that isn't recorded. The refusal is recorded through the
+    same check, which raises `RefusedWriteError` when the document still
+    spells a value once its problems are scanned: a miss or a scan's
+    marker can. The validator searches text checks' patterns in a child
+    process, so it runs off the loop, which keeps the proxy serving."""
     seq, record = drifted.seq, run.setup.record
     name = f"repairs/{seq}.json"
     clean = require_clean(record.redactor, name)
@@ -756,6 +757,9 @@ async def _repaired(
         # A field of a type `model_copy` let through makes the serializer
         # warn, quoting its value: raised here, and its text never kept.
         text = offered.model_dump_json(warnings="error")
+        # Before any problem names a part of it: a validator's pointer
+        # escapes `/` and `~` (RFC 6901), a spelling no scan finds.
+        clean(text)
         patched = parse_compiled(text, run.setup.config, source=Path(name))
         problems = await asyncio.to_thread(heal_patch_problems, committed, patched)
         if not problems and [step.seq for step in patched.steps[: len(ran)]] != ran:

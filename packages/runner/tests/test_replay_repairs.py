@@ -21,7 +21,7 @@ from aqa_runner.executor import Drift, RunResult
 from aqa_runner.locator_generation import register_identity_engine
 from aqa_runner.locators import Miss
 from aqa_runner.replays import Opened, Replaying, replay_run
-from aqa_runner.run_record import RunRecord
+from aqa_runner.run_record import RefusedWriteError, RunRecord
 from playwright.async_api import async_playwright
 
 from packages.runner.tests import executor_fixtures as fx
@@ -37,8 +37,8 @@ from packages.runner.tests.egress_fixtures import gate
 from packages.runner.tests.secret_fixtures import (
     BOUND_AT_START,
     FAKE_VALUE,
-    OTHER_FAKE_VALUE,
     copies_found,
+    hermetic_environment,
 )
 from packages.runner.tests.test_every_locator import around
 
@@ -425,20 +425,52 @@ def held(tmp_path: Path, value: str, run: Repairing) -> list[str]:
     return copies_found(value, files=files, texts=[repr(run.result)])
 
 
-def test_a_repaired_script_that_spells_a_bound_value_is_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
-    named = [
-        fx.by_role("button", FAKE_VALUE),
-        {"css": "button", "scope": {"css": "#order"}},
-    ]
+# A value a JSON pointer token escapes (RFC 6901): `~` as `~0`, `/` as `~1`.
+SLASHED = "fake/session~token-for-242"
 
-    run = repairing(
-        tmp_path,
-        lambda drift: rebound(drift.script, locators=named),
-        spec_at=secret_spec_at,
-    )
+
+def pointer(name: str) -> str:
+    return name.replace("~", "~0").replace("/", "~1")
+
+
+def naming_a_target(name: str) -> Callable[[Drift], CompiledScript]:
+    """A repair that offers the script it was handed with the toggle's
+    binding added under `name`."""
+
+    def offer(drift: Drift) -> CompiledScript:
+        targets = {**drift.script.targets, name: drift.script.targets["toggle"]}
+        return drift.script.model_copy(update={"targets": targets})
+
+    return offer
+
+
+@pytest.mark.parametrize(
+    ("value", "offer"),
+    [
+        pytest.param(
+            FAKE_VALUE,
+            lambda drift: rebound(
+                drift.script,
+                locators=[
+                    fx.by_role("button", FAKE_VALUE),
+                    {"css": "button", "scope": {"css": "#order"}},
+                ],
+            ),
+            id="locator",
+        ),
+        # Which a validator's problem would name as a pointer token.
+        pytest.param(SLASHED, naming_a_target(SLASHED), id="target"),
+    ],
+)
+def test_a_repaired_script_that_spells_a_bound_value_is_refused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+    offer: Callable[[Drift], CompiledScript],
+) -> None:
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", value)
+
+    run = repairing(tmp_path, offer, spec_at=secret_spec_at)
 
     problem = "repairs/1.json: a bound value's spelling is in it, so it isn't written"
     assert repairs(run) == [(1, MISSES, (problem,), None)]
@@ -448,7 +480,8 @@ def test_a_repaired_script_that_spells_a_bound_value_is_refused(
         "problems": [problem],
         "script": None,
     }
-    assert held(tmp_path, FAKE_VALUE, run) == []
+    assert held(tmp_path, value, run) == []
+    assert held(tmp_path, pointer(value), run) == []
 
 
 def misfilled(drift: Drift) -> CompiledScript:
@@ -478,18 +511,30 @@ def test_a_repaired_script_holding_a_value_its_field_doesnt_allow_is_refused_unq
 def test_a_refusals_problems_are_scanned_before_they_are_recorded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A value with no `~` or `/`, which a JSON pointer would escape.
-    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", OTHER_FAKE_VALUE)
+    # The value is an added target's name as a pointer token spells it, so
+    # the validator's problem spells it, and the script offered doesn't.
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", pointer(SLASHED))
 
-    def adding_a_named_target(drift: Drift) -> CompiledScript:
-        targets = {
-            **drift.script.targets,
-            OTHER_FAKE_VALUE: drift.script.targets["toggle"],
-        }
-        return drift.script.model_copy(update={"targets": targets})
-
-    run = repairing(tmp_path, adding_a_named_target, spec_at=secret_spec_at)
+    run = repairing(tmp_path, naming_a_target(SLASHED), spec_at=secret_spec_at)
 
     problem = "/targets/[SECRET:TEST_PASSWORD]: a heal adds no target"
     assert repairs(run) == [(1, MISSES, (problem,), None)]
-    assert held(tmp_path, OTHER_FAKE_VALUE, run) == []
+    assert held(tmp_path, pointer(SLASHED), run) == []
+
+
+def test_a_repair_whose_record_would_spell_a_bound_value_is_never_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A common word, which a run refuses anywhere else in its environment
+    # (#215). The toggle's first miss, `not unanimous`, spells it, so neither
+    # the repair's record nor its refusal's can be written: replay raises.
+    hermetic_environment(monkeypatch)
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", "unanimous")
+
+    with pytest.raises(RefusedWriteError) as raised:
+        repairing(tmp_path, lambda drift: rebound(drift.script), spec_at=secret_spec_at)
+
+    assert str(raised.value) == (
+        "repairs/1.json: a bound value's spelling is in it, so it isn't written"
+    )
+    assert list(tmp_path.rglob("repairs")) == []
