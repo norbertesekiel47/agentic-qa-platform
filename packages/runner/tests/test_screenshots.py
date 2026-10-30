@@ -449,14 +449,15 @@ def test_a_render_keeps_a_buttons_label_and_what_is_checked(sites: Sites) -> Non
 
 
 def test_a_render_keeps_each_selects_chosen_option(sites: Sites) -> None:
-    # The run chooses `s`'s red option; the page's script leaves `n` with no
-    # option chosen, so the red `W` it would show first stays hidden. The
-    # archive holds neither choice.
+    # The run chooses `s`'s and `m`'s red options; the page's script leaves
+    # `n` with no option chosen, so the red `W` it would show first stays
+    # hidden. The archive holds none of the choices.
     page = (
         f"<!doctype html><meta charset=utf-8>{TRIGGER}"
         f"<select id=s style='{RED}'><option></option><option value=b>WWWWWW</option>"
         f"</select><select id=n style='{RED}'><option>W</option><option></option>"
-        "</select><script>n.value = 'none'</script>"
+        f"</select><select id=m style='{RED}'><option></option><option value=b>WW"
+        "</option></select><script>n.value = 'none'</script>"
     )
 
     async def scenario() -> tuple[int, int]:
@@ -468,6 +469,7 @@ def test_a_render_keeps_each_selects_chosen_option(sites: Sites) -> None:
             )
             await session.navigate(f"{sites.app}/selects")
             await session.select(await element(session, "#s"), "b")
+            await session.select(await element(session, "#m"), "b")
             live = await red_pixels(scratch, (await take_screenshot(session)).png)
             trigger = await element(session, "#trigger")
             await session.fill_secret(trigger, secret(sites, "TRIGGER"))
