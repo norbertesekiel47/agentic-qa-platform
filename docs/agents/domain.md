@@ -10,8 +10,6 @@ This repo departs from the skills' defaults in one place: **ADRs live in `ADRs/`
 - **`CONTEXT.md`** at the repo root: the domain glossary.
 - **`ADRs/`**: read ADRs that touch the area you're about to work in. `ADRs/README.md` indexes them with their status. Read any Amendment sections too.
 
-If `CONTEXT.md` doesn't exist, **proceed silently**. Don't flag its absence; don't suggest creating it upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates it lazily when terms actually get resolved.
-
 ## File structure
 
 ```

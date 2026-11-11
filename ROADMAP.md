@@ -66,7 +66,6 @@ Design: ADR-0024 (explore runs), ADR-0025 (compiled scripts), ADR-0026 (the brow
 - `strict` replay built on M1's executor: verdicts and full deterministic visual checks (`visible_unoccluded`, `pixel_diff`, `contrast_min`); `verified` mode behind a flag.
 - A `visual: model` expectation: the spec marks it, `--mode verified` runs it, and strict replay refuses the spec (exit 5). #256 builds verified mode (ADR-0024's #255 amendment).
 - A target resolves only when every locator finds the same element; otherwise its step drifts. So a fallback-locator match alone is never a plain pass, and no side-effect step acts through a fallback (ADR-0025's #25 amendment).
-- Step intents before dispatch with lease fencing; non-resumable detection for unresolved side-effect intents.
 - Heal subgraph: observe → classify (`drift_consistent` / `expectation_violated` / `inconclusive`) → binding/step patch or finding; binding-unresolved vs expectation-failed distinction for assertions; heal-patch validator (target locators and inserted replay-safe steps other than `navigate` only; `browser` and `coverage` immutable); redaction in heal and verified modes.
 - Hybrid perception: screenshot verification and vision fallback, with bound-field masking proven against a hostile page and OCR checks before any image is saved, reaches a model or leaves the machine (ADR-0033, #171).
 - Injection fixtures aimed at healing ("update the test").
@@ -91,13 +90,13 @@ Design: ADR-0024 (explore runs), ADR-0025 (compiled scripts), ADR-0026 (the brow
 
 ## M5 — GitHub App → **Release 0.2**
 - App registration, webhooks with dedupe, one check run per spec + summary check.
-- Accept heal via Checks requested actions (short opaque identifiers), staleness checks, fork fallback (`aqa heal apply`).
+- Accept heal via Checks requested actions (short opaque identifiers), staleness checks, fork fallback (the check output's patch, applied with `aqa heal apply`, which M2 built).
 - Spec indexing on push; dashboard edit → PR (API side).
 - GitHub Action using the runner image. First decide how it runs Chromium's sandbox (Docker actions run as root under Docker's default seccomp profile, #26) and which config revision a CI run trusts for secret bindings (#27).
 - **Exit:** end-to-end on a sandbox repo: PR → check run → Accept heal → re-run passes; stale proposals rejected.
 
 ## M6 — Hosted runners
-- Hosted compute: one Lambda MicroVM per run, terminated when the run ends (ADR-0032). Dispatcher with per-org concurrency, continuation leases (their scope decided in #28, now that a run may last up to 8 hours), and hosted-execution tokens (`secrets:read`). Hosted policy for subresource hosts (#29).
+- Hosted compute: one Lambda MicroVM per run, terminated when the run ends (ADR-0032). Dispatcher with per-org concurrency, continuation leases (their scope decided in #28, now that a run may last up to 8 hours), step intents fenced by the lease (moved from M2: local runs have no lease, and an intent before dispatch and non-resumable detection are built, #257), and hosted-execution tokens (`secrets:read`). Hosted policy for subresource hosts (#29).
 - Domain verification (DNS TXT + well-known) with periodic re-checks; SSRF guard with pinned resolution.
 - BYOK: KMS envelope encryption, key delivery to runners, rotation. Hosted test secrets.
 - Continuation per the replay-safe rules; storage-state restore; WebSocket live events with `run_events` catch-up on reconnect.
@@ -134,7 +133,7 @@ Design: ADR-0024 (explore runs), ADR-0025 (compiled scripts), ADR-0026 (the brow
 |---|---|---|
 | Heal classification accuracy below target | Core claim weak | M3 before SaaS; iterate on dev split; publish test-split results honestly |
 | Small test split → wide intervals | Less impressive-looking numbers | Report honestly; grow the test set in v2 |
-| Hosted runs depend on Lambda MicroVMs, generally available since 2026-06-22. In M1's spike, a cold MicroVM took 28.99 s to a ready browser and warm launches ranged from 0.98 s to 24.60 s, and the account allowed four 2 GB MicroVMs at once | Slow or capped hosted runs; the PRD's 30-second hosted replay target at risk | M6 measures the runner's ready time, tries the `/validate` prefetch, requests quota increases, then keeps or amends the target. ECS on EC2 with an instance per run is the fallback (ADR-0032) |
+| Hosted runs depend on Lambda MicroVMs, generally available since 2026-06-22. In M1's spike, a cold MicroVM took 28.99 s to a ready browser end to end on 2026-10-01 and 83.59 s in the 2026-10-09 rerun, the slowest warm ones 27.34 s and 54.93 s (ADR-0032, D4), and the account allowed four 2 GB MicroVMs at once | Slow or capped hosted runs; the PRD's 30-second hosted replay target at risk | M6 measures the runner's ready time, tries the `/validate` prefetch, requests quota increases, then keeps or amends the target. ECS on EC2 with an instance per run is the fallback (ADR-0032) |
 | Full benchmark authored before the compiler is proven | Wasted mutation work | M0 pilot on one app first; full benchmark at M3 |
 | Continuation limits (non-replay-safe specs) | Some long specs can't resume | Most specs fit in one invocation; `reset` hooks; clear `non_resumable` status |
 | Clerk client-only auth in a static export | Dashboard auth friction | Proven by the M7 skeleton before screens are built |
