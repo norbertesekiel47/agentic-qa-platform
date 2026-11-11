@@ -13,9 +13,9 @@ Four entry points, one rule set (its tables are in ``policy_rules.py``;
 * ``--scan`` (CLI, for CI or pre-commit): the same scan; exit 1 on violations.
 * ``--diff <base>`` (CLI, CI's ``floor`` job): judges each file the working
   tree changes since the merge base of ``<base>`` and HEAD, untracked files
-  included, as an edit is judged. Exit 1 on a refused finding, and on one
-  that needs approval unless ``AQA_FLOOR_CHANGE_APPROVED=true`` (CI sets it
-  from the maintainer's label); exit 2 when the diff can't be taken.
+  included, as an edit is judged. Exit 1 on a refused finding; a finding that
+  needs approval is listed for the maintainer, whose merge approves it, and
+  doesn't fail the diff; exit 2 when the diff can't be taken.
 
 Refused
 -------
@@ -123,9 +123,10 @@ Known gaps, stated rather than hidden
   do not run Claude Code hooks. CI's ``--diff`` sees their changes, but runs
   the pull request's own copy of this guard and of its workflow, so a pull
   request that weakens either is judged by the weakened copy, compiled
-  files included; a link it approved hides later changes behind it; and the
-  approval label can outlive a push. ADR-0028's amendment (2026-10-01) lists
-  these gaps.
+  files included; and a link it approved hides later changes behind it.
+  ADR-0028's amendment (2026-10-01) lists these gaps. Approval-class findings
+  only list in CI: the maintainer's review and merge are the control
+  (ADR-0028's 2026-11-10 amendment).
 
 Contract (code.claude.com/docs/en/hooks): stdin is the hook payload as JSON.
 PreToolUse: exit 2 refuses and shows stderr to the model; a JSON
@@ -717,19 +718,14 @@ def diff_cli(base: str, cwd: Path) -> int:
     for verdict in refused:
         sys.stdout.write(redacted(render(verdict)))
     asks = [ask for verdict in verdicts for ask in verdict.asks]
-    # CI sets this from the maintainer's label; it never excuses a refusal.
-    approved = os.environ.get("AQA_FLOOR_CHANGE_APPROVED") == "true"
     if asks:
-        heading = (
-            "approved by the maintainer (AQA_FLOOR_CHANGE_APPROVED=true)"
-            if approved
-            else "needs the maintainer's approval (in CI, the floor-change-approved label)"
-        )
-        print(f"policy_guard --diff {base}: {heading}:")
-        # The first line names the file; the lines that changed are on the pull
-        # request, and a credential among them could span several.
+        # Listed, never failing: the maintainer's review and merge approve them
+        # (ADR-0028's 2026-11-10 amendment). The first line names the file; the
+        # lines that changed are on the pull request, and a credential among
+        # them could span several.
+        print(f"policy_guard --diff {base}: for the maintainer's review before merge:")
         print(redacted("\n".join(f"- {ask.splitlines()[0]}" for ask in asks)))
-    return 1 if refused or (asks and not approved) else 0
+    return 1 if refused else 0
 
 
 # --- entry points -------------------------------------------------------------------

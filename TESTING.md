@@ -185,7 +185,7 @@ A change is mergeable only when every gate that runs passes. The jobs are in `.g
 | Browser tests: the sandbox check, the browser session and the spike's trial (#37), then the egress fixtures | `tests`, after steps that install Playwright's headless shell, log the runner's AppArmor setting and relax it (ADR-0026) | The sandbox check (#35), the browser session (#36), the trial (#37), the egress proxy's and runner-side requests' (#42), and #43's packet-level egress suite now |
 | Dependency audit of `uv.lock` and the checks image's `bench/harness/checks-requirements.txt` (osv-scanner) | `dependency-audit` | Now, and weekly |
 | Guard tests · policy scan | `guardrails` | Now |
-| The floor's moves: `policy_guard.py --diff refs/remotes/origin/main`, whose approval-class findings pass with the maintainer's `floor-change-approved` label (ADR-0028 amendment) | `floor` | Now, on pull requests, and again when a label is added or removed |
+| The floor's moves: `policy_guard.py --diff refs/remotes/origin/main`, which fails on a refused finding and lists approval-class ones for the maintainer, whose merge approves them (ADR-0028's 2026-11-10 amendment) | `floor` | Now, on pull requests |
 | Secret scan (gitleaks, full history) | `secrets` | Now |
 | `fallow audit` | `fallow` | Now, on pull requests. It checks TypeScript and JavaScript only, and skips `bench/apps/`, so it finds nothing until M7 |
 | `pnpm lint` · `pnpm typecheck` · `vitest` · Playwright component/page tests | — | M7, with the dashboard, and its dependency audit |

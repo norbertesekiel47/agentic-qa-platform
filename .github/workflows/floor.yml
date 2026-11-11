@@ -4,13 +4,9 @@
 # - a refused finding (a new suppression, skip, tautology, stub or swallowed
 #   exception) always fails it;
 # - an approval-class finding (a deleted test, fewer assertions, a changed
-#   gate config, an edit to the guard) fails it unless the maintainer has put
-#   the floor-change-approved label on the pull request.
-#
-# AQA_FLOOR_CHANGE_APPROVED below is that approval; ADR-0028's amendment owns
-# when it holds. A label change starts a run of its own, which reads the labels
-# as they are then: this workflow is separate from ci.yml so that a label
-# change runs only this job.
+#   gate config, an edit to the guard) is listed in the job's log and doesn't
+#   fail it: the maintainer's review and merge approve it (ADR-0028's
+#   2026-11-10 amendment).
 #
 # Runner, supply-chain and token notes: ci.yml's header (ADR-0019, ADR-0029).
 
@@ -18,7 +14,7 @@ name: floor
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
@@ -32,8 +28,6 @@ jobs:
     name: floor
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
-    env:
-      AQA_FLOOR_CHANGE_APPROVED: ${{ github.event.action != 'synchronize' && contains(github.event.pull_request.labels.*.name, 'floor-change-approved') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
