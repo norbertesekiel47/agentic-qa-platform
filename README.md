@@ -92,7 +92,7 @@ spec.md ──explore (LLM)──► compiled.json ──strict replay (no LLM)�
 
 - **Hybrid perception:** accessibility tree for precise actions, screenshots for visual verification, vision fallback for canvas/iframes.
 - **Specs live in your repo** (`qa/*.spec.md`), versioned with the code they test; heals arrive as PR commits you approve, which change only locators or insert replay-safe steps.
-- **Model-agnostic:** role-based routing (navigator / verifier / healer / vision fallback) across OpenRouter, OpenAI, Anthropic, DeepSeek, and more — bring your own keys.
+- **Model-agnostic by design:** role-based routing (navigator / verifier / healer / vision fallback), with your own keys. Anthropic is the one provider with an adapter today; OpenRouter, OpenAI, DeepSeek and others come with the adapters [PRD FR-12](PRD.md#4-functional-requirements) plans.
 - **Runs anywhere:** the same runner executes in your GitHub Actions (zero stored secrets via OIDC) or on AWS-hosted runners from the dashboard, with a sandboxed browser, per-run isolation, and connection-level egress control (hosted runs navigate and act only on verified domains).
 
 ## Architecture
