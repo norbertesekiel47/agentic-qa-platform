@@ -1,6 +1,6 @@
 # Hosted-compute spike
 
-M1's decision gate (ADR-0008 amendment, 2026-09-29): which hosted compute runs Chromium with its sandbox on **and** gives every run a fresh VM. Three candidates run the same program, the **trial**: a Lambda MicroVM, a Fargate task and a Lambda function. #37 builds the trial and its packages; #38 runs them on AWS and records the outcome in an ADR. Why the trial measures as it does is in the ADR-0008 amendment of 2026-09-30.
+M1's decision gate (ADR-0008 amendment, 2026-09-29): which hosted compute runs Chromium with its sandbox on **and** gives every run a fresh VM. Three candidates run the same program, the **trial**: a Lambda MicroVM, a Fargate task and a Lambda function. #37 builds the trial and its packages; #38 ran them on AWS and recorded the outcome in ADR-0032. Why the trial measures as it does is in the ADR-0008 amendment of 2026-09-30.
 
 "Trial" is the spike's word for one run of this program on one candidate. It isn't a probe: in CONTEXT.md, a probe is a spec's read-only endpoint.
 
@@ -10,6 +10,7 @@ M1's decision gate (ADR-0008 amendment, 2026-09-29): which hosted compute runs C
 | `src/aqa_hosted_chromium_spike/__main__.py` | The Fargate task's command: one trial, printed as a line of JSON |
 | `src/aqa_hosted_chromium_spike/lambda_function.py` | The Lambda function's handler: one trial per invocation, answered with the execution environment's log stream |
 | `src/aqa_hosted_chromium_spike/microvm.py` | The MicroVM's HTTP server on port 8080: answers Lambda's lifecycle hooks and `GET /health`, and runs one trial per `POST /trial` |
+| `src/aqa_hosted_chromium_spike/diagnostics.py` | The diagnostic phase records on stderr: a closed vocabulary of stages and a clock reading, never request or error content (see Diagnostic phases) |
 | `Dockerfile` | One target per candidate: `fargate`, `lambda` and `microvm` (the last stage, which Lambda builds) |
 | `package.sh` | Builds a candidate's package locally, from HEAD |
 | `scripts/` | The AWS CLI scripts #38 runs: budget alarm, deploy, invoke, collect, teardown |

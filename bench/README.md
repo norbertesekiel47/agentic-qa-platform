@@ -23,6 +23,7 @@ uv run python bench/harness/flags.py show <app>        # which case is on; fails
 uv run python bench/harness/flags.py selftest <app>    # alternate the reserved flag 0000 and clean, 10 cycles
 
 uv run python bench/harness/toggle.py <app> --cycles 5 # every check on the clean app and under each case's flag
+uv run python bench/harness/toggle.py <app> --case <case-id>   # switch on only that case's flag (repeatable); every check still runs
 
 uv run python bench/harness/pilot.py <app> --out .scratch/<new dir> [--spec <id> ...] [--repeat 3] [--compiled-dir DIR] [--patches DIR]
 uv run python bench/harness/pilot.py conduit --out .scratch/<new dir> --repeat 3 --patches bench/harness/patches   # M1's exit run: the committed scripts and the hand-written benign patches
