@@ -11,11 +11,11 @@ E2E suites break when the UI changes even though nothing is broken, and "AI test
 1. **Explore once** — an agent reads a plain-English spec and drives a real browser.
 2. **Compile** — the successful path becomes a deterministic script (robust locators + deterministic assertions, including visual checks like "the Pay button is visible and not covered").
 3. **Replay for $0** — strict-mode runs make zero LLM calls.
-4. **Heal on drift** — when a step breaks, the agent determines whether the UI merely moved (every expectation still holds → a locator update you accept on the PR) or an expectation is violated (a bug report with evidence). Heals never change what "correct" means.
+4. **Heal on drift** — when a step breaks, the agent determines whether the UI merely moved (every expectation still holds → a heal proposal you accept on the PR: new locators, or an inserted replay-safe step) or an expectation is violated (a bug report with evidence). Heals never change what "correct" means.
 
 ## What works today
 
-Explore, compile and strict replay run locally, against [Conduit](bench/apps/conduit/README.md), the first benchmark app. Heal is M2.
+Explore, compile and strict replay run locally, against [Conduit](bench/apps/conduit/README.md), the first benchmark app. Heal is M2 and in progress.
 
 ![aqa replay passes read-article on the clean app at $0, then catches two planted bugs: a date one day early fails expectation 2, and a TypeError violates the js_exceptions invariant](docs/media/aqa-demo.gif)
 
@@ -23,6 +23,7 @@ Explore, compile and strict replay run locally, against [Conduit](bench/apps/con
 
 - **`aqa explore <spec>`** turns a plain-English spec into a compiled script. A LangGraph loop writes a coverage plan from the spec alone, before it sees the page. A stateless navigator then drives sandboxed Chromium over the accessibility tree. A replay with no model calls must reproduce the path before the script is marked confirmed; a path with side effects and no reset hook is written unconfirmed and says so ([ADR-0024](ADRs/0024-explore-runs.md), [ADR-0025](ADRs/0025-compiled-targets-checks-flags.md)). The five pilot scripts it compiled are in [`bench/apps/conduit/qa/.compiled/`](bench/apps/conduit/qa/.compiled/).
 - **`aqa replay <spec>`** replays a compiled script in strict mode, with no model call and no heal, and writes a verdict for each step, check and invariant.
+- **`aqa run <spec>`** replays with every locator. A target that drifted goes to the healer, which calls the model; the rebinding it finds is a heal proposal in the run record, and the compiled script is unchanged. `aqa heal <spec>` is `aqa run` of one spec, and `aqa heal apply <proposal_id>` writes a proposal to the compiled script and commits nothing ([ADR-0024](ADRs/0024-explore-runs.md)).
 - **Scored against planted bugs.** The pilot harness replays the compiled scripts on the clean app and under each dev-split planted bug and benign change. It scores every pair against the [manifest](bench/manifest.v1.json): each bug must fail exactly the expectations and invariants it names. The M1 exit run, with its command, its commit and its one exception (`conduit-benign-002`), is in [ROADMAP.md](ROADMAP.md#m1--local-explore--compile).
 - **Page content is treated as untrusted.** Chromium's sandbox is always on, an egress proxy confines the browser's traffic, and test secrets are filled by `fill_secret`, bound to an origin and a field, and redacted from what the model sees ([ADR-0026](ADRs/0026-local-ci-browser-boundary.md)). Prompt-injection fixtures (task hijack, decoy success, steering) run against explore.
 - **Role-based model routing**, with each call's cost taken from a pinned price map ([ADR-0007](ADRs/0007-model-agnostic-role-routing.md)).
@@ -76,6 +77,8 @@ The harness's other commands are in [bench/README.md](bench/README.md).
 | Median LLM cost per heal | < $0.05 | — |
 | 10-step replay (local / hosted) | < 30 s | — |
 
+The targets are PRD §6's, and change there first ([PRD.md](PRD.md#6-release-criteria-v1-targets-measured-on-the-frozen-test-split)).
+
 Results will be reported per bug category with confidence intervals (method and sidedness stated), including misses. Tuning happens only on a separate dev split.
 
 ## How it works
@@ -88,13 +91,13 @@ spec.md ──explore (LLM)──► compiled.json ──strict replay (no LLM)�
 ```
 
 - **Hybrid perception:** accessibility tree for precise actions, screenshots for visual verification, vision fallback for canvas/iframes.
-- **Specs live in your repo** (`qa/*.spec.md`), versioned with the code they test; heals arrive as locator-only PR commits you approve.
+- **Specs live in your repo** (`qa/*.spec.md`), versioned with the code they test; heals arrive as PR commits you approve, which change only locators or insert replay-safe steps.
 - **Model-agnostic:** role-based routing (navigator / verifier / healer / vision fallback) across OpenRouter, OpenAI, Anthropic, DeepSeek, and more — bring your own keys.
-- **Runs anywhere:** the same runner image executes in your GitHub Actions (zero stored secrets via OIDC) or on AWS-hosted runners from the dashboard, with a sandboxed browser, per-run isolation, and connection-level egress control (hosted runs navigate and act only on verified domains).
+- **Runs anywhere:** the same runner executes in your GitHub Actions (zero stored secrets via OIDC) or on AWS-hosted runners from the dashboard, with a sandboxed browser, per-run isolation, and connection-level egress control (hosted runs navigate and act only on verified domains).
 
 ## Architecture
 
-Python (FastAPI, LangGraph, Playwright) · Next.js dashboard (static, on S3 + CloudFront) · AWS (hosted runners outside the VPC, one fresh VM per run, with the compute chosen by the M1 spike; RDS Postgres with row-level security, S3, SQS, KMS) · Clerk Organizations. Details: [ARCHITECTURE.md](ARCHITECTURE.md).
+Python (FastAPI, LangGraph, Playwright) · Next.js dashboard (static, on S3 + CloudFront) · AWS (hosted runners outside the VPC, one Lambda MicroVM per run, the compute M1's spike chose ([ADR-0032](ADRs/0032-hosted-compute-lambda-microvms.md)); RDS Postgres with row-level security, S3, SQS, KMS) · Clerk Organizations. Details: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Releases *(planned)*
 
@@ -102,18 +105,20 @@ Python (FastAPI, LangGraph, Playwright) · Next.js dashboard (static, on S3 + Cl
 - **0.2 — CI-native:** GitHub Action + GitHub App with Accept heal.
 - **1.0 — SaaS:** hosted runs, dashboard, multi-tenant orgs.
 
+Scope and order: [ROADMAP.md](ROADMAP.md).
+
 ## Quickstart *(planned)*
 
 ```bash
 uvx agentic-qa init
 aqa explore qa/checkout.spec.md --url http://localhost:3000
-aqa run --url http://localhost:3000
+aqa run qa/checkout.spec.md --url http://localhost:3000
 aqa report
 ```
 
 ## Documentation
 
-[Vision](VISION.md) · [PRD](PRD.md) · [Architecture](ARCHITECTURE.md) · [Tech stack](TECH_STACK.md) · [Data model](DATA_MODEL.md) · [API](API.md) · [UX spec](UX_SPEC.md) · [Testing & benchmark](TESTING.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md) · [Decisions (ADRs)](ADRs/) · [For coding agents](AGENTS.md)
+[Vision](VISION.md) · [PRD](PRD.md) · [Architecture](ARCHITECTURE.md) · [Tech stack](TECH_STACK.md) · [Glossary](CONTEXT.md) · [Constraints](CONSTRAINTS.md) · [Data model](DATA_MODEL.md) · [API](API.md) · [UX spec](UX_SPEC.md) · [Testing & benchmark](TESTING.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md) · [Lab notes](LAB_NOTES.md) · [Decisions (ADRs)](ADRs/) · [For coding agents](AGENTS.md)
 
 ## Part of a three-project portfolio
 
