@@ -1,6 +1,6 @@
 # Constraints
 
-Last reviewed: 2026-10-01 (#40: an Exceptions row for vcrpy's missing types; #66: CI's `floor` job runs `policy_guard.py --diff`, so the floor's approval-class rules reach pull requests).
+Last reviewed: 2026-11-10 (the Planned rows start at M3: both were past their written triggers with nothing enforcing them); 2026-10-23 (ADR-0029's shards amendment: the second mypy run also names `.github/scripts` and the root `conftest.py`); 2026-10-01 (#40: an Exceptions row for vcrpy's missing types; #66: CI's `floor` job runs `policy_guard.py --diff`, so the floor's approval-class rules reach pull requests).
 
 This file owns the project's quality bar: the floor every change keeps and the thresholds the gates hold. The floor applies to every file policy_guard checks. The thresholds cover the Python code; fallow gates TypeScript (ADR-0018) once the dashboard exists.
 - The tool configs in `pyproject.toml` mirror it, and `tests/test_constraints.py` fails when a config drifts from a number here.
@@ -52,8 +52,8 @@ Recorded now, enforced once the code or the pipeline they need exists.
 
 | What | Threshold | Starts with |
 |---|---|---|
-| Coverage of each test-first module (TESTING.md §2) | 100% line and branch, via `uv run coverage report --include=<the module's paths> --fail-under=100` | The ticket that adds the first test-first module, which also adds the command |
-| Mutation testing | Chosen then | The replay engine, the first test-first module |
+| Coverage of each test-first module (TESTING.md §2) | 100% line and branch, via `uv run coverage report --include=<the module's paths> --fail-under=100` | M3, before the first benchmark numbers |
+| Mutation testing | Chosen then | M3, before the first benchmark numbers |
 
 ## Exceptions
 
