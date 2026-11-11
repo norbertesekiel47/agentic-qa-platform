@@ -1,6 +1,6 @@
 # PRD — Agentic QA Platform (v1)
 
-Status: Draft (revised after external review) · Owner: Norbert Esekiel · Last updated: 2026-09-29
+Status: Draft (revised after external review) · Owner: Norbert Esekiel · Last updated: 2026-10-27
 
 Related: [VISION](VISION.md) · [ARCHITECTURE](ARCHITECTURE.md) · [DATA_MODEL](DATA_MODEL.md) · [API](API.md) · [UX_SPEC](UX_SPEC.md) · [ROADMAP](ROADMAP.md)
 
