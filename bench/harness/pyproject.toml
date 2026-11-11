@@ -3,8 +3,8 @@
 # reads spec files with aqa-core's parser, so the harness needs the workspace's
 # Python. toggle_checks.py alone runs elsewhere, in the checks image's Python
 # 3.12, which is why Ruff holds the harness to 3.12 syntax. Playwright is here
-# for toggle_checks.py's types; the checks image pins its own hash-locked copy
-# (checks.Dockerfile).
+# for pilot_replay.py, which drives it, and for toggle_checks.py's types; the
+# checks image pins its own hash-locked copy (checks.Dockerfile).
 [project]
 name = "aqa-bench-harness"
 version = "0.1.0"
