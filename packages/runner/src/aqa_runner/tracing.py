@@ -1,6 +1,6 @@
 """Tracing stays off (SECURITY §10, ADR-0007 amendment). A customer's environment
 may carry LangChain's tracing variables for their own tooling; an aqa run must
-not export through them, and nothing in M1 turns export on."""
+not export through them, and nothing in aqa turns export on."""
 
 import os
 
