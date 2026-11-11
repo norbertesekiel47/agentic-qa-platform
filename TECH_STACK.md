@@ -15,7 +15,7 @@ A version followed by an HTML comment, `renovate: NAME`, is tracked: it is the e
 | Egress proxy framing | h11 | 0.16.0<!-- renovate: h11 --> | HTTP/1.1 parsing for the in-runner egress proxy, so each request is read and checked whole and each response is framed correctly, and for runner-side requests; already locked through httpcore (ADR-0026 amendment, 2026-10-01) |
 | Agent orchestration | LangGraph | 1.2.12<!-- renovate: langgraph --> | Run graph and checkpointing (interrupts deferred past v1; ADR-0006) |
 | Checkpointer | Local runs (M1): LangGraph's in-memory saver. Uploaded and hosted runs (M4 onward): a custom `BaseCheckpointSaver` over our API | — | Runners have no DB access (ADR-0008) |
-| Chat-model layer | LangChain provider packages: `langchain-openai` 1.6.6<!-- renovate: langchain-openai --> (OpenAI + OpenRouter via OpenAI-compatible base URL), `langchain-anthropic` 1.7.4<!-- renovate: langchain-anthropic -->, `langchain-deepseek` 1.1.1<!-- renovate: langchain-deepseek -->; the Anthropic SDK under langchain-anthropic, `anthropic` 1.9.0<!-- renovate: anthropic -->, pinned because the adapter catches its errors (#41) | — | Native tool binding and structured output in LangGraph (ADR-0007) |
+| Chat-model layer | LangChain provider packages: `langchain-anthropic` 1.7.4<!-- renovate: langchain-anthropic -->; the Anthropic SDK under langchain-anthropic, `anthropic` 1.9.0<!-- renovate: anthropic -->, pinned because the adapter catches its errors (#41). `langchain-openai` 1.6.6 (OpenAI + OpenRouter via OpenAI-compatible base URL) and `langchain-deepseek` 1.1.1 come with the first non-Anthropic provider (PRD FR-12) | — | Native tool binding and structured output in LangGraph (ADR-0007) |
 | Cost and capability table | A vendored copy of LiteLLM's `model_prices_and_context_window.json`, pinned to an upstream commit and its sha256 | refreshed by script | Per-call cost and capability flags for many providers without hand-maintained prices. We don't install the `litellm` package, whose PyPI releases were compromised in March 2026 (ADR-0007 amendment) |
 | API framework | FastAPI | 0.141.1 | OpenAPI generation → typed TS client |
 | Lambda adapter | Mangum | 0.22.0 | ASGI on Lambda behind API Gateway |
@@ -26,12 +26,12 @@ A version followed by an HTML comment, `renovate: NAME`, is tracked: it is the e
 | Migrations | Alembic | 1.20.0 | Versioned schema, RLS policies in migrations |
 | CLI | Typer 0.27.2<!-- renovate: typer --> + Rich 15.0.0<!-- renovate: rich --> | — | Ergonomic CLI and terminal output |
 | Tracing | OpenTelemetry SDK 1.45.0 + LangSmith 0.14.1<!-- renovate: langsmith --> | — | Portable traces; LangSmith for LLM debugging. The runner imports `langsmith` itself, to switch export off (SECURITY §10), so it is pinned |
-| Logging | structlog | 26.1.0<!-- renovate: structlog --> | JSON logs with redaction processors |
+| Logging | structlog, planned for M4's API, where logging first lands | 26.1.0 | JSON logs with redaction processors |
 | JWT verification | PyJWT | 2.15.0 | Clerk JWKS + run tokens |
 | AWS SDK | boto3 | 1.43.x | KMS, SQS, S3, Lambda invoke |
 | M1 spike images | Base `public.ecr.aws/lambda/microvms:al2023-minimal` (pinned by digest) for every candidate; awslambdaric runs the Lambda function's | awslambdaric 4.1.0<!-- renovate: awslambdaric --> | One Amazon Linux 2023 image for all three candidates, so they differ only in their platform (ADR-0008 amendment, 2026-09-30) |
 
-**Quality tooling:** Ruff 0.16.9<!-- renovate: ruff -->, mypy 2.3.1<!-- renovate: mypy --> (strict), pytest 9.1.1<!-- renovate: pytest -->, pytest-cov 7.1.0<!-- renovate: pytest-cov --> with coverage 7.16.2<!-- renovate: coverage -->, testcontainers 4.15.0, Hypothesis 6.168.2<!-- renovate: hypothesis -->, VCR.py 8.3.0<!-- renovate: vcrpy --> (recorded LLM/HTTP fixtures), types-pyyaml 6.0.12.20260906<!-- renovate: types-pyyaml --> (PyYAML's stubs, for mypy), respx 0.23.1<!-- renovate: respx -->. CI installs uv 0.11.15 and runs osv-scanner 2.6.0, the dependency audit, as sha256-checked release binaries (ADR-0029).
+**Quality tooling:** Ruff 0.16.9<!-- renovate: ruff -->, mypy 2.3.1<!-- renovate: mypy --> (strict), pytest 9.1.1<!-- renovate: pytest -->, pytest-cov 7.1.0<!-- renovate: pytest-cov --> with coverage 7.16.2<!-- renovate: coverage -->, testcontainers 4.15.0, VCR.py 8.3.0<!-- renovate: vcrpy --> (recorded LLM/HTTP fixtures), types-pyyaml 6.0.12.20260906<!-- renovate: types-pyyaml --> (PyYAML's stubs, for mypy). CI installs uv 0.11.15 and runs osv-scanner 2.6.0, the dependency audit, as sha256-checked release binaries (ADR-0029).
 
 ## 2. Dashboard (TypeScript)
 
