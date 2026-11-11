@@ -135,4 +135,4 @@ Under the 2026-10-01 amendment, every pull request that moved the floor failed `
 Consequences:
 - This supersedes the 2026-10-01 amendment's "How CI approves" and "What the label approves", and its consequences about the label and `--diff`'s exit 1. The rest of that amendment stands, the gap of a pull request that judges itself included.
 - A pull request that moves the floor is green in CI. The job's log and the pull request's description are where the maintainer sees what it moves.
-- The GitHub label is deleted once this lands.
+- The maintainer deleted the GitHub label on 2026-11-10, before this landed. Until it lands, main's `floor.yml` still reads the label, so a pull request into main that moves the floor fails `floor` with no label to approve it. This change's own pull request runs its own `floor.yml`, which reads none.
