@@ -1,7 +1,8 @@
-"""One pilot attempt (ADR-0023, #51): a fresh run record, egress gate, proxy
-and Playwright driver, the spec's reset hook sent on that gate, then the
-strict replay, the reset and the replay through the runner's `replay_run`
-(#237). Manifest answers never enter; the caller scores the result."""
+"""One pilot attempt (ADR-0023, #51): a fresh run record and egress gate, the
+spec's reset hook sent on that gate, then a first-match strict replay with a
+proxy and Playwright driver of its own, the reset and the replay both through
+the runner's `replay_run` (#237). Manifest answers never enter; the caller
+scores the result."""
 
 import asyncio
 from collections.abc import AsyncIterator

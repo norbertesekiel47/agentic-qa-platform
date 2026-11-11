@@ -7,7 +7,10 @@ strict executor (#46) records each step's intent and completion in
 `steps.jsonl` and each step's evidence (`aqa_runner.evidence`), and
 exploring (#53) adds its own documents, a line in `costs.jsonl` per priced
 model call, and a part per phase, a record of its own (ADR-0024's #53 P5
-amendment).
+amendment). `aqa replay` and `aqa run` (#239, #244) add `replay.json`, and a
+run that heals adds each drift's repair under `repairs/`, each heal's
+requests and first look under `heals/`, and a line in `costs.jsonl` per
+priced model call.
 
 Every file but the two journals, `steps.jsonl` and `costs.jsonl`, and a
 screenshot is scanned as it is written, and refused while a bound value's
@@ -40,8 +43,8 @@ if TYPE_CHECKING:
 # Where a run's step intents and completions go, one JSON line each.
 STEPS = "steps.jsonl"
 
-# Where explore keeps the cost record of each priced model call, one JSON
-# line each (#53).
+# Where explore and a run that heals keep the cost record of each priced
+# model call, one JSON line each (#53, #244).
 COSTS = "costs.jsonl"
 
 

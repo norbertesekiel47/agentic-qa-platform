@@ -2,7 +2,8 @@
 (DATA_MODEL §7, Resolution per use; ADR-0025 and its amendments).
 
 Each call is one look at the page. Waiting for a target to resolve, within
-the run's `resolve_seconds`, is the executor's loop around it (#46)."""
+the run's `resolve_seconds`, is `evaluation.look_for`'s loop around it (#46),
+which the executor and the assertions' evaluation share."""
 
 import re
 import sys
