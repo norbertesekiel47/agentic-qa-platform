@@ -15,7 +15,6 @@ from collections.abc import Mapping
 from pathlib import Path
 
 HOOK = Path(__file__).with_name("policy_guard.py")
-APPROVED = {"AQA_FLOOR_CHANGE_APPROVED": "true"}
 
 MEMBER = "aqa-core = { workspace = true }"
 NEW_MEMBER = "aqa-api = { workspace = true }"
@@ -121,23 +120,19 @@ class DiffTestCase(unittest.TestCase):
         return self.guard("--diff", base, env=env)
 
     def assert_refused(self, rel: str) -> str:
-        """A refused finding fails --diff even with the maintainer's approval."""
-        result = self.diff(**APPROVED)
+        """A refused finding fails --diff."""
+        result = self.diff()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn(rel, result.stdout)
         return result.stdout
 
     def assert_needs_approval(self, rel: str) -> str:
-        """An approval-class finding fails --diff until the maintainer approves,
-        and is still listed once approved."""
+        """An approval-class finding is listed for the maintainer, whose merge
+        approves it, and doesn't fail --diff (ADR-0028's 2026-11-10 amendment)."""
         result = self.diff()
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(rel, result.stdout)
-        self.assertIn("needs the maintainer's approval", result.stdout)
-        approved = self.diff(**APPROVED)
-        self.assertEqual(approved.returncode, 0, approved.stdout + approved.stderr)
-        self.assertIn(rel, approved.stdout)
-        self.assertIn("approved by the maintainer", approved.stdout)
+        self.assertIn("for the maintainer's review before merge", result.stdout)
         return result.stdout
 
     def assert_clean(self) -> None:
@@ -509,7 +504,7 @@ class OutputTests(DiffTestCase):
         self.put(
             self.WORKFLOW, WORKFLOW_YML + f"        env: {{TOKEN: {self.TOKEN}}}\n"
         )
-        result = self.diff(**APPROVED)
+        result = self.diff()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn(self.WORKFLOW, result.stdout)
         self.assertNotIn(self.TOKEN, result.stdout + result.stderr)
@@ -536,7 +531,7 @@ class OutputTests(DiffTestCase):
         )
         self.on_main({self.WORKFLOW: WORKFLOW_YML})
         self.put(self.WORKFLOW, WORKFLOW_YML + key)
-        result = self.diff(**APPROVED)
+        result = self.diff()
         self.assertIn(self.WORKFLOW, result.stdout)
         self.assertNotIn(body, result.stdout + result.stderr)
 
@@ -587,25 +582,28 @@ class CommandLineTests(DiffTestCase):
 
 
 class ApprovalTests(DiffTestCase):
-    def test_approval_lets_approval_class_findings_pass(self) -> None:
+    def test_an_approval_class_finding_is_listed_and_passes(self) -> None:
+        # The maintainer's merge approves it; no variable or label stands in,
+        # so the retired approval variable changes nothing either way.
         self.on_main({"CONSTRAINTS.md": CONSTRAINTS_MD})
         self.put("CONSTRAINTS.md", CONSTRAINTS_MD.replace("≥ 94%", "≥ 90%"))
-        for value in ("false", "1", "True"):
-            with self.subTest(value=value):
-                result = self.diff(AQA_FLOOR_CHANGE_APPROVED=value)
-                self.assertEqual(result.returncode, 1, result.stdout)
-        approved = self.diff(**APPROVED)
-        self.assertEqual(approved.returncode, 0, approved.stdout + approved.stderr)
-        self.assertIn("CONSTRAINTS.md", approved.stdout)
+        for env in ({}, {"AQA_FLOOR_CHANGE_APPROVED": "true"}):
+            with self.subTest(env=env):
+                result = self.diff(**env)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("CONSTRAINTS.md", result.stdout)
+                self.assertIn("for the maintainer's review before merge", result.stdout)
 
-    def test_approval_never_excuses_a_refused_finding(self) -> None:
+    def test_an_approval_class_finding_never_hides_a_refused_one(self) -> None:
         self.on_main({"CONSTRAINTS.md": CONSTRAINTS_MD})
         self.put("CONSTRAINTS.md", CONSTRAINTS_MD.replace("≥ 94%", "≥ 90%"))
         self.put("packages/core/a.py", "x = f()  # type: ignore\n")
-        result = self.diff(**APPROVED)
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("packages/core/a.py", result.stdout)
-        self.assertIn("CONSTRAINTS.md", result.stdout)
+        for env in ({}, {"AQA_FLOOR_CHANGE_APPROVED": "true"}):
+            with self.subTest(env=env):
+                result = self.diff(**env)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("packages/core/a.py", result.stdout)
+                self.assertIn("CONSTRAINTS.md", result.stdout)
 
 
 class ExitCodeTests(DiffTestCase):
