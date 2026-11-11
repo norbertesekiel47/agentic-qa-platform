@@ -169,14 +169,14 @@ _Avoid_: step, which is an action the run dispatched
 ### Healing and verdicts
 
 **Drift**:
-A binding that doesn't resolve: within the wait budget, its locators don't all find the same element with the unique match its use needs, for a step or for an assertion. Drift sends the run to heal and says nothing yet about whether the app is broken.
+A binding that doesn't resolve: within the wait budget, its locators don't all find the same element with the unique match its use needs, for a step or for an assertion. Drift sends the run to heal (strict `aqa replay` never heals, and reports it `inconclusive`) and says nothing yet about whether the app is broken.
 
 **Heal**:
 The part of a run that handles drift: it re-observes the page, repairs bindings, may insert replay-safe steps, and classifies the outcome as a verdict.
 _Avoid_: auto-fix
 
 **Verdict**:
-The classified outcome of a step: `pass`, `drift_consistent`, `expectation_violated` or `inconclusive`. Every verdict cites evidence. A heal's `confidence` beside a verdict is the model's own report, uncalibrated, and decides nothing. `aqa run`'s run document says `mode: run`, `aqa replay`'s `mode: strict`.
+The classified outcome of a step, an assertion or an invariant: `pass`, `drift_consistent`, `expectation_violated` or `inconclusive`. Every verdict cites evidence. A heal's `confidence` beside a verdict is the model's own report, uncalibrated, and decides nothing. `aqa run`'s run document says `mode: run`, `aqa replay`'s `mode: strict`.
 
 **`drift_consistent`**:
 The verdict that the UI changed, and that after rebinding targets and inserting replay-safe steps every assertion evaluates and passes and every invariant holds. It produces a heal proposal and claims nothing about why the UI changed.

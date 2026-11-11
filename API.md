@@ -155,7 +155,7 @@ aqa explore <spec> [--url <url>]  # coverage plan → exploration → confirmati
             [--force]             #   explore again when the compiled script is up to date
             [--budget <name>=<value>]...  # lay a budget over config.yaml's for this run, once per name: attempts, actions_per_attempt, model_usd, minutes, resolve_seconds; without a reset hook, explore makes one attempt whatever attempts says
             [--confirm-repeat]    #   allow one confirmation that repeats side effects when the spec has no reset hook
-aqa replay  <spec>... [--url <url>]  # strict replay, no LLM and no heal: each run's verdicts in its replay.json (ADR-0024's #239 amendment); --mode verified for model-assisted visual checks
+aqa replay  <spec>... [--url <url>]  # strict replay, no LLM and no heal: each run's verdicts in its replay.json (ADR-0024's #239 amendment); --mode verified, for model-assisted visual checks, comes with #256
             [--json]              #   print each run's replay.json, in one JSON array, and nothing else
             [--quiet]             #   print only the runs that didn't pass; not with --json
 aqa run     <spec>... [--url <url>]  # replay with every locator; a drift goes to the healer; a proposal in each run's replay.json, the compiled script unchanged (ADR-0024's #244 amendment)
@@ -166,6 +166,8 @@ aqa login                         # device-code auth to the SaaS
 aqa upload  <run_dir>             # upload a local run
 aqa --version                     # print "aqa <version>" and exit
 ```
+
+Built so far: `explore`, `replay`, `run`, `heal` and `--version`. `aqa report` is #249 (M2), `aqa login` and `aqa upload` come in M4, and `aqa init` has no milestone yet (ROADMAP).
 
 Exit codes:
 
