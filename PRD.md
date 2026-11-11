@@ -24,7 +24,7 @@ A multi-tenant SaaS, CLI, GitHub Action, and GitHub App that turns structured na
 
 **CI / GitHub**
 - As Priya, when I open a PR, the GitHub Action replays all compiled specs in strict mode against my preview deployment and posts a check run per spec.
-- As Priya, when a step breaks because an element moved but every expectation still holds, I see the evidence and click **Accept heal** to commit the locator update to my branch.
+- As Priya, when a step breaks because an element moved but every expectation still holds, I see the evidence and click **Accept heal** to commit the heal to my branch.
 - As Priya, when an expectation is violated, the check fails and links to the run viewer, showing exactly what happened.
 - As Priya, if I intentionally changed what the app should do, I edit the spec's expectations in my PR — heals never change expectations.
 
@@ -78,7 +78,7 @@ A multi-tenant SaaS, CLI, GitHub Action, and GitHub App that turns structured na
 
 ### 4.5 GitHub App
 - FR-18 Posts one check run per spec plus a summary check.
-- FR-19 A spec with a heal proposal offers **Accept heal** (Checks requested action with a short opaque identifier). Acceptance verifies the user's write access, rejects stale proposals (head SHA or compiled blob changed), and commits the locator update to the PR branch. Fork PRs get a patch + `aqa heal apply` instructions.
+- FR-19 A spec with a heal proposal offers **Accept heal** (Checks requested action with a short opaque identifier). Acceptance verifies the user's write access, rejects stale proposals (head SHA or compiled blob changed), and commits the heal patch to the PR branch. Fork PRs get a patch + `aqa heal apply` instructions.
 - FR-20 Dashboard spec edits open a PR; the repo remains the source of truth.
 
 ### 4.6 Hosted runs (SaaS)

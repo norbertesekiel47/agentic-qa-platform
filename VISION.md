@@ -17,7 +17,7 @@ Use the model only where judgment is needed, and nowhere else.
 1. **Explore once.** An agent reads a plain-English spec, drives a real browser, and finds the path through the app.
 2. **Compile.** A successful path is compiled into a deterministic script with robust locators and explicit assertions.
 3. **Replay for free.** Every subsequent run replays the script in strict mode with **zero LLM calls** — including deterministic visual checks.
-4. **Heal on drift.** When a step breaks, the agent resumes from that step and answers the one hard question it *can* answer from evidence: *did the UI merely move — with every expectation still holding — or is an expectation actually violated?* UI drift → a locator-only script update for human review. Violated expectation → a bug report with evidence. The agent never claims to know what the author *intended*; if the intended behavior changed, the author edits the spec's expectations, and heals can never change them.
+4. **Heal on drift.** When a step breaks, the agent resumes from that step and answers the one hard question it *can* answer from evidence: *did the UI merely move — with every expectation still holding — or is an expectation actually violated?* UI drift → a script update for human review that changes only locators or inserts replay-safe steps. Violated expectation → a bug report with evidence. The agent never claims to know what the author *intended*; if the intended behavior changed, the author edits the spec's expectations, and heals can never change them.
 
 That classification is the product's core AI problem, and it is measured, not asserted.
 
@@ -53,7 +53,7 @@ A developer opens a PR that redesigns checkout. Within minutes the checks report
 
 1. **Deterministic by default, agentic by exception.**
 2. **Evidence over assertion.** Every verdict links to screenshots, the accessibility snapshot, network/console logs, and the agent's reasoning.
-3. **Humans approve changes to tests.** Heals are locator-only proposals, never silent rewrites, and never change what "correct" means.
+3. **Humans approve changes to tests.** Heals are proposals that change only locators or insert replay-safe steps, never silent rewrites, and never change what "correct" means.
 4. **Tenant isolation is enforced by the database**, not promised by application code.
 5. **Every number is reproducible.** No metric appears anywhere without the command and commit that produced it.
 
