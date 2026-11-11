@@ -1,6 +1,7 @@
 """The project config, qa/config.yaml, is read strictly (DATA_MODEL §9, #39)."""
 
 import json
+import re
 import typing
 from pathlib import Path
 
@@ -10,31 +11,17 @@ from aqa_core.project import SpecError, load_config
 from aqa_core.schema import AriaRole, authority
 from pydantic import ValidationError
 
-# DATA_MODEL §9's example, verbatim.
-EXAMPLE = """\
-base_url: "http://127.0.0.1:4100"   # the start origin when a command's `--url` is omitted; `--url` wins
-roles:                        # overrides the defaults in TECH_STACK §3
-  navigator: { provider: anthropic, model: claude-sonnet-5-5, effort: medium, fallback: claude-opus-5-5 }
-browser:                      # settings for every run (ADR-0025); a spec may override them
-  timezone: UTC
-  locale: en-US
-  viewport: [1280, 800]
-egress:                       # ADR-0026
-  subresource_hosts: [ "fonts.cdn.example.test" ]            # pages may load from these; no navigation, no secrets
-  expected_blocked: [ "analytics.example.test" ]             # refused; their direct symptoms don't count against invariants
-  private_origins: [ "http://staging.internal.test:8080" ]   # local and CI runs only: may resolve to private addresses
-secrets:                      # bindings only; values come from AQA_SECRET_<NAME>
-  TEST_PASSWORD: { origins: [ start ], field: password }
-  API_TOKEN: { origins: [ start ], field: { role: textbox, name: "API token" } }
-models:                       # a model the pinned price map lacks, or a replacement for its entry (ADR-0007 amendment)
-  "example-provider/example-model": { capabilities: [tools, structured_output], input_usd_per_mtok: 0.50, output_usd_per_mtok: 1.50 }
-budgets:                      # per explore run (ADR-0024)
-  attempts: 3
-  actions_per_attempt: 40
-  model_usd: 3.00
-  minutes: 15
-  resolve_seconds: 10
-"""
+DATA_MODEL = Path(__file__).parents[3] / "DATA_MODEL.md"
+
+
+def data_models_example() -> str:
+    """DATA_MODEL §9's example config, read from the doc so the two can't
+    drift apart."""
+    section = DATA_MODEL.read_text().split("\n## 9. ", 1)[1]
+    found = re.search(r"```yaml\n(base_url: .*?\n)```", section, re.DOTALL)
+    assert found is not None, "DATA_MODEL §9 has no example config"
+    return found[1]
+
 
 BINDING = "{ origins: [ start ], field: password }"
 
@@ -46,7 +33,7 @@ def write(tmp_path: Path, text: str) -> Path:
 
 
 def test_the_documented_example_loads(tmp_path: Path) -> None:
-    config = load_config(write(tmp_path, EXAMPLE))
+    config = load_config(write(tmp_path, data_models_example()))
 
     assert config.base_url == "http://127.0.0.1:4100"
     assert config.browser.viewport == (1280, 800)
@@ -59,6 +46,16 @@ def test_the_documented_example_loads(tmp_path: Path) -> None:
     )
     assert config.models["example-provider/example-model"].output_usd_per_mtok == 1.5
     assert config.roles["navigator"].fallback == "claude-opus-5-5"
+    # Every budget the example sets, read from it rather than defaulted.
+    assert config.budgets.model_dump(exclude_unset=True) == {
+        "attempts": 3,
+        "actions_per_attempt": 40,
+        "model_usd": 3,
+        "minutes": 15,
+        "resolve_seconds": 10,
+        "heal_turns": 6,
+        "heal_model_usd": 0.3,
+    }
 
 
 def test_every_key_is_optional(tmp_path: Path) -> None:
