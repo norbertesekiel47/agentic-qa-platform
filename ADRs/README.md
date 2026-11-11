@@ -8,11 +8,11 @@ Each ADR captures one decision between real alternatives: the context, the optio
 |---|---|---|
 | [0001](0001-agentic-qa-product-choice.md) | Build an agentic QA tester, not a general web agent | Accepted |
 | [0002](0002-hybrid-perception.md) | Hybrid perception: accessibility tree for actions, vision for verification | Accepted |
-| [0003](0003-explore-compile-heal.md) | Explore once, compile, replay without LLM, heal on drift | Accepted (amended 2026-09-27) |
+| [0003](0003-explore-compile-heal.md) | Explore once, compile, replay without LLM, heal on drift | Accepted (amended 2026-09-27, 2026-10-27) |
 | [0004](0004-specs-in-repo.md) | Structured natural-language specs; repo is the source of truth | Accepted |
 | [0005](0005-python-backend-nextjs-dashboard.md) | Python backend + Next.js dashboard with generated client | Accepted |
-| [0006](0006-langgraph-run-graph.md) | LangGraph for the run graph with an API-backed checkpointer | Accepted (amended 2026-09-27, 2026-09-28) |
-| [0007](0007-model-agnostic-role-routing.md) | Model-agnostic, role-based model routing | Accepted (amended 2026-09-29, 2026-10-01) |
+| [0006](0006-langgraph-run-graph.md) | LangGraph for the run graph with an API-backed checkpointer | Accepted (amended 2026-09-27, 2026-09-28, 2026-11-02) |
+| [0007](0007-model-agnostic-role-routing.md) | Model-agnostic, role-based model routing | Accepted (amended 2026-09-29, 2026-10-01, 2026-10-08, 2026-10-09) |
 | [0008](0008-runner-image-lambda.md) | One runner image, two locations; Lambda for hosted runs | Superseded in part by [0032](0032-hosted-compute-lambda-microvms.md) (hosted compute; amended 2026-09-27, 2026-09-29, 2026-09-30) |
 | [0009](0009-rds-postgres-rls.md) | RDS PostgreSQL with row-level security; fck-nat | Accepted |
 | [0010](0010-clerk-organizations.md) | Clerk Organizations for identity and tenancy | Accepted |
@@ -28,16 +28,16 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | [0020](0020-benchmark-apps-conduit-medusa.md) | Benchmark apps: RealWorld Conduit first, Medusa second | Accepted (amended 2026-09-28) |
 | [0021](0021-bench-apps-gate-carve-out.md) | Vendored benchmark apps (`bench/apps/`): a narrow gate carve-out | Accepted |
 | [0022](0022-bench-flags-test-api-manifest.md) | Benchmark feature flags, test-only endpoints and the ground-truth manifest | Accepted (amended 2026-09-28, 2026-09-29, 2026-10-01) |
-| [0023](0023-bench-pilot-toggle-checks-dry-review.md) | Benchmark pilot: browser toggle checks and a written dry compile review | Accepted (amended 2026-09-28, 2026-09-29, 2026-10-01) |
-| [0024](0024-explore-runs.md) | Explore runs: coverage plan, stateless navigator and confirmation replay | Accepted |
-| [0025](0025-compiled-targets-checks-flags.md) | Compiled scripts: meanings, locators, checks and step flags | Accepted (amended 2026-10-02) |
-| [0026](0026-local-ci-browser-boundary.md) | The browser boundary for local and CI runs: sandbox, egress and test secrets | Accepted (amended 2026-09-30, 2026-10-01); masked screenshots superseded for M1 by ADR-0033 |
+| [0023](0023-bench-pilot-toggle-checks-dry-review.md) | Benchmark pilot: browser toggle checks and a written dry compile review | Accepted (amended 2026-09-28 to 2026-11-02) |
+| [0024](0024-explore-runs.md) | Explore runs: coverage plan, stateless navigator and confirmation replay | Accepted (amended 2026-10-02 to 2026-11-02) |
+| [0025](0025-compiled-targets-checks-flags.md) | Compiled scripts: meanings, locators, checks and step flags | Accepted (amended 2026-10-02 to 2026-10-28) |
+| [0026](0026-local-ci-browser-boundary.md) | The browser boundary for local and CI runs: sandbox, egress and test secrets | Accepted (amended 2026-09-30 to 2026-10-28); masked screenshots superseded for M1 by ADR-0033 |
 | [0027](0027-python-workspace.md) | The Python workspace: layout, pins and tool settings | Accepted (amended 2026-09-29, 2026-10-01) |
-| [0028](0028-quality-bar.md) | The quality bar: coverage, complexity, the Ruff rule set and the floor guard | Accepted (amended 2026-09-29, 2026-10-01, 2026-10-02, 2026-10-03) |
-| [0029](0029-ci-on-the-uv-workspace.md) | CI on the uv workspace: jobs, installs, the mypy split and the dependency audit | Accepted (amended 2026-10-01) |
+| [0028](0028-quality-bar.md) | The quality bar: coverage, complexity, the Ruff rule set and the floor guard | Accepted (amended 2026-09-29, 2026-10-01, 2026-10-02, 2026-10-03, 2026-10-04) |
+| [0029](0029-ci-on-the-uv-workspace.md) | CI on the uv workspace: jobs, installs, the mypy split and the dependency audit | Accepted (amended 2026-10-01, 2026-10-23) |
 | [0030](0030-spec-yaml-parsing.md) | Reading specs and the project config: PyYAML narrowed to YAML 1.2's core schema | Accepted |
 | [0031](0031-renovate-weekly-dependency-updates.md) | Renovate for weekly dependency updates, and how a bump keeps TECH_STACK.md true | Accepted |
-| [0032](0032-hosted-compute-lambda-microvms.md) | Hosted compute: one Lambda MicroVM per run | Accepted |
+| [0032](0032-hosted-compute-lambda-microvms.md) | Hosted compute: one Lambda MicroVM per run | Accepted (amended 2026-10-04) |
 | [0033](0033-m1-saves-no-screenshots.md) | M1 saves no screenshots; bound-field masking moves to M2 | Accepted (amended 2026-10-27, 2026-10-28) |
 | [0034](0034-screenshots-by-snapshot-and-re-render.md) | Once a secret is filled, a screenshot is a render of a scrubbed snapshot | Accepted (amended 2026-10-28) |
 | [0035](0035-ocr-check-before-images.md) | An OCR check before any image is saved, sent to a model or leaves the machine | Accepted; the engine is open with the maintainer |
@@ -62,4 +62,9 @@ What we chose and the one-paragraph reason.
 
 ## Consequences
 What becomes easier, harder, or required as a result. Follow-ups.
+
+## Amendment (YYYY-MM-DD): <what changed> (#issue)
+What changed, why, and what it supersedes.
 ```
+
+List each amendment's date in the index row's status.
