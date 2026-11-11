@@ -94,7 +94,7 @@ Agentic QA — 5 specs · 3 passed · 1 heal proposed · 1 expectation violated
 - `aqa replay` (M2, #239): one line per run as it ends, in `aqa explore`'s form with a cost of `$0`, the run record whenever it didn't pass, and its reasons on stderr; no status icon, summary or report hint yet (#249). `--json` prints the runs' `replay.json` documents in one array and nothing else; `--quiet` prints only the runs that didn't pass (API.md §7).
 - `aqa run` (M2, #244): `aqa replay`'s line with what the healer cost. On `drift_consistent`, on stderr, the proposal's id, each rebound target's meaning and the element it is bound to, then a unified diff. The role and name are the page's own words, so the diff is the evidence (API.md §7).
 - `aqa heal <spec>` (M2, #247) prints `aqa run`'s line. `aqa heal apply <proposal_id>` prints `applied <id> <spec id>: <path>` and each path the patch names, with one more line when writing it changed the file's formatting, on stdout; a refusal prints its outcome, the id and why on stderr. It shows no locator: the person reviews `git diff`, and commits it (API.md §7).
-- `--json` mode for scripting; `--quiet` for CI logs.
+- `--json` mode for scripting; `--quiet` for CI logs (only `aqa replay` has them so far).
 - Errors are actionable ("Domain `staging.acme.dev` is not verified for hosted runs — run in CI or verify at <link>").
 
 ## 6. Local report viewer
