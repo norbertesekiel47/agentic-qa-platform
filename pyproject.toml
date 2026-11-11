@@ -16,11 +16,9 @@ dependencies = [
 [dependency-groups]
 dev = [
     "coverage==7.16.2",
-    "hypothesis==6.168.2",
     "mypy==2.3.1",
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
-    "respx==0.23.1",
     "ruff==0.16.9",
     "types-pyyaml==6.0.12.20260906",
     "vcrpy==8.3.0",
@@ -91,7 +89,8 @@ ignore = [
 "spikes/*/tests/**" = ["S101"]
 "tests/**" = ["S101"]
 # T20: scripts whose interface is stdout. In package code T20 stays on, because
-# a print bypasses structlog's redaction. S104, S105: the secret detector names
+# a print bypasses the scan every command's output passes (aqa_cli.common's
+# `rendered`). S104, S105: the secret detector names
 # what it looks for, a local host list and the guidance texts for secrets.
 ".claude/hooks/policy_guard.py" = ["T20"]
 ".claude/hooks/policy_rules.py" = ["S104", "S105"]
