@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 # DATA_MODEL §9's example, verbatim.
 EXAMPLE = """\
-base_url: "http://127.0.0.1:4100"   # the start origin when `aqa explore --url` is omitted; `--url` wins
+base_url: "http://127.0.0.1:4100"   # the start origin when a command's `--url` is omitted; `--url` wins
 roles:                        # overrides the defaults in TECH_STACK §3
   navigator: { provider: anthropic, model: claude-sonnet-5-5, effort: medium, fallback: claude-opus-5-5 }
 browser:                      # settings for every run (ADR-0025); a spec may override them

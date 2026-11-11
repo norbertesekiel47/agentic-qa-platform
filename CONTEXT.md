@@ -11,7 +11,7 @@ A Markdown file in the customer's repo that states one user goal in structured p
 _Avoid_: test case, scenario
 
 **Project config**:
-The committed file of project-wide settings next to a project's specs: model roles, browser settings, egress hosts, test-secret bindings and reviewed subject contracts. The directory that holds it is the project's **spec root**, under which every spec ID is unique.
+The committed file of project-wide settings next to a project's specs: the default start origin, model roles and model overrides, browser settings, egress hosts, test-secret bindings, budgets and reviewed subject contracts. The directory that holds it is the project's **spec root**, under which every spec ID is unique.
 
 **Expectation**:
 One observable claim in a spec's `expect` list about what must be true once the goal is done. Only a human edit to the spec can change an expectation.
@@ -107,7 +107,7 @@ A step whose `side_effect` flag is true: it changes app state and can't safely r
 ### Runs
 
 **Run**:
-One execution of one spec version in one mode (explore, strict or verified), whether in CI, on a hosted runner or locally.
+One execution of one spec version in one mode (explore, strict or verified; `aqa run` is strict replay that may heal, and its document says `mode: run`), whether in CI, on a hosted runner or locally.
 
 **Explore**:
 The mode for a spec that has no compiled script yet: the agent drives the browser until every expectation's planned checks pass, then compiles the path it took and proves it with a confirmation replay.
@@ -127,7 +127,7 @@ The default replay mode, used in CI. It makes zero LLM calls, so every assertion
 An opt-in replay mode that adds model-assisted visual checks for expectations that ask for them. Its cost and results are always reported apart from strict replays.
 
 **Run viewer**:
-The step-by-step view of any finished run, explore runs included, with its screenshots, evidence and verdicts. It is a dashboard screen, and `aqa report` opens the same view locally.
+The step-by-step view of any finished run, explore runs included, with its screenshots, evidence and verdicts. It is a dashboard screen, and `aqa report` (#249) will open the same view locally.
 _Avoid_: replay, replay viewer, run replay
 
 **Step intent**:
@@ -172,7 +172,7 @@ _Avoid_: step, which is an action the run dispatched
 A binding that doesn't resolve: within the wait budget, its locators don't all find the same element with the unique match its use needs, for a step or for an assertion. Drift sends the run to heal (strict `aqa replay` never heals, and reports it `inconclusive`) and says nothing yet about whether the app is broken.
 
 **Heal**:
-The part of a run that handles drift: it re-observes the page, repairs bindings, may insert replay-safe steps, and classifies the outcome as a verdict.
+The part of a run that handles drift: it re-observes the page, repairs bindings, may insert replay-safe steps once #246 builds that, and classifies the outcome as a verdict.
 _Avoid_: auto-fix
 
 **Verdict**:
