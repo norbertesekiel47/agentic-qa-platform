@@ -179,8 +179,8 @@ A change is mergeable only when every gate that runs passes. The jobs are in `.g
 | Gate | CI job | Runs |
 |---|---|---|
 | `ruff check` · `ruff format --check` | `python` | Now |
-| `mypy --strict`, in two runs: the packages, `spikes` and `tests`, then the scripts in `bench/harness`, `.claude/hooks` and `.github/scripts`, and the root `conftest.py` | `python` | Now |
-| `pytest --cov`: every test in `packages/`, `spikes/`, `bench/harness/`, `.claude/hooks/` and `tests/`, including CONSTRAINTS.md's threshold checks, in six shards of whole test files balanced on `.github/shard-durations.json` | `tests`, one job per shard | Now. §1's layers (unit, integration, isolation, checkpointer, continuation, hygiene, egress/secrets, strict-mode) join as their code lands |
+| `mypy --strict`, in two runs (CONSTRAINTS.md, Types) | `python` | Now |
+| `pytest --cov`: every test in `packages/`, `spikes/`, `bench/harness/`, `.claude/hooks/` and `tests/`, including CONSTRAINTS.md's threshold checks, in six shards of whole test files balanced on `.github/shard-durations.json` | `tests`, one job per shard | Now. §1's layers join as their code lands: unit, binding, invariants, egress/secrets, strict-mode and continuation's local intents have; integration, isolation, checkpointer and hygiene haven't |
 | Each collected test ran in exactly one shard (`.github/scripts/check_shards.py`), and the coverage floor on the shards' combined data | `python`, which needs every shard and runs even when one fails | Now |
 | Browser tests: the sandbox check, the browser session and the spike's trial (#37), then the egress fixtures | `tests`, after steps that install Playwright's headless shell, log the runner's AppArmor setting and relax it (ADR-0026) | The sandbox check (#35), the browser session (#36), the trial (#37), the egress proxy's and runner-side requests' (#42), and #43's packet-level egress suite now |
 | Dependency audit of `uv.lock` and the checks image's `bench/harness/checks-requirements.txt` (osv-scanner) | `dependency-audit` | Now, and weekly |
@@ -193,7 +193,7 @@ A change is mergeable only when every gate that runs passes. The jobs are in `.g
 
 The thresholds these gates hold, coverage included, are in [CONSTRAINTS.md](CONSTRAINTS.md).
 
-**Never** silence a check to go green: no new `# type: ignore`, `@ts-expect-error`, `eslint-disable`, `pytest.skip`, weakened assertions, or lowered thresholds without an ADR.
+**Never** silence a check to go green: [CONSTRAINTS.md](CONSTRAINTS.md)'s Floor lists what that rules out, and a threshold moves only with the maintainer's approval.
 
 ## 9. Evidence rule
 

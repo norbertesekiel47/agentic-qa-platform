@@ -98,8 +98,8 @@ The secret scan reads commits, not the working tree, and the other gates read th
 
 ## 5. Rules (non-negotiable)
 
-1. **Quality gates on every change.** Ruff + mypy `--strict` (Python), TypeScript `strict` + ESLint (dashboard), pytest + Vitest. Not done until all pass. Never silence a check to get green — no new `# type: ignore`, `@ts-expect-error`, `eslint-disable`, skipped tests, weakened assertions, or lowered thresholds without an ADR. The thresholds are in [CONSTRAINTS.md](CONSTRAINTS.md): read it before writing code, and never weaken it to make a change pass.
-2. **Test-first for core logic:** replay engine, locator resolution, heal-verdict schema and patch application, RLS policies, token/OIDC/webhook verification, domain verification, API-key hashing, secret redaction.
+1. **Quality gates on every change.** Ruff + mypy `--strict` (Python), TypeScript `strict` + ESLint (dashboard), pytest + Vitest. Not done until all pass. Never silence a check to get green — no new `# type: ignore`, `@ts-expect-error`, `eslint-disable`, skipped tests, weakened assertions, or lowered thresholds; a threshold moves only with the maintainer's approval. The thresholds are in [CONSTRAINTS.md](CONSTRAINTS.md): read it before writing code, and never weaken it to make a change pass.
+2. **Test-first for core logic:** the modules [TESTING.md §2](TESTING.md#2-test-driven-development-scope) lists.
 3. **Tenant isolation tests are mandatory.** Every new table or tenant-scoped endpoint ships registered in the isolation registry with a test proving org A cannot read or write org B's data. CI fails on unregistered tables/routes.
 4. **One milestone = one vertical slice = one PR series**, following [ROADMAP.md](ROADMAP.md) order. Conventional commits (`feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`).
 5. **Decisions go in ADRs.** Any choice between real alternatives gets an ADR in `ADRs/` (context, options, decision, consequences). Use the template in `ADRs/README.md`.
@@ -141,7 +141,7 @@ The secret scan reads commits, not the working tree, and the other gates read th
 
 ## 7. Definition of done
 
-- Gates green on the final HEAD (evidence re-run after any rebase; SHA recorded in the PR).
+- Gates green on the final HEAD ([TESTING.md §9](TESTING.md#9-evidence-rule)).
 - Tests added for new behavior (isolation tests for new tenant surfaces).
 - Docs and ADRs updated.
 - UI changes: before/after screenshots at 390px and 1440px.
