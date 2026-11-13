@@ -81,14 +81,22 @@ def left_behind(root: Path) -> list[Path]:
 
 
 def plain(text: str) -> str:
-    """Typer's usage error, without its box and colours, on one line."""
+    """Typer's output, without its box and colours, on one line."""
     unboxed = re.sub(r"[│╭╮╰╯─]", " ", re.sub(r"\x1b\[[0-9;]*m", "", text))
     return " ".join(unboxed.split())
 
 
 def test_report_is_a_command_with_an_optional_run_id(aqa: str) -> None:
+    # Coloured, as Rich colours it under GitHub Actions: a colour code before a
+    # word leaves no word boundary there.
+    coloured = os.environ | {"FORCE_COLOR": "1"}
     listed = subprocess.run(
-        [aqa, "--help"], capture_output=True, text=True, timeout=60, check=False
+        [aqa, "--help"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        env=coloured,
     )
     helped = subprocess.run(
         [aqa, "report", "--help"],
@@ -96,12 +104,14 @@ def test_report_is_a_command_with_an_optional_run_id(aqa: str) -> None:
         text=True,
         timeout=60,
         check=False,
+        env=coloured,
     )
 
     assert listed.returncode == 0, listed.stderr
-    assert re.search(r"\breport\b", listed.stdout)
+    assert "\x1b[" in listed.stdout
+    assert re.search(r"\breport\b", plain(listed.stdout))
     assert helped.returncode == 0, helped.stderr
-    assert "[RUN_ID]" in helped.stdout
+    assert "[RUN_ID]" in plain(helped.stdout)
 
 
 @pytest.mark.parametrize("where", ["spec-root", "subdirectory"])
