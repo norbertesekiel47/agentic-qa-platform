@@ -184,9 +184,15 @@ def _integer(value: object) -> int | None:
 
 
 def _number(value: object) -> float | None:
+    """`value` as a finite float, or None: JSON's integers have no bound, so
+    one may hold no float."""
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    return float(value) if math.isfinite(value) else None
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _texts(value: object) -> tuple[str, ...]:
@@ -343,7 +349,9 @@ def _kept(run: Path, spec_id: str | None) -> Kept | Gap:
 
 def _cost(run: Path) -> Decimal | Gap:
     """What the run's priced calls cost: the sum of `costs.jsonl`'s, nothing when
-    there is none, and `Gap.BROKEN` when a line isn't a `CostRecord`."""
+    there is none, and `Gap.BROKEN` when a line isn't a `CostRecord` or the sum
+    is past what a `Decimal` holds (`decimal.Overflow`, an `ArithmeticError`):
+    a `CostRecord` takes any finite `Decimal`, such as 1e999999999."""
     raw = read_below(run, "costs.jsonl")
     if raw is Gap.ABSENT:
         return Decimal(0)
@@ -352,9 +360,9 @@ def _cost(run: Path) -> Decimal | Gap:
     try:
         lines = raw.decode("utf-8").splitlines()
         calls = [CostRecord.model_validate_json(line) for line in lines]
-    except ValueError:
+        return sum((call.cost_usd for call in calls), Decimal(0))
+    except ValueError, ArithmeticError:
         return Gap.BROKEN
-    return sum((call.cost_usd for call in calls), Decimal(0))
 
 
 @dataclass(frozen=True)

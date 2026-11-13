@@ -531,6 +531,18 @@ def test_without_a_usable_journal_actions_come_from_run_json(
     assert OUTSIDE not in html
 
 
+def costing(cost_usd: str) -> Callable[[Ran], object]:
+    """An edit that gives the record's one cost line `cost_usd`, which a
+    `CostRecord` still reads."""
+
+    def edit(ran: Ran) -> None:
+        [line] = (ran.record / "costs.jsonl").read_text().splitlines()
+        call = json.loads(line) | {"cost_usd": cost_usd}
+        (ran.record / "costs.jsonl").write_text(json.dumps(call) + "\n")
+
+    return edit
+
+
 @pytest.mark.parametrize(
     ("edit", "cost"),
     [
@@ -541,8 +553,10 @@ def test_without_a_usable_journal_actions_come_from_run_json(
             lambda ran: (ran.record / "costs.jsonl").write_text("{}\n"),
             "couldn't be read",
         ),
+        # A finite Decimal, which no sum in the default context can hold.
+        (costing("1e999999999"), "couldn't be read"),
     ],
-    ids=["deleted", "garbage", "linked", "not-a-cost-record"],
+    ids=["deleted", "garbage", "linked", "not-a-cost-record", "past-any-sum"],
 )
 def test_a_cost_record_that_cant_be_read_says_so(
     drift: Ran,
@@ -738,6 +752,30 @@ def test_each_tab_shows_the_selected_steps_evidence(
         "Confidence: 0.9 (model-reported, uncalibrated) The model's rationale, in "
         "its own words (model-reported, uncalibrated) it fits"
     )
+
+
+@pytest.mark.parametrize(
+    "confidence",
+    [10**400, "0.9", True, None],
+    ids=["past-a-float", "text", "a-boolean", "null"],
+)
+def test_a_confidence_that_isnt_a_number_is_not_reported(
+    drift: Ran,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    confidence: object,
+) -> None:
+    def edit(ran: Ran) -> None:
+        ran.edit_replay_json(
+            lambda d: d["verdicts"][1]["heal"]["model_reported"].update(
+                confidence=confidence
+            )
+        )
+
+    _, shown = report_of(drift, tmp_path, monkeypatch, edit)
+
+    assert "Confidence: no confidence reported" in block(shown, "reasoning", 1).text
+    assert "confidence no confidence reported" in panel(shown)
 
 
 def test_a_strict_replay_says_no_model_ran(
