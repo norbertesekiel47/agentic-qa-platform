@@ -217,7 +217,11 @@ def assert_healed_and_applies(
     ]
     assert proposal["compiled"] == ".compiled/order.json"
     assert result.stdout == ""
-    assert f"  heal proposal {proposal['id']}:\n" in result.stderr
+    # The run viewer's command comes before the proposal, which ends the block.
+    assert (
+        f"  run viewer: aqa report {record_of(spec).name}\n"
+        f"  heal proposal {proposal['id']}:\n"
+    ) in result.stderr
     assert f"  toggle ({TOGGLE_MEANING}): bound {case.bound}\n" in result.stderr
     assert "  --- a/.compiled/order.json\n" in result.stderr
     assert "  +++ b/.compiled/order.json\n" in result.stderr
@@ -347,8 +351,10 @@ def test_a_run_with_no_drift_passes_and_builds_no_model_client(
     assert result.exit_code == 0, result.output
     assert (client.models, client.requests) == ([], [])
     assert result.stderr == ""
-    assert result.stdout.startswith("passed order: ")
-    assert result.stdout.rstrip().endswith(", $0")
+    first, hint = result.stdout.splitlines()
+    assert first.startswith("passed order: ")
+    assert first.endswith(", $0")
+    assert hint == f"  run viewer: aqa report {record_of(spec).name}"
     document = replay_json(spec)
     assert (document["mode"], document["heal_proposal"]) == ("run", None)
     assert all(verdict["heal"] is None for verdict in document["verdicts"])
