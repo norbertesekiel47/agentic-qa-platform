@@ -174,6 +174,13 @@ def document(root: Path) -> dict[str, Any]:
     return written
 
 
+def viewer(root: Path) -> str:
+    """The line that ends a run's block once its `replay.json` is written: the
+    command that writes the run viewer of the one run record under the spec root
+    `root` (#249)."""
+    return f"  run viewer: aqa report {record_in(root).name}\n"
+
+
 def test_strict_replay_builds_no_model_client(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -215,13 +222,34 @@ def test_strict_replay_builds_no_model_client(
 def test_a_script_that_passes_exits_0_with_one_line(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    spec = committed(shop(tmp_path / "qa"), shop_script("shop"))
+    root = tmp_path / "qa"
+    spec = committed(shop(root), shop_script("shop"))
 
     result = replay(monkeypatch, on(app, spec))
 
     assert result.exit_code == 0, result.output
-    assert re.fullmatch(rf"passed shop: {SECONDS}, \$0\n", result.stdout)
+    assert re.fullmatch(
+        rf"passed shop: {SECONDS}, \$0\n{re.escape(viewer(root))}", result.stdout
+    )
     assert result.stderr == ""
+
+
+@pytest.mark.parametrize("page", ["shop", "shop-wrong"])
+def test_a_runs_lines_end_with_the_command_that_writes_its_run_viewer(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, page: str
+) -> None:
+    root = tmp_path / "qa"
+    spec = committed(shop(root, page=f"/page/{page}"), shop_script(page))
+
+    result = replay(monkeypatch, on(app, spec))
+
+    record = record_in(root)
+    said = result.stdout if page == "shop" else result.stderr
+    assert said.endswith(f"\n{viewer(root)}")
+    monkeypatch.chdir(root)
+    hinted = typer.testing.CliRunner().invoke(aqa, ["report", record.name])
+    assert hinted.exit_code == 0, hinted.output
+    assert (record / "report.html").is_file()
 
 
 def test_a_replay_keeps_its_run_json_and_its_line_says_that_duration(
@@ -260,7 +288,10 @@ def test_a_replay_keeps_its_run_json_and_its_line_says_that_duration(
     ) == CompiledScript.model_validate_json(script)
     # As published, its targets' order included, which a heal's diff reads.
     assert json.dumps(kept["script"], indent=2, ensure_ascii=False) + "\n" == script
-    assert result.stdout == f"passed order: {kept['duration_seconds']:.1f}s, $0\n"
+    assert result.stdout == (
+        f"passed order: {kept['duration_seconds']:.1f}s, $0\n"
+        f"  run viewer: aqa report {record.name}\n"
+    )
 
 
 def test_a_run_json_the_record_refuses_is_left_out(
@@ -298,7 +329,7 @@ def test_a_resolved_false_assertion_is_expectation_violated_and_exits_1(
     assert result.stdout == ""
     assert re.fullmatch(
         rf"expectation_violated shop: {SECONDS}, \$0, run record: {record_in(root)}\n"
-        "  a2: expectation_violated\n",
+        rf"  a2: expectation_violated\n{re.escape(viewer(root))}",
         result.stderr,
     )
     # Every check is evaluated, those after the false one included.
@@ -314,13 +345,14 @@ def test_a_resolved_false_assertion_is_expectation_violated_and_exits_1(
 def test_a_violated_invariant_is_expectation_violated_and_exits_1(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    spec = committed(shop(tmp_path / "qa", page="/page/console-error"), compiled([]))
+    root = tmp_path / "qa"
+    spec = committed(shop(root, page="/page/console-error"), compiled([]))
 
     result = replay(monkeypatch, on(app, spec))
 
     assert result.exit_code == 1, result.output
     assert result.stderr.endswith(
-        "\n  invariant console_errors: expectation_violated\n"
+        f"\n  invariant console_errors: expectation_violated\n{viewer(root)}"
     )
 
 
@@ -337,7 +369,8 @@ def test_a_check_that_times_out_is_inconclusive_and_exits_3(
     assert result.exit_code == 3, result.output
     assert re.fullmatch(
         rf"inconclusive shop: {SECONDS}, \$0, run record: {record_in(root)}\n"
-        "  a1: inconclusive, check_timed_out\n  a2: inconclusive, check_timed_out\n",
+        "  a1: inconclusive, check_timed_out\n  a2: inconclusive, check_timed_out\n"
+        f"{re.escape(viewer(root))}",
         result.stderr,
     )
 
@@ -350,14 +383,15 @@ def test_a_target_only_a_fallback_finds_drifts_and_is_inconclusive(
     script = compiled([click], targets={"save": FORM_TARGETS["save"]})
     # The miss is found sooner than the default 10 s.
     quick = "budgets: { resolve_seconds: 1 }\n"
-    spec = committed(shop(tmp_path / "qa", page="/page/form", config=quick), script)
+    root = tmp_path / "qa"
+    spec = committed(shop(root, page="/page/form", config=quick), script)
 
     result = replay(monkeypatch, on(app, spec))
 
     assert result.exit_code == 3, result.output
     assert result.stderr.endswith(
         "\n  step 1: inconclusive, drift: strict replay doesn't heal "
-        "(no match, not unanimous)\n"
+        f"(no match, not unanimous)\n{viewer(root)}"
     )
     # No side effect acts through a fallback (#25).
     assert "/write/save" not in app.paths()
@@ -378,7 +412,7 @@ def test_an_egress_block_exits_6_with_no_verdict(
         rf"egress_blocked shop: {SECONDS}, \$0, run record: {record}\n", result.stderr
     )
     assert result.stderr.endswith(
-        f"\n  the egress record is {record / 'egress.json'}\n"
+        f"\n  the egress record is {record / 'egress.json'}\n{viewer(root)}"
     )
     assert (record / "egress.json").is_file()
     assert document(root)["verdicts"] == []
@@ -774,7 +808,7 @@ def test_a_failed_reset_hook_exits_14_and_opens_no_browser(
     assert result.exit_code == 14, result.output
     assert re.fullmatch(
         rf"reset_unsafe shop: {SECONDS}, \$0, run record: {record_in(root)}\n"
-        "  the reset hook answered 500\n",
+        rf"  the reset hook answered 500\n{re.escape(viewer(root))}",
         result.stderr,
     )
 
@@ -828,7 +862,7 @@ def test_an_egress_listener_that_cannot_open_exits_13(
     assert result.exit_code == 13, result.output
     assert re.fullmatch(
         rf"unreachable shop: {SECONDS}, \$0, run record: {record_in(root)}\n"
-        "  the egress listener couldn't start\n",
+        rf"  the egress listener couldn't start\n{re.escape(viewer(root))}",
         result.stderr,
     )
 
@@ -879,9 +913,11 @@ def test_a_record_that_takes_no_more_exits_15(
     result = replay(monkeypatch, on(app, spec))
 
     assert result.exit_code == 15, result.output
+    # A run whose replay.json wasn't written has no viewer to name.
+    hint = "" if failing == "replay.json" else re.escape(viewer(root))
     assert re.fullmatch(
         rf"record_error shop: {SECONDS}, \$0, run record: {record_in(root)}\n"
-        f"  {said}\n",
+        f"  {said}\n{hint}",
         result.stderr,
     )
 
@@ -903,7 +939,8 @@ def test_a_refusal_that_reaches_the_replay_exits_15(
     assert result.exit_code == 15, result.output
     assert re.fullmatch(
         rf"record_error shop: {SECONDS}, \$0, run record: {record_in(root)}\n"
-        "  the run record took no more lines, so the replay stopped\n",
+        "  the run record took no more lines, so the replay stopped\n"
+        f"{re.escape(viewer(root))}",
         result.stderr,
     )
 
@@ -923,7 +960,8 @@ def test_an_egress_block_whose_record_cant_be_written_still_exits_6(
     assert re.fullmatch(
         rf"egress_blocked shop: {SECONDS}, \$0, run record: {record}\n"
         "  the run record took no more lines, so the replay stopped\n"
-        f"  the egress record couldn't be saved to {record / 'egress.json'}\n",
+        f"  the egress record couldn't be saved to {record / 'egress.json'}\n"
+        f"{re.escape(viewer(root))}",
         result.stderr,
     )
     assert document(root)["error_code"] == "egress_blocked"
@@ -985,7 +1023,7 @@ def test_a_selector_engine_left_unregistered_exits_10(
     assert re.fullmatch(
         rf"no_sandbox shop: {SECONDS}, \$0, run record: {record_in(root)}\n"
         "  the binding engine isn't registered: call register_identity_engine "
-        "before the browser session opens\n",
+        f"before the browser session opens\n{re.escape(viewer(root))}",
         result.stderr,
     )
 
@@ -1096,7 +1134,8 @@ def test_quiet_prints_only_runs_that_didnt_pass(
         assert result.exit_code == 1
         assert re.fullmatch(
             rf"expectation_violated shop: {SECONDS}, \$0, run record: "
-            rf"{record_in(root)}\n  a2: expectation_violated\n",
+            rf"{record_in(root)}\n  a2: expectation_violated\n"
+            f"{re.escape(viewer(root))}",
             result.stderr,
         )
 

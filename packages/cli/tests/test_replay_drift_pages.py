@@ -13,7 +13,14 @@ import pytest
 from aqa_core.compiled import CompiledScript
 
 from packages.cli.tests.test_explore_runs import record_in
-from packages.cli.tests.test_replay import SECONDS, committed, document, on, replay
+from packages.cli.tests.test_replay import (
+    SECONDS,
+    committed,
+    document,
+    on,
+    replay,
+    viewer,
+)
 from packages.runner.tests.drift_fixtures import (
     BUTTON,
     DETAILS,
@@ -38,13 +45,16 @@ def test_each_recorded_script_passes_on_the_clean_page(
     script: CompiledScript,
     expectation: str,
 ) -> None:
-    spec = committed(order_spec(tmp_path / "qa", expectation), script)
+    root = tmp_path / "qa"
+    spec = committed(order_spec(root, expectation), script)
 
     with serving(page("order")) as app:
         result = replay(monkeypatch, on(app, spec))
 
     assert result.exit_code == 0, result.output
-    assert re.fullmatch(rf"passed order: {SECONDS}, \$0\n", result.stdout)
+    assert re.fullmatch(
+        rf"passed order: {SECONDS}, \$0\n{re.escape(viewer(root))}", result.stdout
+    )
     assert result.stderr == ""
 
 
@@ -227,7 +237,7 @@ def test_a_drifted_target_is_inconclusive_never_expectation_violated(
     record = re.escape(str(record_in(root)))
     assert re.fullmatch(
         rf"{pinned.outcome} order: {SECONDS}, \$0, run record: {record}\n"
-        rf"  {re.escape(pinned.reason)}\n",
+        rf"  {re.escape(pinned.reason)}\n{re.escape(viewer(root))}",
         result.stderr,
     )
     assert judged(root) == pinned.verdicts
@@ -248,7 +258,7 @@ def test_a_modal_over_a_checked_target_is_expectation_violated_and_exits_1(
     record = re.escape(str(record_in(root)))
     assert re.fullmatch(
         rf"expectation_violated order: {SECONDS}, \$0, run record: {record}\n"
-        r"  a1: expectation_violated\n",
+        rf"  a1: expectation_violated\n{re.escape(viewer(root))}",
         result.stderr,
     )
     assert judged(root) == [

@@ -363,8 +363,9 @@ def _said(scan: Redactor, spec_id: str, replayed: Replayed) -> None:
     model calls cost, which is nothing with no model, the run record when it
     didn't pass, and "non-resumable" whenever a side effect's outcome is
     unknown, alone if the rest is withheld. Then each reason its document
-    gives, where its egress record is, and what a person reads of its heal
-    proposal. A run that passed has none of them."""
+    gives, where its egress record is, the `aqa report` command that writes
+    its run viewer once its `replay.json` is written (#249), and what a person
+    reads of its heal proposal. A run that passed has only the command."""
     document = replayed.document
     failed = replayed.outcome != "passed"
     facts = [f"{replayed.seconds:.1f}s", f"${replayed.cost.normalize():f}"]
@@ -380,5 +381,7 @@ def _said(scan: Redactor, spec_id: str, replayed: Replayed) -> None:
         egress = replayed.record / "egress.json"
         saved = "is" if egress.is_file() else "couldn't be saved to"
         lines.append(f"  the egress record {saved} {egress}")
+    if replayed.record is not None and (replayed.record / "replay.json").is_file():
+        lines.append(f"  run viewer: aqa report {replayed.record.name}")
     lines.extend(f"  {line}" for line in replayed.proposal)
     say(scan, *lines, err=failed, withheld=withheld)
