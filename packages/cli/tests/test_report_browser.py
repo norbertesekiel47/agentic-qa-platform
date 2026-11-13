@@ -342,14 +342,16 @@ def test_the_timeline_and_tabs_work_by_keyboard(reports: dict[str, Path]) -> Non
 
     assert named == [1]
     # The run's drifted step is selected as the page opens, and Tab reaches it.
+    # What shows of it: the label naming it, and its block in each of the four
+    # panels.
     assert [(s["step"], s["tab"], s["shown"], s["focused"]) for s in seen] == [
-        (1, "tab-a11y", ["1", "1", "1", "1"], "step-1"),
-        (0, "tab-a11y", ["0", "0", "0", "0"], "step-0"),
-        (1, "tab-a11y", ["1", "1", "1", "1"], "step-1"),
-        (1, "tab-a11y", ["1", "1", "1", "1"], "tab-a11y"),
-        (1, "tab-network", ["1", "1", "1", "1"], "tab-network"),
-        (1, "tab-console", ["1", "1", "1", "1"], "tab-console"),
-        (1, "tab-network", ["1", "1", "1", "1"], "tab-network"),
+        (1, "tab-a11y", ["1"] * 5, "step-1"),
+        (0, "tab-a11y", ["0"] * 5, "step-0"),
+        (1, "tab-a11y", ["1"] * 5, "step-1"),
+        (1, "tab-a11y", ["1"] * 5, "tab-a11y"),
+        (1, "tab-network", ["1"] * 5, "tab-network"),
+        (1, "tab-console", ["1"] * 5, "tab-console"),
+        (1, "tab-network", ["1"] * 5, "tab-network"),
     ]
     assert [s["panel"] for s in seen[-3:]] == [
         ["panel-network"],

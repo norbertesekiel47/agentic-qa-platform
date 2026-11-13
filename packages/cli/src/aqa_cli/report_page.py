@@ -573,9 +573,17 @@ def _tabs(record: Record, steps: Sequence[_Step], chosen: int) -> str:
         + "</div>"
         for i, (key, block) in enumerate(blocks)
     )
+    # Which step the panels show, one label per step, shown as the script
+    # shows that step's blocks; a live region, so the change is announced.
+    labels = "".join(
+        f'<p class="for-step" data-step="{n}"{"" if n == chosen else " hidden"}>'
+        f"Evidence of step {step.verdict.seq} {_chip(_verdict_look(step.verdict))}</p>"
+        for n, step in enumerate(steps)
+    )
     return (
         '<section aria-labelledby="evidence-title">'
         '<h2 id="evidence-title">Evidence for the selected step</h2>'
+        f'<div aria-live="polite">{labels}</div>'
         f'<div class="tabs" role="tablist" aria-labelledby="evidence-title">{tabs}</div>'
         f"{panels}</section>"
     )
@@ -646,10 +654,7 @@ def _bindings(record: Record) -> str:
     return f"<ul>{''.join(rows)}</ul>" if rows else f"<p>{_gap('none')}</p>"
 
 
-def _diff(record: Record) -> str:
-    found = heal_diff(record)
-    if found is None:
-        return ""
+def _diff(found: tuple[str, ...] | Gap) -> str:
     if isinstance(found, Gap):
         words = (
             "The heal diff: not recorded."
@@ -671,16 +676,34 @@ def _diff(record: Record) -> str:
     )
 
 
+def _accept(held: str) -> str:
+    """The command that writes the proposal `held` names (API.md §7), for one
+    `heal apply` would take."""
+    return (
+        f"<p>To accept it, run <code>aqa heal apply {_e(held)}</code> in this "
+        "project: it writes the proposal to the compiled script and commits "
+        "nothing, so review <code>git diff</code>, then commit it.</p>"
+    )
+
+
 def _healed(record: Record) -> str:
+    """What a run that healed adds to the panel: the assertions that passed
+    after its repair, what it bound, and its proposal: the diff and the command
+    that accepts it, or why neither is shown. `heal apply` reads the proposal,
+    not `run.json`, so a record without one still names the command."""
     proposal = record.proposal
     held = proposal.get("id") if isinstance(proposal, dict) else None
     named = f" <code>{_e(held)}</code>" if isinstance(held, str) else ""
+    found = heal_diff(record)
+    shown = "" if found is None else _diff(found)
+    if isinstance(held, str) and found is not None and found is not Gap.NOT_ONE:
+        shown += _accept(held)
     return (
         "<h3>Assertions that passed after the repair</h3>"
         f"{_passing(record, ('assertion',))}"
         "<h3>What the healer bound</h3>"
         f"{_bindings(record)}"
-        f"<h3>Heal proposal{named}</h3>{_diff(record)}"
+        f"<h3>Heal proposal{named}</h3>{shown}"
     )
 
 
