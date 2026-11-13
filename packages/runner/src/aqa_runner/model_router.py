@@ -102,6 +102,12 @@ class ModelRouter:
         (ADR-0007's #161 amendment)."""
         return tuple(self._completed_calls)
 
+    @property
+    def roles(self) -> Mapping[ModelRoleName, ResolvedRole]:
+        """What each role calls, as this router resolved it: what a run's
+        `run.json` records of its healer (#249)."""
+        return self._roles
+
     @classmethod
     def from_config(cls, config: ProjectConfig, client_factory: ClientFactory) -> Self:
         """A router for `config`'s roles. No client is built until a call needs

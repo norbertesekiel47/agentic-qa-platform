@@ -10,7 +10,6 @@ one is never written."""
 import asyncio
 import contextlib
 import re
-import time
 from collections.abc import (
     AsyncIterator,
     Callable,
@@ -31,11 +30,11 @@ from aqa_core.project import SpecError, load_project, read_compiled, start_origi
 from aqa_core.spec import Spec
 from aqa_runner.admission import BoundValueSpelledError, admitted
 from aqa_runner.bound_secrets import BoundSecret, MissingSecretError, SecretLoggedError
+from aqa_runner.heal import Healing
 from aqa_runner.locator_generation import register_identity_engine
 from aqa_runner.model_turns import Spending
 from aqa_runner.publication import Publication, publication
 from aqa_runner.redaction import NO_SECRETS, Redactor
-from aqa_runner.repairs import Repair
 from aqa_runner.strict_replay import Replayed, StrictRun, strict_replay
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Playwright, async_playwright
@@ -299,12 +298,12 @@ def replayed_runs(
     *,
     lines: bool = True,
     quiet: bool = False,
-    heal: Callable[[StrictRun, Spending], Repair] | None = None,
+    heal: Callable[[StrictRun, Spending], Healing] | None = None,
 ) -> list[Replayed]:
     """Each run, in order, on one Playwright driver, a drift going to the repair
-    `heal` builds for it when given, and, with `lines`, its line as it ends,
-    unless `quiet` and it passed; or a stop (13) when the driver or the egress
-    listener couldn't start."""
+    of the healing `heal` builds for it when given, and, with `lines`, its line
+    as it ends, unless `quiet` and it passed; or a stop (13) when the driver or
+    the egress listener couldn't start."""
     try:
         return asyncio.run(_replayed(runs, scan, lines=lines, quiet=quiet, heal=heal))
     except UnstartedError as error:
@@ -318,14 +317,13 @@ async def _replayed(
     *,
     lines: bool,
     quiet: bool,
-    heal: Callable[[StrictRun, Spending], Repair] | None,
+    heal: Callable[[StrictRun, Spending], Healing] | None,
 ) -> list[Replayed]:
     ended: list[Replayed] = []
     async with started(async_playwright().start()) as playwright:
         # Once per Playwright: a second registration is refused.
         await register_identity_engine(playwright)
         for run in runs:
-            began = time.monotonic()
             replayed = await strict_replay(
                 run,
                 playwright,
@@ -333,23 +331,22 @@ async def _replayed(
                 heal=None if heal is None else partial(heal, run),
             )
             if lines and not (quiet and replayed.outcome == "passed"):
-                seconds = time.monotonic() - began
-                _said(scan, run.spec.frontmatter.id, replayed, seconds)
+                _said(scan, run.spec.frontmatter.id, replayed)
             ended.append(replayed)
     return ended
 
 
-def _said(scan: Redactor, spec_id: str, replayed: Replayed, seconds: float) -> None:
+def _said(scan: Redactor, spec_id: str, replayed: Replayed) -> None:
     """Say how the run ended in one line, to stdout when it passed and to
-    stderr otherwise: the outcome, the time, what its model calls cost, which is
-    nothing with no model, the run record when it didn't pass, and
-    "non-resumable" whenever a side effect's outcome is unknown, alone if the
-    rest is withheld. Then each reason its document gives, where its egress
-    record is, and what a person reads of its heal proposal. A run that passed
-    has none of them."""
+    stderr otherwise: the outcome, the time its `run.json` records, what its
+    model calls cost, which is nothing with no model, the run record when it
+    didn't pass, and "non-resumable" whenever a side effect's outcome is
+    unknown, alone if the rest is withheld. Then each reason its document
+    gives, where its egress record is, and what a person reads of its heal
+    proposal. A run that passed has none of them."""
     document = replayed.document
     failed = replayed.outcome != "passed"
-    facts = [f"{seconds:.1f}s", f"${replayed.cost.normalize():f}"]
+    facts = [f"{replayed.seconds:.1f}s", f"${replayed.cost.normalize():f}"]
     withheld = [WITHHELD.format(outcome=replayed.outcome, spec_id=spec_id)]
     if failed and replayed.record is not None:
         facts.append(f"run record: {replayed.record}")

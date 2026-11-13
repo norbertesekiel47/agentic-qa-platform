@@ -39,6 +39,13 @@ from packages.cli.tests.test_explore_runs import (
     record_in,
     shop,
 )
+from packages.runner.tests.drift_fixtures import (
+    DETAILS,
+    SHIPPING,
+    order_spec,
+    page,
+    serving,
+)
 from packages.runner.tests.egress_fixtures import unused_port
 from packages.runner.tests.executor_fixtures import (
     FORM_TARGETS,
@@ -215,6 +222,67 @@ def test_a_script_that_passes_exits_0_with_one_line(
     assert result.exit_code == 0, result.output
     assert re.fullmatch(rf"passed shop: {SECONDS}, \$0\n", result.stdout)
     assert result.stderr == ""
+
+
+def test_a_replay_keeps_its_run_json_and_its_line_says_that_duration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "qa"
+    spec = committed(order_spec(root, SHIPPING), DETAILS)
+
+    with serving(page("order")) as app:
+        result = replay(monkeypatch, on(app, spec))
+
+    assert result.exit_code == 0, result.output
+    record = record_in(root)
+    kept = json.loads((record / "run.json").read_text())
+    assert sorted(kept) == [
+        "duration_seconds",
+        "expectations",
+        "goal",
+        "models",
+        "run_id",
+        "schema_version",
+        "script",
+        "spec_id",
+    ]
+    assert (kept["schema_version"], kept["run_id"], kept["spec_id"]) == (
+        1,
+        record.name,
+        "order",
+    )
+    assert kept["goal"] == "A customer finds out when their order ships."
+    assert kept["expectations"] == [SHIPPING]
+    assert kept["models"] == {}
+    script = (root / ".compiled" / "order.json").read_text()
+    assert CompiledScript.model_validate_json(
+        json.dumps(kept["script"])
+    ) == CompiledScript.model_validate_json(script)
+    assert kept["script"] == json.loads(script)
+    assert result.stdout == f"passed order: {kept['duration_seconds']:.1f}s, $0\n"
+
+
+def test_a_run_json_the_record_refuses_is_left_out(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write = RunRecord.write
+
+    def refusing_run_json(
+        record: RunRecord, name: str, *args: Any, **kwargs: Any
+    ) -> Path:
+        if name == "run.json":
+            raise RefusedWriteError("fake refused run.json")
+        return write(record, name, *args, **kwargs)
+
+    monkeypatch.setattr(RunRecord, "write", refusing_run_json)
+    root = tmp_path / "qa"
+    spec = committed(shop(root), shop_script("shop"))
+
+    result = replay(monkeypatch, on(app, spec))
+
+    assert result.exit_code == 0, result.output
+    assert not (record_in(root) / "run.json").exists()
+    assert document(root)["outcome"] == "passed"
 
 
 def test_a_resolved_false_assertion_is_expectation_violated_and_exits_1(
@@ -687,6 +755,7 @@ def test_each_runs_record_scans_with_every_value_the_invocation_bound(
     assert result.exit_code == 0, result.output
     record = record_in(root)
     files = [path for path in record.rglob("*") if path.is_file()]
+    assert record / "run.json" in files
     assert copies_found(SECOND, files=files) == []
     snapshot = (record / "evidence" / "0" / "a11y_snapshot.yaml").read_text()
     assert "[SECRET:OTHER_PASSWORD]" in snapshot
@@ -787,8 +856,12 @@ def refusing(name: str, *, failing: str | None) -> Callable[..., Any]:
             ("write", "replay.json"),
             "replay.json could not be written to the run record",
         ),
+        (
+            ("write", "run.json"),
+            "run.json could not be written to the run record",
+        ),
     ],
-    ids=["journal", "document"],
+    ids=["journal", "document", "run-document"],
 )
 def test_a_record_that_takes_no_more_exits_15(
     app: App,
@@ -1076,6 +1149,7 @@ def test_a_bound_value_is_in_no_line_or_document(
     assert result.exit_code == 1, result.output
     record = record_in(root)
     files = [path for path in record.rglob("*") if path.is_file()]
+    assert record / "run.json" in files
     texts = [result.stdout, result.stderr]
     assert copies_found(FAKE_VALUE, files=files, texts=texts) == []
     assert document(root)["withheld"] is True
