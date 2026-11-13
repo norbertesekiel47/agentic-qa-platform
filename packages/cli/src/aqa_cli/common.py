@@ -1,6 +1,7 @@
-"""What `aqa explore`, `aqa replay`, `aqa run` and `aqa heal` share (API.md §7):
-resolving a spec, writing through one output boundary that fails closed (ADR-0026's
-#53 P17 amendment), stopping with an outcome and its exit code, starting and stopping
+"""What `aqa explore`, `aqa replay`, `aqa run`, `aqa heal` and `aqa report` share
+(API.md §7): resolving a spec, finding the spec root of a command given none,
+writing through one output boundary that fails closed (ADR-0026's #53 P17
+amendment), stopping with an outcome and its exit code, starting and stopping
 Playwright's driver, and the runner `replay` and `run` both are.
 
 Everything a command prints goes through `rendered`, which scans the whole text
@@ -71,6 +72,10 @@ _NO_DRIVER: Final = "the browser driver couldn't start"
 _NOTHING: Final = "nothing was replayed"
 _MISSING: Final = "no compiled script: explore it first"
 _REFUSED: Final = "replay refuses the compiled script, so nothing was replayed"
+_LINKED: Final = (
+    "a link, which could lead into another checkout: run this inside the project you "
+    "mean"
+)
 
 # Characters that would move the cursor, recolour the terminal or reorder text
 # when printed: C0 and C1 controls, line and paragraph separators, and every
@@ -159,6 +164,22 @@ def _spec_root(path: Path) -> Path:
     raise SpecError(
         [f"{path}: no config.yaml in its directory or above it, so no spec root"]
     )
+
+
+def spec_root_above(directory: Path) -> Path:
+    """The spec root a command given no spec path runs under: from `directory` up,
+    at each level `qa/`, where `aqa init` puts one, and then the level itself, so a
+    repository's own `config.yaml` doesn't win over its `qa/`. No person named this
+    root, and a repository can commit `qa` as a link into another checkout, where the
+    write would land, so a link is refused before anything behind it is read. A level
+    holds no link: the working directory is the operating system's physical path."""
+    for level in (directory, *directory.parents):
+        for root in (level / "qa", level):
+            if (root / "config.yaml").is_file():
+                if root.is_symlink():
+                    raise SpecError([f"{root}: {_LINKED}"])
+                return root
+    raise SpecError([f"{directory}: no config.yaml in it, in its qa/ or above it"])
 
 
 def resolve(path: Path, url: str | None) -> tuple[Path, Spec, ProjectConfig, str]:
