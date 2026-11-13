@@ -100,7 +100,7 @@ a { color: var(--link); }
 .s-errored { color: var(--errored); }
 .notice {
   margin: 1rem 0 0; padding: 0.5rem 0.75rem; background: var(--panel);
-  border: 1px solid var(--line); border-left: 4px solid var(--inconclusive); border-radius: 4px;
+  border: 1px solid var(--line); border-left: 4px solid var(--muted); border-radius: 4px;
 }
 .timeline { display: flex; gap: 0.5rem; overflow-x: auto; padding: 0.25rem; }
 .step {
@@ -110,13 +110,18 @@ a { color: var(--link); }
 }
 .step[aria-selected="true"] { border-color: var(--focus); box-shadow: inset 0 0 0 1px var(--focus); }
 .step .seq { font-weight: 600; }
-.tabs { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.5rem; border-bottom: 1px solid var(--line); }
+.tabs {
+  display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 0.25rem; margin-top: 0.5rem;
+  border-bottom: 1px solid var(--line);
+}
 [role="tab"] {
-  min-height: 2.25rem; padding: 0.375rem 0.875rem; font: inherit; color: var(--text);
+  flex: none; min-height: 2.25rem; padding: 0.375rem 0.875rem; font: inherit; color: var(--text);
   background: transparent; border: 1px solid transparent; border-bottom: 0;
   border-radius: 6px 6px 0 0; cursor: pointer;
 }
 [role="tab"][aria-selected="true"] { background: var(--panel); border-color: var(--line); font-weight: 600; }
+/* Inside the strip's scroll box, so the outline is drawn within the tab. */
+[role="tab"]:focus { outline-offset: -2px; }
 [role="tabpanel"] {
   padding: 0.75rem; background: var(--panel);
   border: 1px solid var(--line); border-top: 0; border-radius: 0 0 6px 6px;
@@ -135,6 +140,8 @@ blockquote { margin: 0; padding: 0.25rem 0.75rem; border-left: 3px solid var(--l
 @media (max-width: 767.98px) {
   .timeline { flex-direction: column; overflow-x: visible; }
   .step { flex: none; }
+  .tabs { gap: 0.125rem; }
+  [role="tab"] { padding: 0.375rem 0.5rem; font-size: 0.875rem; }
 }
 """
 

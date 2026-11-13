@@ -96,7 +96,6 @@ async def opened(
     *,
     width: int = 1440,
     scheme: Scheme = "dark",
-    bypass_csp: bool = False,
 ) -> AsyncIterator[Page]:
     """A new page of a sandboxed Chromium, `width` wide in `scheme`."""
     async with async_playwright() as playwright:
@@ -105,7 +104,6 @@ async def opened(
             context = await browser.new_context(
                 viewport={"width": width, "height": SIZES[width]},
                 color_scheme=scheme,
-                bypass_csp=bypass_csp,
             )
             yield await context.new_page()
         finally:
@@ -368,6 +366,8 @@ async def boxes(viewer: Page) -> dict[str, Any]:
                 const box = o.getBoundingClientRect();
                 return { top: box.top, left: box.left };
             }),
+            tabs: [...document.querySelectorAll('[role="tab"]')].map(
+                (tab) => tab.getBoundingClientRect().top),
             width: document.documentElement.scrollWidth,
         })"""
     )
@@ -399,6 +399,9 @@ def test_the_timeline_stacks_at_390_and_runs_across_at_1440(
     assert laid[390]["width"] <= 390
     assert wide[0]["top"] == wide[1]["top"]
     assert wide[0]["left"] < wide[1]["left"]
+    # The four tabs sit in one row above their panel at either width.
+    assert [len(set(laid[width]["tabs"])) for width in SIZES] == [1, 1]
+    assert len(laid[390]["tabs"]) == 4
 
 
 def test_the_style_has_no_motion() -> None:
