@@ -179,6 +179,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "axe-playwright-python" },
     { name = "coverage" },
     { name = "mypy" },
     { name = "pytest" },
@@ -199,6 +200,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "axe-playwright-python", specifier = "==0.1.8" },
     { name = "coverage", specifier = "==7.16.2" },
     { name = "mypy", specifier = "==2.3.1" },
     { name = "pytest", specifier = "==9.1.1" },
@@ -298,6 +300,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/d8/e1/f55d834d4dd376bf3209ffbcfa62c616c8e40c6958db38e58eb752d9e22c/awslambdaric-4.1.0-cp315-cp315t-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:840f56a24b37fcf358982eeb1a977dfd5751cbc83c0a02508cbcf8216a094b19", size = 360051, upload-time = "2026-09-28T21:07:34.252Z" },
     { url = "https://files.pythonhosted.org/packages/b7/f1/6b150d219af49688d2c20166da64d40b225a680457a4425fcde35cf8bf8b/awslambdaric-4.1.0-cp315-cp315t-musllinux_1_2_aarch64.whl", hash = "sha256:c279144fa70f6e33787fe4b5b4894f6be777e61b28b12eb5245826a51f94e04b", size = 1335093, upload-time = "2026-09-28T18:51:41.322Z" },
     { url = "https://files.pythonhosted.org/packages/0e/6f/e1b51ad22645e3637a662927a30395cfc662d8841d24b98f5e33dcd63227/awslambdaric-4.1.0-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:bbca1f4cbef2bae91d01d7196600cb781f83746a7f51511c9f44e76ac8a34525", size = 1388954, upload-time = "2026-09-28T21:07:35.691Z" },
+]
+
+[[package]]
+name = "axe-playwright-python"
+version = "0.1.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "playwright" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4c/3a/0ac4e97b92a3f8dc98f7dfb3b68c3e8d3811eda630000ccf4f7654e3498a/axe_playwright_python-0.1.8.tar.gz", hash = "sha256:97de160210fd5ce51e552d21d3b0a1cabb850235942737643ee3b9398de81a47", size = 194644, upload-time = "2026-07-24T20:11:06.699Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4c/c6/5fdb6d5d96653927b6a4763a4b7aaa9e468d4a6eda5048b7c2e158d17bc9/axe_playwright_python-0.1.8-py3-none-any.whl", hash = "sha256:fdd263c998388f1a8e67cad02677e612d946248bd44d163be5e8650ea31f95f8", size = 160681, upload-time = "2026-07-24T20:11:05.228Z" },
 ]
 
 [[package]]
