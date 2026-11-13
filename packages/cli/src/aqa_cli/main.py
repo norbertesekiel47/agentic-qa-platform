@@ -8,6 +8,7 @@ import typer
 from aqa_cli.explore import explore
 from aqa_cli.heal import heal
 from aqa_cli.replay import replay
+from aqa_cli.report import report
 from aqa_cli.run import run
 
 # Tracebacks never show local variables, which can hold provider keys and
@@ -44,3 +45,4 @@ app.command()(explore)
 app.command()(replay)
 app.command()(run)
 app.command()(heal)
+app.command()(report)
