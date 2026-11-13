@@ -81,6 +81,7 @@ _TUNNEL: Final = (
     "proxy can't read"
 )
 _NAVIGATED: Final = "page: the page's main frame navigated"
+_UNKEPT: Final = "settle: the step kept no settle window or settling to read"
 
 
 @dataclass(frozen=True)
@@ -420,16 +421,20 @@ async def _found_alone(page: Page, element: ElementHandle, committed: Target) ->
 
 
 def inserted_failure(
-    window: Window, settled: Settled, redactor: Redactor
+    window: Window | None, settled: Settled | None, redactor: Redactor
 ) -> Redacted | None:
     """Why a step a repair inserted, whose action's settle window is `window`
     and whose settling ended `settled`, didn't show it changed nothing, or None
     when it did (ADR-0024's #246 amendment): settling ended `idle`, the egress
     proxy heard every write from the window's opening on and read none, no
     tunnel was open, and the page's main frame didn't navigate. Each that
-    fails is named, scanned with `redactor`, the session's. Only the step's
-    own window counts: the one before belongs to the step that opened it,
-    and later ones open after the next step ran."""
+    fails is named, scanned with `redactor`, the session's. A step that kept
+    no window or no settling fails with that alone, since nothing else can be
+    read: missing evidence never passes it. Only the step's own window
+    counts: the one before belongs to the step that opened it, and later ones
+    open after the next step ran."""
+    if window is None or settled is None:
+        return redactor.redact(_UNSHOWN + _UNKEPT)
     unshown = [
         phrase
         for phrase, holds in (

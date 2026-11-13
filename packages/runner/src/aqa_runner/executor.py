@@ -623,14 +623,13 @@ def _shown(
     """`result`, unless it is a step a repair inserted that completed and whose
     own settle window doesn't show it changed nothing: then it failed, with why
     (`repairs.inserted_failure`), and keeps its window, locator and settling.
+    One that kept no window or settling fails too, so nothing passes unread.
     Judged once its completion is on disk and before it is kept, so before its
     evidence and anything of the next step. A step is inserted when the
     committed script has no step of its seq."""
     if (
         result is None
         or result.outcome != "completed"
-        or result.window is None
-        or result.settled is None
         or any(step.seq == result.seq for step in run.committed.steps)
     ):
         return result

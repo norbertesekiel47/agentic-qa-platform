@@ -11,7 +11,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -19,10 +19,10 @@ from urllib.parse import urlsplit
 import pytest
 from aqa_core.compiled import Click, CompiledScript, Press, Step, Target
 from aqa_core.project import load_config, load_spec
-from aqa_runner import settling
+from aqa_runner import executor, settling
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.evaluation import AssertionResult
-from aqa_runner.executor import RunResult
+from aqa_runner.executor import RunResult, StepResult
 from aqa_runner.locator_generation import register_identity_engine
 from aqa_runner.redaction import NO_SECRETS, Redactor
 from aqa_runner.repairs import Drift, Offer, StepAt, inserted_failure
@@ -56,6 +56,8 @@ TUNNEL = (
     "proxy can't read"
 )
 NAVIGATED = "page: the page's main frame navigated"
+# The reason for a step that kept nothing to read the rest from.
+UNKEPT = "settle: the step kept no settle window or settling to read"
 
 
 @pytest.mark.parametrize(
@@ -80,6 +82,21 @@ def test_each_fault_alone_fails_an_inserted_step_with_its_phrase(
 
 def test_an_idle_window_that_heard_everything_and_saw_nothing_passes() -> None:
     assert inserted_failure(Window(heard=True), "idle", NO_SECRETS) is None
+
+
+@pytest.mark.parametrize(
+    ("window", "settled"),
+    [
+        pytest.param(None, "idle", id="no_window"),
+        pytest.param(Window(heard=True), None, id="no_settling"),
+        pytest.param(None, None, id="neither"),
+    ],
+)
+def test_a_step_that_kept_no_window_or_settling_fails_with_nothing_else_read(
+    window: Window | None, settled: Settled | None
+) -> None:
+    """Missing evidence fails the step: nothing shows it changed nothing."""
+    assert inserted_failure(window, settled, NO_SECRETS) == UNSHOWN + UNKEPT
 
 
 def test_several_faults_are_listed_in_a_fixed_order() -> None:
@@ -365,6 +382,27 @@ def test_an_inserted_step_after_a_violated_invariant_ends_expectation_violated(
 
     assert run.outcomes() == [(0, "completed", None), (3, "failed", UNSHOWN + WROTE)]
     assert run.ended() == ("expectation_violated", 1, None, [])
+
+
+def test_an_inserted_step_completed_without_its_settle_window_stops_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A producer of `completed` that kept no window, which none is today, fails
+    the step closed rather than letting it through unread."""
+    dispatching = executor.dispatched
+
+    async def windowless(*args: Any, **kwargs: Any) -> StepResult:
+        result = await dispatching(*args, **kwargs)
+        return replace(result, window=None) if result.seq == 3 else result
+
+    monkeypatch.setattr(executor, "dispatched", windowless)
+
+    run = replayed(tmp_path, inserting(PRESS_TAB), html=MOVED)
+
+    assert run.outcomes() == [(0, "completed", None), (3, "failed", UNSHOWN + UNKEPT)]
+    assert run.result.assertions == STOPPED
+    assert run.states() == STOPPED_STATES
+    assert run.ended() == INCONCLUSIVE
 
 
 # Every step completed and every assertion passed.
