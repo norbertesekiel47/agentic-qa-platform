@@ -11,14 +11,7 @@ from typing import Literal
 
 from aqa_core.compiled import NetworkNone, NetworkSeen
 from aqa_core.compiler import Observed
-from playwright.async_api import (
-    ConsoleMessage,
-    Error,
-    Frame,
-    Page,
-    Request,
-    Response,
-)
+from playwright.async_api import ConsoleMessage, Error, Frame, Page, Request, Response
 
 from aqa_runner import network
 from aqa_runner.document_origins import RECORD_LIMIT, Records
