@@ -462,10 +462,11 @@ class _Healed:
     through a target whose locators differ between the committed script and the
     final one, or an assertion of any kind on such a target. `by_subject` is each
     repair by what it was handed, `first` each target's first repair to change
-    it, `targets` what each subject reads, `dispatched` each step that completed
-    or whose intent has no completion, so not one refused before dispatch or one
-    that drifted, which write none, and `untroubled` says nothing stopped, blocked
-    or left unresolved the run."""
+    it, `targets` what each subject reads, `dispatched` each step that completed,
+    that keeps its settle window, as one a repair inserted that failed once it
+    settled does (#246), or whose intent has no completion, so not one refused
+    before dispatch or one that drifted, which write none, and `untroubled` says
+    nothing stopped, blocked or left unresolved the run."""
 
     redactor: Redactor
     rebound: frozenset[str]
@@ -501,7 +502,9 @@ class _Healed:
             frozenset(
                 _Subject("step", step.seq)
                 for step in result.steps
-                if step.outcome == "completed" or step.seq in unresolved
+                if step.outcome == "completed"
+                or step.window is not None
+                or step.seq in unresolved
             ),
             not (
                 end.stopped_on

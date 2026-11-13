@@ -11,7 +11,7 @@ from typing import Literal
 
 from aqa_core.compiled import NetworkNone, NetworkSeen
 from aqa_core.compiler import Observed
-from playwright.async_api import ConsoleMessage, Error, Page, Request, Response
+from playwright.async_api import ConsoleMessage, Error, Frame, Page, Request, Response
 
 from aqa_runner import network
 from aqa_runner.document_origins import RECORD_LIMIT, Records
@@ -93,8 +93,10 @@ class Window:
     the window's opening on; `wrote`, whether it read one meanwhile, any
     method but GET, HEAD or OPTIONS, from any page or worker; `tunnelled`,
     whether a tunnel (https or a WebSocket), whose requests and messages it
-    can't read, had opened by then (ADR-0025's #54 amendment). No field
-    retains a live Playwright object."""
+    can't read, had opened by then (ADR-0025's #54 amendment); `navigated`,
+    whether Playwright reported a navigation of the page's main frame
+    meanwhile, a same-document one included (ADR-0024's #246 amendment). No
+    field retains a live Playwright object."""
 
     requests: Records[PageRequest] = field(default_factory=Records[PageRequest])
     responses: Records[Exchange] = field(default_factory=Records[Exchange])
@@ -103,6 +105,7 @@ class Window:
     heard: bool = False
     wrote: bool = False
     tunnelled: bool = False
+    navigated: bool = False
 
 
 @dataclass(frozen=True)
@@ -195,6 +198,13 @@ class Traffic:
         page.on("requestfailed", self._ended)
         # https://playwright.dev/python/docs/api/class-page#page-event-console
         page.on("console", self._logged)
+        # Every navigation of every frame, same-document ones included, as the
+        # browser reports it, never a script in the page's world; the main
+        # frame persists across them:
+        # https://playwright.dev/python/docs/api/class-page#page-event-frame-navigated
+        # https://playwright.dev/python/docs/api/class-page#page-main-frame
+        self._main_frame = page.main_frame
+        page.on("framenavigated", self._navigated)
 
     def proxied(self, method: bytes) -> None:
         """A write request the egress proxy read, `method` as sent, which joins
@@ -313,6 +323,12 @@ class Traffic:
         # https://playwright.dev/python/docs/api/class-consolemessage
         text = self._redactor.redact(message.text, limit=CONSOLE_CHARS)
         logged.add(ConsoleEntry(message.type, str(text)))
+
+    def _navigated(self, frame: Frame) -> None:
+        """A frame's navigation, which marks the window of the latest action
+        when the frame is the page's main frame: a child frame's doesn't."""
+        if frame is self._main_frame:
+            self._window.navigated = True
 
     def _on_finished(self, request: Request) -> None:
         self._finished.add(request)

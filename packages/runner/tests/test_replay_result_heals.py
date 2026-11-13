@@ -16,6 +16,7 @@ from aqa_runner.executor import RunResult, StepResult
 from aqa_runner.redaction import NO_SECRETS
 from aqa_runner.repairs import AssertionAt, Basis, Repaired, StepAt
 from aqa_runner.replay_result import ReplayEnd, Stop, unrecorded
+from aqa_runner.settling import Window
 
 from packages.runner.tests.test_replay_result import (
     BLOB,
@@ -300,6 +301,42 @@ def test_a_step_that_failed_after_its_dispatch_is_listed_in_a_finding(
 
     entry = judged(end, "invariant", "console_errors")
     assert entry["finding"]["rebound_steps"] == [1]
+
+
+def test_an_inserted_step_that_settled_and_then_failed_is_listed_in_a_finding(
+    tmp_path: Path,
+) -> None:
+    """Step 2, which heal inserted through `save`, which it rebound, settled, then
+    didn't show it changed nothing (#246): its action took effect, so it reached
+    dispatch."""
+    run = made(tmp_path)
+    inserted = Click.model_validate(
+        {"seq": 2, "action": "click", "target": "save", "side_effect": False}
+    )
+    patched = rebinding(run.script, save=NEW_SAVE)
+    taken = Repaired(
+        the_click(run.script),
+        MISSED,
+        (),
+        patched.model_copy(update={"steps": (inserted, *patched.steps)}),
+        Basis(BOUND_AS, REPORTED, None, "heals/1"),
+    )
+    failed = StepResult(
+        2, "failed", Window(heard=True, wrote=True), 0, "idle", error="it wrote"
+    )
+
+    healed = ending(run, repairs=(taken,), base=BLOB, **violated("console_errors"))
+    end = replace(
+        healed,
+        result=replace(
+            cast_result(healed),
+            steps=(StepResult(0, "completed"), failed),
+            assertions=(),
+        ),
+    )
+
+    entry = judged(end, "invariant", "console_errors")
+    assert entry["finding"]["rebound_steps"] == [2]
 
 
 def with_the_check_on_save_called(run: Made, name: str) -> Made:
