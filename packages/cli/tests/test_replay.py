@@ -258,7 +258,8 @@ def test_a_replay_keeps_its_run_json_and_its_line_says_that_duration(
     assert CompiledScript.model_validate_json(
         json.dumps(kept["script"])
     ) == CompiledScript.model_validate_json(script)
-    assert kept["script"] == json.loads(script)
+    # As published, its targets' order included, which a heal's diff reads.
+    assert json.dumps(kept["script"], indent=2, ensure_ascii=False) + "\n" == script
     assert result.stdout == f"passed order: {kept['duration_seconds']:.1f}s, $0\n"
 
 
