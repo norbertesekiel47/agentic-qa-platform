@@ -296,6 +296,41 @@ def test_an_inserted_press_on_a_page_that_never_settles_stops_the_run(
     assert run.ended() == INCONCLUSIVE
 
 
+def test_an_inserted_press_that_loads_a_new_document_stops_the_run(
+    tmp_path: Path,
+) -> None:
+    html = enter_does("location.assign('/raw/elsewhere')")
+
+    run = replayed(tmp_path, inserting(PRESS_ENTER), html=html)
+
+    assert ("GET", "/raw/elsewhere") in run.seen
+    assert run.outcomes() == [
+        (0, "completed", None),
+        (3, "failed", UNSHOWN + NAVIGATED),
+    ]
+    assert run.result.assertions == STOPPED
+    assert run.states() == STOPPED_STATES
+    assert run.ended() == INCONCLUSIVE
+
+
+def test_an_inserted_click_that_moves_the_page_through_its_history_stops_the_run(
+    tmp_path: Path,
+) -> None:
+    """A same-document navigation requests nothing, and still moves the page."""
+    html = contact_does("history.pushState(null, '', '/page/contact')")
+
+    run = replayed(tmp_path, inserting(CLICK_CONTACT), html=html)
+
+    assert [path for _, path in run.seen] == ["/page/order"]
+    assert run.outcomes() == [
+        (0, "completed", None),
+        (3, "failed", UNSHOWN + NAVIGATED),
+    ]
+    assert run.result.assertions == STOPPED
+    assert run.states() == STOPPED_STATES
+    assert run.ended() == INCONCLUSIVE
+
+
 # The moved page, with a WebSocket the page opens as it loads, whose
 # handshake the app holds, so it stays open and nothing fails meanwhile.
 SOCKET = MOVED + "<script>new WebSocket(`ws://${location.host}/held/socket`);</script>"
@@ -342,6 +377,28 @@ PASSED = (
 def test_an_inserted_press_that_changes_nothing_completes(tmp_path: Path) -> None:
     run = replayed(tmp_path, inserting(PRESS_TAB), html=MOVED)
 
+    assert run.outcomes() == [
+        (0, "completed", None),
+        (3, "completed", None),
+        (1, "completed", None),
+    ]
+    assert run.result.assertions == PASSED
+    assert run.result.outcome == "passed"
+    assert run.ended()[:2] == ("drift_consistent", 7)
+
+
+# The moved page, with a frame of the app's below it.
+FRAMED = MOVED + '<iframe src="/raw/first"></iframe>'
+
+
+def test_an_inserted_click_that_navigates_only_a_child_frame_completes(
+    tmp_path: Path,
+) -> None:
+    html = contact_does("frames[0].location.assign('/raw/second')", FRAMED)
+
+    run = replayed(tmp_path, inserting(CLICK_CONTACT), html=html)
+
+    assert ("GET", "/raw/second") in run.seen
     assert run.outcomes() == [
         (0, "completed", None),
         (3, "completed", None),
