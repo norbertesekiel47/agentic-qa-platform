@@ -29,7 +29,7 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | [0021](0021-bench-apps-gate-carve-out.md) | Vendored benchmark apps (`bench/apps/`): a narrow gate carve-out | Accepted |
 | [0022](0022-bench-flags-test-api-manifest.md) | Benchmark feature flags, test-only endpoints and the ground-truth manifest | Accepted (amended 2026-09-28, 2026-09-29, 2026-10-01) |
 | [0023](0023-bench-pilot-toggle-checks-dry-review.md) | Benchmark pilot: browser toggle checks and a written dry compile review | Accepted (amended 2026-09-28 to 2026-11-02) |
-| [0024](0024-explore-runs.md) | Explore runs: coverage plan, stateless navigator and confirmation replay | Accepted (amended 2026-10-02 to 2026-11-12) |
+| [0024](0024-explore-runs.md) | Explore runs: coverage plan, stateless navigator and confirmation replay | Accepted (amended 2026-10-02 to 2026-11-13) |
 | [0025](0025-compiled-targets-checks-flags.md) | Compiled scripts: meanings, locators, checks and step flags | Accepted (amended 2026-10-02 to 2026-10-28) |
 | [0026](0026-local-ci-browser-boundary.md) | The browser boundary for local and CI runs: sandbox, egress and test secrets | Accepted (amended 2026-09-30 to 2026-10-28); masked screenshots superseded for M1 by ADR-0033 |
 | [0027](0027-python-workspace.md) | The Python workspace: layout, pins and tool settings | Accepted (amended 2026-09-29, 2026-10-01) |

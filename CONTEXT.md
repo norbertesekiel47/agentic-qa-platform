@@ -127,7 +127,7 @@ The default replay mode, used in CI. It makes zero LLM calls, so every assertion
 An opt-in replay mode that adds model-assisted visual checks for expectations that ask for them. Its cost and results are always reported apart from strict replays.
 
 **Run viewer**:
-The step-by-step view of any finished run, explore runs included, with its screenshots, evidence and verdicts. It is a dashboard screen, and `aqa report` (#249) will open the same view locally.
+The step-by-step view of any finished run, explore runs included, with its screenshots, evidence and verdicts. It is a dashboard screen. `aqa report` (#249) writes the same view of a finished replay or run into its local run record, as one offline HTML file; explore runs and screenshots come later.
 _Avoid_: replay, replay viewer, run replay
 
 **Step intent**:

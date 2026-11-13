@@ -16,7 +16,7 @@ from aqa_runner.heal_proposal import held_proposal, patched_script
 from aqa_runner.publication import PublishError, PublishWriteError, publish_text
 from aqa_runner.redaction import NO_SECRETS
 
-from aqa_cli.common import found_script, say, stop
+from aqa_cli.common import found_script, say, spec_root_above, stop
 from aqa_cli.run import run
 
 _PROPOSAL_ID: Final = re.compile(r"ah_[0-9a-f]{12}")
@@ -28,10 +28,6 @@ _UNREAD: Final = (
 _STALE: Final = (
     "the compiled script changed since this proposal was made, so nothing was "
     "applied: run aqa run again"
-)
-_LINKED: Final = (
-    "a link, which could lead into another checkout: run this inside the project you "
-    "mean"
 )
 _REFORMATTED: Final = (
     "  the compiled script wasn't in the form aqa writes, so its formatting changed too"
@@ -74,22 +70,6 @@ def heal(
             )
 
 
-def _spec_root_above(directory: Path) -> Path:
-    """The spec root a command given no spec path runs under: from `directory` up,
-    at each level `qa/`, where `aqa init` puts one, and then the level itself, so a
-    repository's own `config.yaml` doesn't win over its `qa/`. No person named this
-    root, and a repository can commit `qa` as a link into another checkout, where the
-    write would land, so a link is refused before anything behind it is read. A level
-    holds no link: the working directory is the operating system's physical path."""
-    for level in (directory, *directory.parents):
-        for root in (level / "qa", level):
-            if (root / "config.yaml").is_file():
-                if root.is_symlink():
-                    raise SpecError([f"{root}: {_LINKED}"])
-                return root
-    raise SpecError([f"{directory}: no config.yaml in it, in its qa/ or above it"])
-
-
 def _apply(proposal: str) -> None:
     """Write the proposal `proposal` names to its spec's compiled script, or stop at
     the first refusal (API.md §7). `Publication.found` comes before the read, so a
@@ -101,7 +81,7 @@ def _apply(proposal: str) -> None:
             param_hint="'PROPOSAL_ID'",
         )
     try:
-        root = _spec_root_above(Path.cwd())
+        root = spec_root_above(Path.cwd())
         project = load_project(root)
         spec_id, held = held_proposal(root, proposal)
     except OSError:

@@ -26,7 +26,7 @@ from aqa_runner.model_router import ModelRouter
 from aqa_runner.model_turns import Spending
 from aqa_runner.publication import published_text
 from aqa_runner.redaction import NO_SECRETS, Redactor
-from aqa_runner.repairs import Basis, Drift, Offer, Repair
+from aqa_runner.repairs import Basis, Drift, Offer
 from aqa_runner.replay_result import ReplayEnd, present
 from aqa_runner.replays import Opened, Replaying, replay_run
 from aqa_runner.run_record import RunRecord
@@ -275,11 +275,9 @@ async def heal_recorded(
     config = load_config(root / "config.yaml")
     script = fx.for_spec(case.script, spec)
 
-    def heal(spending: Spending) -> Repair:
+    def heal(spending: Spending) -> Healing:
         budgets = config.budgets
-        return Healing(
-            router, spending, budgets.heal_turns, budgets.resolve_seconds
-        ).repair
+        return Healing(router, spending, budgets.heal_turns, budgets.resolve_seconds)
 
     with serving(case.html) as app:
         blob = blob_sha(published_text(script).encode())

@@ -22,6 +22,8 @@ from aqa_cli import run as run_module
 from aqa_cli.main import app as aqa
 from aqa_core.compiled import CompiledScript
 from aqa_core.heal_patch import heal_patch_problems
+from aqa_core.model_roles import resolve_roles
+from aqa_core.price_map import vendored
 from aqa_core.project import load_project, parse_compiled
 from aqa_runner.publication import published_text
 from aqa_runner.strict_replay import Replayed
@@ -215,7 +217,11 @@ def assert_healed_and_applies(
     ]
     assert proposal["compiled"] == ".compiled/order.json"
     assert result.stdout == ""
-    assert f"  heal proposal {proposal['id']}:\n" in result.stderr
+    # The run viewer's command comes before the proposal, which ends the block.
+    assert (
+        f"  run viewer: aqa report {record_of(spec).name}\n"
+        f"  heal proposal {proposal['id']}:\n"
+    ) in result.stderr
     assert f"  toggle ({TOGGLE_MEANING}): bound {case.bound}\n" in result.stderr
     assert "  --- a/.compiled/order.json\n" in result.stderr
     assert "  +++ b/.compiled/order.json\n" in result.stderr
@@ -292,6 +298,47 @@ def test_a_run_line_says_the_outcome_time_cost_and_record(
     assert f", $0.003, run record: {record_of(spec)}" in first
 
 
+def test_a_run_that_heals_keeps_its_run_json_with_the_healers_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = order_at(tmp_path / "qa")
+
+    with serving(MOVED) as app:
+        result = run(
+            monkeypatch,
+            [str(spec), "--url", app.origin],
+            Scripted(rebinding("button", "Show details")),
+        )
+
+    assert result.exit_code == 7, result.output
+    record = record_of(spec)
+    kept = json.loads((record / "run.json").read_text())
+    assert (kept["schema_version"], kept["run_id"], kept["spec_id"]) == (
+        1,
+        record.name,
+        "order",
+    )
+    assert kept["goal"] == "A customer finds out when their order ships."
+    assert kept["expectations"] == [SHIPPING]
+    healer = resolve_roles(load_project(spec.parent).config, vendored())["healer"]
+    assert kept["models"] == {
+        "healer": {
+            "provider": "anthropic",
+            "model": healer.model.name,
+            "effort": healer.effort,
+            "fallback": None,
+        }
+    }
+    committed = compiled_of(spec).read_text()
+    assert CompiledScript.model_validate_json(
+        json.dumps(kept["script"])
+    ) == CompiledScript.model_validate_json(committed)
+    assert json.dumps(kept["script"], indent=2, ensure_ascii=False) + "\n" == committed
+    assert result.stderr.startswith(
+        f"drift_consistent order: {kept['duration_seconds']:.1f}s, $0.003, "
+    )
+
+
 def test_a_run_with_no_drift_passes_and_builds_no_model_client(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -304,8 +351,10 @@ def test_a_run_with_no_drift_passes_and_builds_no_model_client(
     assert result.exit_code == 0, result.output
     assert (client.models, client.requests) == ([], [])
     assert result.stderr == ""
-    assert result.stdout.startswith("passed order: ")
-    assert result.stdout.rstrip().endswith(", $0")
+    first, hint = result.stdout.splitlines()
+    assert first.startswith("passed order: ")
+    assert first.endswith(", $0")
+    assert hint == f"  run viewer: aqa report {record_of(spec).name}"
     document = replay_json(spec)
     assert (document["mode"], document["heal_proposal"]) == ("run", None)
     assert all(verdict["heal"] is None for verdict in document["verdicts"])
@@ -589,6 +638,7 @@ def test_a_bound_value_on_the_page_reaches_no_output_or_file(
 
     assert result.exit_code == 7, result.output
     files = [each for each in (root / ".aqa").rglob("*") if each.is_file()]
+    assert record_of(path) / "run.json" in files
     sent = [request[-1].text for request in client.requests]
     assert (
         copies_found(OTHER_FAKE_VALUE, files=files, texts=[result.output, *sent]) == []
