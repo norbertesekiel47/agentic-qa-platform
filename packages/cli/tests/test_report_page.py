@@ -261,6 +261,18 @@ def test_a_run_that_healed_shows_its_classification_binding_and_diff(
     assert f"Heal proposal {proposal['id']}" in said
     shown_diff = shown.one(having("class", "diff")).raw_text.split("\n")
     assert shown_diff == drift.diff
+    assert said.endswith(
+        f"To accept it, run aqa heal apply {proposal['id']} in this project: it "
+        "writes the proposal to the compiled script and commits nothing, so review "
+        "git diff, then commit it."
+    )
+    # The evidence says which step it shows: the drifted one, as the page opens.
+    # A live region, so a screen reader hears the selection move.
+    labels = shown.one(having("aria-live", "polite")).all(having("class", "for-step"))
+    assert [(label.text, "hidden" in label.attrs) for label in labels] == [
+        ("Evidence of step 0 ✓ passed", True),
+        ("Evidence of step 1 ⇄ UI drift, expectations hold", False),
+    ]
     assert "intentional" not in html.lower()
 
 
@@ -377,6 +389,8 @@ def test_a_proposal_aqa_run_doesnt_write_gets_no_diff(
 
     assert shown.all(having("class", "diff")) == []
     assert NOT_ONE in panel(shown)
+    # `heal apply` would refuse it, so nothing says to apply it.
+    assert "aqa heal apply" not in panel(shown)
 
 
 def assert_links_stay_in(record: Path, page_tree: Element) -> None:
@@ -509,6 +523,11 @@ def test_without_a_usable_run_json_its_fields_are_not_recorded(
     assert "Expectations not recorded" in shown.text
     assert steps(shown)[1].endswith("Target: toggle Locator: not recorded")
     assert "The heal diff: not recorded." in panel(shown)
+    # `heal apply` reads the proposal, not `run.json`, so it still applies.
+    proposal = drift.replay_json()["heal_proposal"]["id"]
+    assert f"To accept it, run aqa heal apply {proposal} in this project" in panel(
+        shown
+    )
     assert "a1: not recorded" in panel(shown)
     assert OUTSIDE not in html
 
