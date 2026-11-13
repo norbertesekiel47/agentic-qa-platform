@@ -72,6 +72,7 @@ from aqa_runner.repairs import (
     Repair,
     Repaired,
     StepAt,
+    inserted_failure,
     rebind_refusal,
 )
 from aqa_runner.run_record import STEPS, RefusedWriteError, RunRecord, require_clean
@@ -85,7 +86,8 @@ NAVIGATION_SECONDS = 30
 
 # How a step ended: dispatched and settled; its target never resolved, so
 # nothing was dispatched; or dispatching or settling raised, so its outcome
-# is unknown.
+# is unknown, or a step a repair inserted settled without showing it changed
+# nothing.
 type StepOutcome = Literal["completed", "drifted", "failed"]
 
 # How the run ended (DATA_MODEL's `runs.status`).
@@ -138,7 +140,8 @@ class StepResult:
     has its settle `window`, whose requests are the step's, the index of
     the locator that found its target, if it had one, and how settling
     ended. A drifted step has each locator's miss; a failed one, what
-    raised."""
+    raised, or, for a step a repair inserted that settled without showing it
+    changed nothing, why, beside the window, index and settling it keeps."""
 
     seq: int
     outcome: StepOutcome
@@ -245,7 +248,10 @@ async def replay(
     drift. Once every step has completed, a positive check whose target
     drifted goes to it too (`_evaluated`). What the repair raises leaves as
     any failure here does. A step through a target a repair rebound passes a
-    gate before its intent (`repairs.rebind_refusal`)."""
+    gate before its intent (`repairs.rebind_refusal`). A step a repair
+    inserted, once it completed, must show from its own settle window that
+    it changed nothing, or it fails, its completion on disk, and the run
+    stops there (`repairs.inserted_failure`)."""
     try:
         replayed = await _replayed(
             script, setup, gate, every_locator, chromium=chromium, proxy=proxy
@@ -380,7 +386,7 @@ async def _replayed(
         pending, in_use = list(runnable), script
         while pending and steps[-1].outcome == "completed" and not interrupted():
             step = pending[0]
-            result = await _run(session, run, step, interrupted)
+            result = _shown(run, await _run(session, run, step, interrupted), redactor)
             if result is None:
                 break
             # One repair per drifted step: a step that drifts again after its
@@ -609,6 +615,29 @@ async def _run(
             )
         )
     return await _run_targeted(session, run, step, interrupted)
+
+
+def _shown(
+    run: _Replay, result: StepResult | None, redactor: Redactor
+) -> StepResult | None:
+    """`result`, unless it is a step a repair inserted that completed and whose
+    own settle window doesn't show it changed nothing: then it failed, with why
+    (`repairs.inserted_failure`), and keeps its window, locator and settling.
+    Judged once its completion is on disk and before it is kept, so before its
+    evidence and anything of the next step. A step is inserted when the
+    committed script has no step of its seq."""
+    if (
+        result is None
+        or result.outcome != "completed"
+        or result.window is None
+        or result.settled is None
+        or any(step.seq == result.seq for step in run.committed.steps)
+    ):
+        return result
+    failure = inserted_failure(result.window, result.settled, redactor)
+    if failure is None:
+        return result
+    return replace(result, outcome="failed", error=failure)
 
 
 async def _run_targeted(
