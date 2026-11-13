@@ -74,6 +74,21 @@ def test_a_record_writes_a_document_as_json(tmp_path: Path) -> None:
     assert json.loads(written.read_text()) == {"outcome": "planned", "calls": []}
 
 
+def test_a_document_can_keep_its_own_key_order(tmp_path: Path) -> None:
+    record = RunRecord.create(tmp_path)
+    # A compiled script's targets keep their order: its published text, and
+    # so a heal's diff, depend on it (#249).
+    document = {"targets": {"toggle": 1, "summary": 2}, "steps": []}
+
+    sorted_ = record.write("sorted.json", document)
+    kept = record.write("kept.json", document, sort_keys=False)
+
+    assert list(json.loads(sorted_.read_text())["targets"]) == ["summary", "toggle"]
+    assert kept.read_text() == (
+        '{\n  "targets": {\n    "toggle": 1,\n    "summary": 2\n  },\n  "steps": []\n}\n'
+    )
+
+
 def test_a_record_never_writes_a_document_twice(tmp_path: Path) -> None:
     record = RunRecord.create(tmp_path)
     record.write("plan.json", {"outcome": "planned"})

@@ -182,10 +182,10 @@ def _models(healing: Healing | None) -> dict[str, object]:
 def _kept(end: ReplayEnd, seconds: float, models: dict[str, object]) -> ReplayEnd:
     """Write the run's `run.json`, what the run viewer reads besides
     `replay.json` (#249): the spec's goal and expectations, how long the run
-    took, the models it routed to and the script it replayed. It is scanned
-    as evidence is, and left out if the record refuses it, so no goal decides
-    a run; a record that can't write it adds a record error, as for
-    `replay.json`."""
+    took, the models it routed to and the script it replayed, in the script's
+    own key order, which a heal's diff reads. It is scanned as evidence is, and
+    left out if the record refuses it, so no goal decides a run; a record that
+    can't write it adds a record error, as for `replay.json`."""
     spec = end.spec.frontmatter
     document = {
         "schema_version": 1,
@@ -199,7 +199,7 @@ def _kept(end: ReplayEnd, seconds: float, models: dict[str, object]) -> ReplayEn
     }
     try:
         with suppress(RefusedWriteError):
-            end.record.write("run.json", document)
+            end.record.write("run.json", document, sort_keys=False)
     except OSError:
         unkept = Stop("record_error", end.record.redactor.redact(_UNKEPT))
         return replace(end, stops=(*end.stops, unkept))

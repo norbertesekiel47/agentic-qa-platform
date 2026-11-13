@@ -329,7 +329,7 @@ def test_a_run_that_heals_keeps_its_run_json_with_the_healers_model(
     assert CompiledScript.model_validate_json(
         json.dumps(kept["script"])
     ) == CompiledScript.model_validate_json(committed)
-    assert kept["script"] == json.loads(committed)
+    assert json.dumps(kept["script"], indent=2, ensure_ascii=False) + "\n" == committed
     assert result.stderr.startswith(
         f"drift_consistent order: {kept['duration_seconds']:.1f}s, $0.003, "
     )

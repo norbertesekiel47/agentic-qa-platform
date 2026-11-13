@@ -215,13 +215,20 @@ class RunRecord:
         return other._journals is self._journals
 
     def write(
-        self, name: str, document: object, *, check: LineCheck | None = None
+        self,
+        name: str,
+        document: object,
+        *,
+        check: LineCheck | None = None,
+        sort_keys: bool = True,
     ) -> Path:
         """Write `document` to the record as the JSON file `name`, once: a
         record keeps what a run wrote, so a second write of a name is a
         FileExistsError. `name` is a path inside the record, its directories
         made as needed. The JSON is made and scanned before the file is
         opened, so a document that can't be written leaves no file behind.
+        Its keys are sorted, unless `sort_keys` is false: `run.json` keeps
+        its script's own order, which a heal's diff reads (#249).
 
         The scan runs over the JSON as written, so it also finds a value
         that JSON's escapes spell (a line feed written as a backslash and an
@@ -229,7 +236,7 @@ class RunRecord:
 
         With a `check`, the JSON goes to `check` instead of the scan, and
         is written as `check` saw it, with a final newline, or not at all."""
-        text = json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False)
+        text = json.dumps(document, indent=2, sort_keys=sort_keys, ensure_ascii=False)
         if check is not None:
             check(text)
             return self._create(name, text + "\n")
