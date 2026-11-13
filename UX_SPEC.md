@@ -1,6 +1,6 @@
 # UX Spec — Agentic QA Platform
 
-Last updated: 2026-11-02 (`aqa heal` and `aqa heal apply`'s lines, #247); 2026-11-02 (`aqa run`'s line and its proposal, #244); 2026-10-27 (`aqa replay`'s line, `--json` and `--quiet`, #239); 2026-10-18 (`aqa explore`'s line and its withheld form, #53 P17). Covers the dashboard (9 screens), GitHub surfaces, CLI output, and the local report viewer.
+Last updated: 2026-11-13 (`aqa report` writes the local run viewer, its line, and what it leaves out until later, #249); 2026-11-02 (`aqa heal` and `aqa heal apply`'s lines, #247); 2026-11-02 (`aqa run`'s line and its proposal, #244); 2026-10-27 (`aqa replay`'s line, `--json` and `--quiet`, #239); 2026-10-18 (`aqa explore`'s line and its withheld form, #53 P17). Covers the dashboard (9 screens), GitHub surfaces, CLI output, and the local report viewer.
 
 ## 1. Design direction
 
@@ -91,15 +91,18 @@ Agentic QA — 5 specs · 3 passed · 1 heal proposed · 1 expectation violated
 
 - Human mode: one line per spec with status icon, time, cost; heal proposals printed as unified diffs; final summary; `aqa report` hint.
 - `aqa explore` (M1): one line, `<outcome> <spec id>: <seconds>s, $<cost>`, then the compiled script's path when one was published, `run record: <path>` when the exit isn't 0, and `non-resumable` when an action's outcome is unknown; stdout on exit 0, stderr otherwise, followed on stderr by an unconfirmed script's warning, each reason indented, and where the egress record is. A line that would spell a bound test secret is withheld as `<outcome> <spec id>: the rest is withheld, since it would spell a bound value`, with `non-resumable` kept on a line of its own, alone when the two together would spell one (API.md §7).
-- `aqa replay` (M2, #239): one line per run as it ends, in `aqa explore`'s form with a cost of `$0`, the run record whenever it didn't pass, and its reasons on stderr; no status icon, summary or report hint yet (#249). `--json` prints the runs' `replay.json` documents in one array and nothing else; `--quiet` prints only the runs that didn't pass (API.md §7).
+- `aqa replay` (M2, #239): one line per run as it ends, in `aqa explore`'s form with a cost of `$0`, the run record whenever it didn't pass, and its reasons on stderr; no status icon, summary or report hint yet. `--json` prints the runs' `replay.json` documents in one array and nothing else; `--quiet` prints only the runs that didn't pass (API.md §7).
 - `aqa run` (M2, #244): `aqa replay`'s line with what the healer cost. On `drift_consistent`, on stderr, the proposal's id, each rebound target's meaning and the element it is bound to, then a unified diff. The role and name are the page's own words, so the diff is the evidence (API.md §7).
 - `aqa heal <spec>` (M2, #247) prints `aqa run`'s line. `aqa heal apply <proposal_id>` prints `applied <id> <spec id>: <path>` and each path the patch names, with one more line when writing it changed the file's formatting, on stdout; a refusal prints its outcome, the id and why on stderr. It shows no locator: the person reviews `git diff`, and commits it (API.md §7).
+- `aqa report [<run_id>]` (M2, #249) prints `report <run_id>: <path>` on stdout once it has written the run viewer (§6) into that run's record; a refusal prints its outcome, the id (`report` when none was given) and why, on one line on stderr (API.md §7).
 - `--json` mode for scripting; `--quiet` for CI logs (only `aqa replay` has them so far).
 - Errors are actionable ("Domain `staging.acme.dev` is not verified for hosted runs — run in CI or verify at <link>").
 
 ## 6. Local report viewer
 
-`aqa report` opens a self-contained HTML file (no network needed) with the same layout as the run viewer (screen 3.5) — this is also what the public demo links to for runs without signing in.
+`aqa report` writes a self-contained HTML file (no network needed) into the run's own record, `.aqa/runs/<run_id>/report.html`, with the run viewer's layout (screen 3.5): the header (the goal, the verdict chip, the mode badge, the duration, the cost and the model config, with the record's private notice), the step timeline, the Accessibility, Network, Console and Agent reasoning tabs for the selected step, and the verdict panel with the evidence links and, for a heal, the diff. It opens no browser; the person opens the file. It reports finished `aqa replay`, `aqa run` and `aqa heal` runs, and shows only what the run's record holds: a field the record doesn't hold reads "not recorded".
+
+What the local report leaves out, for later issues: the Screenshot tab, explore runs, commit and PR links, the share link and "Open in GitHub". Sharing a report waits for M8, by the maintainer's 2026-10-27 decision: until then the file stays in the private run record (SECURITY §10).
 
 ## 7. Accessibility
 
