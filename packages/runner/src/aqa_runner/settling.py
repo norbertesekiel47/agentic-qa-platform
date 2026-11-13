@@ -93,8 +93,10 @@ class Window:
     the window's opening on; `wrote`, whether it read one meanwhile, any
     method but GET, HEAD or OPTIONS, from any page or worker; `tunnelled`,
     whether a tunnel (https or a WebSocket), whose requests and messages it
-    can't read, had opened by then (ADR-0025's #54 amendment). No field
-    retains a live Playwright object."""
+    can't read, had opened by then (ADR-0025's #54 amendment); `navigated`,
+    whether Playwright reported a navigation of the page's main frame
+    meanwhile, a same-document one included (ADR-0024's #246 amendment). No
+    field retains a live Playwright object."""
 
     requests: Records[PageRequest] = field(default_factory=Records[PageRequest])
     responses: Records[Exchange] = field(default_factory=Records[Exchange])
@@ -103,6 +105,7 @@ class Window:
     heard: bool = False
     wrote: bool = False
     tunnelled: bool = False
+    navigated: bool = False
 
 
 @dataclass(frozen=True)

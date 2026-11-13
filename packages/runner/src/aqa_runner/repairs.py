@@ -38,9 +38,10 @@ from aqa_runner.document_origins import DocumentChangedError, PolicyEventError
 from aqa_runner.evaluation import MARGIN_SECONDS, bounded
 from aqa_runner.locators import Miss, Resolved, resolve
 from aqa_runner.reasons import UnansweredError
-from aqa_runner.redaction import Redacted
+from aqa_runner.redaction import Redacted, Redactor
 from aqa_runner.run_record import RefusedWriteError, RunRecord, require_clean
 from aqa_runner.secret_fields import SecretNotFilledError, SecretRefusedError
+from aqa_runner.settling import Settled, Window
 
 # Why a step through a rebound target didn't run, in fixed words (ADR-0024's
 # #244 amendment): the page chooses what its elements say, never these.
@@ -66,6 +67,20 @@ _UNANCHORED: Final = (
 _BROKE: Final = (
     "the page broke the checks on this step's rebound target, so it did not run"
 )
+# Why a step a repair inserted failed once it settled, in fixed words
+# (ADR-0024's #246 amendment), each missing piece of evidence in this order.
+# Three are explore's words for the same evidence (`aqa_core.compiler`).
+_UNSHOWN: Final = "a repair inserted this step, and it didn't show it changed nothing: "
+_BUSY: Final = "settle: the page was still busy when settling's wait ran out"
+_UNHEARD: Final = (
+    "network: the egress proxy didn't hear every write from the step's dispatch on"
+)
+_WROTE: Final = "network: a write request"
+_TUNNEL: Final = (
+    "network: an encrypted or WebSocket connection was open, which the egress "
+    "proxy can't read"
+)
+_NAVIGATED: Final = "page: the page's main frame navigated"
 
 
 @dataclass(frozen=True)
@@ -402,6 +417,31 @@ async def _found_alone(page: Page, element: ElementHandle, committed: Target) ->
             finally:
                 await found.element.dispose()
     return False
+
+
+def inserted_failure(
+    window: Window, settled: Settled, redactor: Redactor
+) -> Redacted | None:
+    """Why a step a repair inserted, whose action's settle window is `window`
+    and whose settling ended `settled`, didn't show it changed nothing, or None
+    when it did (ADR-0024's #246 amendment): settling ended `idle`, the egress
+    proxy heard every write from the window's opening on and read none, no
+    tunnel was open, and the page's main frame didn't navigate. Each that
+    fails is named, scanned with `redactor`, the session's. Only the step's
+    own window counts: the one before belongs to the step that opened it,
+    and later ones open after the next step ran."""
+    unshown = [
+        phrase
+        for phrase, holds in (
+            (_BUSY, settled != "idle"),
+            (_UNHEARD, not window.heard),
+            (_WROTE, window.wrote),
+            (_TUNNEL, window.tunnelled),
+            (_NAVIGATED, window.navigated),
+        )
+        if holds
+    ]
+    return redactor.redact(_UNSHOWN + "; ".join(unshown)) if unshown else None
 
 
 async def cut_off[T](look: Coroutine[Any, Any, T], budget: float) -> T:
