@@ -34,6 +34,7 @@ from packages.runner.tests.explore_graph_fixtures import calling
 from packages.runner.tests.heal_fixtures import (
     BUDGETS,
     FOUND_NONE,
+    MOVED,
     NO_TOOL,
     Healed,
     basis,
@@ -51,6 +52,8 @@ CANVAS = page("canvas")
 INSIDE = (88, 36)
 ON_THE_HEADING = (24, 100)
 ON_THE_BUTTON = (48, 154)
+# On #240's moved page, the toggle, now in the order's section.
+ON_THE_MOVED_TOGGLE = (50, 90)
 SECRET_CONFIG = f"budgets: {{ resolve_seconds: 2 }}\nsecrets: {{ {BOUND_AT_START} }}\n"
 CLICKED = ("GET", "/did/canvas-click")
 CANARY = "canary-only-the-model-wrote"
@@ -559,3 +562,35 @@ def test_a_point_that_passes_the_checks_offers_the_generators_locators(
     assert basis(run).model_reported is None
     assert basis(run).said == "element"
     assert run.document["heal_proposal"] is None
+
+
+def test_a_vision_pick_that_passes_every_check_is_a_heal_proposal(
+    tmp_path: Path,
+) -> None:
+    """The maintainer's acceptance on #252: a vision pick of a non-canvas
+    element that passes the rebind checks, then replay's, is a proposal as a
+    tree pick's is, with the generator's locators and no model report."""
+    run = healed(tmp_path, NO_TOOL, clicking(*ON_THE_MOVED_TOGGLE), html=MOVED)
+
+    written = run.document
+    assert (written["outcome"], written["exit_code"]) == ("drift_consistent", 7)
+    step = run.verdict("step", 1)
+    assert step["verdict"] == "drift_consistent"
+    assert (step["heal"]["bound"], step["heal"]["model_reported"]) == (
+        "element",
+        None,
+    )
+    # A point gives no snapshot line, so no role locator: the css one the
+    # generator finds alone.
+    assert written["heal_proposal"]["patch"] == [
+        {
+            "op": "replace",
+            "path": "/targets/toggle/locators",
+            "value": [{"css": "button", "scope": {"css": "#order"}}],
+        }
+    ]
+    assert [check.outcome for check in run.result.assertions] == ["pass", "pass"]
+    assert [tools for tools, _ in run.client.offered] == [
+        ("rebind",),
+        ("vision_click",),
+    ]
