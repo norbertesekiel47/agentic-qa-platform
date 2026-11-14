@@ -1,13 +1,16 @@
 """#171's hostile pages through each path that saves a screenshot as evidence
-(#251; ADR-0033's #251 amendment): a step that drifted and a step that failed,
-in a replay that asks for screenshots as `strict_replay`'s do, and a heal's
-first look. Each case's page is set up on the replay's own session, through its
-start step's dispatch, with its bound value filled and its attack started, as
-`test_screenshots.attack` sets one up; the replay then reaches the path's
-capture through its own code. No saved image shows the bound value, each shows
-the page's marker, and a case not marked `withholds` saves one. Each case is
-captured once a path, at scale 1: #171's own suite captures each 8 times and
-covers scale 2. Real Chromium, sandboxed, on the OS that runs it."""
+(#251; ADR-0033's #251 and #314 amendments): a step that drifted and a step
+that failed, in a replay that asks for screenshots as `strict_replay`'s do; a
+heal's first look; and a step that failed in a replay that also asks for the
+"before" screenshots, as `--before-screenshots` does. Each case's page is set
+up on the replay's own session, through its start step's dispatch, with its
+bound value filled and its attack started, as `test_screenshots.attack` sets
+one up; the replay then reaches the path's captures through its own code. No
+saved image shows the bound value, each shows the page's marker, and a case
+not marked `withholds` saves each the path takes. Each case is captured once a
+path, twice on the "before" path, at scale 1: #171's own suite captures each
+8 times and covers scale 2. Real Chromium, sandboxed, on the OS that runs
+it."""
 
 import asyncio
 from collections.abc import Awaitable, Callable, Iterator
@@ -51,8 +54,9 @@ from packages.runner.tests.screenshot_pages import (
 )
 from packages.runner.tests.test_screenshots import field
 
-# Where the capture is reached: a step that drifted or failed, or a heal's look.
-type Through = Literal["drifted", "failed", "heal"]
+# Where the capture is reached: a step that drifted or failed, a heal's look,
+# or a step that failed with its "before" asked for too.
+type Through = Literal["drifted", "failed", "heal", "before"]
 
 # A click on a button no case's page has, which drifts, and a key press, whose
 # dispatch the test makes fail.
@@ -171,9 +175,12 @@ async def replayed(
         repair = Healing(
             router, spending, CONFIG.budgets.heal_turns, HEAL_SECONDS
         ).repair
-    script: CompiledScript = FAILS if through == "failed" else DRIFTS
-    # The heal's replay doesn't ask, so its one image is the heal's.
-    setup = RunSetup(spec, CONFIG, sites.app, record, repair, through != "heal")
+    script: CompiledScript = FAILS if through in ("failed", "before") else DRIFTS
+    # The heal's replay doesn't ask, so its one image is the heal's; only the
+    # last path asks for the "before" (#314).
+    setup = RunSetup(
+        spec, CONFIG, sites.app, record, repair, through != "heal", through == "before"
+    )
     gate = run_gate(sites)
     async with async_playwright() as playwright, EgressProxy(gate) as proxy:
         await register_identity_engine(playwright)
@@ -202,7 +209,7 @@ async def replayed(
 
 
 @pytest.mark.parametrize("name", list(CASES))
-@pytest.mark.parametrize("through", ["drifted", "failed", "heal"])
+@pytest.mark.parametrize("through", ["drifted", "failed", "heal", "before"])
 def test_no_saved_evidence_screenshot_shows_a_bound_value_whatever_the_page_does(
     sites: Sites,
     tmp_path: Path,
@@ -213,11 +220,12 @@ def test_no_saved_evidence_screenshot_shows_a_bound_value_whatever_the_page_does
     case = CASES[name]
     if case.unseen:
         unseen(monkeypatch)
-    staging(monkeypatch, sites, name, failing=through == "failed")
+    failing = through in ("failed", "before")
+    staging(monkeypatch, sites, name, failing=failing)
 
     result, pixels = asyncio.run(replayed(sites, tmp_path, through))
 
-    outcome = "failed" if through == "failed" else "drifted"
+    outcome = "failed" if failing else "drifted"
     assert [(step.seq, step.outcome) for step in result.steps] == [
         (0, "completed"),
         (1, outcome),
@@ -229,12 +237,20 @@ def test_no_saved_evidence_screenshot_shows_a_bound_value_whatever_the_page_does
     else:
         shot = result.shots.get(1)
     assert isinstance(shot, Shot)
-    # Saved, or withheld with its reason in the result: never both, never neither.
-    assert (shot.path is None) == (shot.withheld is not None)
-    assert [saved for saved, _, _ in pixels] == (
-        [] if shot.path is None else [shot.path]
+    before = result.before_shots.get(1)
+    # Only the last path captured the page ahead of the step.
+    assert (before is None) == (through != "before")
+    shots = [shot] if before is None else [shot, before]
+    for each in shots:
+        # Saved, or withheld with its reason in the result: never both, never
+        # neither.
+        assert (each.path is None) == (each.withheld is not None)
+    assert [saved for saved, _, _ in pixels] == sorted(
+        each.path for each in shots if each.path is not None
     )
     # No red, and the marker: what is saved is the page, not a blank.
     assert [(red, green) for _, red, green in pixels] == [(0, MARKED)] * len(pixels)
     if not case.withholds:
-        assert shot.path is not None, shot.withheld
+        assert [each.path is not None for each in shots] == [True] * len(shots), [
+            each.withheld for each in shots
+        ]
