@@ -8,9 +8,9 @@ anything (`judged`)."""
 import base64
 from typing import Annotated, Final, Literal
 
-from aqa_core.schema import AtLeastOne, ListOf, StrictModel
+from aqa_core.schema import AtLeastOne, StrictModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from pydantic import AfterValidator, StrictStr
+from pydantic import AfterValidator, Field, StrictStr
 
 from aqa_runner.evaluation import Verified, VerifierSaid
 from aqa_runner.model_router import Routed
@@ -67,7 +67,9 @@ class VerifierVerdict(StrictModel):
     model's own report, and decide nothing."""
 
     verdict: Literal["pass", "expectation_violated", "inconclusive"]
-    evidence_refs: Annotated[ListOf[StrictStr], AtLeastOne]
+    # Written out, not `ListOf`, so the schema holds the array itself, not a
+    # definition named after the alias. JSON's list reads as the tuple.
+    evidence_refs: Annotated[tuple[StrictStr, ...], Field(strict=False), AtLeastOne]
     confidence: Annotated[float, AfterValidator(_a_share)]
     rationale: StrictStr
 
