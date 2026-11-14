@@ -158,6 +158,25 @@ def test_a_withheld_before_screenshot_says_why_and_changes_nothing_else(
     assert unscreenshotted(document(refused)) == unscreenshotted(document(taken))
 
 
+def test_aqa_report_writes_the_viewer_of_a_run_that_kept_a_before_screenshot(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The report reads `evidence.path` and `evidence.screenshot` (#313), so the
+    # new key and file leave it as it was.
+    root = tmp_path / "qa"
+    spec = committed(shop(root, page="/page/throws"), FAILS)
+    replayed = replay(monkeypatch, [*on(app, spec), FLAG])
+    record = record_in(root)
+    monkeypatch.chdir(root)
+
+    result = typer.testing.CliRunner().invoke(aqa, ["report", record.name])
+
+    assert replayed.exit_code == 3, replayed.output
+    assert (record / "evidence" / "1" / "before_screenshot.png").is_file()
+    assert result.exit_code == 0, result.output
+    assert result.stdout == f"report {record.name}: {record / 'report.html'}\n"
+
+
 @pytest.mark.parametrize(
     ("command", "flagged"),
     [
