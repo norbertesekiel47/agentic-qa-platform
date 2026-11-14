@@ -7,7 +7,7 @@ Each ADR captures one decision between real alternatives: the context, the optio
 | # | Title | Status |
 |---|---|---|
 | [0001](0001-agentic-qa-product-choice.md) | Build an agentic QA tester, not a general web agent | Accepted |
-| [0002](0002-hybrid-perception.md) | Hybrid perception: accessibility tree for actions, vision for verification | Accepted |
+| [0002](0002-hybrid-perception.md) | Hybrid perception: accessibility tree for actions, vision for verification | Accepted (amended 2026-11-14) |
 | [0003](0003-explore-compile-heal.md) | Explore once, compile, replay without LLM, heal on drift | Accepted (amended 2026-09-27, 2026-10-27) |
 | [0004](0004-specs-in-repo.md) | Structured natural-language specs; repo is the source of truth | Accepted |
 | [0005](0005-python-backend-nextjs-dashboard.md) | Python backend + Next.js dashboard with generated client | Accepted |

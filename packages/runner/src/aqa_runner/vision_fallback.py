@@ -89,7 +89,8 @@ def vision_request(
     blocks = (("target", target_text(meaning, locators)), ("screenshot", size))
     text = "\n\n".join(block(label, text, redactor) for label, text in blocks)
     # LangChain's standard image block, which langchain-anthropic sends as a
-    # base64 image source.
+    # base64 image source
+    # (https://docs.langchain.com/oss/python/langchain/messages#multimodal).
     image = {
         "type": "image",
         "base64": b64encode(shot.png).decode("ascii"),

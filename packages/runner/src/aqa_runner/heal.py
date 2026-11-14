@@ -110,7 +110,8 @@ _A_CANVAS: Final = (
     "inside one, so the rebind can't be confirmed"
 )
 # The element at a point of the main frame's viewport, read in the page's
-# world, which dispatches no event.
+# world, which dispatches no event
+# (https://playwright.dev/python/docs/api/class-page#page-evaluate-handle).
 _AT_POINT: Final = "([x, y]) => document.elementFromPoint(x, y)"
 # The refusals that say the page has no place for this subject, whichever
 # element the model picks (#229). `outside_region` and the rest are about the

@@ -29,7 +29,7 @@ Explore, compile and strict replay run locally, against [Conduit](bench/apps/con
 - **Page content is treated as untrusted.** Chromium's sandbox is always on, an egress proxy confines the browser's traffic, and test secrets are filled by `fill_secret`, bound to an origin and a field, and redacted from what the model sees ([ADR-0026](ADRs/0026-local-ci-browser-boundary.md)). Prompt-injection fixtures (task hijack, decoy success, steering) run against explore.
 - **Role-based model routing**, with each call's cost taken from a pinned price map ([ADR-0007](ADRs/0007-model-agnostic-role-routing.md)).
 
-Not built yet: a heal that inserts replay-safe steps or falls back to vision, screenshots as evidence, verified mode, the `pixel_diff` and `contrast_min` checks, measured benchmark numbers (M3), the GitHub App, hosted runs and the dashboard. Order and scope: [ROADMAP.md](ROADMAP.md).
+Not built yet: a heal that inserts replay-safe steps, a vision rebind proven to heal (vision fallback reads a point today, and a canvas-drawn control ends `inconclusive`), screenshots as evidence, verified mode, the `pixel_diff` and `contrast_min` checks, measured benchmark numbers (M3), the GitHub App, hosted runs and the dashboard. Order and scope: [ROADMAP.md](ROADMAP.md).
 
 ### Try it
 
