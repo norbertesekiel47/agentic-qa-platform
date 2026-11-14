@@ -1,7 +1,9 @@
 """Evidence (ADR-0026, Evidence, and its #50 B amendment): what a run keeps
-of each step, under `evidence/<seq>/` in the record it is given, and of a heal's
-first look, under `heals/<key>/`. Replay (`aqa_runner.executor`), exploring
-(#53) and heal (`aqa_runner.heal`) all save it here.
+of each step, under `evidence/<seq>/` in the record it is given, of a heal's
+first look, under `heals/<key>/`, and of a verified replay's look for each
+`model_verify` check, under `verified/assertion-<index>/`. Replay
+(`aqa_runner.executor`), exploring (#53), heal (`aqa_runner.heal`) and the
+verifier (`aqa_runner.verification`) all save it here.
 
 - `a11y_snapshot.yaml`: the caller's own scanned snapshot of the page after
   the step, the one a model is shown, so saving it takes no look of its own
@@ -13,9 +15,10 @@ first look, under `heals/<key>/`. Replay (`aqa_runner.executor`), exploring
 - `screenshot.png`, only when its caller asks: the page as `take_screenshot`
   captures it, masked, and OCR-checked in a run that binds a secret
   (ADR-0034, ADR-0035). Replay asks for one at a step that drifted or
-  failed in `aqa replay`, `aqa run` and `aqa heal <spec>`, and heal at its
-  first look; explore, the bench pilot and a completed step never do
-  (ADR-0033's #251 amendment).
+  failed in `aqa replay`, `aqa run` and `aqa heal <spec>`, heal at its
+  first look, and the verifier for each check it would ask about, whose
+  image, the `Shot`'s, is the one sent; explore, the bench pilot and a
+  completed step never do (ADR-0033's #251 and #256 amendments).
 
 In a run that binds any test secret, the logs keep no URL, method or
 console text: a page can split a value across them in pieces no scan finds
@@ -25,7 +28,7 @@ screenshot the capture withholds is too, so no page makes evidence decide a
 run; a write the disk or a link refuses raises, as a steps line's does."""
 
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final
 
 from aqa_runner.browser_session import BrowserSession
@@ -36,7 +39,11 @@ from aqa_runner.document_origins import (
 )
 from aqa_runner.redaction import Redacted
 from aqa_runner.run_record import RefusedWriteError, RunRecord
-from aqa_runner.screenshots import ScreenshotWithheldError, take_screenshot
+from aqa_runner.screenshots import (
+    Screenshot,
+    ScreenshotWithheldError,
+    take_screenshot,
+)
 from aqa_runner.settling import ConsoleEntry, NetworkEntry, Window
 
 # Why a screenshot wasn't taken, in fixed words, when the capture's page
@@ -49,10 +56,13 @@ _FRAMES_CHANGED: Final = "the page's frames changed during the capture"
 class Shot:
     """What became of a screenshot evidence was asked for: the file it was
     saved as, by its name in the record, or why it was withheld, in words of
-    ours that never quote the page."""
+    ours that never quote the page. A saved one keeps the `Screenshot` that
+    file was written from, the only image a verifier is sent (ADR-0024's #256
+    amendment), out of every repr, comparison and document."""
 
     path: str | None = None
     withheld: str | None = None
+    image: Screenshot | None = field(default=None, repr=False, compare=False)
 
 
 async def capture_evidence(
@@ -117,7 +127,7 @@ async def _screenshot(record: RunRecord, session: BrowserSession, folder: str) -
         return Shot(withheld=_FRAMES_CHANGED)
     name = f"{folder}/screenshot.png"
     record.write_screenshot(name, shot)
-    return Shot(name)
+    return Shot(name, image=shot)
 
 
 def _console_entry(entry: ConsoleEntry, *, withheld: bool) -> dict[str, object]:
