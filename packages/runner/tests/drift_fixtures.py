@@ -74,6 +74,21 @@ BUTTON = compiled(
     ],
 )
 
+# The toggle's contrast, which its own background, a button's, gives it.
+CONTRASTED = compiled(
+    [],
+    targets={"toggle": TOGGLE},
+    assertions=[
+        {
+            "id": "a1",
+            "expect_index": 0,
+            "check": "contrast_min",
+            "target": "toggle",
+            "min_ratio": 4.5,
+        }
+    ],
+)
+
 
 def page(name: str) -> str:
     """The drift page `name`: `order`, or a drift of it."""

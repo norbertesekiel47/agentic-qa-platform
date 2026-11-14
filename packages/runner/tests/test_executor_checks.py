@@ -769,6 +769,100 @@ def test_visual_without_viewport_requirement_is_refused_before_browser_start(
     assert app.seen == []
 
 
+CONTRAST: dict[str, Any] = {
+    "id": "contrast",
+    "expect_index": 0,
+    "check": "contrast_min",
+    "target": "contrast",
+    "min_ratio": 4.5,
+}
+CONTRAST_TARGETS = {
+    "contrast": {"semantic": "the saved notice", "locators": [{"css": "#contrast"}]}
+}
+
+
+def contrast_run(
+    app: App, tmp_path: Path, state: str, config: ProjectConfig | None = None
+) -> executor.RunResult:
+    """A replay of `CONTRAST` then `AFTER` on the contrast page in `state`."""
+    settings = config or ProjectConfig()
+    return run(
+        app,
+        tmp_path,
+        compiled([], targets=CONTRAST_TARGETS, assertions=[CONTRAST, AFTER]),
+        config=settings,
+        spec=a_spec(tmp_path, settings, start_url=f"/page/contrast?state={state}"),
+    ).result
+
+
+@pytest.mark.parametrize(
+    ("state", "outcome"),
+    [("clear", "pass"), ("faint", "failed"), ("missing", "binding_unresolved")],
+)
+def test_contrast_checks_distinguish_a_low_ratio_from_a_missing_binding(
+    app: App, tmp_path: Path, state: str, outcome: str
+) -> None:
+    config = ProjectConfig.model_validate({"budgets": {"resolve_seconds": 1}})
+    result = contrast_run(app, tmp_path, state, config)
+
+    assert [a.outcome for a in result.assertions] == [outcome, "pass"]
+    assert result.assertions[0].locator_index == (None if state == "missing" else 0)
+    assert bool(result.assertions[0].misses) == (state == "missing")
+    assert result.outcome == ("passed" if outcome == "pass" else "failed")
+
+
+def test_a_contrast_refusal_is_not_evaluated_and_stops_later_checks(
+    app: App, tmp_path: Path
+) -> None:
+    result = contrast_run(app, tmp_path, "gradient")
+
+    assert [a.outcome for a in result.assertions] == ["not_evaluated"] * 2
+    assert result.assertions[0].error == (
+        "contrast_min does not support a background image, gradient, generated "
+        "background or clipped background behind its text"
+    )
+    assert result.assertions[0].locator_index is None
+    assert (
+        result.assertions[1].error
+        == "not evaluated after contrast's look at the page raised"
+    )
+    assert result.outcome == "errored"
+
+
+def test_contrast_observation_is_bounded_and_stops_later_checks(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed: list[ElementHandle] = []
+    disposed: list[ElementHandle] = []
+    dispose = ElementHandle.dispose
+
+    async def disposing(element: ElementHandle) -> None:
+        disposed.append(element)
+        await dispose(element)
+
+    monkeypatch.setattr(ElementHandle, "dispose", disposing)
+
+    async def unanswered(_session: BrowserSession, element: ElementHandle) -> float:
+        observed.append(element)
+        return float(await asyncio.Event().wait())
+
+    monkeypatch.setattr(BrowserSession, "contrast", unanswered)
+    config = ProjectConfig.model_validate({"budgets": {"resolve_seconds": 1}})
+    started = time.monotonic()
+    result = contrast_run(app, tmp_path, "clear", config)
+
+    assert [a.outcome for a in result.assertions] == ["not_evaluated"] * 2
+    assert result.assertions[0].error == "the page didn't answer within 2 s"
+    assert len(observed) == 1
+    assert disposed.count(observed[0]) == 1
+    assert (
+        result.assertions[1].error
+        == "not evaluated after contrast's look at the page raised"
+    )
+    assert result.outcome == "errored"
+    assert time.monotonic() - started < 10
+
+
 @pytest.mark.parametrize("violated", [False, True])
 def test_all_nine_checks_construct_no_client_and_preserve_invariant_verdicts(
     app: App,

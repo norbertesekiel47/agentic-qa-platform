@@ -11,6 +11,7 @@ from aqa_core.schema import Contract
 from aqa_runner import network, probes
 from aqa_runner.binding import Refused
 from aqa_runner.browser_session import RefError, UnsupportedVisualFrameError
+from aqa_runner.contrast import ContrastRefusedError
 from aqa_runner.document_origins import (
     DocumentChangedError,
     PolicyEvent,
@@ -159,6 +160,17 @@ REFUSED_FIELD = SecretRefusedError(
             "visible_unoccluded does not support elements inside frames",
         ),
         (
+            ContrastRefusedError("frame"),
+            "contrast_min does not support elements inside frames",
+        ),
+        (
+            ContrastRefusedError("background"),
+            (
+                "contrast_min does not support a background image, gradient, "
+                "generated background or clipped background behind its text"
+            ),
+        ),
+        (
             RefusedWriteError(UNWRITTEN),
             UNWRITTEN,
         ),
@@ -278,6 +290,14 @@ def test_an_owned_reason_outside_a_withheld_run_keeps_its_origin(
         (
             UnsupportedVisualFrameError("framed"),
             "visible_unoccluded does not support elements inside frames",
+        ),
+        (
+            ContrastRefusedError("no_opaque"),
+            "contrast_min found no opaque background behind its text",
+        ),
+        (
+            ContrastRefusedError("unread"),
+            "contrast_min could not read its target's styles",
         ),
         (RefusedWriteError(UNWRITTEN), UNWRITTEN),
         (

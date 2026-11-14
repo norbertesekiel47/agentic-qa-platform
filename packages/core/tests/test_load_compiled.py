@@ -270,6 +270,19 @@ def assertion(script: dict[str, Any], check: str) -> dict[str, Any]:
             "'nowhere' names no target in targets",
         ),
         (
+            lambda s: s["assertions"].append(
+                {
+                    "id": "a7",
+                    "expect_index": 4,
+                    "check": "contrast_min",
+                    "target": "nowhere",
+                    "min_ratio": 4.5,
+                }
+            ),
+            "assertions[6].target",
+            "'nowhere' names no target in targets",
+        ),
+        (
             lambda s: assertion(s, "url_matches").update(expect_index=7),
             "assertions[4].expect_index",
             "7 names no expectation in coverage.expectations",
@@ -303,6 +316,7 @@ def assertion(script: dict[str, Any], check: str) -> dict[str, Any]:
         "text_in_target target",
         "visible_unoccluded target",
         "not_visible target",
+        "contrast_min target",
         "expect_index",
         "coverage assertion",
         "satisfies",

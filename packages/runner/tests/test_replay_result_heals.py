@@ -37,6 +37,7 @@ from packages.runner.tests.test_replay_result import (
     rebinding,
     the_click,
     violated,
+    with_contrast,
 )
 
 
@@ -165,6 +166,18 @@ def test_an_assertion_on_a_rebound_target_that_fails_is_a_violation_citing_the_h
     assert entry["finding"]["category"] == "visual"
     assert entry["heal"] == HEAL_CITED
     assert document(end)["exit_code"] == 1
+
+
+def test_a_contrast_min_on_a_rebound_target_cites_the_heal(tmp_path: Path) -> None:
+    run = with_contrast(made(tmp_path))
+    failed = AssertionResult("a5", "failed", locator_index=0)
+
+    end = ending(run, assertions=(failed,), **healing_the_step(run))
+
+    entry = judged(end, "assertion", "a5")
+    assert entry["verdict"] == "expectation_violated"
+    assert entry["finding"]["category"] == "visual"
+    assert entry["heal"] == HEAL_CITED
 
 
 def test_a_finding_lists_each_step_on_the_rebound_set_and_no_other(
