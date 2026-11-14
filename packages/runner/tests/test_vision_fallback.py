@@ -4,10 +4,12 @@ model's only output is a point, and the send check reads the request's text,
 not its image's data. Real Chromium makes each screenshot; the wire request goes
 to a local stand-in for the provider, with a fake key."""
 
+import ast
 import asyncio
 import json
 from base64 import b64decode, b64encode
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -35,6 +37,7 @@ from packages.runner.tests.navigator_fixtures import bound
 from packages.runner.tests.provider_stand_in import called, standing_in
 from packages.runner.tests.secret_fixtures import FAKE_VALUE
 
+REPO = Path(__file__).resolve().parents[3]
 MEANING = "the button that shows the order's details"
 LOCATORS: list[Locator] = [
     ByRole(role="button", name="Show details"),
@@ -127,6 +130,34 @@ def test_the_send_check_reads_a_requests_text_and_not_its_images_data() -> None:
             check([HumanMessage(content=cast(list[str | dict[str, Any]], leaked))])
     with pytest.raises(UnsentRequestError):
         check([SystemMessage(content=FAKE_VALUE), HumanMessage(content=[image])])
+
+
+def image_blocks_built(tree: ast.AST) -> int:
+    """How many dict literals in `tree` say they are an image block, as far as
+    their spelling shows."""
+    return sum(
+        any(
+            isinstance(key, ast.Constant)
+            and key.value == "type"
+            and isinstance(value, ast.Constant)
+            and value.value == "image"
+            for key, value in zip(node.keys, node.values, strict=True)
+        )
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Dict)
+    )
+
+
+def test_only_the_vision_request_builds_an_image_block() -> None:
+    """The send check reads no image block's data, so only `vision_request`,
+    which takes only a `Screenshot`, may build one (SECURITY §5)."""
+    builders = {
+        path.relative_to(REPO).as_posix(): count
+        for path in sorted(REPO.glob("packages/*/src/**/*.py"))
+        if (count := image_blocks_built(ast.parse(path.read_text())))
+    }
+
+    assert builders == {"packages/runner/src/aqa_runner/vision_fallback.py": 1}
 
 
 def test_a_vision_request_reaches_the_provider_as_a_png_and_one_strict_tool(
