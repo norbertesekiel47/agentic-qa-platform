@@ -120,7 +120,10 @@ class Preconditions(StrictModel):
 
 
 class Expectation(StrictModel):
-    """One expectation: a plain string, or `{ text, visual }`."""
+    """One expectation: a plain string, or `{ text, visual }`. One marked
+    `visual: model` parses, and only `aqa replay --mode verified` checks it:
+    every other command's admission refuses it (`aqa_runner.admission`,
+    ADR-0024's #256 amendment)."""
 
     text: NonEmpty
     visual: Literal["deterministic", "model"] = "deterministic"
@@ -129,16 +132,6 @@ class Expectation(StrictModel):
     @classmethod
     def _from_string(cls, data: object) -> object:
         return {"text": data} if isinstance(data, str) else data
-
-    @field_validator("visual")
-    @classmethod
-    def _deterministic_in_m1(cls, visual: str) -> str:
-        if visual == "model":
-            raise ValueError(
-                "visual: model is a spec error in M1: a model-assisted check can't pass "
-                "the strict confirmation replay that ends explore (ADR-0024)"
-            )
-        return visual
 
 
 InvariantName = Literal["console_errors", "js_exceptions", "http_5xx", "broken_images"]

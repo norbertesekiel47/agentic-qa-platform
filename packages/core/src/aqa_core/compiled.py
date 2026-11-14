@@ -630,6 +630,15 @@ class VisibleUnoccluded(_Assertion):
     in_viewport: StrictBool
 
 
+class ModelVerify(_Assertion):
+    """A `visual: model` expectation judged by the verifier role on the page's
+    masked screenshot, with the target's element cited: only `aqa replay
+    --mode verified` evaluates one (ADR-0024's #256 amendment)."""
+
+    check: Literal["model_verify"]
+    target: NonEmpty
+
+
 Assertion = Annotated[
     TextVisible
     | TextInTarget
@@ -639,7 +648,8 @@ Assertion = Annotated[
     | NetworkSeen
     | ProbeEquals
     | ProbeEqualsBaseline
-    | VisibleUnoccluded,
+    | VisibleUnoccluded
+    | ModelVerify,
     Field(discriminator="check"),
 ]
 
