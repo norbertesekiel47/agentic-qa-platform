@@ -111,7 +111,9 @@ def verified(
 ) -> typer.testing.Result:
     """`aqa replay --mode verified` of `spec` on `app`, its model `client`."""
     monkeypatch.setattr(replay_module, "AnthropicClient", client)
-    return invoke(["replay", "--mode", "verified", str(spec), "--url", app.origin, *more])
+    return invoke(
+        ["replay", "--mode", "verified", str(spec), "--url", app.origin, *more]
+    )
 
 
 def record_in(spec: Path) -> Path:
@@ -191,7 +193,9 @@ def test_strict_admission_refuses_a_visual_model_spec_before_anything_is_built(
     assert built == []
 
 
-@pytest.mark.parametrize("mode", [[], ["--mode", "verified"]], ids=["strict", "verified"])
+@pytest.mark.parametrize(
+    "mode", [[], ["--mode", "verified"]], ids=["strict", "verified"]
+)
 def test_a_model_verify_on_an_expectation_not_marked_visual_model_is_a_spec_error(
     tmp_path: Path, mode: list[str]
 ) -> None:
@@ -329,7 +333,9 @@ def test_a_pass_sends_the_saved_screenshot_and_cites_its_folder(
             "rationale": "the badge is drawn in one colour",
         },
     }
-    [cost] = [json.loads(line) for line in (record / "costs.jsonl").read_text().splitlines()]
+    [cost] = [
+        json.loads(line) for line in (record / "costs.jsonl").read_text().splitlines()
+    ]
     assert (cost["role"], cost["mode"]) == ("verifier", "verified")
     assert document(spec)["verified_cost_usd"] == cost["cost_usd"]
     models = json.loads((record / "run.json").read_text())["models"]
@@ -371,16 +377,15 @@ def test_a_withheld_screenshot_is_inconclusive_and_calls_no_model(
 
 
 @pytest.mark.parametrize(
-    ("reply", "reason", "said"),
+    "case",
     [
         pytest.param(
-            replying("pass", [SHOT, "e999"]), MISCITED, [SHOT, "e999"], id="other_refs"
+            (replying("pass", [SHOT, "e999"]), MISCITED, [SHOT, "e999"]),
+            id="other_refs",
         ),
-        pytest.param(replying("inconclusive"), UNJUDGED, None, id="inconclusive"),
+        pytest.param((replying("inconclusive"), UNJUDGED, None), id="inconclusive"),
         pytest.param(
-            REFUSED,
-            "the verifier's reply was refusal, so it decides nothing",
-            None,
+            (REFUSED, "the verifier's reply was refusal, so it decides nothing", None),
             id="refusal",
         ),
     ],
@@ -389,10 +394,9 @@ def test_a_reply_that_decides_nothing_is_inconclusive(
     app: App,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    reply: Any,
-    reason: str,
-    said: list[str] | None,
+    case: tuple[Any, str, list[str] | None],
 ) -> None:
+    reply, reason, said = case
     client = Scripted(reply)
     spec = badge_spec(tmp_path / "qa")
 

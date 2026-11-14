@@ -394,8 +394,9 @@ def test_a_model_verify_target_must_be_one_of_the_targets(tmp_path: Path) -> Non
         {"secrets": {"TEST_PASSWORD": {"origins": ["start"], "field": "password"}}}
     )
 
+    text = json.dumps(with_model_verify(target="nowhere"))
+
     with pytest.raises(SpecError) as refused:
-        text = json.dumps(with_model_verify(target="nowhere"))
         parse_compiled(text, config, source=source)
 
     assert refused.value.problems == (

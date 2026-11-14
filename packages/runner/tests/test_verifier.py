@@ -111,8 +111,10 @@ def test_a_request_holds_the_expectation_the_references_and_the_image() -> None:
 
     assert system.content == VERIFY_INSTRUCTIONS
     assert isinstance(human, HumanMessage)
+    assert isinstance(human.content, list)
     [text, image] = human.content
-    assert isinstance(text, dict) and isinstance(image, dict)
+    assert isinstance(text, dict)
+    assert isinstance(image, dict)
     assert text["text"] == (
         "<expectation>\nThe badge reads [SECRET:TEST_PASSWORD] in green\n"
         "</expectation>\n\n"

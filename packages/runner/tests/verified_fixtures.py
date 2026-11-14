@@ -155,7 +155,9 @@ def pixel(png: bytes, x: int, y: int) -> tuple[int, int, int]:
         kind = png[at + 4 : at + 8]
         chunks[kind] = chunks.get(kind, b"") + png[at + 8 : at + 8 + length]
         at += 12 + length
-    width, _, depth, colour, _, _, interlace = struct.unpack(">IIBBBBB", chunks[b"IHDR"])
+    width, _, depth, colour, _, _, interlace = struct.unpack(
+        ">IIBBBBB", chunks[b"IHDR"]
+    )
     assert (depth, interlace, colour in (2, 6)) == (8, 0, True)
     size = 3 if colour == 2 else 4
     stride = width * size
