@@ -3,10 +3,9 @@ ADR-0024's #238 and #244 amendments): a run record and an egress gate, then the
 spec's reset hook and the script replayed through `replays.replay_run`, in a
 fresh browser on the caller's driver, a step that drifts or fails saving its
 masked screenshot as evidence (#251), and, when `--before-screenshots` asks, a
-step that fails saving the page as it found it beside it (#314); then the
-run's `run.json`, what the run
-viewer reads of it (#249), and its `replay.json` (`replay_result.present`),
-whose outcome decides. With no `heal`, a strict replay, nothing here builds a
+step that fails saving the page as it found it beside it (#314); then the run's
+`run.json`, what the run viewer reads of it (#249), and its `replay.json`
+(`replay_result.present`), whose outcome decides. With no `heal`, a strict replay, nothing here builds a
 model client. With one, what `aqa run` gives, a drift goes to the repair of the
 healing it builds for the run.
 

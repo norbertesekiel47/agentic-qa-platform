@@ -586,8 +586,16 @@ def _run_result(replayed: _Replayed, proxy: EgressProxy, gate: EgressGate) -> Ru
         replayed.policy_events_total,
         replayed.evidence,
         replayed.repairs,
-        {seq: s.screenshot for seq, s in replayed.shots.items() if s.screenshot},
-        {seq: s.before for seq, s in replayed.shots.items() if s.before},
+        {
+            seq: shot
+            for seq, saved in replayed.shots.items()
+            if (shot := saved.screenshot) is not None
+        },
+        {
+            seq: shot
+            for seq, saved in replayed.shots.items()
+            if (shot := saved.before) is not None
+        },
     )
 
 
