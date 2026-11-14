@@ -206,7 +206,7 @@ The report of an `expectation_violated` verdict: category, title, repro steps an
 _Avoid_: bug report, issue
 
 **Evidence**:
-What a verdict cites: before and after screenshots, an accessibility-snapshot diff, network and console logs, and the model's rationale. Until masked screenshots land (#251), it has no screenshot, and says so.
+What a verdict cites: before and after screenshots, an accessibility-snapshot diff, network and console logs, and the model's rationale. Today a step that drifted or failed, and a heal's first look, keep one masked screenshot each, or say why it was withheld; the "before" screenshot is still to come (#251).
 
 **Triage label**:
 A person's judgment on a verdict (correct, should have been `expectation_violated`, should have been `drift_consistent`, or not a bug). Triage labels are the ground truth for evaluating the healer.

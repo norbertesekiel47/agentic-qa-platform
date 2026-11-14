@@ -10,7 +10,8 @@ model call, and a part per phase, a record of its own (ADR-0024's #53 P5
 amendment). `aqa replay` and `aqa run` (#239, #244) add `replay.json`, and a
 run that heals adds each drift's repair under `repairs/`, each heal's
 requests and first look under `heals/`, and a line in `costs.jsonl` per
-priced model call.
+priced model call. In both, a step that drifts or fails, and a heal's first
+look, keep a masked `screenshot.png` with their evidence (#251).
 
 Every file but the two journals, `steps.jsonl` and `costs.jsonl`, and a
 screenshot is scanned as it is written, and refused while a bound value's
