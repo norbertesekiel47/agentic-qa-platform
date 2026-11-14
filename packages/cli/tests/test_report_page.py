@@ -6,10 +6,12 @@ browser does with the page."""
 
 import difflib
 import json
+import re
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
 from aqa_core.compiled import CompiledScript
@@ -29,6 +31,7 @@ from packages.cli.tests.report_fixtures import (
     reported,
     tagged,
     tree,
+    unhealed,
 )
 from packages.runner.tests.drift_fixtures import (
     BUTTON,
@@ -84,6 +87,11 @@ def withheld(tmp_path_factory: pytest.TempPathFactory) -> Ran:
     return replayed_with_a_secret(
         tmp_path_factory.mktemp("withheld") / "qa", DETAILS, SHIPPING
     )
+
+
+@pytest.fixture(scope="module")
+def gave_up(tmp_path_factory: pytest.TempPathFactory) -> Ran:
+    return unhealed(tmp_path_factory.mktemp("gave-up") / "qa")
 
 
 def report_of(
@@ -410,7 +418,9 @@ def assert_links_stay_in(record: Path, page_tree: Element) -> None:
         )
 
 
-@pytest.mark.parametrize("outcome", ["passed", "inconclusive", "violated", "drift"])
+@pytest.mark.parametrize(
+    "outcome", ["passed", "inconclusive", "violated", "drift", "gave_up"]
+)
 def test_every_link_is_a_file_inside_the_record(
     outcome: str,
     request: pytest.FixtureRequest,
@@ -835,3 +845,372 @@ def test_a_run_binding_a_test_secret_shows_its_evidence_withheld(
         "The console text was withheld, because the run bound a test secret."
     )
     assert "fake-api-token-for-49" not in html
+
+
+# The Screenshot tab (#313): the screenshots #310 saves for step 1 of a run on the
+# moved page, the page at its heal's first look and as the step left it.
+HEAL_SHOT: Final = "heals/1/screenshot.png"
+STEP_SHOT: Final = "evidence/1/screenshot.png"
+FIRST_LOOK: Final = "The page at the heal's first look"
+LEFT_IT: Final = "The page as the step left it"
+SWIPE: Final = "Swipe between the heal's first look and the page as the step left it"
+# What the tab says of step 1, the toggle's click, as its timeline entry does.
+CLICKED: Final = (
+    'Action: {"action": "click", "target": "toggle"} · Target: toggle, the button '
+    "that shows the order's details"
+)
+ALT: Final = re.compile(
+    r"Step [0-9]+: the page (at the heal's first look|as the step left it)"
+)
+
+
+def images(shown: Element) -> list[str | None]:
+    return [image.attrs["src"] for image in shown.all(tagged("img"))]
+
+
+def links(shown: Element) -> list[str | None]:
+    return [link.attrs["href"] for link in shown.all(having("href"))]
+
+
+def test_the_screenshot_tab_comes_first_and_accessibility_opens_selected(
+    drift: Ran, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, shown = report_of(drift, tmp_path, monkeypatch)
+
+    tabs = shown.all(having("role", "tab"))
+    assert [(tab.attrs["id"], tab.text) for tab in tabs] == [
+        ("tab-screenshot", "Screenshot"),
+        ("tab-a11y", "Accessibility"),
+        ("tab-network", "Network"),
+        ("tab-console", "Console"),
+        ("tab-reasoning", "Agent reasoning"),
+    ]
+    assert [(tab.attrs["aria-selected"], tab.attrs["tabindex"]) for tab in tabs] == [
+        ("false", "-1"),
+        ("true", "0"),
+        ("false", "-1"),
+        ("false", "-1"),
+        ("false", "-1"),
+    ]
+    panels = shown.all(having("role", "tabpanel"))
+    assert [(each.attrs["id"], "hidden" in each.attrs) for each in panels] == [
+        ("panel-screenshot", True),
+        ("panel-a11y", False),
+        ("panel-network", True),
+        ("panel-console", True),
+        ("panel-reasoning", True),
+    ]
+    blocks = shown.one(having("id", "panel-screenshot")).all(having("data-step"))
+    assert [(each.attrs["data-step"], "hidden" in each.attrs) for each in blocks] == [
+        ("0", True),
+        ("1", False),
+    ]
+
+
+def test_a_heal_that_rebound_shows_its_first_look_alone(
+    drift: Ran, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, shown = report_of(drift, tmp_path, monkeypatch)
+
+    found = block(shown, "screenshot", 1)
+    assert images(found) == [HEAL_SHOT]
+    assert links(found) == [HEAL_SHOT]
+    assert [caption.text for caption in found.all(tagged("figcaption"))] == [FIRST_LOOK]
+    assert found.all(tagged("input")) == []
+    assert found.text == f"{CLICKED} {FIRST_LOOK} {HEAL_SHOT}"
+
+
+def test_a_strict_replay_shows_the_page_as_the_step_left_it(
+    inconclusive: Ran, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, shown = report_of(inconclusive, tmp_path, monkeypatch)
+
+    found = block(shown, "screenshot", 1)
+    assert images(found) == [STEP_SHOT]
+    assert links(found) == [STEP_SHOT]
+    assert found.all(tagged("input")) == []
+    assert found.text == f"{CLICKED} {LEFT_IT} {STEP_SHOT}"
+
+
+def test_a_heal_that_gave_up_gets_a_swipe_between_its_two_images(
+    gave_up: Ran, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, shown = report_of(gave_up, tmp_path, monkeypatch)
+
+    found = block(shown, "screenshot", 1)
+    assert images(found) == [HEAL_SHOT, STEP_SHOT]
+    [swipe] = found.all(tagged("input"))
+    shape = ("type", "min", "max", "step", "value", "aria-valuetext")
+    assert {name: swipe.attrs[name] for name in shape} == {
+        "type": "range",
+        "min": "0",
+        "max": "100",
+        "step": "1",
+        "value": "50",
+        "aria-valuetext": "50% heal's first look, 50% as the step left it",
+    }
+    [label] = found.all(tagged("label"))
+    assert label.attrs["for"] == swipe.attrs["id"]
+    assert label.text == SWIPE
+    # Each image is a link too, so it is reached without the swipe.
+    assert links(found) == [HEAL_SHOT, STEP_SHOT]
+    assert found.text == (
+        f"{CLICKED} Heal's first look As the step left it {SWIPE} {HEAL_SHOT} "
+        f"{STEP_SHOT}"
+    )
+    # The verdict panel's links stay as they were.
+    assert "screenshot.png" not in panel(shown)
+
+
+def cited(side: str, value: object) -> Callable[[Ran], None]:
+    """An edit that gives step 1's verdict, on `side` (its evidence or its
+    heal), the screenshot `value`."""
+
+    def edit(ran: Ran) -> None:
+        def changed(document: dict[str, Any]) -> None:
+            [step] = [v for v in document["verdicts"] if v.get("step") == 1]
+            step["evidence" if side == "evidence" else "heal"]["screenshot"] = value
+
+        ran.edit_replay_json(changed)
+
+    return edit
+
+
+def test_a_withheld_screenshot_shows_its_reason(
+    inconclusive: Ran, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reason = "a DevTools call or the render failed"
+    edit = cited("evidence", {"path": None, "withheld": reason})
+
+    _, shown = report_of(inconclusive, tmp_path, monkeypatch, edit)
+
+    found = block(shown, "screenshot", 1)
+    assert images(found) == []
+    assert found.text == f"{CLICKED} {LEFT_IT} Withheld: {reason}."
+
+
+def test_a_withheld_first_look_leaves_the_steps_image_with_no_swipe(
+    gave_up: Ran, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reason = "the page was off the run's allowed origins"
+    edit = cited("heal", {"path": None, "withheld": reason})
+
+    _, shown = report_of(gave_up, tmp_path, monkeypatch, edit)
+
+    found = block(shown, "screenshot", 1)
+    assert images(found) == [STEP_SHOT]
+    assert found.all(tagged("input")) == []
+    assert found.text == (
+        f"{CLICKED} {FIRST_LOOK} Withheld: {reason}. {LEFT_IT} {STEP_SHOT}"
+    )
+
+
+@pytest.mark.parametrize(
+    "outcome", ["passed", "inconclusive", "violated", "drift", "withheld", "gave_up"]
+)
+def test_a_step_with_no_screenshot_says_so(
+    outcome: str,
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ran: Ran = request.getfixturevalue(outcome)
+
+    _, shown = report_of(ran, tmp_path, monkeypatch)
+
+    assert block(shown, "screenshot", 0).text == "Not recorded for this step."
+    if outcome in ("passed", "withheld"):
+        assert block(shown, "screenshot", 1).text == "Not recorded for this step."
+
+
+# Each side's own folder in the gave-up run, and the other side's.
+FOLDERS: Final = {
+    "evidence": ("evidence/1", "heals/1"),
+    "heal": ("heals/1", "evidence/1"),
+}
+
+
+def moved_out(ran: Ran, folder: str) -> None:
+    """`folder` of `ran`'s record moved out of it, with a link to it left in its
+    place."""
+    outside = ran.root.parent / "outside-folder"
+    shutil.move(ran.record / folder, outside)
+    (ran.record / folder).symlink_to(outside, target_is_directory=True)
+
+
+def wrongly(side: str, case: str) -> Callable[[Ran], None]:
+    """An edit that leaves step 1's screenshot on `side` one the record doesn't
+    hold, in the way `case` names."""
+    own, other = FOLDERS[side]
+    shot = f"{own}/screenshot.png"
+    # Another step's folder: `evidence/0` or `heals/0`.
+    another = f"{own.split('/')[0]}/0"
+    paths = {
+        "javascript": "javascript:alert(1)",
+        "absolute": "/etc/passwd",
+        "up": "../../x.png",
+        "up-through-its-folder": f"{own}/../../x.png",
+        "the-other-sides": f"{other}/screenshot.png",
+        "another-steps": f"{another}/screenshot.png",
+        "not-a-screenshot": f"{own}/a11y_snapshot.yaml",
+    }
+    values: dict[str, object] = {
+        "both-set": {"path": shot, "withheld": "a DevTools call or the render failed"},
+        "neither-set": {"path": None, "withheld": None},
+        "a-path-not-text": {"path": 7, "withheld": None},
+        "a-reason-not-text": {"path": None, "withheld": 7},
+        "not-an-object": shot,
+    }
+
+    def edit(ran: Ran) -> None:
+        record = ran.record
+        if case in paths:
+            # So each path it may cite in the record is a regular file.
+            (record / another).mkdir(exist_ok=True)
+            shutil.copy(record / shot, record / another / "screenshot.png")
+            cited(side, {"path": paths[case], "withheld": None})(ran)
+        elif case in values:
+            cited(side, values[case])(ran)
+        elif case == "deleted":
+            (record / shot).unlink()
+        elif case == "a-folder":
+            (record / shot).unlink()
+            (record / shot).mkdir()
+        elif case == "linked":
+            (record / shot).unlink()
+            planted(ran, shot)
+        else:
+            moved_out(ran, own)
+
+    return edit
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "javascript",
+        "absolute",
+        "up",
+        "up-through-its-folder",
+        "the-other-sides",
+        "another-steps",
+        "not-a-screenshot",
+        "both-set",
+        "neither-set",
+        "a-path-not-text",
+        "a-reason-not-text",
+        "not-an-object",
+        "deleted",
+        "a-folder",
+        "linked",
+        "in-a-linked-folder",
+    ],
+)
+@pytest.mark.parametrize("side", ["evidence", "heal"])
+def test_a_screenshot_the_record_doesnt_hold_is_not_recorded(
+    gave_up: Ran,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    side: str,
+    case: str,
+) -> None:
+    html, shown = report_of(gave_up, tmp_path, monkeypatch, wrongly(side, case))
+
+    found = block(shown, "screenshot", 1)
+    assert found.all(tagged("input")) == []
+    if side == "evidence":
+        assert images(found) == [HEAL_SHOT]
+        assert found.text == (
+            f"{CLICKED} {FIRST_LOOK} {HEAL_SHOT} {LEFT_IT} not recorded"
+        )
+    else:
+        assert images(found) == [STEP_SHOT]
+        assert found.text == (
+            f"{CLICKED} {FIRST_LOOK} not recorded {LEFT_IT} {STEP_SHOT}"
+        )
+    [gap] = found.all(having("class", "gap"))
+    assert gap.text == "not recorded"
+    assert OUTSIDE not in html
+    assert_links_stay_in(tmp_path / "qa" / ".aqa" / "runs" / gave_up.record.name, shown)
+
+
+@pytest.mark.parametrize("outcome", ["drift", "gave_up"])
+def test_each_image_has_fixed_alt_text_and_a_description_of_its_step(
+    outcome: str,
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ran: Ran = request.getfixturevalue(outcome)
+
+    _, shown = report_of(ran, tmp_path, monkeypatch)
+
+    found = block(shown, "screenshot", 1)
+    alts = {
+        image.attrs["src"]: image.attrs["alt"] for image in found.all(tagged("img"))
+    }
+    step_shot = {STEP_SHOT: "Step 1: the page as the step left it"}
+    assert alts == {
+        HEAL_SHOT: "Step 1: the page at the heal's first look",
+        **(step_shot if outcome == "gave_up" else {}),
+    }
+    for image in shown.all(tagged("img")):
+        assert ALT.fullmatch(image.attrs["alt"] or "")
+        described = found.one(having("id", image.attrs["aria-describedby"]))
+        assert described.text == CLICKED
+
+
+def test_no_attribute_holds_the_records_text(
+    gave_up: Ran, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mark = "said-by-the-record-4u49"
+
+    def marked(ran: Ran) -> None:
+        run_json = ran.record / "run.json"
+        kept = json.loads(run_json.read_text())
+        kept["script"]["targets"]["toggle"]["semantic"] = mark
+        run_json.write_text(json.dumps(kept))
+
+    _, shown = report_of(gave_up, tmp_path, monkeypatch, marked)
+
+    [image, *_] = block(shown, "screenshot", 1).all(tagged("img"))
+    described = shown.one(having("id", image.attrs["aria-describedby"]))
+    assert described.text.endswith(f"Target: toggle, {mark}")
+    every = shown.all(lambda _: True)
+    assert all(mark not in (v or "") for each in every for v in each.attrs.values())
+
+
+def test_the_screenshot_tab_never_says_before_or_after(
+    gave_up: Ran, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, shown = report_of(gave_up, tmp_path, monkeypatch)
+
+    found = shown.one(having("id", "panel-screenshot"))
+    said = [
+        found.text,
+        *(
+            f"{n} {v or ''}"
+            for each in found.all(lambda _: True)
+            for n, v in each.attrs.items()
+        ),
+    ]
+    assert all(re.search("before|after", each, re.IGNORECASE) is None for each in said)
+
+
+def test_the_report_writes_no_image(
+    gave_up: Ran, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    copy = copied(gave_up, tmp_path)
+
+    def pngs() -> list[tuple[str, bytes]]:
+        return sorted(
+            (str(png.relative_to(copy.record)), png.read_bytes())
+            for png in copy.record.rglob("*.png")
+        )
+
+    held = pngs()
+    result = reported(copy, monkeypatch)
+
+    assert result.exit_code == 0, result.output
+    assert pngs() == held
+    assert [name for name, _ in held] == [STEP_SHOT, HEAL_SHOT]

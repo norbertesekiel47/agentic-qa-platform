@@ -127,7 +127,7 @@ The default replay mode, used in CI. It makes zero LLM calls, so every assertion
 An opt-in replay mode that adds model-assisted visual checks for expectations that ask for them. Its cost and results are always reported apart from strict replays.
 
 **Run viewer**:
-The step-by-step view of any finished run, explore runs included, with its screenshots, evidence and verdicts. It is a dashboard screen. `aqa report` (#249) writes the same view of a finished replay or run into its local run record, as one offline HTML file; explore runs and screenshots come later.
+The step-by-step view of any finished run, explore runs included, with its screenshots, evidence and verdicts. It is a dashboard screen. `aqa report` (#249) writes the same view of a finished replay or run into its local run record, as one offline HTML file, with each step's screenshots (#313); explore runs come later.
 _Avoid_: replay, replay viewer, run replay
 
 **Step intent**:
@@ -206,7 +206,7 @@ The report of an `expectation_violated` verdict: category, title, repro steps an
 _Avoid_: bug report, issue
 
 **Evidence**:
-What a verdict cites: before and after screenshots, an accessibility-snapshot diff, network and console logs, and the model's rationale. Until masked screenshots land (#251), it has no screenshot, and says so.
+What a verdict cites: before and after screenshots, an accessibility-snapshot diff, network and console logs, and the model's rationale. Today a step that drifted or failed, and a heal's first look, keep one masked screenshot each, or say why it was withheld (#251); with `--before-screenshots`, a step that failed also keeps its "before", the page as the step found it (#314).
 
 **Triage label**:
 A person's judgment on a verdict (correct, should have been `expectation_violated`, should have been `drift_consistent`, or not a bug). Triage labels are the ground truth for evaluating the healer.

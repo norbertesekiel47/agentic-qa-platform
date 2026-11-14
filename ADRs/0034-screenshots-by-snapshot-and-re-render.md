@@ -1,6 +1,6 @@
 # ADR-0034: Once a secret is filled, a screenshot is a render of a scrubbed snapshot
 
-- Status: Accepted (amended 2026-10-28: the render restores each select's chosen option, #272; #250's OCR check is inside `take_screenshot`, ADR-0035)
+- Status: Accepted (amended 2026-10-28: the render restores each select's chosen option, #272; #250's OCR check is inside `take_screenshot`, ADR-0035; 2026-11-14: the paths that save one, ADR-0033)
 - Date: 2026-10-27
 
 ## Context
@@ -97,9 +97,9 @@ After the review fixes (#171's Phase 5), the suite runs 55 cases: 51 pages, 4 of
 - **A filled field renders empty**, and so does every editable element in a secret-filled session. A screenshot shows a filled password field as unfilled. Heal reads the accessibility tree for that.
 - **A page can force withholding**: by changing its fields between the two snapshot calls, keeping its main thread busy, growing its archive past `ARCHIVE_CHARS`, or turning on designMode. A withheld screenshot is safe. #251 records the reason.
 - **Seams for later tickets:**
-  - #251 calls `take_screenshot(session)`, then `record.write_screenshot(f"evidence/{seq}/<name>.png", shot)`, and records the reason when it catches `ScreenshotWithheldError`.
+  - #251 calls `take_screenshot(session)`, then `record.write_screenshot(f"evidence/{seq}/<name>.png", shot)`, and records the reason when it catches `ScreenshotWithheldError`. *Amended by ADR-0033 (#251):* `evidence.capture_evidence` calls `take_screenshot(session, record_refusal=False)` and writes `evidence/<seq>/screenshot.png` or `heals/<key>/screenshot.png`, and `replay.json` keeps the reason.
   - #250 checks `shot.png` between the two, and before any model input. *Amended by ADR-0035:* the check is inside `take_screenshot`, before a `Screenshot` exists, so #251 adds none.
-  - No run path saves a screenshot until #251.
+  - No run path saves a screenshot until #251. *Amended by ADR-0033 (#251):* two paths save one now.
 - **Amends ADR-0033**: the capture and the record's binary writer exist.
 - **Cost.** A secret-filled capture took about 70-110 ms on the test pages and 0.5 s on Conduit in the prototype, against 14-22 ms live. There is no dependency, paid resource or model call.
 

@@ -4,6 +4,10 @@ rendered, is withheld, and the record saves nothing."""
 
 import asyncio
 import html
+import json
+import os
+import subprocess
+import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -373,10 +377,86 @@ def test_a_missing_model_file_saves_nothing_and_downloads_nothing(
         (models / name).symlink_to(ocr.MODELS / name)
     monkeypatch.setattr(ocr, "MODELS", models)
 
-    with pytest.raises(FileNotFoundError):
-        reflected(sites, tmp_path, UNBOUND)
+    assert reflected(sites, tmp_path, UNBOUND) == (ENGINE_FAILED, [])
 
     # The run record's own .gitignore: no screenshot, and no model file.
     assert [path.name for path in tmp_path.rglob("*") if path.is_file()] == [
         ".gitignore"
     ]
+
+
+# Why a capture whose OCR engine raised is withheld (ADR-0035's #251
+# amendment).
+ENGINE_FAILED = "the image's OCR engine failed"
+
+
+def test_an_ocr_engine_error_withholds_it_and_keeps_nothing_of_the_error(
+    sites: Sites, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def failing(_png: bytes, _redactor: Redactor) -> bool:
+        raise RuntimeError(f"fake engine failure quoting {RED_VALUE}")
+
+    monkeypatch.setattr(ocr, "spells_a_value", failing)
+
+    async def scenario() -> ScreenshotWithheldError:
+        async with browsing(sites, redactor=Redactor(bound(sites.app))) as session:
+            await session.navigate(f"{sites.app}/kept")
+            with pytest.raises(ScreenshotWithheldError) as withheld:
+                await take_screenshot(session)
+            return withheld.value
+
+    withheld = asyncio.run(scenario())
+    assert str(withheld) == ENGINE_FAILED
+    assert (withheld.__cause__, withheld.__context__) == (None, None)
+
+
+def test_a_defect_outside_the_ocr_engine_still_raises(
+    sites: Sites, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*_: object) -> None:
+        raise RuntimeError("fake defect in the scrub")
+
+    monkeypatch.setattr(screenshots, "_prepared", broken)
+
+    async def scenario() -> None:
+        async with browsing(sites, redactor=Redactor(bound(sites.app))) as session:
+            await serve_cases(session.page, sites.other)
+            await red_filled(session, sites)
+            await take_screenshot(session)
+
+    with pytest.raises(RuntimeError, match="fake defect in the scrub"):
+        asyncio.run(scenario())
+
+
+# What a fresh interpreter's environment gains when it imports `module`, and
+# whether OpenCV was loaded.
+GAINED = """import json, os, sys
+before = dict(os.environ)
+import {module}
+print(json.dumps([sorted(set(os.environ.items()) ^ set(before.items())), "cv2" in sys.modules]))"""
+
+
+def gained(module: str) -> tuple[list[list[str]], bool]:
+    environment = {
+        name: value for name, value in os.environ.items() if name != "LD_LIBRARY_PATH"
+    }
+    child = subprocess.run(
+        [sys.executable, "-c", GAINED.format(module=module)],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    changes, loaded = json.loads(child.stdout)
+    return changes, loaded
+
+
+# OpenCV's loader, which RapidOCR imports, prepends its own directory and an
+# empty entry, the working directory, to LD_LIBRARY_PATH for every process
+# this one starts, `aqa`'s Playwright driver among them (#251).
+def test_loading_the_ocr_engine_leaves_the_processs_environment_as_it_was() -> None:
+    assert gained("aqa_runner.ocr") == ([], True)
+    # The control: OpenCV alone changes it.
+    changes, loaded = gained("cv2")
+    assert loaded is True
+    assert [name for name, _ in changes] == ["LD_LIBRARY_PATH"]
