@@ -1,7 +1,8 @@
 """What `test_report_page.py` and `test_report_browser.py` share (#249): real runs
-on #240's drift pages, one per outcome the report pins and one that binds a test
-secret, each made once per module and copied for a test, which may edit its copy
-as a person could; `aqa report` of a copy; and the page read back as a tree."""
+on #240's drift pages, one per outcome the report pins, one that binds a test
+secret and one whose heal gave up (#313), each made once per module and copied for
+a test, which may edit its copy as a person could; `aqa report` of a copy; and the
+page read back as a tree."""
 
 import json
 import re
@@ -23,7 +24,7 @@ from packages.cli.tests.test_replay import committed
 from packages.cli.tests.test_run import KEY, order_at
 from packages.runner.tests.drift_fixtures import order_spec, page, serving
 from packages.runner.tests.explore_graph_fixtures import Scripted
-from packages.runner.tests.heal_fixtures import rebinding
+from packages.runner.tests.heal_fixtures import NO_TOOL, rebinding
 from packages.runner.tests.secret_fixtures import BOUND_AT_START, OTHER_FAKE_VALUE
 
 # The goal every drift page's spec has.
@@ -113,14 +114,13 @@ def replayed_with_a_secret(root: Path, script: CompiledScript, expectation: str)
     return Ran(root, _the_record(root), result.stdout, result.stderr)
 
 
-def healed(root: Path) -> Ran:
-    """`aqa run` of the order spec under `root` on the moved page, whose scripted
-    healer rebinds the toggle: a run that ends `drift_consistent`."""
+def _healing(root: Path, client: Scripted) -> Ran:
+    """`aqa run` of the order spec under `root` on the moved page, with `client`
+    as the healer's model."""
     spec = order_at(root)
     try:
         with pytest.MonkeyPatch.context() as patch:
             patch.setenv("ANTHROPIC_API_KEY", KEY)
-            client = Scripted(rebinding("button", "Show details"))
             patch.setattr(run_module, "AnthropicClient", client)
             with serving(page("moved")) as app:
                 result = typer.testing.CliRunner().invoke(
@@ -130,6 +130,19 @@ def healed(root: Path) -> Ran:
         # A router switches LangSmith's tracing off for the whole process.
         langsmith.configure(enabled=None, client=None)
     return Ran(root, _the_record(root), result.stdout, result.stderr)
+
+
+def healed(root: Path) -> Ran:
+    """`aqa run` of the order spec under `root` on the moved page, whose scripted
+    healer rebinds the toggle: a run that ends `drift_consistent`."""
+    return _healing(root, Scripted(rebinding("button", "Show details")))
+
+
+def unhealed(root: Path) -> Ran:
+    """`aqa run` of the order spec under `root` on the moved page, whose scripted
+    healer calls no tool: its heal gives up, so step 1 keeps a screenshot of its
+    own beside the heal's first look (#313)."""
+    return _healing(root, Scripted(NO_TOOL))
 
 
 def copied(ran: Ran, to: Path) -> Ran:
