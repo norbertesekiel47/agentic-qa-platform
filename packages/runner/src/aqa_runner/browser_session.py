@@ -19,6 +19,7 @@ from playwright.async_api import Browser, ElementHandle, Error, Frame, Page
 
 from aqa_runner import keys, settling, snapshot_refs
 from aqa_runner.bound_secrets import BoundSecret
+from aqa_runner.contrast import READ_STYLES, ContrastRefusedError, lowest_ratio
 from aqa_runner.document_origins import (
     DocumentChangedError,
     PolicyEvent,
@@ -577,6 +578,20 @@ class BrowserSession:
                     "visible_unoccluded does not support elements inside frames"
                 )
             return bool(await element.evaluate(UNOCCLUDED, [min_size, in_viewport]))
+
+    async def contrast(self, element: ElementHandle) -> float:
+        """The lowest WCAG contrast ratio of `element`'s text, as
+        `contrast_min` reads it (`aqa_runner.contrast`), without scrolling.
+        After the origin checks, a child-frame target is refused, as
+        `unoccluded` refuses one; then one evaluation in the page's world
+        reads computed styles and the hit test, and the runner works out
+        the rest, or raises `ContrastRefusedError` for a case styles can't
+        settle."""
+        async with self._turn:
+            frame = await self._require_allowed_element(element)
+            if frame is not self.page.main_frame:
+                raise ContrastRefusedError("frame")
+            return lowest_ratio(await element.evaluate(READ_STYLES))
 
     async def text_of(self, element: ElementHandle) -> Redacted:
         """`element`'s rendered text, as `text_in_target` reads it, once the
