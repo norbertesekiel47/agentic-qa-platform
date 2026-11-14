@@ -109,6 +109,12 @@ _A_CANVAS: Final = (
     f"{_VISION}the element at the point is a canvas, and no locator names a point "
     "inside one, so the rebind can't be confirmed"
 )
+# A live screenshot shows every frame, and a frame on none of the run's
+# allowed origins is one the agent never observes (SECURITY §4 item 2).
+_FRAMED: Final = (
+    f"{_VISION}the page holds a frame from an origin the run doesn't allow, "
+    "which the agent never observes, so no screenshot was taken"
+)
 # The element at a point of the main frame's viewport, read in the page's
 # world, which dispatches no event
 # (https://playwright.dev/python/docs/api/class-page#page-evaluate-handle).
@@ -479,18 +485,38 @@ async def _looked_at(context: _Heal, number: int) -> Offer | _Stop:
 
 async def _shot(context: _Heal) -> Screenshot | _Stop:
     """One screenshot of the live page, taken once a turn may start, never
-    after a fill, or what stopped it."""
+    after a fill or of a page that holds a frame the agent never observes,
+    before and after the capture, or what stopped it."""
     if (stop := _spent(context)) is not None:
         return stop
     session = context.session
     if session.secret_filled:
         return _Stop(_FILLED)
+    changes = session.document_changes
+    if (stop := await _framed(context, changes)) is not None:
+        return stop
     try:
-        return await take_screenshot(session)
+        shot = await take_screenshot(session)
     except ScreenshotWithheldError as withheld:
         return _Stop(f"{_VISION}the screenshot was withheld: {withheld}")
     except (PolicyEventError, DocumentChangedError) as error:
         return _Stop(_unlooked(context, error))
+    return await _framed(context, changes) or shot
+
+
+async def _framed(context: _Heal, changes: int) -> _Stop | None:
+    """Why no screenshot may be sent: the page holds a frame on none of the
+    run's allowed origins, its frames navigated or went since the count was
+    `changes`, so a frame may have come and gone around the capture, or the
+    look failed; None when none of these holds. Bounded."""
+    session = context.session
+    try:
+        held = await bounded(session.holds_frame_left_out(), context.healing.seconds)
+    except (Error, PolicyEventError, UnansweredError) as error:
+        return _Stop(_unlooked(context, error))
+    if session.document_changes != changes:
+        return _Stop(_unlooked(context, DocumentChangedError()))
+    return _Stop(_FRAMED) if held else None
 
 
 async def _shown(context: _Heal, number: int, shot: Screenshot) -> Routed | _Stop:
