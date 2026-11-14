@@ -219,6 +219,58 @@ def test_strict_replay_builds_no_model_client(
     assert built == []
 
 
+def test_a_drifted_step_saves_its_screenshot_and_builds_no_model_client(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    built: list[str] = []
+
+    class ModelClientBuiltError(Exception):
+        pass
+
+    def refuse(name: str) -> Callable[..., None]:
+        def constructor(*_: object, **__: object) -> None:
+            built.append(name)
+            raise ModelClientBuiltError(name)
+
+        return constructor
+
+    clients: list[type] = [
+        ModelRouter,
+        AnthropicClient,
+        ChatAnthropic,
+        anthropic.Anthropic,
+        anthropic.AsyncAnthropic,
+    ]
+    for client in clients:
+        monkeypatch.setattr(client, "__init__", refuse(client.__name__))
+    # The control: building any of them now is caught.
+    for client in clients:
+        with pytest.raises(ModelClientBuiltError):
+            client()
+    built.clear()
+    click = {"seq": 1, "action": "click", "target": "save", "side_effect": True}
+    click |= {"side_effect_basis": "network: POST /write/save"}
+    script = compiled([click], targets={"save": FORM_TARGETS["save"]})
+    # The miss is found sooner than the default 10 s.
+    quick = "budgets: { resolve_seconds: 1 }\n"
+    root = tmp_path / "qa"
+    spec = committed(shop(root, page="/page/form", config=quick), script)
+
+    result = replay(monkeypatch, on(app, spec))
+
+    assert result.exit_code == 3, result.output
+    assert built == []
+    record = record_in(root)
+    assert [path.relative_to(record).as_posix() for path in record.rglob("*.png")] == [
+        "evidence/1/screenshot.png"
+    ]
+    assert [
+        (verdict.get("step"), verdict["evidence"]["screenshot"])
+        for verdict in document(root)["verdicts"]
+    ] == [(0, None), (1, {"path": "evidence/1/screenshot.png", "withheld": None})]
+
+
 def test_a_script_that_passes_exits_0_with_one_line(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
