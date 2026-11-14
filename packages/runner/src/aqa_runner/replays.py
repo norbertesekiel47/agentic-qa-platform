@@ -17,6 +17,7 @@ from playwright.async_api import Browser, BrowserType
 from aqa_runner import executor
 from aqa_runner.egress import EgressGate
 from aqa_runner.egress_proxy import EgressProxy
+from aqa_runner.evaluation import Verify
 from aqa_runner.repairs import Repair
 from aqa_runner.reset import reset
 from aqa_runner.run_record import RunRecord
@@ -25,13 +26,16 @@ from aqa_runner.run_record import RunRecord
 @dataclass(frozen=True)
 class Replaying:
     """What a replay is for and goes through: the spec and project config,
-    the run's start origin (`aqa_core.project.start_origin`), and the run's
-    egress gate, which sends the reset and every request the replay makes."""
+    the run's start origin (`aqa_core.project.start_origin`), the run's
+    egress gate, which sends the reset and every request the replay makes,
+    and, in a verified replay, the verifier each `model_verify` check goes
+    to (#256)."""
 
     spec: Spec
     config: ProjectConfig
     start: str
     gate: EgressGate
+    verify: Verify | None = None
 
 
 @dataclass(frozen=True)
@@ -59,9 +63,11 @@ async def replay_run(
     within `resolve_seconds` (`aqa_runner.reset.reset`), then enter
     `opening()` and replay `script` in what it yields (`executor.replay`):
     with every locator at each use when `every_locator`, else first-match,
-    with a drift handed to `repair` when given (#242, #244), and with a
+    with a drift handed to `repair` when given (#242, #244), with a
     screenshot in the evidence of a step that drifts or fails when
-    `screenshots` asks, as only `strict_replay` does (#251).
+    `screenshots` asks, as only `strict_replay` does (#251), and with each
+    `model_verify` check handed to the verifier `replaying` has, if any
+    (#256).
     A failed reset raises `ResetFailedError` before `opening` is entered, so
     no browser starts before the reset passed. What replay raises reaches
     `opening`'s exit, so the caller can tell it before what it opened
@@ -74,7 +80,15 @@ async def replay_run(
     async with opening() as opened:
         return await executor.replay(
             script,
-            executor.RunSetup(spec, config, start, opened.record, repair, screenshots),
+            executor.RunSetup(
+                spec,
+                config,
+                start,
+                opened.record,
+                repair,
+                screenshots,
+                replaying.verify,
+            ),
             chromium=opened.chromium,
             proxy=opened.proxy,
             gate=replaying.gate,

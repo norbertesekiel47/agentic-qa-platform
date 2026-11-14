@@ -6,7 +6,9 @@ masked screenshot as evidence (#251); then the run's `run.json`, what the run
 viewer reads of it (#249), and its `replay.json` (`replay_result.present`),
 whose outcome decides. With no `heal`, a strict replay, nothing here builds a
 model client. With one, what `aqa run` gives, a drift goes to the repair of the
-healing it builds for the run.
+healing it builds for the run. With `verify`, what `aqa replay --mode verified`
+gives, each `model_verify` check goes to the verifier it builds for the run
+(#256).
 
 The caller admits the script and binds its test secrets first, for every
 spec before any run (`aqa replay`), so nothing here sends a reset for a
@@ -25,7 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from aqa_core.compiled import CompiledScript
-from aqa_core.config import ProjectConfig
+from aqa_core.config import ModelRoleName, ProjectConfig
 from aqa_core.spec import Spec
 from playwright.async_api import Playwright
 
@@ -33,7 +35,7 @@ from aqa_runner.binding import UnregisteredEngineError
 from aqa_runner.bound_secrets import BoundSecret
 from aqa_runner.egress import EgressGate, egress_policy
 from aqa_runner.egress_proxy import EgressProxy, ListenerUnavailableError
-from aqa_runner.executor import RunResult
+from aqa_runner.executor import RunResult, interruption
 from aqa_runner.heal_proposal import proposal_lines
 from aqa_runner.model_turns import Spending
 from aqa_runner.redaction import Redactor
@@ -52,6 +54,8 @@ from aqa_runner.sandbox import SandboxUnavailableError
 
 if TYPE_CHECKING:
     from aqa_runner.heal import Healing
+    from aqa_runner.model_router import ModelRouter
+    from aqa_runner.verification import Verifying
 
 # Why a run stopped, in fixed words.
 _UNMADE: Final = "the run record could not be created; nothing was replayed"
@@ -98,6 +102,7 @@ async def strict_replay(
     scan: Redactor,
     *,
     heal: Callable[[Spending], Healing] | None = None,
+    verify: Callable[[Spending, Callable[[], bool]], Verifying] | None = None,
 ) -> Replayed:
     """Replay `run` once in a new record under its spec root, launching its
     browser from `playwright`, whose selector engines are registered, and
@@ -105,21 +110,34 @@ async def strict_replay(
     scans with `scan`, every test secret the caller bound, `run`'s among them,
     so no run's record keeps a value another spec binds. With `heal`, drift
     goes to the repair of the healing it builds, once, for the run's spend
-    (`heal_model_usd`). The run's time is taken once, from before its record
-    is made."""
+    (`heal_model_usd`). With `verify`, each `model_verify` check goes to the
+    verifier it builds, once, for the run's spend (`verified_model_usd`) and
+    whether the run is interrupted yet. The run's time is taken once, from
+    before its record is made."""
     began = time.monotonic()
     spec = run.spec
     try:
         record = RunRecord.create(run.root).redacting(scan)
     except OSError, ValueError:  # ValueError: a .aqa or .aqa/runs that is a link
-        document = unrecorded(spec, scan, _UNMADE, healing=heal is not None)
+        document = unrecorded(
+            spec, scan, _UNMADE, healing=heal is not None, verified=verify is not None
+        )
         return Replayed("record_error", document, None, time.monotonic() - began)
-    spending = Spending(record, Decimal(str(run.config.budgets.heal_model_usd)))
+    budgets = run.config.budgets
+    budget = budgets.heal_model_usd if verify is None else budgets.verified_model_usd
+    spending = Spending(record, Decimal(str(budget)))
     healing = None if heal is None else heal(spending)
     repair = None if healing is None else healing.repair
     gate = EgressGate(egress_policy(spec, run.config, run.start))
     proxy = EgressProxy(gate)
-    replaying = Replaying(spec, run.config, run.start, gate)
+    expected = run.config.egress.expected_blocked
+    verifying = (
+        None
+        if verify is None
+        else verify(spending, interruption(gate, proxy, expected))
+    )
+    verified = None if verifying is None else verifying.verify
+    replaying = Replaying(spec, run.config, run.start, gate, verified)
     opening = partial(_opened, playwright, proxy, record)
     result: RunResult | None = None
     stops: list[Stop] = []
@@ -143,14 +161,24 @@ async def strict_replay(
         stops.append(Stop("record_error", record.redactor.redact(_UNWRITTEN)))
     # Read from the proxy and gate, not the result: a record that took no
     # more lines, egress.json's included, loses the result, never a block.
-    blocks = proxy.egress_blocks(run.config.egress.expected_blocked)
+    blocks = proxy.egress_blocks(expected)
     events = tuple(gate.infrastructure_events)
     base = None if heal is None else run.blob_sha
+    if verifying is not None:
+        stops.extend(verifying.stops)
     end = ReplayEnd(
-        record, spec, run.script, result, blocks, events, tuple(stops), base
+        record,
+        spec,
+        run.script,
+        result,
+        blocks,
+        events,
+        tuple(stops),
+        base,
+        None if verifying is None else tuple(spending.calls),
     )
     seconds = time.monotonic() - began
-    end = _kept(end, seconds, _models(healing))
+    end = _kept(end, seconds, _models(healing, verifying))
     return replace(
         _ended(end, seconds),
         cost=sum((c.cost_usd for c in spending.calls), Decimal(0)),
@@ -168,20 +196,25 @@ async def _opened(
         yield Opened(playwright.chromium, proxy, record)
 
 
-def _models(healing: Healing | None) -> dict[str, object]:
+def _models(healing: Healing | None, verifying: Verifying | None) -> dict[str, object]:
     """The models a run's router resolved, as `run.json` holds them: none in a
-    strict replay, and the healer's in a run that heals."""
-    if healing is None:
-        return {}
-    healer = healing.router.roles["healer"]
-    fallback = None if healer.fallback is None else healer.fallback.name
+    strict replay, the healer's in a run that heals, and the verifier's in a
+    verified replay."""
+    if healing is not None:
+        return {"healer": _resolved(healing.router, "healer")}
+    if verifying is not None:
+        return {"verifier": _resolved(verifying.router, "verifier")}
+    return {}
+
+
+def _resolved(router: ModelRouter, role: ModelRoleName) -> dict[str, object]:
+    resolved = router.roles[role]
+    fallback = None if resolved.fallback is None else resolved.fallback.name
     return {
-        "healer": {
-            "provider": healer.model.provider,
-            "model": healer.model.name,
-            "effort": healer.effort,
-            "fallback": fallback,
-        }
+        "provider": resolved.model.provider,
+        "model": resolved.model.name,
+        "effort": resolved.effort,
+        "fallback": fallback,
     }
 
 
