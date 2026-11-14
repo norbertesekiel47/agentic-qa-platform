@@ -119,7 +119,7 @@ async def strict_replay(
     repair = None if healing is None else healing.repair
     gate = EgressGate(egress_policy(spec, run.config, run.start))
     proxy = EgressProxy(gate)
-    replaying = Replaying(spec, run.config, run.start, gate)
+    replaying = Replaying(spec, run.config, run.start, gate, screenshots=True)
     opening = partial(_opened, playwright, proxy, record)
     result: RunResult | None = None
     stops: list[Stop] = []
@@ -130,7 +130,6 @@ async def strict_replay(
             opening,
             every_locator=True,
             repair=repair,
-            screenshots=True,
         )
     except ResetFailedError as error:
         stops.append(Stop("reset_unsafe", record.redactor.redact(str(error))))

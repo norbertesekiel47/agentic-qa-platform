@@ -226,10 +226,12 @@ def replayed(
     html: str,
     script: CompiledScript = WITH_CONTACT,
     screenshots: bool = False,
+    before_screenshots: bool = False,
 ) -> Inserting:
     """`script` replayed with every locator on `html`, for the order spec, with
     a repair that offers what `offer` gives for each drift; with `screenshots`,
-    as `strict_replay` asks for them."""
+    as `strict_replay` asks for them, and with `before_screenshots`, as
+    `--before-screenshots` does."""
     path = order_spec(tmp_path / "qa", SHIPPING)
     config = load_config(path.parent / "config.yaml")
     spec = load_spec(path, config)
@@ -250,16 +252,18 @@ def replayed(
                 yield Opened(playwright.chromium, proxy, record)
 
         async def scenario() -> RunResult:
-            replaying = Replaying(spec, config, app.origin, run_gate)
+            replaying = Replaying(
+                spec,
+                config,
+                app.origin,
+                run_gate,
+                screenshots=screenshots,
+                before_screenshots=before_screenshots,
+            )
             # No replay test may hang the suite.
             async with asyncio.timeout(60):
                 return await replay_run(
-                    committed,
-                    replaying,
-                    opening,
-                    every_locator=True,
-                    repair=repair,
-                    screenshots=screenshots,
+                    committed, replaying, opening, every_locator=True, repair=repair
                 )
 
         result = asyncio.run(scenario())

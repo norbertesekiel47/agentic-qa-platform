@@ -36,6 +36,7 @@ from aqa_runner.evidence import (
 from aqa_runner.redaction import Redacted, Redactor
 from aqa_runner.run_record import RunRecord
 from aqa_runner.screenshots import take_screenshot
+from aqa_runner.settling import Window
 from aqa_runner.snapshot_refs import LEFT_OUT
 from playwright.async_api import Error, Frame
 
@@ -529,19 +530,36 @@ SIGNING_IN = [
 ]
 
 
+# The sign-in's last step in the replay that fails instead: a key press whose
+# dispatch the fixture makes raise.
+PRESS = {"seq": 3, "action": "press", "key": "Shift", "side_effect": False}
+
+
 @dataclass
 class Hostile:
-    """A replay that signs in on a page reflecting the value, its app, and
-    every file its record holds."""
+    """A replay that signs in on a page reflecting the value, its app, every
+    file its record holds, and whether its last step failed rather than
+    drifted."""
 
     done: Run
     app: App
     files: dict[str, bytes]
+    failed: bool
 
 
-@pytest.fixture(scope="module")
-def hostile(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Hostile]:
+async def unpressed(*_: object) -> Window:
+    raise Error("fake failure of the step's action")
+
+
+# Without the "before" screenshots and with them (#314), then with them in
+# the replay whose last step fails.
+@pytest.fixture(scope="module", params=["off", "on", "fails"])
+def hostile(
+    request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[Hostile]:
     tmp_path = tmp_path_factory.mktemp("hostile")
+    failed = request.param == "fails"
+    steps = [*SIGNING_IN[:2], PRESS] if failed else SIGNING_IN
     with pytest.MonkeyPatch.context() as patch, serving_app() as app:
         patch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
         patch.setitem(PAGES, "evidence-hostile", HOSTILE)
@@ -550,9 +568,11 @@ def hostile(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Hostile]:
         # Only this replay asks, as `strict_replay`'s do: the fixture's other
         # patches last as long as the module.
         with pytest.MonkeyPatch.context() as asking:
-            asking_screenshots(asking)
-            done = run(app, tmp_path, compiled(SIGNING_IN, targets=TARGETS), spec=spec)
-        yield Hostile(done, app, saved(done.record.path))
+            asking_screenshots(asking, before=request.param != "off")
+            if failed:
+                asking.setattr(BrowserSession, "press", unpressed)
+            done = run(app, tmp_path, compiled(steps, targets=TARGETS), spec=spec)
+        yield Hostile(done, app, saved(done.record.path), failed)
 
 
 def test_the_run_record_holds_only_the_steps_and_each_steps_evidence(
@@ -561,12 +581,17 @@ def test_the_run_record_holds_only_the_steps_and_each_steps_evidence(
     steps = [step.outcome for step in hostile.done.result.steps]
     files = hostile.files
 
-    assert steps == ["completed", "completed", "completed", "drifted"]
+    last = "failed" if hostile.failed else "drifted"
+    assert steps == ["completed", "completed", "completed", last]
+    # A step that completes or drifts drops its "before"; one that fails
+    # keeps it.
+    before = ["evidence/3/before_screenshot.png"] if hostile.failed else []
     assert sorted(files) == sorted(
         [
             "steps.jsonl",
             *(f"evidence/{seq}/{name}" for seq in range(4) for name in FILES),
             "evidence/3/screenshot.png",
+            *before,
         ]
     )
     assert logs(files, "evidence/3") == [[], []]
