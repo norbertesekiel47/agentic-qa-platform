@@ -2,14 +2,38 @@
 ADR-0035): RapidOCR reads the image's text, and the run's scan looks for a
 bound value in it. The engine is RapidOCR's, behind this one module."""
 
+import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from functools import cache
 from itertools import batched
 from pathlib import Path
 
-import rapidocr
-from rapidocr.main import RapidOCR, RapidOCRError
-
 from aqa_runner.redaction import Redactor
+
+
+@contextmanager
+def _environment_kept() -> Iterator[None]:
+    """The process's environment as it was before the block, put back once
+    the block ends, however it ends."""
+    kept = os.environ.copy()
+    try:
+        yield
+    finally:
+        for name in os.environ.keys() - kept.keys():
+            del os.environ[name]
+        os.environ.update(kept)
+
+
+# OpenCV's loader, which RapidOCR imports, writes into the process's
+# environment for the processes it starts: outside Windows it prepends its
+# own directory and an empty entry, the working directory, to
+# LD_LIBRARY_PATH (opencv-python's cv2/__init__.py). Every process `aqa`
+# starts would inherit that, Playwright's driver among them, so the
+# environment is put back as it was.
+with _environment_kept():
+    import rapidocr
+    from rapidocr.main import RapidOCR, RapidOCRError
 
 # RapidOCR's models, bundled in its wheel. Named by path, a model is never
 # downloaded, and a missing file fails the check as its model loads.
