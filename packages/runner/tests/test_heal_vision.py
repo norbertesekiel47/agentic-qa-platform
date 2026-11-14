@@ -163,7 +163,18 @@ def test_the_vision_turn_records_the_images_size_and_hash_and_never_the_image(
         "call": json.dumps({"name": "vision_click", "args": {"x": 88, "y": 36}}),
         "costs": [2],
     }
-    assert list((run.record / "heals/1").glob("*.png")) == []
+    # The only image is the first look's evidence (#251): vision fallback's own
+    # capture is sent, and never saved.
+    folder = run.record / "heals/1"
+    assert [path.name for path in folder.glob("*.png")] == ["screenshot.png"]
+    assert sorted(path.name for path in folder.iterdir()) == [
+        "1.json",
+        "a11y_snapshot.yaml",
+        "console_log.json",
+        "network_log.json",
+        "screenshot.png",
+        "vision.json",
+    ]
     assert turn_files(run) == ["1.json"]
 
 
