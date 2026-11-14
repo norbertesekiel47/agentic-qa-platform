@@ -345,6 +345,25 @@ def test_a_pass_sends_the_saved_screenshot_and_cites_its_folder(
     )
 
 
+@pytest.mark.parametrize(
+    ("flag", "printed"), [("--json", "["), ("--quiet", "")], ids=["json", "quiet"]
+)
+def test_json_and_quiet_work_as_in_strict_mode(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: str, printed: str
+) -> None:
+    spec = badge_spec(tmp_path / "qa")
+
+    result = verified(monkeypatch, app, spec, Scripted(replying("pass")), flag)
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.startswith(printed)
+    if flag == "--json":
+        [written] = json.loads(result.stdout)
+        assert written == document(spec)
+    else:
+        assert result.stdout == ""
+
+
 def test_a_withheld_screenshot_is_inconclusive_and_calls_no_model(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
