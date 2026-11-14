@@ -24,7 +24,7 @@ from packages.cli.tests.test_replay import committed
 from packages.cli.tests.test_run import KEY, order_at
 from packages.runner.tests.drift_fixtures import order_spec, page, serving
 from packages.runner.tests.explore_graph_fixtures import Scripted
-from packages.runner.tests.heal_fixtures import NO_TOOL, rebinding
+from packages.runner.tests.heal_fixtures import NO_POINT, NO_TOOL, rebinding
 from packages.runner.tests.secret_fixtures import BOUND_AT_START, OTHER_FAKE_VALUE
 
 # The goal every drift page's spec has.
@@ -140,9 +140,9 @@ def healed(root: Path) -> Ran:
 
 def unhealed(root: Path) -> Ran:
     """`aqa run` of the order spec under `root` on the moved page, whose scripted
-    healer calls no tool: its heal gives up, so step 1 keeps a screenshot of its
-    own beside the heal's first look (#313)."""
-    return _healing(root, Scripted(NO_TOOL))
+    healer calls no tool, nor does its vision fallback (#252): its heal gives up,
+    so step 1 keeps a screenshot of its own beside the heal's first look (#313)."""
+    return _healing(root, Scripted(NO_TOOL, NO_POINT))
 
 
 def copied(ran: Ran, to: Path) -> Ran:
