@@ -49,6 +49,16 @@ def heal(
             "--url", help="The start origin; the project config's base_url if omitted."
         ),
     ] = None,
+    before_screenshots: Annotated[
+        bool,
+        typer.Option(
+            "--before-screenshots",
+            help=(
+                "Capture the page before each step, and save it beside the "
+                "screenshot of a step that fails."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Heal one spec, or apply a heal proposal to its compiled script.
 
@@ -57,15 +67,16 @@ def heal(
     aqa heal apply <proposal_id> writes a proposal to the compiled script, and
     commits nothing. A spec file named apply is ./apply."""
     match words:
-        case ["apply", proposal] if url is None:
+        case ["apply", proposal] if url is None and not before_screenshots:
             _apply(proposal)
         case ["apply"]:
             raise typer.BadParameter("apply takes a proposal's id", param_hint=_WORDS)
         case [spec]:
-            run([Path(spec)], url=url)
+            run([Path(spec)], url=url, before_screenshots=before_screenshots)
         case _:
             raise typer.BadParameter(
-                "give one spec, or apply and a proposal's id with no --url",
+                "give one spec, or apply and a proposal's id with no --url or "
+                "--before-screenshots",
                 param_hint=_WORDS,
             )
 

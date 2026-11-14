@@ -4,8 +4,9 @@ or failed saves one masked screenshot in its evidence folder, and what became of
 it is in `RunResult.shots`. A completed step, a drifted step a repair took, and
 a replay that doesn't ask, as explore's confirmation and the bench pilot don't,
 save none. A hostile run that heals keeps no image but the ones
-`RunRecord.write_screenshot` wrote. Real Chromium against the executor's fixture
-app."""
+`RunRecord.write_screenshot` wrote, and so does one that asks for the "before"
+screenshots and fails after its fill (#314). Real Chromium against the
+executor's fixture app."""
 
 import asyncio
 from collections.abc import AsyncIterator, Iterator
@@ -116,12 +117,13 @@ def test_a_step_that_fails_saves_its_screenshot_and_no_other_step_does(
     )
     verdicts = cast("list[dict[str, object]]", present(end)["verdicts"])
     assert [(verdict.get("step"), verdict["evidence"]) for verdict in verdicts] == [
-        (0, {"path": "evidence/0", "screenshot": None}),
+        (0, {"path": "evidence/0", "screenshot": None, "before_screenshot": None}),
         (
             1,
             {
                 "path": "evidence/1",
                 "screenshot": {"path": "evidence/1/screenshot.png", "withheld": None},
+                "before_screenshot": None,
             },
         ),
     ]
@@ -216,6 +218,14 @@ SIGNS_IN_THEN_DRIFTS = compiled(
         **NEVER,
     },
 )
+# The same fill, then a key press whose dispatch the test makes fail.
+SIGNS_IN_THEN_FAILS = compiled(
+    [
+        SIGNS_IN_THEN_DRIFTS.steps[0].model_dump(),
+        {"seq": 2, "action": "press", "key": "Shift", "side_effect": False},
+    ],
+    targets={"password": SIGNS_IN_THEN_DRIFTS.targets["password"].model_dump()},
+)
 # The signatures an image file starts with; WebP's and ISO-BMFF's (AVIF,
 # HEIC) are at their offsets in `an_image`.
 SIGNATURES = (
@@ -244,8 +254,30 @@ def an_image(data: bytes) -> bool:
     )
 
 
+async def unpressed(*_: object) -> Window:
+    raise Error("fake failure of the step's action")
+
+
+@pytest.mark.parametrize(
+    ("failing", "kept"),
+    [
+        pytest.param(
+            False, {"evidence/2/screenshot.png", "heals/2/screenshot.png"}, id="drifts"
+        ),
+        # With the "before" screenshots asked for, as --before-screenshots does.
+        pytest.param(
+            True,
+            {"evidence/2/screenshot.png", "evidence/2/before_screenshot.png"},
+            id="fails-with-before",
+        ),
+    ],
+)
 def test_every_image_a_hostile_run_keeps_is_one_write_screenshot_wrote(
-    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    app: App,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failing: bool,
+    kept: set[str],
 ) -> None:
     monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
     monkeypatch.setitem(PAGES, "sign-in", SIGN_IN)
@@ -255,7 +287,9 @@ def test_every_image_a_hostile_run_keeps_is_one_write_screenshot_wrote(
     )
     config = load_config(root / "config.yaml")
     spec = load_spec(root / "login.spec.md", config)
-    script = for_spec(SIGNS_IN_THEN_DRIFTS, spec)
+    script = for_spec(SIGNS_IN_THEN_FAILS if failing else SIGNS_IN_THEN_DRIFTS, spec)
+    if failing:
+        monkeypatch.setattr(BrowserSession, "press", unpressed)
     _, _, bound, _ = admitted(script, spec, config, app.origin)
     written: list[str] = []
     write = RunRecord.write_screenshot
@@ -277,7 +311,9 @@ def test_every_image_a_hostile_run_keeps_is_one_write_screenshot_wrote(
             run = StrictRun(root, spec, config, app.origin, script, bound, BLOB)
             scan = Redactor(bound.values())
             async with asyncio.timeout(60):
-                ended = await strict_replay(run, playwright, scan, heal=heal)
+                ended = await strict_replay(
+                    run, playwright, scan, heal=heal, before_screenshots=failing
+                )
             assert ended.record is not None
             async with launched_browser(playwright.chromium) as browser:
                 scratch = await browser.new_page()
@@ -289,7 +325,7 @@ def test_every_image_a_hostile_run_keeps_is_one_write_screenshot_wrote(
 
     ended, reds = asyncio.run(scenario())
 
-    # The fill went in, then the drift's heal gave up.
+    # The fill went in, then the drift's heal gave up, or the press failed.
     verdicts = cast("list[dict[str, object]]", ended.document["verdicts"])
     assert ended.outcome == "inconclusive"
     assert [verdict["verdict"] for verdict in verdicts] == [
@@ -306,7 +342,7 @@ def test_every_image_a_hostile_run_keeps_is_one_write_screenshot_wrote(
     assert sorted(name for name, data in files.items() if an_image(data)) == sorted(
         written
     )
-    assert {"evidence/2/screenshot.png", "heals/2/screenshot.png"} <= set(written)
+    assert kept <= set(written)
     assert [
         name
         for name, data in files.items()

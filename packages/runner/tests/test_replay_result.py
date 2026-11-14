@@ -511,7 +511,7 @@ def test_each_violation_carries_a_finding_of_its_category(
 
 
 def evidence(seq: int) -> dict[str, object]:
-    return {"path": f"evidence/{seq}", "screenshot": None}
+    return {"path": f"evidence/{seq}", "screenshot": None, "before_screenshot": None}
 
 
 def test_the_document_holds_each_verdict_with_its_evidence(tmp_path: Path) -> None:
@@ -650,6 +650,7 @@ def stopped_at_2(end: ReplayEnd) -> ReplayEnd:
 SAVED_AT_2 = {
     "path": "evidence/2",
     "screenshot": {"path": "evidence/2/screenshot.png", "withheld": None},
+    "before_screenshot": None,
 }
 
 
@@ -690,6 +691,7 @@ def test_a_withheld_screenshot_is_cited_with_why(tmp_path: Path) -> None:
             "path": None,
             "withheld": "a DevTools call or the render failed",
         },
+        "before_screenshot": None,
     }
 
 
@@ -707,6 +709,57 @@ def test_a_withheld_screenshots_reason_is_scanned_with_the_runs_scan(
     assert judged(stopped_at_2(end), "step", 2)["evidence"]["screenshot"] == {
         "path": None,
         "withheld": "[SECRET:TEST_PASSWORD] was in it",
+    }
+
+
+# Step 2's evidence, with both images its failed step saved.
+PAIRED_AT_2 = SAVED_AT_2 | {
+    "before_screenshot": {"path": "evidence/2/before_screenshot.png", "withheld": None}
+}
+
+
+def test_a_verdict_cites_the_before_screenshot_of_the_step_its_evidence_is(
+    tmp_path: Path,
+) -> None:
+    end = ending(
+        made(tmp_path),
+        steps=(StepResult(2, "failed", error="the page crashed"),),
+        invariants=(HELD[0], *VIOLATED, HELD[2], HELD[3]),
+        # The page where the invariant was first violated.
+        evidence=Evidence(2, None),
+        shots={2: Shot("evidence/2/screenshot.png")},
+        before_shots={2: Shot("evidence/2/before_screenshot.png")},
+    )
+
+    verdicts = document(stopped_at_2(end))["verdicts"]
+
+    assert [
+        (*next(iter(verdict.items())), verdict["evidence"]) for verdict in verdicts
+    ] == [
+        ("step", 0, evidence(0)),
+        ("step", 1, evidence(1)),
+        ("step", 2, PAIRED_AT_2),
+        ("invariant", "js_exceptions", PAIRED_AT_2),
+    ]
+
+
+def test_a_withheld_before_screenshots_reason_is_scanned_with_the_runs_scan(
+    tmp_path: Path,
+) -> None:
+    # Scanned by another scan than the run's, so it still spells the value.
+    leak = NO_SECRETS.redact("fake-bound-value was in it")
+    end = ending(
+        made(tmp_path, BOUND),
+        steps=(StepResult(2, "failed", error="the page crashed"),),
+        shots={2: Shot("evidence/2/screenshot.png")},
+        before_shots={2: Shot(withheld=leak)},
+    )
+
+    assert judged(stopped_at_2(end), "step", 2)["evidence"] == SAVED_AT_2 | {
+        "before_screenshot": {
+            "path": None,
+            "withheld": "[SECRET:TEST_PASSWORD] was in it",
+        }
     }
 
 

@@ -659,10 +659,15 @@ def run(
     return Run(asyncio.run(scenario()), record)
 
 
-def asking_screenshots(patch: pytest.MonkeyPatch) -> None:
+def asking_screenshots(patch: pytest.MonkeyPatch, *, before: bool = False) -> None:
     """Have `run`'s replays ask for screenshots in their evidence, as
-    `strict_replay`'s do (#251), until `patch` is undone."""
-    patch.setattr(f"{__name__}.RunSetup", partial(RunSetup, screenshots=True))
+    `strict_replay`'s do (#251), and with `before`, for the "before"
+    screenshots `--before-screenshots` asks for (#314), until `patch` is
+    undone."""
+    patch.setattr(
+        f"{__name__}.RunSetup",
+        partial(RunSetup, screenshots=True, before_screenshots=before),
+    )
 
 
 def by_role(role: str, name: str) -> dict[str, Any]:

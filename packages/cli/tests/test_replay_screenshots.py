@@ -91,6 +91,7 @@ def test_a_withheld_screenshot_saves_nothing_and_changes_nothing_else(
             "path": None,
             "withheld": "a DevTools call or the render failed",
         },
+        "before_screenshot": None,
     }
     assert unscreenshotted(document(refused)) == unscreenshotted(document(taken))
 

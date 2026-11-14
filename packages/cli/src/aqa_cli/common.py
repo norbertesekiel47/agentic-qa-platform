@@ -320,13 +320,24 @@ def replayed_runs(
     lines: bool = True,
     quiet: bool = False,
     heal: Callable[[StrictRun, Spending], Healing] | None = None,
+    before_screenshots: bool = False,
 ) -> list[Replayed]:
     """Each run, in order, on one Playwright driver, a drift going to the repair
-    of the healing `heal` builds for it when given, and, with `lines`, its line
-    as it ends, unless `quiet` and it passed; or a stop (13) when the driver or
-    the egress listener couldn't start."""
+    of the healing `heal` builds for it when given, a failed step saving its
+    "before" when `before_screenshots` asks (`strict_replay`), and, with
+    `lines`, its line as it ends, unless `quiet` and it passed; or a stop (13)
+    when the driver or the egress listener couldn't start."""
     try:
-        return asyncio.run(_replayed(runs, scan, lines=lines, quiet=quiet, heal=heal))
+        return asyncio.run(
+            _replayed(
+                runs,
+                scan,
+                lines=lines,
+                quiet=quiet,
+                heal=heal,
+                before_screenshots=before_screenshots,
+            )
+        )
     except UnstartedError as error:
         subject = ", ".join(run.spec.frontmatter.id for run in runs)
         stop("unreachable", subject, f"{error}, so {_NOTHING}", scan=scan)
@@ -339,6 +350,7 @@ async def _replayed(
     lines: bool,
     quiet: bool,
     heal: Callable[[StrictRun, Spending], Healing] | None,
+    before_screenshots: bool,
 ) -> list[Replayed]:
     ended: list[Replayed] = []
     async with started(async_playwright().start()) as playwright:
@@ -350,6 +362,7 @@ async def _replayed(
                 playwright,
                 scan,
                 heal=None if heal is None else partial(heal, run),
+                before_screenshots=before_screenshots,
             )
             if lines and not (quiet and replayed.outcome == "passed"):
                 _said(scan, run.spec.frontmatter.id, replayed)
