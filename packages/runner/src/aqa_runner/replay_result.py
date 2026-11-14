@@ -31,11 +31,11 @@ from aqa_core.compiled import (
     Assertion,
     Click,
     CompiledScript,
+    ContrastMin,
     Fill,
     FillSecret,
-    NotVisible,
     Select,
-    TextInTarget,
+    TargetCheck,
     VisibleUnoccluded,
 )
 from aqa_core.spec import InvariantName, Spec
@@ -363,7 +363,9 @@ class _Judging:
         self, result: AssertionResult, check: Assertion, expectation: str
     ) -> _Judged:
         category: Category = (
-            "visual" if isinstance(check, VisibleUnoccluded) else "functional"
+            "visual"
+            if isinstance(check, VisibleUnoccluded | ContrastMin)
+            else "functional"
         )
         judged = self._judged(
             _Subject("assertion", result.id),
@@ -487,7 +489,7 @@ class _Healed:
         } | {
             _Subject("assertion", check.id): check.target
             for check in end.script.assertions
-            if isinstance(check, TextInTarget | NotVisible | VisibleUnoccluded)
+            if isinstance(check, TargetCheck)
         }
         return cls(
             end.record.redactor,

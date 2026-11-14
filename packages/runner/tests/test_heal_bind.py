@@ -27,7 +27,7 @@ from aqa_runner.repairs import Drift
 from langchain_core.messages import BaseMessage
 from playwright.async_api import Error, Page
 
-from packages.runner.tests.drift_fixtures import BUTTON, DETAILS, SUMMARY
+from packages.runner.tests.drift_fixtures import BUTTON, CONTRASTED, DETAILS, SUMMARY
 from packages.runner.tests.executor_fixtures import compiled, read_steps
 from packages.runner.tests.explore_graph_fixtures import NO_RESPONSE, calling, ref
 from packages.runner.tests.heal_fixtures import (
@@ -855,6 +855,25 @@ def test_a_drifted_assertion_target_is_rebound_by_the_model_and_checked_again(
         {"css": "button", "scope": {"css": "#order"}},
     ]
     assert turn_files(run, "assertion-0") == ["1.json"]
+
+
+# The moved page, its toggle labelled too: an action's locators may find it
+# by that label, and an assertion's may not.
+LABELLED = in_the_footer('<label for="show">Show details</label>').replace(
+    "<button onclick", '<button id="show" onclick', 1
+)
+
+
+def test_a_drifted_contrast_min_target_is_rebound_for_an_assertions_use(
+    tmp_path: Path,
+) -> None:
+    run = healed(tmp_path, SHOW, script=CONTRASTED, spec_at=in_view_at, html=LABELLED)
+
+    assert [check.outcome for check in run.result.assertions] == ["pass"]
+    assert locators_of(run, "toggle") == [
+        {"role": "button", "name": "Show details"},
+        {"css": "button", "scope": {"css": "#order"}},
+    ]
 
 
 def test_an_assertion_target_whose_text_is_checked_is_located_by_no_name(

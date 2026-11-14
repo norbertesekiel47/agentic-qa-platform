@@ -16,11 +16,10 @@ from aqa_core.compiled import (
     CompiledScript,
     Fill,
     FillSecret,
+    PositiveCheck,
     Select,
     Step,
     Target,
-    TextInTarget,
-    VisibleUnoccluded,
 )
 from aqa_core.config import ProjectConfig
 from aqa_core.heal_patch import heal_patch_problems, pointer
@@ -105,7 +104,7 @@ class AssertionAt:
     """A drifted positive check, and its index in the script's assertions."""
 
     index: int
-    check: TextInTarget | VisibleUnoccluded
+    check: PositiveCheck
 
     @property
     def key(self) -> str:

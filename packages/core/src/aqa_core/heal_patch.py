@@ -17,10 +17,9 @@ from aqa_core.compiled import (
     ByTestId,
     CompiledScript,
     Locator,
-    NotVisible,
     Step,
+    TargetCheck,
     TextInTarget,
-    VisibleUnoccluded,
     allowed_for_assertion,
     css_strings,
     css_tokens,
@@ -151,9 +150,7 @@ def _target_problems(script: CompiledScript, healed: CompiledScript) -> Iterator
     locator the heal wrote, one its target didn't have, is held to the
     grammar here, so a person's reviewed edit stands."""
     asserted = {
-        check.target
-        for check in script.assertions
-        if isinstance(check, TextInTarget | NotVisible | VisibleUnoccluded)
+        check.target for check in script.assertions if isinstance(check, TargetCheck)
     }
     claims = text_claims(script)
     for name in healed.targets:

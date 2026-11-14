@@ -21,7 +21,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Final, Literal, TypedDict
 
-from aqa_core.compiled import Locator, NotVisible, TextInTarget, VisibleUnoccluded
+from aqa_core.compiled import Locator, TargetCheck, TextInTarget
 from aqa_core.heal_patch import literal_claim_spelled, text_claims
 from langchain_core.messages import BaseMessage
 from langgraph.checkpoint.memory import InMemorySaver
@@ -428,8 +428,7 @@ async def _generated(context: _Heal, seen: Seen) -> tuple[Locator, ...]:
     claims = text_claims(script).get(target.semantic, [])
     dropped = _dropping(context.redactor, claims)
     asserted = any(
-        isinstance(check, TextInTarget | NotVisible | VisibleUnoccluded)
-        and check.target == name
+        isinstance(check, TargetCheck) and check.target == name
         for check in script.assertions
     )
 
