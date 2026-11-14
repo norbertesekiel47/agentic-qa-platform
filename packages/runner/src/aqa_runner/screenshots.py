@@ -378,12 +378,16 @@ class Screenshot:
             raise TypeError("only take_screenshot makes a Screenshot")
 
 
-async def take_screenshot(session: BrowserSession) -> Screenshot:
+async def take_screenshot(
+    session: BrowserSession, *, record_refusal: bool = True
+) -> Screenshot:
     """A screenshot of the session's page, at its viewport in CSS pixels:
     the live page's until the session's first `fill_secret`, a render of
     its scrubbed snapshot from then on. On a page off the run's allowed
     origins it raises `PolicyEventError`, and after a frame change during
-    the snapshot `DocumentChangedError`, as every observation does.
+    the snapshot `DocumentChangedError`, as every observation does; without
+    `record_refusal`, that refusal isn't added to the session's policy
+    events, as evidence's own look adds none (`aqa_runner.evidence`).
 
     It is withheld (`ScreenshotWithheldError`, with a reason that never
     quotes the page, so nothing is saved) when the snapshot, its scrub or
@@ -400,7 +404,7 @@ async def take_screenshot(session: BrowserSession) -> Screenshot:
     read, or when the OCR engine raises, a missing model file included
     (ADR-0035's #251 amendment)."""
     try:
-        png = await _captured(session)
+        png = await _captured(session, record_refusal=record_refusal)
     except TimeoutError:
         reason = f"the page's snapshot, its scrub or its render took over {CAPTURE_SECONDS} s"
     except Error:
@@ -456,11 +460,11 @@ def _read(png: bytes, redactor: Redactor) -> bool:
             raise _EngineFailedError from error
 
 
-async def _captured(session: BrowserSession) -> bytes:
+async def _captured(session: BrowserSession, *, record_refusal: bool) -> bytes:
     # The bound covers the page's checks too, which a busy page holds back.
     async with (
         asyncio.timeout(CAPTURE_SECONDS),
-        session.observing_page() as page,
+        session.observing_page(record_refusal=record_refusal) as page,
         _devtools(page) as devtools,
     ):
         # Read under the session's lock, which `fill_secret` holds from its
