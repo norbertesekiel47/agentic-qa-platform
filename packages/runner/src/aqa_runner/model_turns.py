@@ -6,7 +6,7 @@ import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from decimal import MAX_PREC, Decimal, localcontext
-from typing import Final
+from typing import Any, Final
 
 from aqa_core.model_costs import CostRecord
 from langchain_core.messages import AIMessage, BaseMessage
@@ -41,16 +41,30 @@ def unspelled(redactor: Redactor) -> Callable[[Sequence[BaseMessage]], None]:
     `UnsentRequestError` when any of its messages still spells a value
     `redactor` binds, such as one a join at a marker's edge completes: in
     its text, or in its content and tool calls as JSON, non-ASCII as
-    written, so no other text's escape counts as a spelling."""
+    written, so no other text's escape counts as a spelling. An image
+    block's data is the one part it doesn't read: only a `Screenshot`,
+    which `take_screenshot` checked, is sent as an image (SECURITY §5)."""
 
     def check(messages: Sequence[BaseMessage]) -> None:
         for message in messages:
             calls = message.tool_calls if isinstance(message, AIMessage) else []
-            sent = json.dumps([message.content, calls], ensure_ascii=False)
+            sent = json.dumps([_imageless(message.content), calls], ensure_ascii=False)
             if redactor.finds(message.text) or redactor.finds(sent):
                 raise UnsentRequestError
 
     return check
+
+
+def _imageless(content: str | list[str | dict[Any, Any]]) -> object:
+    """`content` with each image block's base64 data left out."""
+    if isinstance(content, str):
+        return content
+    return [
+        {key: value for key, value in part.items() if key != "base64"}
+        if isinstance(part, dict) and part.get("type") == "image"
+        else part
+        for part in content
+    ]
 
 
 def block(label: str, text: str, redactor: Redactor) -> str:
