@@ -25,7 +25,14 @@ from aqa_runner.document_origins import (
     PolicyEventError,
     frame_origin,
 )
-from aqa_runner.evidence import Shot, capture_evidence
+from aqa_runner.evidence import (
+    Asked,
+    Held,
+    Shot,
+    Shots,
+    capture_evidence,
+    held_screenshot,
+)
 from aqa_runner.redaction import Redacted, Redactor
 from aqa_runner.run_record import RunRecord
 from aqa_runner.screenshots import take_screenshot
@@ -303,7 +310,7 @@ def test_evidence_saves_a_screenshot_only_when_asked(
         redactor = Redactor([fake_secret("FAKE_TOKEN", REFLECTED, sites.app)])
         record = RunRecord.create(tmp_path).redacting(redactor)
 
-        async def scenario() -> tuple[Shot | None, Shot | None]:
+        async def scenario() -> tuple[Shots, Shots]:
             async with document_fixtures.browsing(sites, redactor=redactor) as session:
                 window = await session.navigate(f"{sites.app}/reflect")
                 unasked = await capture_evidence(
@@ -315,13 +322,13 @@ def test_evidence_saves_a_screenshot_only_when_asked(
                     "evidence/1",
                     window,
                     await session.snapshot(),
-                    screenshot=True,
+                    asked=Asked(screenshot=True),
                 )
                 return unasked, asked
 
         unasked, asked = asyncio.run(scenario())
 
-    assert (unasked, asked) == (None, Shot("evidence/1/screenshot.png"))
+    assert (unasked, asked) == (Shots(), Shots(Shot("evidence/1/screenshot.png")))
     files = saved(record.path)
     assert sorted(files) == sorted(
         [
@@ -332,6 +339,58 @@ def test_evidence_saves_a_screenshot_only_when_asked(
     assert files["evidence/1/screenshot.png"].startswith(PNG)
 
 
+def test_evidence_saves_a_held_before_screenshot_beside_its_own(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    with reflecting(monkeypatch) as sites:
+        redactor = Redactor([fake_secret("FAKE_TOKEN", REFLECTED, sites.app)])
+        record = RunRecord.create(tmp_path).redacting(redactor)
+
+        async def scenario() -> tuple[Shots, Shots]:
+            async with document_fixtures.browsing(sites, redactor=redactor) as session:
+                window = await session.navigate(f"{sites.app}/reflect")
+                alone = await capture_evidence(
+                    record,
+                    session,
+                    "evidence/1",
+                    window,
+                    None,
+                    asked=Asked(before=await held_screenshot(session)),
+                )
+                held = await held_screenshot(session)
+                both = await capture_evidence(
+                    record,
+                    session,
+                    "evidence/2",
+                    window,
+                    None,
+                    asked=Asked(screenshot=True, before=held),
+                )
+                return alone, both
+
+        alone, both = asyncio.run(scenario())
+
+    assert alone == Shots(before=Shot("evidence/1/before_screenshot.png"))
+    assert both == Shots(
+        Shot("evidence/2/screenshot.png"), Shot("evidence/2/before_screenshot.png")
+    )
+    files = saved(record.path)
+    assert sorted(files) == sorted(
+        [
+            *(f"evidence/1/{name}" for name in (*FILES[1:], "before_screenshot.png")),
+            *(
+                f"evidence/2/{name}"
+                for name in (*FILES[1:], "screenshot.png", "before_screenshot.png")
+            ),
+        ]
+    )
+    assert [name for name, data in files.items() if data.startswith(PNG)] == [
+        "evidence/1/before_screenshot.png",
+        "evidence/2/before_screenshot.png",
+        "evidence/2/screenshot.png",
+    ]
+
+
 def test_an_evidence_screenshot_off_the_allowed_origins_is_withheld_quietly(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -339,25 +398,59 @@ def test_an_evidence_screenshot_off_the_allowed_origins_is_withheld_quietly(
         redactor = Redactor([fake_secret("FAKE_TOKEN", REFLECTED, sites.app)])
         record = RunRecord.create(tmp_path).redacting(redactor)
 
-        async def scenario() -> tuple[Shot | None, int, int, int]:
+        async def scenario() -> tuple[Shots, int, int, int]:
             async with document_fixtures.browsing(sites, redactor=redactor) as session:
                 window = await session.navigate(f"{sites.app}/reflect")
                 with suppress(Error):
                     await session.page.goto(f"{sites.cdn}/canary?{quote(REFLECTED)}")
                 before = session.policy_events.total
-                shot = await capture_evidence(
-                    record, session, "evidence/1", window, None, screenshot=True
+                shots = await capture_evidence(
+                    record, session, "evidence/1", window, None, asked=Asked(True)
                 )
                 after = session.policy_events.total
                 # The control: the capture's own default records its refusal.
                 with pytest.raises(PolicyEventError):
                     await take_screenshot(session)
-                return shot, before, after, session.policy_events.total
+                return shots, before, after, session.policy_events.total
 
-        shot, before, after, recorded = asyncio.run(scenario())
+        shots, before, after, recorded = asyncio.run(scenario())
 
-    assert shot == Shot(withheld=OFF_ORIGIN)
+    assert shots == Shots(Shot(withheld=OFF_ORIGIN))
     assert (before, after, recorded) == (0, 0, 1)
+    files = saved(record.path)
+    assert sorted(files) == [f"evidence/1/{name}" for name in FILES[1:]]
+    assert holding(files, ["cdn.example.test", MARKER]) == []
+
+
+def test_a_before_screenshot_off_the_allowed_origins_is_withheld_quietly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    with reflecting(monkeypatch) as sites:
+        redactor = Redactor([fake_secret("FAKE_TOKEN", REFLECTED, sites.app)])
+        record = RunRecord.create(tmp_path).redacting(redactor)
+
+        async def scenario() -> tuple[Held, Shots, int, int]:
+            async with document_fixtures.browsing(sites, redactor=redactor) as session:
+                window = await session.navigate(f"{sites.app}/reflect")
+                with suppress(Error):
+                    await session.page.goto(f"{sites.cdn}/canary?{quote(REFLECTED)}")
+                before = session.policy_events.total
+                held = await held_screenshot(session)
+                shots = await capture_evidence(
+                    record,
+                    session,
+                    "evidence/1",
+                    window,
+                    None,
+                    asked=Asked(before=held),
+                )
+                return held, shots, before, session.policy_events.total
+
+        held, shots, before, after = asyncio.run(scenario())
+
+    assert held == OFF_ORIGIN
+    assert shots == Shots(before=Shot(withheld=OFF_ORIGIN))
+    assert (before, after) == (0, 0)
     files = saved(record.path)
     assert sorted(files) == [f"evidence/1/{name}" for name in FILES[1:]]
     assert holding(files, ["cdn.example.test", MARKER]) == []
@@ -368,7 +461,7 @@ def test_an_evidence_screenshot_whose_frames_change_under_it_is_withheld(
 ) -> None:
     record = RunRecord.create(tmp_path)
 
-    async def scenario(sites: document_fixtures.Sites) -> Shot | None:
+    async def scenario(sites: document_fixtures.Sites) -> Shots:
         async with document_fixtures.browsing(sites) as session:
             await session.navigate(f"{sites.app}/deep")
 
@@ -380,13 +473,13 @@ def test_an_evidence_screenshot_whose_frames_change_under_it_is_withheld(
 
             monkeypatch.setattr(browser_session, "frame_origin", removing)
             return await capture_evidence(
-                record, session, "evidence/1", None, None, screenshot=True
+                record, session, "evidence/1", None, None, asked=Asked(True)
             )
 
     with document_fixtures.serving_sites(monkeypatch) as sites:
-        shot = asyncio.run(scenario(sites))
+        shots = asyncio.run(scenario(sites))
 
-    assert shot == Shot(withheld=FRAMES_CHANGED)
+    assert shots == Shots(Shot(withheld=FRAMES_CHANGED))
     assert sorted(saved(record.path)) == [f"evidence/1/{name}" for name in FILES[1:]]
 
 

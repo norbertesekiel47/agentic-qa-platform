@@ -61,7 +61,7 @@ from aqa_runner.evaluation import (
     look_for,
     looked,
 )
-from aqa_runner.evidence import Shot, capture_evidence
+from aqa_runner.evidence import Asked, Shot, capture_evidence
 from aqa_runner.invariants import InvariantResult, invariant_results
 from aqa_runner.locators import Miss, Resolved
 from aqa_runner.reasons import UnansweredError
@@ -580,15 +580,15 @@ async def _keep_with_evidence(
     steps.append(step)
     budget = run.setup.config.budgets.resolve_seconds
     snapshot = await _observed(session, budget)
-    shot = await capture_evidence(
+    saved = await capture_evidence(
         run.setup.record,
         session,
         f"evidence/{step.seq}",
         step.window,
         snapshot,
-        screenshot=run.setup.screenshots and step.outcome != "completed",
+        asked=Asked(run.setup.screenshots and step.outcome != "completed"),
     )
-    if shot is not None:
+    if (shot := saved.screenshot) is not None:
         shots[step.seq] = shot
     return Evidence(step.seq, None if snapshot is None else str(snapshot))
 

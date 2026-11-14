@@ -16,6 +16,11 @@ first look, under `heals/<key>/`. Replay (`aqa_runner.executor`), exploring
   failed in `aqa replay`, `aqa run` and `aqa heal <spec>`, and heal at its
   first look; explore, the bench pilot and a completed step never do
   (ADR-0033's #251 amendment).
+- `before_screenshot.png`, only when its caller passes one in: the page as
+  `held_screenshot` captured it ahead of the step, in the same way, held in
+  memory until the step's outcome was known. With `--before-screenshots`,
+  replay takes one ahead of each compiled step and passes it in only for a
+  step that failed; any other step's is dropped (ADR-0033's #314 amendment).
 
 In a run that binds any test secret, the logs keep no URL, method or
 console text: a page can split a value across them in pieces no scan finds
@@ -36,13 +41,21 @@ from aqa_runner.document_origins import (
 )
 from aqa_runner.redaction import Redacted
 from aqa_runner.run_record import RefusedWriteError, RunRecord
-from aqa_runner.screenshots import ScreenshotWithheldError, take_screenshot
+from aqa_runner.screenshots import (
+    Screenshot,
+    ScreenshotWithheldError,
+    take_screenshot,
+)
 from aqa_runner.settling import ConsoleEntry, NetworkEntry, Window
 
 # Why a screenshot wasn't taken, in fixed words, when the capture's page
 # checks refused it: a policy event's own words name the page's URL.
 _OFF_ORIGIN: Final = "the page was off the run's allowed origins"
 _FRAMES_CHANGED: Final = "the page's frames changed during the capture"
+
+# A screenshot held in memory until evidence saves or drops it: the image, or
+# why it was withheld (`held_screenshot`).
+type Held = Screenshot | str
 
 
 @dataclass(frozen=True)
@@ -55,6 +68,28 @@ class Shot:
     withheld: str | None = None
 
 
+@dataclass(frozen=True)
+class Asked:
+    """The screenshots a call of `capture_evidence` saves: the page's after
+    the step, when `screenshot` asks, and `before`, one `held_screenshot`
+    took ahead of the step, when given."""
+
+    screenshot: bool = False
+    before: Held | None = None
+
+
+@dataclass(frozen=True)
+class Shots:
+    """What became of the screenshots a call of `capture_evidence` was asked
+    for (`Asked`), each None when it wasn't."""
+
+    screenshot: Shot | None = None
+    before: Shot | None = None
+
+
+_UNASKED: Final = Asked()
+
+
 async def capture_evidence(
     record: RunRecord,
     session: BrowserSession,
@@ -62,15 +97,17 @@ async def capture_evidence(
     window: Window | None,
     snapshot: Redacted | None,
     *,
-    screenshot: bool = False,
-) -> Shot | None:
+    asked: Asked = _UNASKED,
+) -> Shots:
     """Save evidence in `folder` of `record`, whose scan must be `session`'s
     (`ValueError` before anything is written). `window` is the step's
     settle window, None when it has none (a drifted step, a failed one
     whose result keeps none, or a heal's look); `snapshot` is the caller's
-    first snapshot after the step settled. With `screenshot`, the page's
-    screenshot is saved last, and what became of it is returned; its
-    refusal records no policy event. Without it, None."""
+    first snapshot after the step settled. The screenshot `asked.before`
+    holds, which `held_screenshot` took in `session` ahead of the step, is
+    saved as `before_screenshot.png`, or, withheld, saves nothing. With
+    `asked.screenshot`, the page's screenshot is saved last; its refusal
+    records no policy event. What became of each is returned."""
     if record.redactor is not session.redactor:
         raise ValueError(
             "evidence goes only to a record that scans with its session's redactor"
@@ -103,21 +140,38 @@ async def capture_evidence(
     for name, document in documents.items():
         with suppress(RefusedWriteError):
             record.write(f"{folder}/{name}", document)
-    return await _screenshot(record, session, folder) if screenshot else None
+    before = asked.before
+    ahead = (
+        None if before is None else _saved(record, folder, "before_screenshot", before)
+    )
+    after = await held_screenshot(session) if asked.screenshot else None
+    return Shots(
+        None if after is None else _saved(record, folder, "screenshot", after), ahead
+    )
 
 
-async def _screenshot(record: RunRecord, session: BrowserSession, folder: str) -> Shot:
+async def held_screenshot(session: BrowserSession) -> Held:
+    """The page's screenshot, as `take_screenshot` captures it, or why it was
+    withheld, in words of ours: what evidence saves, held until it does.
+    Its refusal records no policy event."""
     try:
-        shot = await take_screenshot(session, record_refusal=False)
+        return await take_screenshot(session, record_refusal=False)
     except ScreenshotWithheldError as withheld:
-        return Shot(withheld=str(withheld))
+        return str(withheld)
     except PolicyEventError:
-        return Shot(withheld=_OFF_ORIGIN)
+        return _OFF_ORIGIN
     except DocumentChangedError:
-        return Shot(withheld=_FRAMES_CHANGED)
-    name = f"{folder}/screenshot.png"
-    record.write_screenshot(name, shot)
-    return Shot(name)
+        return _FRAMES_CHANGED
+
+
+def _saved(record: RunRecord, folder: str, name: str, held: Held) -> Shot:
+    """Save `held` in `folder` as `<name>.png`, or nothing when it was
+    withheld; what became of it."""
+    if isinstance(held, str):
+        return Shot(withheld=held)
+    path = f"{folder}/{name}.png"
+    record.write_screenshot(path, held)
+    return Shot(path)
 
 
 def _console_entry(entry: ConsoleEntry, *, withheld: bool) -> dict[str, object]:
