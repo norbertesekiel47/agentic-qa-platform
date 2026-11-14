@@ -12,10 +12,12 @@ from aqa_core.compiled import ByRole
 from aqa_runner import heal
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.chat_client import Reply
+from aqa_runner.evidence import Shot
 from aqa_runner.healer import heal_request
 from aqa_runner.model_router import ModelCallError
 from aqa_runner.reasons import UnansweredError
 from aqa_runner.redaction import NO_SECRETS, Redacted
+from aqa_runner.repairs import AssertionAt
 from aqa_runner.run_record import RefusedWriteError, require_clean
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
@@ -46,6 +48,9 @@ from packages.runner.tests.secret_fixtures import BOUND_AT_START, FAKE_VALUE
 from packages.runner.tests.test_replay_repairs import secret_spec_at
 
 UNWRITTEN = "the run record took no more lines, so the heal stopped"
+# A PNG's signature, and its base64 form's start, which no request may hold.
+PNG = b"\x89PNG\r\n\x1a\n"
+BASE64_PNG = "iVBORw0KGgo"
 CANARY = "canary-only-the-model-wrote"
 # The toggle clicked, then a summary one of whose locators the page no longer
 # has: a step's drift, then an assertion's.
@@ -118,12 +123,68 @@ def test_a_heal_leaves_each_turn_its_cost_lines_and_its_first_observation(
         "a11y_snapshot.yaml",
         "console_log.json",
         "network_log.json",
+        "screenshot.png",
     ]
     empty = {"entries": [], "total": 0}
     assert json.loads((folder / "console_log.json").read_text()) == empty
     assert json.loads((folder / "network_log.json").read_text()) == empty
     snapshot = (folder / "a11y_snapshot.yaml").read_text()
     assert snapshot.replace("<", "&lt;") in sent
+
+
+def test_a_heals_first_look_saves_a_screenshot_no_request_carries(
+    tmp_path: Path,
+) -> None:
+    run = healed(tmp_path, SHOW)
+
+    assert basis(run).shot == Shot("heals/1/screenshot.png")
+    assert (run.record / "heals/1/screenshot.png").read_bytes().startswith(PNG)
+    assert run.verdict("step", 1)["heal"]["screenshot"] == {
+        "path": "heals/1/screenshot.png",
+        "withheld": None,
+    }
+    contents = [message.content for request in run.asked() for message in request]
+    blocks = [
+        block
+        for content in contents
+        if not isinstance(content, str)
+        for block in content
+        if isinstance(block, dict) and block.get("type") in ("image", "image_url")
+    ]
+    sent = [turn_record(run, "1", number)["sent"] for number in (1,)]
+    assert blocks == []
+    assert [text for text in (json.dumps(contents), *sent) if BASE64_PNG in text] == []
+
+
+def test_only_a_heals_first_look_saves_a_screenshot(tmp_path: Path) -> None:
+    stale = calling("rebind", {"ref": "e99999", "confidence": 1, "rationale": "x"})
+
+    run = healed(tmp_path, stale, SHOW)
+
+    assert outcomes(run) == [(0, "completed"), (1, "completed")]
+    assert turn_files(run) == ["1.json", "2.json"]
+    assert sorted(
+        path.relative_to(run.record).as_posix() for path in run.record.rglob("*.png")
+    ) == ["heals/1/screenshot.png"]
+
+
+def test_a_heal_that_stopped_before_its_first_look_cites_no_screenshot(
+    tmp_path: Path,
+) -> None:
+    # The first drift's one response spends the run's budget.
+    run = healed(
+        tmp_path,
+        SHOW,
+        NO_TOOL,
+        script=SUMMARY_DRIFTS,
+        config=with_budgets("heal_model_usd: 0.003"),
+    )
+
+    later = run.result.repairs[1].at
+    assert isinstance(later, AssertionAt)
+    assert (basis(run, 1).record, basis(run, 1).shot) == (None, None)
+    assert run.verdict("assertion", later.check.id)["heal"]["screenshot"] is None
+    assert basis(run).shot == Shot("heals/1/screenshot.png")
 
 
 def test_a_heal_request_holds_only_the_target_results_and_snapshot(
@@ -239,7 +300,7 @@ def test_a_turn_record_the_record_refuses_is_a_record_error(
 def test_evidence_the_disk_refuses_is_a_record_error_with_no_call(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def refused(*_: object) -> None:
+    async def refused(*_: object, **__: object) -> None:
         raise OSError(errno.ENOSPC, "fake full disk")
 
     monkeypatch.setattr(heal, "capture_evidence", refused)
