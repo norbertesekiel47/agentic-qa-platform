@@ -52,18 +52,19 @@ def sites(monkeypatch: pytest.MonkeyPatch) -> Iterator[Sites]:
 
 
 def requested(
-    sites: Sites, redactor: Redactor | None = None
+    sites: Sites, redactor: Redactor | None = None, *, scan: Redactor = NO_SECRETS
 ) -> tuple[Screenshot, list[BaseMessage]]:
-    """A screenshot of a page and the vision request built from it, with the
-    session's scan unless `redactor` is another."""
+    """A screenshot of a page, in a session that scans with `scan`, and the
+    vision request built from it, with the session's scan unless `redactor`
+    is another."""
 
     async def scenario() -> tuple[Screenshot, list[BaseMessage]]:
-        async with browsing(sites) as session:
+        async with browsing(sites, redactor=scan) as session:
             await session.navigate(f"{sites.app}/kept")
             shot = await take_screenshot(session)
-            scan = session.redactor if redactor is None else redactor
+            built = session.redactor if redactor is None else redactor
             messages = vision_request(
-                MEANING, LOCATORS, shot, session.settings.viewport, redactor=scan
+                MEANING, LOCATORS, shot, session.settings.viewport, redactor=built
             )
             return shot, messages
 
@@ -117,19 +118,55 @@ def test_a_vision_request_holds_the_target_the_images_size_and_one_png(
     assert "<results>" not in human.text
 
 
-def test_the_send_check_reads_a_requests_text_and_not_its_images_data() -> None:
+def test_the_send_check_reads_any_other_image_block_byte_for_byte() -> None:
     check = unspelled(Redactor([bound("http://127.0.0.1", FAKE_VALUE)]))
-    image = {"type": "image", "base64": FAKE_VALUE, "mime_type": "image/png"}
+    image = {"type": "image", "base64": "iVBORw0K", "mime_type": "image/png"}
 
     check([SystemMessage(content="instructions"), HumanMessage(content=[image])])
     for leaked in (
         [{"type": "text", "text": FAKE_VALUE}, image],
         [{**image, "mime_type": FAKE_VALUE}],
+        [{**image, "base64": FAKE_VALUE}],
     ):
         with pytest.raises(UnsentRequestError):
             check([HumanMessage(content=cast(list[str | dict[str, Any]], leaked))])
     with pytest.raises(UnsentRequestError):
         check([SystemMessage(content=FAKE_VALUE), HumanMessage(content=[image])])
+
+
+# How every 1280 by 800 PNG's base64 begins: its signature and its header's
+# start. Bound as a test secret, the scan finds it in any such image's data.
+PNG_HEAD = "iVBORw0KGgoAAAANSUhEUgAABQAAAAMg"
+
+
+def test_the_send_check_skips_only_the_bytes_of_the_screenshots_it_is_given(
+    sites: Sites,
+) -> None:
+    scan = Redactor([bound(sites.app, PNG_HEAD)])
+    shot, messages = requested(sites, scan=scan)
+    other = HumanMessage(
+        content=[
+            {"type": "image", "base64": PNG_HEAD + "AAAA", "mime_type": "image/png"}
+        ]
+    )
+
+    unspelled(scan, [shot])(messages)
+    with pytest.raises(UnsentRequestError):
+        unspelled(scan)(messages)
+    with pytest.raises(UnsentRequestError):
+        unspelled(scan, [shot])([*messages, other])
+
+
+def test_the_send_check_skips_no_bytes_of_an_image_no_capture_made(
+    sites: Sites,
+) -> None:
+    shot, _ = requested(sites)
+    raw = cast(Screenshot, b"\x89PNG\r\n\x1a\n")
+
+    with pytest.raises(TypeError, match="Screenshot"):
+        unspelled(NO_SECRETS, [raw])
+    with pytest.raises(ValueError, match="another"):
+        unspelled(Redactor([]), [shot])
 
 
 def image_blocks_built(tree: ast.AST) -> int:

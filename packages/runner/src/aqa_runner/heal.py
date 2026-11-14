@@ -534,7 +534,7 @@ async def _shown(context: _Heal, number: int, shot: Screenshot) -> Routed | _Sto
         redactor=context.redactor,
     )
     try:
-        unspelled(context.redactor)(messages)
+        unspelled(context.redactor, [shot])(messages)
     except UnsentRequestError:
         return _Stop(UNSENT)
     if context.drift.interrupted():
