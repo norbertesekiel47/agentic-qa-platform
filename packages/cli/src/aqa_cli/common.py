@@ -29,7 +29,7 @@ from aqa_core.config import ProjectConfig
 from aqa_core.heal_patch import blob_sha
 from aqa_core.project import SpecError, load_project, read_compiled, start_origin
 from aqa_core.spec import Spec
-from aqa_runner.admission import BoundValueSpelledError, admitted
+from aqa_runner.admission import BoundValueSpelledError, Mode, admitted
 from aqa_runner.bound_secrets import BoundSecret, MissingSecretError, SecretLoggedError
 from aqa_runner.heal import Healing
 from aqa_runner.locator_generation import register_identity_engine
@@ -37,6 +37,7 @@ from aqa_runner.model_turns import Spending
 from aqa_runner.publication import Publication, publication
 from aqa_runner.redaction import NO_SECRETS, Redactor
 from aqa_runner.strict_replay import Replayed, StrictRun, strict_replay
+from aqa_runner.verification import Verifying
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Playwright, async_playwright
 
@@ -60,6 +61,9 @@ EXIT_CODES: Final[Mapping[Failure, int]] = {
     "unreachable": 13,
     "record_error": 15,
 }
+# What builds one run's verifier in a verified replay, for its spend and
+# whether it is interrupted yet (`aqa_runner.verification`).
+type Verifier = Callable[[StrictRun, Spending, Callable[[], bool]], Verifying]
 # What is written instead of a text that still spells a bound value after its
 # scans: the outcome and the spec id, then words no run supplies.
 WITHHELD: Final = (
@@ -247,14 +251,17 @@ async def _driver(starting: asyncio.Task[Playwright]) -> Playwright:
             loop.call_exception_handler(report)
 
 
-def admitted_runs(paths: Sequence[Path], url: str | None) -> list[StrictRun]:
+def admitted_runs(
+    paths: Sequence[Path], url: str | None, *, mode: Mode = "strict"
+) -> list[StrictRun]:
     """Each spec at `paths`, admitted for a replay, before any reset is sent and
     before Playwright's driver starts, which must inherit no environment a test
     secret's binding refused (#215), or a stop, scanned with the test secrets
     the specs before it bound, and its own once admission bound them. The first
     problem stops the command: 5 for a spec, or for a compiled script missing,
-    that doesn't load or that replay refuses (`admission.admitted`), 15 for one
-    that can't be read, and 12 for test secrets that can't be used."""
+    that doesn't load or that replay refuses under `mode`'s admission
+    (`admission.admitted`), 15 for one that can't be read, and 12 for test
+    secrets that can't be used."""
     runs: list[StrictRun] = []
     for path in paths:
         scan = scan_of(runs)
@@ -265,7 +272,7 @@ def admitted_runs(paths: Sequence[Path], url: str | None) -> list[StrictRun]:
         spec_id = spec.frontmatter.id
         _, script, raw = found_script(root, spec, config, scan, _NOTHING)
         try:
-            _, _, bound, _ = admitted(script, spec, config, start)
+            _, _, bound, _ = admitted(script, spec, config, start, mode=mode)
         except BoundValueSpelledError as error:
             scan = scan_of(runs, error.bound.values())
             stop("spec_error", spec_id, _REFUSED, error.problems, scan=scan)
@@ -320,13 +327,17 @@ def replayed_runs(
     lines: bool = True,
     quiet: bool = False,
     heal: Callable[[StrictRun, Spending], Healing] | None = None,
+    verify: Verifier | None = None,
 ) -> list[Replayed]:
     """Each run, in order, on one Playwright driver, a drift going to the repair
-    of the healing `heal` builds for it when given, and, with `lines`, its line
-    as it ends, unless `quiet` and it passed; or a stop (13) when the driver or
-    the egress listener couldn't start."""
+    of the healing `heal` builds for it when given, each `model_verify` check
+    to the verifier `verify` builds for it when given, and, with `lines`, its
+    line as it ends, unless `quiet` and it passed; or a stop (13) when the
+    driver or the egress listener couldn't start."""
     try:
-        return asyncio.run(_replayed(runs, scan, lines=lines, quiet=quiet, heal=heal))
+        return asyncio.run(
+            _replayed(runs, scan, lines=lines, quiet=quiet, heal=heal, verify=verify)
+        )
     except UnstartedError as error:
         subject = ", ".join(run.spec.frontmatter.id for run in runs)
         stop("unreachable", subject, f"{error}, so {_NOTHING}", scan=scan)
@@ -339,6 +350,7 @@ async def _replayed(
     lines: bool,
     quiet: bool,
     heal: Callable[[StrictRun, Spending], Healing] | None,
+    verify: Verifier | None,
 ) -> list[Replayed]:
     ended: list[Replayed] = []
     async with started(async_playwright().start()) as playwright:
@@ -350,6 +362,7 @@ async def _replayed(
                 playwright,
                 scan,
                 heal=None if heal is None else partial(heal, run),
+                verify=None if verify is None else partial(verify, run),
             )
             if lines and not (quiet and replayed.outcome == "passed"):
                 _said(scan, run.spec.frontmatter.id, replayed)
@@ -360,15 +373,18 @@ async def _replayed(
 def _said(scan: Redactor, spec_id: str, replayed: Replayed) -> None:
     """Say how the run ended in one line, to stdout when it passed and to
     stderr otherwise: the outcome, the time its `run.json` records, what its
-    model calls cost, which is nothing with no model, the run record when it
-    didn't pass, and "non-resumable" whenever a side effect's outcome is
-    unknown, alone if the rest is withheld. Then each reason its document
-    gives, where its egress record is, the `aqa report` command that writes
-    its run viewer once its `replay.json` is written (#249), and what a person
+    model calls cost, which is nothing with no model, labelled `verified` in a
+    verified replay, the run record when it didn't pass, and "non-resumable"
+    whenever a side effect's outcome is unknown, alone if the rest is withheld.
+    Then each reason its document gives, where its egress record is, the `aqa
+    report` command that writes its run viewer once its `replay.json` is
+    written (#249), which a verified replay's isn't yet, and what a person
     reads of its heal proposal. A run that passed has only the command."""
     document = replayed.document
     failed = replayed.outcome != "passed"
-    facts = [f"{replayed.seconds:.1f}s", f"${replayed.cost.normalize():f}"]
+    verified = document.get("mode") == "verified"
+    cost = f"{'verified ' if verified else ''}${replayed.cost.normalize():f}"
+    facts = [f"{replayed.seconds:.1f}s", cost]
     withheld = [WITHHELD.format(outcome=replayed.outcome, spec_id=spec_id)]
     if failed and replayed.record is not None:
         facts.append(f"run record: {replayed.record}")
@@ -381,7 +397,8 @@ def _said(scan: Redactor, spec_id: str, replayed: Replayed) -> None:
         egress = replayed.record / "egress.json"
         saved = "is" if egress.is_file() else "couldn't be saved to"
         lines.append(f"  the egress record {saved} {egress}")
-    if replayed.record is not None and (replayed.record / "replay.json").is_file():
-        lines.append(f"  run viewer: aqa report {replayed.record.name}")
+    record = replayed.record
+    if not verified and record is not None and (record / "replay.json").is_file():
+        lines.append(f"  run viewer: aqa report {record.name}")
     lines.extend(f"  {line}" for line in replayed.proposal)
     say(scan, *lines, err=failed, withheld=withheld)
