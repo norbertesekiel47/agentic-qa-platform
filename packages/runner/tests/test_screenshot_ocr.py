@@ -4,6 +4,10 @@ rendered, is withheld, and the record saves nothing."""
 
 import asyncio
 import html
+import json
+import os
+import subprocess
+import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -380,3 +384,37 @@ def test_a_missing_model_file_saves_nothing_and_downloads_nothing(
     assert [path.name for path in tmp_path.rglob("*") if path.is_file()] == [
         ".gitignore"
     ]
+
+
+# What a fresh interpreter's environment gains when it imports `module`, and
+# whether OpenCV was loaded.
+GAINED = """import json, os, sys
+before = dict(os.environ)
+import {module}
+print(json.dumps([sorted(set(os.environ.items()) ^ set(before.items())), "cv2" in sys.modules]))"""
+
+
+def gained(module: str) -> tuple[list[list[str]], bool]:
+    environment = {
+        name: value for name, value in os.environ.items() if name != "LD_LIBRARY_PATH"
+    }
+    child = subprocess.run(
+        [sys.executable, "-c", GAINED.format(module=module)],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    changes, loaded = json.loads(child.stdout)
+    return changes, loaded
+
+
+# OpenCV's loader, which RapidOCR imports, prepends its own directory and an
+# empty entry, the working directory, to LD_LIBRARY_PATH for every process
+# this one starts, `aqa`'s Playwright driver among them (#251).
+def test_loading_the_ocr_engine_leaves_the_processs_environment_as_it_was() -> None:
+    assert gained("aqa_runner.ocr") == ([], True)
+    # The control: OpenCV alone changes it.
+    changes, loaded = gained("cv2")
+    assert loaded is True
+    assert [name for name, _ in changes] == ["LD_LIBRARY_PATH"]

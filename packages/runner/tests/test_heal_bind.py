@@ -33,6 +33,7 @@ from packages.runner.tests.explore_graph_fixtures import NO_RESPONSE, calling, r
 from packages.runner.tests.heal_fixtures import (
     FOUND_NONE,
     MOVED,
+    NO_POINT,
     NO_TOOL,
     SHOW,
     Healed,
@@ -286,9 +287,9 @@ OTHER_ROLE = (
 def test_a_rebind_to_another_role_or_an_uneditable_field_is_refused(
     tmp_path: Path, script: CompiledScript, html: str, pick: Any, reason: str
 ) -> None:
-    run = healed(tmp_path, pick, NO_TOOL, script=script, html=html)
+    run = healed(tmp_path, pick, NO_TOOL, NO_POINT, script=script, html=html)
 
-    assert len(run.requests()) == 2
+    assert len(run.requests()) == 3
     assert reason in run.requests()[1]
     assert basis(run).said == FOUND_NONE
     assert run.result.repairs[0].script is None
@@ -299,6 +300,7 @@ def test_an_assertion_targets_rebind_to_another_role_is_refused(tmp_path: Path) 
         tmp_path,
         THE_LINK,
         NO_TOOL,
+        NO_POINT,
         script=BUTTON,
         spec_at=in_view_at,
         html=in_the_footer('<a href="#x">Elsewhere</a>'),
@@ -511,12 +513,13 @@ def test_an_element_outside_the_subjects_region_takes_another_turn(
         tmp_path,
         THE_SUMMARY,
         NO_TOOL,
+        NO_POINT,
         script=contracted("header#toolbar", "p"),
         html=SHOWN.replace('<header id="toolbar">', '<header id="toolbar"><p>Hi</p>'),
         config=contract_config("header#toolbar", "p"),
     )
 
-    assert len(run.requests()) == 2
+    assert len(run.requests()) == 3
     assert (
         "the subject check refused this element (outside_region)" in run.requests()[1]
     )
@@ -558,6 +561,7 @@ def test_a_pick_inside_the_region_that_isnt_the_part_asks_for_no_config_edit(
         tmp_path,
         THE_SUMMARY,
         NO_TOOL,
+        NO_POINT,
         script=contracted("main#order", "h1"),
         html=SHOWN,
         config=contract_config("main#order", "h1"),
@@ -577,11 +581,15 @@ def test_a_pick_of_the_wrong_part_keeps_what_an_outside_pick_said(
         THE_SUMMARY,
         rebinding("button", "Go"),
         NO_TOOL,
+        NO_POINT,
         script=contracted("header#toolbar", "p"),
         html=SHOWN.replace(
             '<header id="toolbar">', '<header id="toolbar"><p>Hi</p><button>Go</button>'
         ),
-        config=contract_config("header#toolbar", "p"),
+        # A fourth turn, for vision fallback once the third finds nothing (#252).
+        config=contract_config("header#toolbar", "p").replace(
+            "heal_turns: 3", "heal_turns: 4"
+        ),
     )
 
     assert "the subject check refused this element (not_the_part)" in run.requests()[2]
@@ -654,9 +662,9 @@ def test_a_page_that_never_stops_changing_takes_another_turn(
 
     monkeypatch.setattr(TargetUses, "add", changing)
 
-    run = healed(tmp_path, SHOW, NO_TOOL)
+    run = healed(tmp_path, SHOW, NO_TOOL, NO_POINT)
 
-    assert len(run.requests()) == 2
+    assert len(run.requests()) == 3
     assert "rebind did not run: " in run.requests()[1]
     assert basis(run).said == FOUND_NONE
 
@@ -669,9 +677,9 @@ def test_a_page_that_breaks_the_generators_read_takes_another_turn(
 
     monkeypatch.setattr(TargetUses, "add", breaking)
 
-    run = healed(tmp_path, SHOW, NO_TOOL)
+    run = healed(tmp_path, SHOW, NO_TOOL, NO_POINT)
 
-    assert len(run.requests()) == 2
+    assert len(run.requests()) == 3
     assert "rebind did not run: Error: the page broke this read" in run.requests()[1]
     assert basis(run).said == FOUND_NONE
 
@@ -685,9 +693,9 @@ def test_a_pick_no_locator_it_may_write_finds_takes_another_turn(
     html = MOVED.replace('id="order"', f'id="{"z" * 100}"')
     html = html.replace("Show details", name)
 
-    run = healed(tmp_path, rebinding("button", name), NO_TOOL, html=html)
+    run = healed(tmp_path, rebinding("button", name), NO_TOOL, NO_POINT, html=html)
 
-    assert len(run.requests()) == 2
+    assert len(run.requests()) == 3
     assert (
         "rebind did not run: the button that shows the order's details: no locator "
         "of the grammar finds the button element alone for an action"

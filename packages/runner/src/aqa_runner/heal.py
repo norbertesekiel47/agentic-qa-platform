@@ -11,26 +11,36 @@ takes back one element's ref. Deterministic code checks that element
 any dispatch), then the generator writes its locators inside the target's
 contract. The model never writes a locator, a step or an assertion.
 
-Each priced response is on disk in `costs.jsonl` before the next call, and each
-request sent leaves `heals/<key>/<n>.json`, whatever came back, unless its cost
-line isn't on disk or the call is cancelled. `Healing` holds one run's budget, so
-a run's drifts share it."""
+A tree turn whose reply calls no tool falls back to vision once (ADR-0002's #252
+amendment): one screenshot goes to the `vision_fallback` role, which names a
+point, and the element there, read without a click, goes through the same checks
+and generator. A canvas can't be confirmed, and the heal ends after that turn.
 
+Each priced response is on disk in `costs.jsonl` before the next call, and each
+request sent leaves `heals/<key>/<n>.json`, or `vision.json`, whatever came
+back, unless its cost line isn't on disk or the call is cancelled. `Healing`
+holds one run's budget, so a run's drifts share it."""
+
+import hashlib
 import json
-from collections.abc import Callable, Iterator
+import struct
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Final, Literal, TypedDict
 
 from aqa_core.compiled import Locator, NotVisible, TextInTarget, VisibleUnoccluded
+from aqa_core.config import ModelRoleName
 from aqa_core.heal_patch import literal_claim_spelled, text_claims
 from langchain_core.messages import BaseMessage
+from langchain_core.tools import BaseTool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
-from playwright.async_api import Error
+from playwright.async_api import ElementHandle, Error, Page
 
 from aqa_runner import reasons
 from aqa_runner.anthropic_client import ProviderError
+from aqa_runner.binding import is_among
 from aqa_runner.browser_session import BrowserSession, RefError
 from aqa_runner.document_origins import DocumentChangedError, PolicyEventError
 from aqa_runner.evaluation import bounded, looked
@@ -65,6 +75,17 @@ from aqa_runner.repairs import (
     rebind_refusal,
 )
 from aqa_runner.run_record import RefusedWriteError, UnrecordedCostError, require_clean
+from aqa_runner.screenshots import (
+    Screenshot,
+    ScreenshotWithheldError,
+    take_screenshot,
+)
+from aqa_runner.vision_fallback import (
+    VisionClick,
+    clicked,
+    vision_request,
+    vision_tools,
+)
 
 # Why a heal stopped, in fixed words.
 _FOUND_NONE: Final = "the healer found no element for the meaning"
@@ -72,6 +93,26 @@ _REFUSED: Final = "the model refused"
 _NO_SPEND: Final = "the spend budget ran out"
 _UNWRITTEN: Final = "the run record took no more lines, so the heal stopped"
 _INTERRUPTED: Final = "the run was interrupted, so the heal stopped"
+# Why vision fallback stopped, in fixed words (ADR-0002's #252 amendment). A
+# render after a fill has no canvas (ADR-0034), so it can't show what the tree
+# missed.
+_VISION: Final = "vision fallback: "
+_FILLED: Final = (
+    f"{_VISION}a secret was filled, so a screenshot would be a render without "
+    "the page's canvas, and none was taken"
+)
+_OUTSIDE: Final = (
+    f"{_VISION}the point is outside the viewport, so nothing was read there"
+)
+_NOTHING_THERE: Final = f"{_VISION}no element is at the point"
+_A_CANVAS: Final = (
+    f"{_VISION}the element at the point is a canvas, and no locator names a point "
+    "inside one, so the rebind can't be confirmed"
+)
+# The element at a point of the main frame's viewport, read in the page's
+# world, which dispatches no event
+# (https://playwright.dev/python/docs/api/class-page#page-evaluate-handle).
+_AT_POINT: Final = "([x, y]) => document.elementFromPoint(x, y)"
 # The refusals that say the page has no place for this subject, whichever
 # element the model picks (#229). `outside_region` and the rest are about the
 # pick, so another turn may find a better one.
@@ -104,6 +145,19 @@ class _Stop:
 
     why: str
     run: Literal["no_response", "record_error"] | None = None
+
+
+@dataclass(frozen=True)
+class _Call:
+    """A turn's call: the role it asks, the tools it offers, the drift's turn
+    it is, and the record it leaves, `heals/<key>/<name>.json`, which also
+    holds `holds`."""
+
+    role: ModelRoleName
+    tools: tuple[BaseTool, ...]
+    turn: int
+    name: str
+    holds: Mapping[str, object]
 
 
 @dataclass
@@ -216,9 +270,9 @@ async def _taken(context: _Heal, state: _Turns) -> _Turns | Offer | _Stop:
         return reply
     call = decided(reply)
     if call is None:
-        return _Stop(_FOUND_NONE)
+        return await _looked_at(context, state["turn"] + 2)
     results = (
-        call.why if isinstance(call, Unfit) else await _bound(context, call, snapshot)
+        call.why if isinstance(call, Unfit) else await _picked(context, call, snapshot)
     )
     if isinstance(results, str):
         return _Turns(turn=state["turn"] + 1, results=results, done=False)
@@ -280,13 +334,16 @@ async def _asked(context: _Heal, state: _Turns, snapshot: Redacted) -> Routed | 
         return _Stop(UNSENT)
     if context.drift.interrupted():
         return _Stop(_INTERRUPTED)
-    return await _called(context, state["turn"] + 1, messages)
+    number = state["turn"] + 1
+    return await _called(
+        context, _Call("healer", healer_tools(), number, str(number), {}), messages
+    )
 
 
 async def _called(
-    context: _Heal, number: int, messages: list[BaseMessage]
+    context: _Heal, asked: _Call, messages: list[BaseMessage]
 ) -> Routed | _Stop:
-    """What the request got, on disk in `heals/<key>/<n>.json`, or the stop it
+    """What the request got, on disk in its record (`_Call`), or the stop it
     makes: no response, a refusal no fallback answered, a response that cost
     more than was left, or a record that took no more. A stop the reply makes
     is carried through its record, so only a cost line not on disk, after which
@@ -296,16 +353,16 @@ async def _called(
     healing.taken += 1
     try:
         routed = await healing.router.call(
-            "healer",
+            asked.role,
             "heal",
             messages,
-            tools=healer_tools(),
+            tools=asked.tools,
             spend=healing.spending.spend(),
         )
     except UnrecordedCostError:
         return _Stop(UNRECORDED, "record_error")
     except (ModelCallError, ProviderError) as error:
-        return _kept(context, number, messages, None, priced) or _Stop(
+        return _kept(context, asked, messages, None, priced) or _Stop(
             no_response(error), "no_response"
         )
     stop = None
@@ -313,31 +370,32 @@ async def _called(
         stop = _Stop(_REFUSED)
     elif healing.spending.left < 0:
         stop = _Stop(OVER)
-    return _kept(context, number, messages, routed, priced) or stop or routed
+    return _kept(context, asked, messages, routed, priced) or stop or routed
 
 
 def _kept(
     context: _Heal,
-    number: int,
+    asked: _Call,
     messages: list[BaseMessage],
     routed: Routed | None,
     priced: int,
 ) -> _Stop | None:
-    """Write the turn's record: the request as sent, how the call ended, the
-    reply's first tool call, scanned, and the lines of the cost records it
-    added to `costs.jsonl`, past the `priced` before it. The stop it makes when
-    the record takes no more, which decides over any other."""
+    """Write the turn's record: the request as sent, what the call holds, how
+    the call ended, the reply's first tool call, scanned, and the lines of the
+    cost records it added to `costs.jsonl`, past the `priced` before it. The
+    stop it makes when the record takes no more, which decides over any other."""
     redactor = context.redactor
     spending = context.healing.spending
     calls = [] if routed is None else routed.message.tool_calls
     first = None if not calls else {"name": calls[0]["name"], "args": calls[0]["args"]}
-    name = f"{context.folder}/{number}.json"
+    name = f"{context.folder}/{asked.name}.json"
     try:
         spending.record.write(
             name,
             {
-                "turn": number,
+                "turn": asked.turn,
                 "sent": messages[-1].text,
+                **asked.holds,
                 "outcome": "no_response" if routed is None else routed.outcome,
                 "call": None if first is None else redactor.redact(json.dumps(first)),
                 "costs": list(range(priced + 1, len(spending.calls) + 1)),
@@ -349,21 +407,36 @@ def _kept(
     return None
 
 
-async def _bound(
+async def _picked(
     context: _Heal, call: Rebind, snapshot: Redacted
 ) -> Offer | _Stop | str:
-    """The offer of the element `call` picked; what ends the turns: a run
-    interrupted by now, a page that won't answer or is off the allowed origins,
-    or a subject contract that refuses this page; or, for the next turn's
-    request, why not this element. Every read here is bounded. Only defects and
-    cancellation raise."""
+    """The offer of the element `call` picked by its ref (`_bound`), or what
+    ends the turns, a run interrupted by now among them, or why not it."""
     if context.drift.interrupted():
         return _Stop(_INTERRUPTED)
+    session, seconds = context.session, context.healing.seconds
+    try:
+        seen = await bounded(seen_element(session, snapshot, call.ref), seconds)
+    except (PolicyEventError, UnansweredError) as error:
+        return _Stop(_unlooked(context, error))
+    except (RefError, DocumentChangedError, Error) as error:
+        return f"rebind did not run: {reasons.reason(error, context.redactor)}"
+    reported = ModelReported(call.confidence, context.line(call.rationale))
+    return await _bound(context, seen, reported)
+
+
+async def _bound(
+    context: _Heal, seen: Seen, reported: ModelReported | None
+) -> Offer | _Stop | str:
+    """The offer of `seen`, with what a model `reported` of it; what ends the
+    turns: a page that won't answer or is off the allowed origins, or a subject
+    contract that refuses this page; or, for the next turn's request, why not
+    this element. Every read here is bounded. Only defects and cancellation
+    raise."""
     session, seconds = context.session, context.healing.seconds
     at = context.drift.at
     target = context.drift.script.targets[at.target]
     try:
-        seen = await bounded(seen_element(session, snapshot, call.ref), seconds)
         refused = await rebind_refusal(
             session,
             at.step if isinstance(at, StepAt) else None,
@@ -381,7 +454,114 @@ async def _bound(
         return _Stop(_unlooked(context, error))
     except (RefError, LocatorError, DocumentChangedError, Error) as error:
         return f"rebind did not run: {reasons.reason(error, context.redactor)}"
-    return _offered(context, call, seen, locators)
+    return _offered(context, seen, reported, locators)
+
+
+async def _looked_at(context: _Heal, number: int) -> Offer | _Stop:
+    """Vision fallback's one turn, turn `number`, once a tree turn found no
+    element (ADR-0002's #252 amendment): a screenshot of the page sent with
+    the target to `vision_fallback`, whose point is read as the element
+    there. Whatever comes of it, the heal ends. Only defects and cancellation
+    raise."""
+    shot = await _shot(context)
+    if isinstance(shot, _Stop):
+        return shot
+    reply = await _shown(context, number, shot)
+    if isinstance(reply, _Stop):
+        return reply
+    point = clicked(reply)
+    if point is None:
+        return _Stop(_FOUND_NONE)
+    if isinstance(point, Unfit):
+        return _Stop(f"{_VISION}{point.why}")
+    return await _pointed(context, point)
+
+
+async def _shot(context: _Heal) -> Screenshot | _Stop:
+    """One screenshot of the live page, taken once a turn may start, never
+    after a fill, or what stopped it."""
+    if (stop := _spent(context)) is not None:
+        return stop
+    session = context.session
+    if session.secret_filled:
+        return _Stop(_FILLED)
+    try:
+        return await take_screenshot(session)
+    except ScreenshotWithheldError as withheld:
+        return _Stop(f"{_VISION}the screenshot was withheld: {withheld}")
+    except (PolicyEventError, DocumentChangedError) as error:
+        return _Stop(_unlooked(context, error))
+
+
+async def _shown(context: _Heal, number: int, shot: Screenshot) -> Routed | _Stop:
+    """What the vision request with `shot` got, or what stopped the turns."""
+    target = context.drift.script.targets[context.drift.at.target]
+    messages = vision_request(
+        target.semantic,
+        target.locators,
+        shot,
+        context.session.settings.viewport,
+        redactor=context.redactor,
+    )
+    try:
+        unspelled(context.redactor)(messages)
+    except UnsentRequestError:
+        return _Stop(UNSENT)
+    if context.drift.interrupted():
+        return _Stop(_INTERRUPTED)
+    held = {"image": _kept_of(shot)}
+    asked = _Call("vision_fallback", vision_tools(), number, "vision", held)
+    return await _called(context, asked, messages)
+
+
+def _kept_of(shot: Screenshot) -> dict[str, object]:
+    """What a vision turn's record keeps of the image it sent: its width and
+    height, the first fields of its PNG header, and its sha256."""
+    width, height = struct.unpack(">II", shot.png[16:24])
+    return {
+        "width": width,
+        "height": height,
+        "sha256": hashlib.sha256(shot.png).hexdigest(),
+    }
+
+
+async def _pointed(context: _Heal, point: VisionClick) -> Offer | _Stop:
+    """The offer of the element at `point`, checked as a tree pick is, with
+    nothing a model reported, or why the heal ends with none. A point off the
+    viewport reads nothing, and a canvas is refused before any check. The read
+    is bounded, and it clicks, hovers, focuses and scrolls nothing."""
+    width, height = context.session.settings.viewport
+    if not (0 <= point.x < width and 0 <= point.y < height):
+        return _Stop(_OUTSIDE)
+    if context.drift.interrupted():
+        return _Stop(_INTERRUPTED)
+    session, seconds = context.session, context.healing.seconds
+    try:
+        async with session.observing_page() as page:
+            # Through `cut_off`: `is_among` lets go of the element with a
+            # read a busy page never answers.
+            found = await cut_off(_at(page, point), seconds)
+    except (PolicyEventError, UnansweredError) as error:
+        return _Stop(_unlooked(context, error))
+    except (DocumentChangedError, Error) as error:
+        return _Stop(f"{_VISION}{reasons.reason(error, context.redactor)}")
+    if isinstance(found, str):
+        return _Stop(found)
+    bound = await _bound(context, Seen(found), None)
+    return _Stop(f"{_VISION}{bound}") if isinstance(bound, str) else bound
+
+
+async def _at(page: Page, point: VisionClick) -> ElementHandle | str:
+    """The element at `point` in the main frame's document, or why there is
+    none to check, in fixed words: no element, or a canvas, which the engine
+    tells in the utility world."""
+    found = await page.evaluate_handle(_AT_POINT, [point.x, point.y])
+    element = found.as_element()
+    if element is None:
+        return _NOTHING_THERE
+    if await is_among(page.locator("css=canvas"), element):
+        return _A_CANVAS
+    return element
 
 
 def _contract_refused(context: _Heal, error: BindingRefusedError) -> _Stop | str:
@@ -402,13 +582,15 @@ def _contract_refused(context: _Heal, error: BindingRefusedError) -> _Stop | str
 
 
 def _offered(
-    context: _Heal, call: Rebind, seen: Seen, locators: tuple[Locator, ...]
+    context: _Heal,
+    seen: Seen,
+    reported: ModelReported | None,
+    locators: tuple[Locator, ...],
 ) -> Offer:
     """The script handed, with only the drifted target's locators replaced."""
     script, name = context.drift.script, context.drift.at.target
     rebound = script.targets[name].model_copy(update={"locators": locators})
     offered = script.model_copy(update={"targets": {**script.targets, name: rebound}})
-    reported = ModelReported(call.confidence, context.line(call.rationale))
     named = f' "{seen.name}"' if seen.name else ""
     bound_as = context.line(f"{seen.role or 'element'}{named}")
     return Offer(offered, Basis(bound_as, reported, None, context.folder))

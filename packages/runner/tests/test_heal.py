@@ -31,6 +31,7 @@ from packages.runner.tests.explore_graph_fixtures import (
 )
 from packages.runner.tests.heal_fixtures import (
     FOUND_NONE,
+    NO_POINT,
     NO_TOOL,
     SHOW,
     Healed,
@@ -169,13 +170,13 @@ FALLBACK = (
 def test_a_reply_that_calls_no_tool_gives_up_and_leaves_its_turn(
     tmp_path: Path,
 ) -> None:
-    run = healed(tmp_path, NO_TOOL)
+    run = healed(tmp_path, NO_TOOL, NO_POINT)
 
     assert basis(run).said == FOUND_NONE
     assert (basis(run).stop, basis(run).record) == (None, "heals/1")
     assert outcomes(run) == [(0, "completed"), (1, "drifted")]
     assert turn_files(run) == ["1.json"]
-    assert len(run.requests()) == 1
+    assert len(run.requests()) == 2
 
 
 def test_a_refused_call_gives_up_and_leaves_its_turn(tmp_path: Path) -> None:
@@ -277,7 +278,7 @@ def test_a_page_that_cant_be_looked_at_ends_the_heal_with_no_call(
 def test_a_ref_no_snapshot_gave_takes_another_turn_and_says_why(tmp_path: Path) -> None:
     stale = calling("rebind", {"ref": "e99999", "confidence": 1, "rationale": "x"})
 
-    run = healed(tmp_path, stale, NO_TOOL)
+    run = healed(tmp_path, stale, NO_TOOL, NO_POINT)
 
     assert "rebind did not run: 'e99999' is from" not in run.requests()[0]
     assert "rebind did not run: 'e99999' isn't a ref" in run.requests()[1]
@@ -294,7 +295,7 @@ def test_an_invalid_reply_takes_another_turn_and_says_why(tmp_path: Path) -> Non
         parsed=None,
     )
 
-    run = healed(tmp_path, cut, NO_TOOL)
+    run = healed(tmp_path, cut, NO_TOOL, NO_POINT)
 
     assert "the reply's outcome was invalid, so nothing ran" in run.requests()[1]
     assert turn_record(run, "1", 1)["outcome"] == "invalid"
@@ -322,7 +323,7 @@ def test_an_invalid_reply_takes_another_turn_and_says_why(tmp_path: Path) -> Non
 def test_a_healer_reply_that_writes_locators_runs_nothing(
     tmp_path: Path, args: dict[str, object]
 ) -> None:
-    run = healed(tmp_path, calling("rebind", args), NO_TOOL)
+    run = healed(tmp_path, calling("rebind", args), NO_TOOL, NO_POINT)
 
     assert (
         "the call to rebind was not run: its arguments don't fit the tool"
@@ -351,7 +352,7 @@ def test_a_healer_reply_that_writes_locators_runs_nothing(
 def test_nothing_the_model_wrote_in_a_call_it_cant_run_is_echoed(
     tmp_path: Path, unfit: Reply, said: str
 ) -> None:
-    run = healed(tmp_path, unfit, NO_TOOL)
+    run = healed(tmp_path, unfit, NO_TOOL, NO_POINT)
 
     assert said in run.requests()[1]
     assert CANARY not in run.requests()[1]
@@ -371,7 +372,7 @@ def test_a_targets_non_ascii_meaning_reaches_the_request_as_written() -> None:
 
 
 def test_a_tool_the_healer_doesnt_have_takes_another_turn(tmp_path: Path) -> None:
-    run = healed(tmp_path, calling("click", {"ref": "e1"}), NO_TOOL)
+    run = healed(tmp_path, calling("click", {"ref": "e1"}), NO_TOOL, NO_POINT)
 
     assert (
         "the reply called a tool the healer doesn't have, so nothing ran"
@@ -388,7 +389,7 @@ def test_a_malformed_call_takes_another_turn(tmp_path: Path) -> None:
         )
     )
 
-    run = healed(tmp_path, broken, NO_TOOL)
+    run = healed(tmp_path, broken, NO_TOOL, NO_POINT)
 
     assert ("a tool call in the reply was malformed, so nothing ran") in run.requests()[
         1
