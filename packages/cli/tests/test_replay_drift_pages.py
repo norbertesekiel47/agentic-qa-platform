@@ -151,6 +151,27 @@ class Pinned:
             ),
             id="removed",
         ),
+        # The toggle is drawn in a canvas: no locator names a drawn control.
+        pytest.param(
+            Pinned(
+                page="canvas",
+                script=DETAILS,
+                expectation=SHIPPING,
+                outcome="inconclusive",
+                code=3,
+                reason="step 1: inconclusive, drift: strict replay doesn't heal (no match, no match)",
+                verdicts=[
+                    (0, "pass", None, None),
+                    (
+                        1,
+                        "inconclusive",
+                        "drift: strict replay doesn't heal (no match, no match)",
+                        None,
+                    ),
+                ],
+            ),
+            id="canvas",
+        ),
         # An action's target must take the click: under the modal it can't.
         pytest.param(
             Pinned(

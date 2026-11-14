@@ -1,9 +1,9 @@
 """Fixtures the drift pages' tests share (#240): an order page whose toggle
-shows its details, four drifts of it, each one change (the toggle moved,
-renamed or removed, or a modal over the page), and the scripts recorded
-against the order page. Later tickets compose a page from these rather
-than edit one. Imported by its path, as pytest names the runner's test
-modules (TESTING.md §1, Shared egress fixtures)."""
+shows its details, five drifts of it, each one change (the toggle moved,
+renamed, removed or drawn in a canvas (#252), or a modal over the page), and
+the scripts recorded against the order page. Later tickets compose a page
+from these rather than edit one. Imported by its path, as pytest names the
+runner's test modules (TESTING.md §1, Shared egress fixtures)."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
