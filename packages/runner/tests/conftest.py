@@ -222,13 +222,21 @@ REDIRECTS = ("ANTHROPIC_API_URL", "ANTHROPIC_BASE_URL")
 @dataclass
 class Recording:
     """What a cassette saw, filled in when the `with` block ends: the body of
-    every request the adapter sent and of every response it got. Replay matches a
-    request by its prompt hash, so the recorded request each response was played
-    for is the one that was sent."""
+    every request the adapter sent, as it sent it, and of every response it
+    got. Replay matches a request by its prompt hash, which leaves out an
+    image's data, so a replayed request is the recorded one but for that data:
+    a test that sends an image checks it here."""
 
     sent: list[dict[str, Any]] = field(default_factory=list)
     # The bodies of the responses played, in the same order.
     responses: list[dict[str, Any]] = field(default_factory=list)
+
+
+# What an image content block's base64 data stands as in the prompt hash. A
+# PNG's bytes aren't promised to match across macOS, CI's Linux runner and
+# Playwright's updates, so the hash leaves them out and the test that sends an
+# image checks it (TESTING §4; ADR-0024's #256 amendment).
+IMAGE_DATA = "<an image's data, which its test checks>"
 
 
 def _canonical(body: bytes | str | None) -> str:
@@ -238,14 +246,52 @@ def _canonical(body: bytes | str | None) -> str:
     )
 
 
+def _unimaged(value: Any) -> Any:
+    """`value`, a request body as JSON, with each image content block's base64
+    `data` as `IMAGE_DATA`, its type and media type kept."""
+    if isinstance(value, list):
+        return [_unimaged(each) for each in value]
+    if not isinstance(value, dict):
+        return value
+    source = value.get("source")
+    if value.get("type") == "image" and isinstance(source, dict) and "data" in source:
+        return value | {"source": source | {"data": IMAGE_DATA}}
+    return {key: _unimaged(each) for key, each in value.items()}
+
+
+def _prompt(body: bytes | str | None) -> str:
+    """The prompt hash's input: the canonical body, `IMAGE_DATA` in place of
+    each image's data. A request with no image hashes as its canonical body."""
+    return _canonical(json.dumps(_unimaged(json.loads(body or b"null"))))
+
+
 def prompt_hash_matches(sent: Any, recorded: Any) -> bool:
     """Whether two requests have the same prompt (model, messages, tools, output
-    format): their canonical bodies hash alike. A changed prompt matches
-    nothing, and replay fails."""
+    format): their bodies, each image's data left out, hash alike. A changed
+    prompt matches nothing, and replay fails."""
     return (
-        hashlib.sha256(_canonical(sent.body).encode()).hexdigest()
-        == hashlib.sha256(_canonical(recorded.body).encode()).hexdigest()
+        hashlib.sha256(_prompt(sent.body).encode()).hexdigest()
+        == hashlib.sha256(_prompt(recorded.body).encode()).hexdigest()
     )
+
+
+def _sending(played: Any) -> list[dict[str, Any]]:
+    """The body of every request the adapter sends through `played`, a VCR
+    cassette in use, as it sends it and in order: one replayed and one
+    recorded alike. A replayed request's own body is kept, not the recorded one
+    it matched, which can differ in an image's data. This wraps the cassette's
+    own `play_response` and `append`, which vcr 8.3.0's stubs call."""
+    sent: list[dict[str, Any]] = []
+    for name in ("play_response", "append"):
+        method = getattr(played, name)
+
+        def kept(request: Any, *more: Any, method: Callable[..., Any] = method) -> Any:
+            answer = method(request, *more)
+            sent.append(json.loads(request.body))
+            return answer
+
+        setattr(played, name, kept)
+    return sent
 
 
 def _refused_request(error: BaseException | None) -> Any | None:
@@ -438,6 +484,7 @@ def cassette(
                     f"{name}.yaml"
                 ) as played,
             ):
+                sent = _sending(played)
                 yield recording
         except Exception as error:
             if (refused := _refused_request(error)) is not None:
@@ -447,7 +494,7 @@ def cassette(
                     f"body was {_canonical(refused.body)}"
                 ) from error
             raise
-        recording.sent = [json.loads(request.body) for request in played.requests]
+        recording.sent = sent
         recording.responses = [
             json.loads(response["body"]["string"]) for response in played.responses
         ]
