@@ -1,6 +1,6 @@
 # ADR-0033: M1 saves no screenshots; bound-field masking moves to M2
 
-- Status: Accepted (amended 2026-10-27: the capture and the record's binary writer exist, ADR-0034; 2026-10-28: the OCR check, ADR-0035)
+- Status: Accepted (amended 2026-10-27: the capture and the record's binary writer exist, ADR-0034; 2026-10-28: the OCR check, ADR-0035; 2026-11-14: the paths that save screenshots, #251)
 - Date: 2026-10-08
 
 ## Context
@@ -30,3 +30,21 @@ Option 3 (the maintainer, 2026-10-08). M1 has no screenshot capture and no binar
 
 ## Amendment (2026-10-28): the OCR check is in place (#250)
 - In a run that binds a test secret, `take_screenshot` OCR-checks every image it captures, live or rendered, from the first capture, before a `Screenshot` exists, and withholds one whose text spells a bound value (ADR-0035). A run that binds nothing runs no OCR. No run path saves a screenshot until #251, so `test_evidence.py`'s pinned contents still stand.
+
+## Amendment (2026-11-14): the paths that save screenshots (#251)
+- **Exactly two paths save an image**, each through `aqa_runner.evidence.capture_evidence`, which holds the one call of `take_screenshot` and of `RunRecord.write_screenshot` in the packages' source:
+  - `evidence/<seq>/screenshot.png`, for a step that drifted or failed, in `aqa replay`, `aqa run` and `aqa heal <spec>`, which all replay through `strict_replay`;
+  - `heals/<key>/screenshot.png`, at a heal's first look. Its later looks save none.
+- **Nothing else saves one.** A completed step saves none, and neither do explore (its attempts and its confirmation replay) or the bench pilot. No image reaches a model: a heal's requests are as before, and sending one is #252's and #256's.
+- **Decisions** (the maintainer may escalate the fourth, a product call):
+  1. The file is `screenshot.png` in both folders, a name that leaves the follow-up's before/after choice open.
+  2. Explore and the bench pilot are left out by an opt-in flag that only `strict_replay` sets (`executor.RunSetup.screenshots`, off by default), so a new caller can't save page pixels by accident.
+  3. `replay.json` stays schema 1. Each verdict's `evidence.screenshot`, always null before, describes the step its `evidence.path` cites: `{path, withheld}`, or null when that step asked for none; in `aqa run`, each `heal` object gains `screenshot` in the same shape, for the heal's first look (DATA_MODEL §7).
+  4. An OCR engine error withholds the capture instead of propagating (ADR-0035's #251 amendment).
+  5. A page off the run's allowed origins, or a frame change during the capture, withholds it with a fixed reason and records no policy event, as evidence's own look records none (`take_screenshot(session, record_refusal=False)`).
+  6. A write the disk or a link refuses still raises, as every evidence write does: the disk's is a `record_error` stop in replay, and the heal's record-error stop in a heal.
+- **A withheld capture** writes nothing and changes no step outcome, verdict, reason or exit code. Its fixed reason, which never quotes the page, is kept only in `replay.json`, scanned with the run's scan as every reason is. A drifted step whose heal gave up saves two images, the heal's look and the kept step's, which can show different moments.
+- **A capture on a page that never answers again** is withheld within `CAPTURE_SECONDS`: `screenshots._devtools` detaches only once its calls have answered, so a failed step on a stalled page can't hold the run (LAB_NOTES, 2026-11-14).
+- **The run record's pinned contents:** `test_evidence.py`'s `test_the_run_record_holds_only_the_steps_and_each_steps_evidence` now asks for screenshots in its hostile replay, as `strict_replay` does, and lists exactly one new file, `evidence/3/screenshot.png`, for its drifted step.
+- **Amends ADR-0024's #243 "Observation before screenshots":** a heal's first look keeps a masked screenshot as evidence, and a verdict cites it, while the healer still reads only the accessibility tree.
+- **Left to follow-ups:** the "before" screenshot, with what "before" and "after" mean for a drifted step, and the report's Screenshot tab and its swipe.

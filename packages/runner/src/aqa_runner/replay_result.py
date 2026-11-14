@@ -43,6 +43,7 @@ from aqa_core.spec import InvariantName, Spec
 from aqa_runner.egress import InfrastructureEvent
 from aqa_runner.egress_proxy import EgressBlocks
 from aqa_runner.evaluation import AssertionResult
+from aqa_runner.evidence import Shot
 from aqa_runner.executor import RunResult, StepResult
 from aqa_runner.heal_proposal import final_script, proposal_document, rebinds
 from aqa_runner.invariants import InvariantResult
@@ -319,6 +320,7 @@ def _judged(end: ReplayEnd) -> list[_Judged]:
         [step.seq for step in result.steps],
         last,
         last if result.evidence is None else result.evidence.seq,
+        result.shots,
     )
     checks = {check.id: check for check in end.script.assertions}
     expect = end.spec.frontmatter.expect
@@ -341,14 +343,16 @@ def _judged(end: ReplayEnd) -> list[_Judged]:
 class _Judging:
     """What one run's verdicts are judged with: its scan; the seqs of the
     steps that ran, each finding's repro steps; the last step, whose
-    evidence is the page the assertions were evaluated on; and the step
-    whose evidence a violated invariant cites, the page that first showed a
-    violation (`RunResult.evidence`)."""
+    evidence is the page the assertions were evaluated on; the step whose
+    evidence a violated invariant cites, the page that first showed a
+    violation (`RunResult.evidence`); and each step's screenshot, by seq
+    (`RunResult.shots`)."""
 
     redactor: Redactor
     ran: list[int]
     last: int
     violated_at: int
+    shots: Mapping[int, Shot]
 
     def step(self, step: StepResult) -> _Judged:
         judged = self._judged(
@@ -396,9 +400,9 @@ class _Judging:
         about: tuple[Category, str] | None = None,
     ) -> _Judged:
         """The verdict on `subject`, where it was `located`, and its reason,
-        citing step `evidence`'s evidence, which no screenshot is part of until
-        #251 (DATA_MODEL §7). A violation's finding is `about` its category and
-        title."""
+        citing step `evidence`'s evidence and that step's screenshot, if its
+        evidence asked for one (DATA_MODEL §7). A violation's finding is
+        `about` its category and title."""
         verdict, reason = judgement
         scan = self.redactor.redact
         finding = None
@@ -417,10 +421,23 @@ class _Judging:
                 **located,
                 "verdict": verdict,
                 "reason": None if reason is None else scan(reason),
-                "evidence": {"path": f"evidence/{evidence}", "screenshot": None},
+                "evidence": {
+                    "path": f"evidence/{evidence}",
+                    "screenshot": _shot(self.shots.get(evidence), self.redactor),
+                },
                 "finding": finding,
             },
         )
+
+
+def _shot(shot: Shot | None, redactor: Redactor) -> dict[str, object] | None:
+    """A screenshot as a verdict cites it: the file it was saved as, or why it
+    was withheld, scanned as every reason is; None when none was asked for.
+    The file's name is ours, so it isn't scanned, as `evidence.path` isn't."""
+    if shot is None:
+        return None
+    withheld = None if shot.withheld is None else redactor.redact(shot.withheld)
+    return {"path": shot.path, "withheld": withheld}
 
 
 def _located(index: int | None, misses: tuple[Miss, ...]) -> dict[str, object]:
@@ -540,11 +557,13 @@ class _Healed:
             first = None if target is None else self.first.get(target)
             repair = self.by_subject.get(judged.subject) or first
             said = _drift(judged.drift, _why_drifted(repair))
-            cited = None if repair is None else _cited(repair, bound=False)
+            cited = (
+                None if repair is None else _cited(repair, self.redactor, bound=False)
+            )
             return judged.ruled("inconclusive", self.redactor.redact(said), cited)
         if target is None or target not in self.rebound:
             return judged.cited(None)
-        cited = _cited(self.first[target], bound=True)
+        cited = _cited(self.first[target], self.redactor, bound=True)
         if passed:
             return judged.ruled("drift_consistent", None, cited)
         if judged.subject.kind == "step" and judged.verdict == "pass":
@@ -573,11 +592,12 @@ def _why_drifted(repair: Repaired | None) -> str:
     return f"heal gave up{said}"
 
 
-def _cited(repaired: Repaired, *, bound: bool) -> dict[str, object]:
+def _cited(repaired: Repaired, redactor: Redactor, *, bound: bool) -> dict[str, object]:
     """Where a verdict's heal is: its repair's record, the heal's own files if
     it wrote any, and, for a binding the verdict stands on, what it bound and
     what its model said of that, which is the model's own report and decides
-    nothing (CONTEXT.md, "Verdict")."""
+    nothing (CONTEXT.md, "Verdict"); and the screenshot of its first look,
+    scanned with `redactor`, if it took one."""
     basis = repaired.basis
     reported = None if basis is None or not bound else basis.model_reported
     return {
@@ -587,6 +607,7 @@ def _cited(repaired: Repaired, *, bound: bool) -> dict[str, object]:
         "model_reported": None
         if reported is None
         else {"confidence": reported.confidence, "rationale": reported.rationale},
+        "screenshot": None if basis is None else _shot(basis.shot, redactor),
     }
 
 

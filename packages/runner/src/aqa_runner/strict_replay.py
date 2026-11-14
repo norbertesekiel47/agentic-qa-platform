@@ -1,7 +1,8 @@
 """One replay of a spec's compiled script with every locator (#239, #244;
 ADR-0024's #238 and #244 amendments): a run record and an egress gate, then the
 spec's reset hook and the script replayed through `replays.replay_run`, in a
-fresh browser on the caller's driver; then the run's `run.json`, what the run
+fresh browser on the caller's driver, a step that drifts or fails saving its
+masked screenshot as evidence (#251); then the run's `run.json`, what the run
 viewer reads of it (#249), and its `replay.json` (`replay_result.present`),
 whose outcome decides. With no `heal`, a strict replay, nothing here builds a
 model client. With one, what `aqa run` gives, a drift goes to the repair of the
@@ -124,7 +125,12 @@ async def strict_replay(
     stops: list[Stop] = []
     try:
         result = await replay_run(
-            run.script, replaying, opening, every_locator=True, repair=repair
+            run.script,
+            replaying,
+            opening,
+            every_locator=True,
+            repair=repair,
+            screenshots=True,
         )
     except ResetFailedError as error:
         stops.append(Stop("reset_unsafe", record.redactor.redact(str(error))))

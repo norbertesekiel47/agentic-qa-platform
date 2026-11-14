@@ -198,14 +198,19 @@ class BrowserSession:
         return self._frame_changes
 
     @asynccontextmanager
-    async def observing_page(self) -> AsyncIterator[Page]:
+    async def observing_page(
+        self, *, record_refusal: bool = True
+    ) -> AsyncIterator[Page]:
         """Observe the allowed page under the session lock. A frame change
-        discards the completed observation with `DocumentChangedError`."""
+        discards the completed observation with `DocumentChangedError`.
+        Without `record_refusal`, a page off the allowed origins raises the
+        same `PolicyEventError` but isn't added to `policy_events`, as for
+        `snapshot`."""
         async with self._turn:
             changes = self._frame_changes
-            await self._require_allowed_page()
+            await self._require_allowed_page(record_refusal=record_refusal)
             yield self.page
-            await self._require_allowed_page()
+            await self._require_allowed_page(record_refusal=record_refusal)
             if self._frame_changes != changes:
                 raise DocumentChangedError
 

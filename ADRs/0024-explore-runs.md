@@ -1128,7 +1128,7 @@ Maintainer decision (2026-10-27). API.md §7 and DATA_MODEL §7 hold the rules.
 Maintainer decision (2026-10-27). DATA_MODEL §7 and §9 hold the rules.
 
 - **Budget.** Two per-run keys, `heal_turns` (default 6) and `heal_model_usd` (default 0.30), in DATA_MODEL §9.
-- **Observation before screenshots.** Until #251 lands, heal observes the accessibility tree, the console log and the network log. Each verdict's evidence records that no screenshot was available.
+- **Observation before screenshots.** Until #251 lands, heal observes the accessibility tree, the console log and the network log. Each verdict's evidence records that no screenshot was available. *Amended by ADR-0033 (#251):* a heal's first look also saves a masked screenshot, `heals/<key>/screenshot.png`, which no request carries, and a step that drifted or failed in `aqa replay`, `aqa run` or `aqa heal <spec>` saves one in its evidence; a verdict cites each in `evidence.screenshot` and `heal.screenshot`.
 - **Local heal proposals.** A JSON Patch stored in `replay.json` (#238), with an `ah_`-prefixed id for `aqa heal apply`. The staleness check compares the compiled script's git blob SHA, plus the PR head SHA when there is one.
 - **Model inputs.** The healer reads the target's meaning, its locators and the redacted snapshot. It never sees the assertion's claim, and it gets no PR context in M2. It returns element refs, and the deterministic checks decide the verdict.
 

@@ -17,17 +17,20 @@ from urllib.parse import quote, quote_plus
 import pytest
 from aqa_core.config import ProjectConfig
 from aqa_core.spec import Spec
+from aqa_runner import browser_session
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.document_origins import (
     DocumentChangedError,
     PolicyEvent,
     PolicyEventError,
+    frame_origin,
 )
-from aqa_runner.evidence import capture_evidence
+from aqa_runner.evidence import Shot, capture_evidence
 from aqa_runner.redaction import Redacted, Redactor
 from aqa_runner.run_record import RunRecord
+from aqa_runner.screenshots import take_screenshot
 from aqa_runner.snapshot_refs import LEFT_OUT
-from playwright.async_api import Error
+from playwright.async_api import Error, Frame
 
 from packages.runner.tests import document_fixtures
 from packages.runner.tests.document_fixtures import ref_for, until
@@ -37,6 +40,7 @@ from packages.runner.tests.executor_fixtures import (
     App,
     Run,
     a_spec,
+    asking_screenshots,
     by_role,
     compiled,
     run,
@@ -69,6 +73,11 @@ SPLIT = [f"{piece}.fragment.test:{4101 + index}" for index, piece in enumerate(P
 # keeps of each log entry.
 FILES = ("a11y_snapshot.yaml", "console_log.json", "network_log.json")
 WITHHELD = ({("type",)}, {("size", "status", "timing")})
+# A PNG's signature, and why evidence's screenshot is withheld on a page off
+# the run's allowed origins or one whose frames change under it (#251).
+PNG = b"\x89PNG\r\n\x1a\n"
+OFF_ORIGIN = "the page was off the run's allowed origins"
+FRAMES_CHANGED = "the page's frames changed during the capture"
 
 
 @pytest.fixture
@@ -287,6 +296,100 @@ def test_an_evidence_read_refuses_like_any_other_but_records_nothing(
     assert holding(files, [str(quiet), "cdn.example.test"]) == []
 
 
+def test_evidence_saves_a_screenshot_only_when_asked(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    with reflecting(monkeypatch) as sites:
+        redactor = Redactor([fake_secret("FAKE_TOKEN", REFLECTED, sites.app)])
+        record = RunRecord.create(tmp_path).redacting(redactor)
+
+        async def scenario() -> tuple[Shot | None, Shot | None]:
+            async with document_fixtures.browsing(sites, redactor=redactor) as session:
+                window = await session.navigate(f"{sites.app}/reflect")
+                unasked = await capture_evidence(
+                    record, session, "evidence/0", window, None
+                )
+                asked = await capture_evidence(
+                    record,
+                    session,
+                    "evidence/1",
+                    window,
+                    await session.snapshot(),
+                    screenshot=True,
+                )
+                return unasked, asked
+
+        unasked, asked = asyncio.run(scenario())
+
+    assert (unasked, asked) == (None, Shot("evidence/1/screenshot.png"))
+    files = saved(record.path)
+    assert sorted(files) == sorted(
+        [
+            *(f"evidence/0/{name}" for name in FILES[1:]),
+            *(f"evidence/1/{name}" for name in (*FILES, "screenshot.png")),
+        ]
+    )
+    assert files["evidence/1/screenshot.png"].startswith(PNG)
+
+
+def test_an_evidence_screenshot_off_the_allowed_origins_is_withheld_quietly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    with reflecting(monkeypatch) as sites:
+        redactor = Redactor([fake_secret("FAKE_TOKEN", REFLECTED, sites.app)])
+        record = RunRecord.create(tmp_path).redacting(redactor)
+
+        async def scenario() -> tuple[Shot | None, int, int, int]:
+            async with document_fixtures.browsing(sites, redactor=redactor) as session:
+                window = await session.navigate(f"{sites.app}/reflect")
+                with suppress(Error):
+                    await session.page.goto(f"{sites.cdn}/canary?{quote(REFLECTED)}")
+                before = session.policy_events.total
+                shot = await capture_evidence(
+                    record, session, "evidence/1", window, None, screenshot=True
+                )
+                after = session.policy_events.total
+                # The control: the capture's own default records its refusal.
+                with pytest.raises(PolicyEventError):
+                    await take_screenshot(session)
+                return shot, before, after, session.policy_events.total
+
+        shot, before, after, recorded = asyncio.run(scenario())
+
+    assert shot == Shot(withheld=OFF_ORIGIN)
+    assert (before, after, recorded) == (0, 0, 1)
+    files = saved(record.path)
+    assert sorted(files) == [f"evidence/1/{name}" for name in FILES[1:]]
+    assert holding(files, ["cdn.example.test", MARKER]) == []
+
+
+def test_an_evidence_screenshot_whose_frames_change_under_it_is_withheld(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    record = RunRecord.create(tmp_path)
+
+    async def scenario(sites: document_fixtures.Sites) -> Shot | None:
+        async with document_fixtures.browsing(sites) as session:
+            await session.navigate(f"{sites.app}/deep")
+
+            # The frame goes during the capture's first check of the page.
+            async def removing(frame: Frame) -> str | None:
+                monkeypatch.setattr(browser_session, "frame_origin", frame_origin)
+                await session.page.locator("iframe").evaluate("e => e.remove()")
+                return await frame_origin(frame)
+
+            monkeypatch.setattr(browser_session, "frame_origin", removing)
+            return await capture_evidence(
+                record, session, "evidence/1", None, None, screenshot=True
+            )
+
+    with document_fixtures.serving_sites(monkeypatch) as sites:
+        shot = asyncio.run(scenario(sites))
+
+    assert shot == Shot(withheld=FRAMES_CHANGED)
+    assert sorted(saved(record.path)) == [f"evidence/1/{name}" for name in FILES[1:]]
+
+
 HOSTILE = """<form method="post" action="/write/signin" accept-charset="utf-8">
     <label>Password <input type="password" name="password"></label>
     <input type="hidden" name="canary" value="fake-request-body-canary">
@@ -351,7 +454,11 @@ def hostile(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Hostile]:
         patch.setitem(PAGES, "evidence-hostile", HOSTILE)
         patch.setitem(PAGES, "evidence-response", "<p>fake-response-body-canary</p>")
         spec = secret_spec(tmp_path, start_url="/page/evidence-hostile")
-        done = run(app, tmp_path, compiled(SIGNING_IN, targets=TARGETS), spec=spec)
+        # Only this replay asks, as `strict_replay`'s do: the fixture's other
+        # patches last as long as the module.
+        with pytest.MonkeyPatch.context() as asking:
+            asking_screenshots(asking)
+            done = run(app, tmp_path, compiled(SIGNING_IN, targets=TARGETS), spec=spec)
         yield Hostile(done, app, saved(done.record.path))
 
 
@@ -366,6 +473,7 @@ def test_the_run_record_holds_only_the_steps_and_each_steps_evidence(
         [
             "steps.jsonl",
             *(f"evidence/{seq}/{name}" for seq in range(4) for name in FILES),
+            "evidence/3/screenshot.png",
         ]
     )
     assert logs(files, "evidence/3") == [[], []]

@@ -36,6 +36,7 @@ from aqa_runner.bound_secrets import BoundSecret
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.document_origins import DocumentChangedError, PolicyEventError
 from aqa_runner.evaluation import MARGIN_SECONDS, bounded
+from aqa_runner.evidence import Shot
 from aqa_runner.locators import Miss, Resolved, resolve
 from aqa_runner.reasons import UnansweredError
 from aqa_runner.redaction import Redacted, Redactor
@@ -150,13 +151,16 @@ class ModelReported:
 class Basis:
     """A repair's account of what it offers, each text scanned by the repair:
     why it gave up, or what it bound; what its model said of that, if a model
-    picked it; a stop of the whole run it hit, if any; and the folder of the
-    run record its own files are in, if it wrote any."""
+    picked it; a stop of the whole run it hit, if any; the folder of the run
+    record its own files are in, if it wrote any; and what became of the
+    screenshot its first look at the page asked for, if it took one (#251),
+    which `repairs/<key>.json` doesn't hold."""
 
     said: Redacted
     model_reported: ModelReported | None = None
     stop: Literal["no_response", "record_error"] | None = None
     record: str | None = None
+    shot: Shot | None = None
 
 
 @dataclass(frozen=True)

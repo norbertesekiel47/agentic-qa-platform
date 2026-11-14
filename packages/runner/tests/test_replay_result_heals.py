@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from aqa_core.compiled import Click, NotVisible, Select, Target, VisibleUnoccluded
 from aqa_runner.evaluation import AssertionResult
+from aqa_runner.evidence import Shot
 from aqa_runner.executor import RunResult, StepResult
 from aqa_runner.redaction import NO_SECRETS
 from aqa_runner.repairs import AssertionAt, Basis, Repaired, StepAt
@@ -20,6 +21,7 @@ from aqa_runner.settling import Window
 
 from packages.runner.tests.test_replay_result import (
     BLOB,
+    BOUND,
     BOUND_AS,
     CLEAN,
     CLICK,
@@ -56,6 +58,7 @@ HEAL_CITED = {
     "record": "heals/1",
     "bound": 'button "Save"',
     "model_reported": {"confidence": 0.9, "rationale": "it moved"},
+    "screenshot": None,
 }
 # The patch healing `save` leaves, and the proposal it makes.
 PATCH = [
@@ -91,6 +94,41 @@ def test_a_healed_step_is_drift_consistent_citing_its_heal(tmp_path: Path) -> No
     assert judged(end, "assertion", "a4")["verdict"] == "drift_consistent"
     assert judged(end, "assertion", "a4")["heal"] == HEAL_CITED
     assert written["reasons"] == []
+
+
+def looking(run: Made, shot: Shot) -> dict[str, Any]:
+    """What `healing_the_step` leaves, its heal's first look having come to
+    `shot`."""
+    healing = healing_the_step(run)
+    [taken] = healing["repairs"]
+    assert taken.basis is not None
+    looked = replace(taken, basis=replace(taken.basis, shot=shot))
+    return healing | {"repairs": (looked,)}
+
+
+def test_a_heal_cites_the_screenshot_of_its_first_look(tmp_path: Path) -> None:
+    run = made(tmp_path)
+
+    end = passing_with(run, **looking(run, Shot("heals/1/screenshot.png")))
+
+    saved = {"path": "heals/1/screenshot.png", "withheld": None}
+    assert judged(end, "step", 1)["heal"] == HEAL_CITED | {"screenshot": saved}
+    assert judged(end, "assertion", "a4")["heal"] == HEAL_CITED | {"screenshot": saved}
+    # The step's own evidence saved none: a repair took its drift.
+    assert judged(end, "step", 1)["evidence"]["screenshot"] is None
+
+
+def test_a_heals_withheld_screenshot_is_cited_with_why_scanned(tmp_path: Path) -> None:
+    run = made(tmp_path, BOUND)
+    # Scanned by another scan than the run's, so it still spells the value.
+    leak = NO_SECRETS.redact("fake-bound-value was in it")
+
+    end = passing_with(run, **looking(run, Shot(withheld=leak)))
+
+    assert judged(end, "step", 1)["heal"]["screenshot"] == {
+        "path": None,
+        "withheld": "[SECRET:TEST_PASSWORD] was in it",
+    }
 
 
 def test_a_subject_off_the_rebound_targets_passes_with_no_heal(tmp_path: Path) -> None:
@@ -568,6 +606,7 @@ def test_a_drift_whose_heal_came_to_nothing_is_inconclusive_and_cites_it(
         "record": record,
         "bound": None,
         "model_reported": None,
+        "screenshot": None,
     }
     assert document(end)["heal_proposal"] is None
 

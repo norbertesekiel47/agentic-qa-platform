@@ -18,8 +18,10 @@ and generator. A canvas can't be confirmed, and the heal ends after that turn.
 
 Each priced response is on disk in `costs.jsonl` before the next call, and each
 request sent leaves `heals/<key>/<n>.json`, or `vision.json`, whatever came
-back, unless its cost line isn't on disk or the call is cancelled. `Healing`
-holds one run's budget, so a run's drifts share it."""
+back, unless its cost line isn't on disk or the call is cancelled. The first
+look's evidence, in `heals/<key>/`, includes the page's masked screenshot, which
+no request carries (#251): vision fallback takes its own. `Healing` holds one
+run's budget, so a run's drifts share it."""
 
 import hashlib
 import json
@@ -44,7 +46,7 @@ from aqa_runner.binding import element_at, is_among
 from aqa_runner.browser_session import BrowserSession, RefError
 from aqa_runner.document_origins import DocumentChangedError, PolicyEventError
 from aqa_runner.evaluation import bounded, looked
-from aqa_runner.evidence import capture_evidence
+from aqa_runner.evidence import Shot, capture_evidence
 from aqa_runner.healer import Rebind, Unfit, decided, heal_request, healer_tools
 from aqa_runner.locator_generation import (
     BindingRefusedError,
@@ -205,12 +207,15 @@ class Healing:
 class _Heal:
     """The graph's context: what the turns on one drift use, never in state, and
     what they offer, the script handed until a turn decides, which gives up. It
-    remembers whether a pick was outside the subject's region, for the reason."""
+    remembers what became of its first look's screenshot, for every account it
+    gives, and whether a pick was outside the subject's region, for the
+    reason."""
 
     healing: Healing
     drift: Drift
     offer: Offer = field(init=False)
     observed: bool = field(init=False, default=False)
+    shot: Shot | None = field(init=False, default=None)
     outside_region: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
@@ -241,7 +246,7 @@ class _Heal:
             f"{stop.why}; {_OUTSIDE_ITS_REGION}" if adds else stop.why
         )
         record = self.folder if self.observed else None
-        return Offer(self.drift.script, Basis(said, None, stop.run, record))
+        return Offer(self.drift.script, Basis(said, None, stop.run, record, self.shot))
 
 
 def _next(state: _Turns) -> str:
@@ -297,7 +302,8 @@ def _spent(context: _Heal) -> _Stop | None:
 async def _observed(context: _Heal) -> Redacted | _Stop:
     """The page's snapshot, looked at again while the page changes under the
     look, or why it couldn't be looked at; the first is also the heal's
-    evidence, whose logs are empty, since a drift has no settle window."""
+    evidence, whose logs are empty, since a drift has no settle window, with
+    the page's screenshot, which only the first look saves."""
     session, seconds = context.session, context.healing.seconds
     try:
         seen = await bounded(looked(session.snapshot, seconds), seconds)
@@ -306,7 +312,9 @@ async def _observed(context: _Heal) -> Redacted | _Stop:
     if not context.observed:
         record = context.healing.spending.record
         try:
-            await capture_evidence(record, session, context.folder, None, seen)
+            context.shot = await capture_evidence(
+                record, session, context.folder, None, seen, screenshot=True
+            )
         except OSError:
             return _Stop(_UNWRITTEN, "record_error")
         context.observed = True
@@ -616,7 +624,7 @@ def _offered(
     offered = script.model_copy(update={"targets": {**script.targets, name: rebound}})
     named = f' "{seen.name}"' if seen.name else ""
     bound_as = context.line(f"{seen.role or 'element'}{named}")
-    return Offer(offered, Basis(bound_as, reported, None, context.folder))
+    return Offer(offered, Basis(bound_as, reported, None, context.folder, context.shot))
 
 
 async def _generated(context: _Heal, seen: Seen) -> tuple[Locator, ...]:

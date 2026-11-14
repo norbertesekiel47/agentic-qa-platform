@@ -378,12 +378,16 @@ class Screenshot:
             raise TypeError("only take_screenshot makes a Screenshot")
 
 
-async def take_screenshot(session: BrowserSession) -> Screenshot:
+async def take_screenshot(
+    session: BrowserSession, *, record_refusal: bool = True
+) -> Screenshot:
     """A screenshot of the session's page, at its viewport in CSS pixels:
     the live page's until the session's first `fill_secret`, a render of
     its scrubbed snapshot from then on. On a page off the run's allowed
     origins it raises `PolicyEventError`, and after a frame change during
-    the snapshot `DocumentChangedError`, as every observation does.
+    the snapshot `DocumentChangedError`, as every observation does; without
+    `record_refusal`, that refusal isn't added to the session's policy
+    events, as evidence's own look adds none (`aqa_runner.evidence`).
 
     It is withheld (`ScreenshotWithheldError`, with a reason that never
     quotes the page, so nothing is saved) when the snapshot, its scrub or
@@ -397,10 +401,10 @@ async def take_screenshot(session: BrowserSession) -> Screenshot:
     or it spells a bound value. In a run that binds a secret, it
     is withheld too when the image's text, as OCR reads it, spells a bound
     value, is over `aqa_runner.ocr.TEXT_CAP`, or takes over `OCR_SECONDS` to
-    read; an error of the OCR engine's, a missing model file's included,
-    propagates, so no `Screenshot` exists."""
+    read, or when the OCR engine raises, a missing model file included
+    (ADR-0035's #251 amendment)."""
     try:
-        png = await _captured(session)
+        png = await _captured(session, record_refusal=record_refusal)
     except TimeoutError:
         reason = f"the page's snapshot, its scrub or its render took over {CAPTURE_SECONDS} s"
     except Error:
@@ -421,8 +425,8 @@ async def take_screenshot(session: BrowserSession) -> Screenshot:
 
 
 async def _checked(png: bytes, redactor: Redactor) -> None:
-    """Withholds `png` when OCR reads a bound value in its text, or doesn't
-    finish reading it in `OCR_SECONDS`."""
+    """Withholds `png` when OCR reads a bound value in its text, doesn't
+    finish reading it in `OCR_SECONDS`, or its engine fails."""
     try:
         # In a thread, as the scrub is, so OCR holds up neither the event
         # loop nor the egress proxy on it.
@@ -432,6 +436,8 @@ async def _checked(png: bytes, redactor: Redactor) -> None:
         reason = f"the image's OCR took over {OCR_SECONDS} s"
     except ocr.TooMuchTextError:
         reason = "the image has more text than OCR reads in its bound"
+    except _EngineFailedError:
+        reason = "the image's OCR engine failed"
     else:
         if not spelled:
             return
@@ -439,16 +445,26 @@ async def _checked(png: bytes, redactor: Redactor) -> None:
     raise ScreenshotWithheldError(reason)
 
 
+class _EngineFailedError(Exception):
+    """What the OCR engine raised, a missing model file's included: its
+    errors are direct `Exception` subclasses of its libraries' own."""
+
+
 def _read(png: bytes, redactor: Redactor) -> bool:
     with _OCR_TURN:
-        return ocr.spells_a_value(png, redactor)
+        try:
+            return ocr.spells_a_value(png, redactor)
+        except ocr.TooMuchTextError:
+            raise
+        except Exception as error:
+            raise _EngineFailedError from error
 
 
-async def _captured(session: BrowserSession) -> bytes:
+async def _captured(session: BrowserSession, *, record_refusal: bool) -> bytes:
     # The bound covers the page's checks too, which a busy page holds back.
     async with (
         asyncio.timeout(CAPTURE_SECONDS),
-        session.observing_page() as page,
+        session.observing_page(record_refusal=record_refusal) as page,
         _devtools(page) as devtools,
     ):
         # Read under the session's lock, which `fill_secret` holds from its
@@ -499,12 +515,14 @@ def _prepared(
 
 @asynccontextmanager
 async def _devtools(page: Page) -> AsyncIterator[CDPSession]:
-    """A DevTools session of `page`'s own, which the page can't see."""
+    """A DevTools session of `page`'s own, which the page can't see.
+    Detached only once its calls have answered: a busy page never answers
+    `detach` either, and the bound that cancelled a call cancels nothing
+    again. A session left behind by a call that failed ends with its page
+    (`document_origins.isolated_origin`, LAB_NOTES 2026-11-01)."""
     devtools = await page.context.new_cdp_session(page)
-    try:
-        yield devtools
-    finally:
-        await devtools.detach()
+    yield devtools
+    await devtools.detach()
 
 
 def _scrubbed(archive: str, redactor: Redactor) -> tuple[_Parts, str]:
