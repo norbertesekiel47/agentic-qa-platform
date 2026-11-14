@@ -40,6 +40,7 @@ SCRIPT = """(() => {
     const inDocument = native("Document", "querySelectorAll");
     const inShadow = native("DocumentFragment", "querySelectorAll");
     const createRange = native("Document", "createRange");
+    const elementFromPoint = native("Document", "elementFromPoint");
     const matches = (scope, css, found = []) => {
         const query = scope === document ? inDocument : inShadow;
         for (const e of query(scope, css)) found.push(e);
@@ -103,6 +104,10 @@ SCRIPT = """(() => {
         if (verb === "regions") return matches(document, token);
         if (verb === "shown") return visible(root) ? [root] : [];
         if (verb === "document") return [document];
+        if (verb === "point") {
+            const found = elementFromPoint(document, Number(token), Number(region));
+            return found ? [found] : [];
+        }
         const r = held.get(token);
         if (!valid(r, region, root)) return [];
         if (verb === "in") return contains(r, root) ? [root] : [];
@@ -138,9 +143,9 @@ async def register_binding_engine(playwright: Playwright) -> None:
     await playwright.selectors.register(ENGINE, script=SCRIPT, content_script=True)
 
 
-async def _query(element: ElementHandle, body: str) -> list[ElementHandle]:
+async def _query(subject: ElementHandle | Page, body: str) -> list[ElementHandle]:
     try:
-        return await element.query_selector_all(f"{ENGINE}={body}")
+        return await subject.query_selector_all(f"{ENGINE}={body}")
     except Error as error:
         if f'Unknown engine "{ENGINE}"' in str(error):
             raise UnregisteredEngineError(
@@ -183,6 +188,14 @@ async def is_among(found: PlaywrightLocator, element: ElementHandle) -> bool:
         return await _passes(found, f"is:{token}")
     finally:
         await _forget(element, token, sys.exception())
+
+
+async def element_at(page: Page, x: int, y: int) -> ElementHandle | None:
+    """The element `elementFromPoint` gives at (`x`, `y`), in CSS pixels of
+    the viewport, in the main frame's document, or None when none is there:
+    read in the utility world, through a native the engine captured, so the
+    page's scripts can't answer. It dispatches nothing."""
+    return next(iter(await _query(page, f"point:{x}|{y}")), None)
 
 
 async def within(ancestor: ElementHandle, element: ElementHandle) -> bool:

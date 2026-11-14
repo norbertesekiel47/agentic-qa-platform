@@ -432,6 +432,23 @@ def test_a_frame_that_arrives_during_the_screenshot_discards_it(
     assert not (run.record / "heals/1/vision.json").exists()
 
 
+# The page's own world answers that the footer's button is at every point.
+ANSWERS_ITSELF = (
+    "<script>Document.prototype.elementFromPoint = document.elementFromPoint = "
+    "() => document.querySelector('footer button');</script>"
+)
+
+
+def test_a_page_that_answers_element_from_point_itself_doesnt_choose_the_element(
+    tmp_path: Path,
+) -> None:
+    run = healed(tmp_path, NO_TOOL, clicking(*INSIDE), html=CANVAS + ANSWERS_ITSELF)
+
+    assert basis(run).said == A_CANVAS
+    assert run.result.repairs[0].script is None
+    assert CLICKED not in run.seen
+
+
 def test_a_vision_request_that_still_spells_a_value_is_not_sent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

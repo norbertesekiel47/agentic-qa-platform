@@ -40,7 +40,7 @@ from playwright.async_api import ElementHandle, Error, Page
 
 from aqa_runner import reasons
 from aqa_runner.anthropic_client import ProviderError
-from aqa_runner.binding import is_among
+from aqa_runner.binding import element_at, is_among
 from aqa_runner.browser_session import BrowserSession, RefError
 from aqa_runner.document_origins import DocumentChangedError, PolicyEventError
 from aqa_runner.evaluation import bounded, looked
@@ -115,10 +115,6 @@ _FRAMED: Final = (
     f"{_VISION}the page holds a frame from an origin the run doesn't allow, "
     "which the agent never observes, so no screenshot was taken"
 )
-# The element at a point of the main frame's viewport, read in the page's
-# world, which dispatches no event
-# (https://playwright.dev/python/docs/api/class-page#page-evaluate-handle).
-_AT_POINT: Final = "([x, y]) => document.elementFromPoint(x, y)"
 # The refusals that say the page has no place for this subject, whichever
 # element the model picks (#229). `outside_region` and the rest are about the
 # pick, so another turn may find a better one.
@@ -578,14 +574,15 @@ async def _pointed(context: _Heal, point: VisionClick) -> Offer | _Stop:
 
 
 async def _at(page: Page, point: VisionClick) -> ElementHandle | str:
-    """The element at `point` in the main frame's document, or why there is
-    none to check, in fixed words: no element, or a canvas, which the engine
-    tells in the utility world."""
-    found = await page.evaluate_handle(_AT_POINT, [point.x, point.y])
-    element = found.as_element()
+    """The element at `point` in the main frame's document, which the
+    binding engine reads in the utility world, or why there is none to
+    check, in fixed words: no element, or a canvas, which it tells there
+    too."""
+    element = await element_at(page, point.x, point.y)
     if element is None:
         return _NOTHING_THERE
     if await is_among(page.locator("css=canvas"), element):
+        await element.dispose()
         return _A_CANVAS
     return element
 
