@@ -979,7 +979,7 @@ def test_a_refusal_that_reaches_the_replay_exits_15(
 ) -> None:
     # None reaches it today: a refused journal line fails its step, and
     # refused evidence and egress records are dropped.
-    async def refused(*_: object) -> None:
+    async def refused(*_: object, **__: object) -> None:
         raise RefusedWriteError("fake refused write")
 
     monkeypatch.setattr(executor, "capture_evidence", refused)
