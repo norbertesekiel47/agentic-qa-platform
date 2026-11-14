@@ -37,6 +37,16 @@ def run(
             "--url", help="The start origin; the project config's base_url if omitted."
         ),
     ] = None,
+    before_screenshots: Annotated[
+        bool,
+        typer.Option(
+            "--before-screenshots",
+            help=(
+                "Capture the page before each step, and save it beside the "
+                "screenshot of a step that fails."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Replay specs' compiled scripts with every locator, each in a sandboxed
     browser; a target that drifted goes to the healer, whose rebinding is a
@@ -47,7 +57,9 @@ def run(
         subject = ", ".join(each.spec.frontmatter.id for each in runs)
         problems = (f"{KEY_VARIABLE}: not set: the healer's model is Anthropic's",)
         stop("spec_error", subject, _UNKEYED, problems, scan=scan_of(runs))
-    ended = replayed_runs(runs, scan_of(runs), heal=_repair)
+    ended = replayed_runs(
+        runs, scan_of(runs), heal=_repair, before_screenshots=before_screenshots
+    )
     if code := EXIT_CODES[rolled_up(each.outcome for each in ended)]:
         raise typer.Exit(code)
 

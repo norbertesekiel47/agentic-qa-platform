@@ -2,7 +2,9 @@
 ADR-0024's #238 and #244 amendments): a run record and an egress gate, then the
 spec's reset hook and the script replayed through `replays.replay_run`, in a
 fresh browser on the caller's driver, a step that drifts or fails saving its
-masked screenshot as evidence (#251); then the run's `run.json`, what the run
+masked screenshot as evidence (#251), and, when `--before-screenshots` asks, a
+step that fails saving the page as it found it beside it (#314); then the
+run's `run.json`, what the run
 viewer reads of it (#249), and its `replay.json` (`replay_result.present`),
 whose outcome decides. With no `heal`, a strict replay, nothing here builds a
 model client. With one, what `aqa run` gives, a drift goes to the repair of the
@@ -98,6 +100,7 @@ async def strict_replay(
     scan: Redactor,
     *,
     heal: Callable[[Spending], Healing] | None = None,
+    before_screenshots: bool = False,
 ) -> Replayed:
     """Replay `run` once in a new record under its spec root, launching its
     browser from `playwright`, whose selector engines are registered, and
@@ -105,8 +108,10 @@ async def strict_replay(
     scans with `scan`, every test secret the caller bound, `run`'s among them,
     so no run's record keeps a value another spec binds. With `heal`, drift
     goes to the repair of the healing it builds, once, for the run's spend
-    (`heal_model_usd`). The run's time is taken once, from before its record
-    is made."""
+    (`heal_model_usd`). With `before_screenshots`, each compiled step's page
+    is captured ahead of it, and a step that fails saves its capture as its
+    "before" (`executor.RunSetup`). The run's time is taken once, from before
+    its record is made."""
     began = time.monotonic()
     spec = run.spec
     try:
@@ -119,7 +124,14 @@ async def strict_replay(
     repair = None if healing is None else healing.repair
     gate = EgressGate(egress_policy(spec, run.config, run.start))
     proxy = EgressProxy(gate)
-    replaying = Replaying(spec, run.config, run.start, gate, screenshots=True)
+    replaying = Replaying(
+        spec,
+        run.config,
+        run.start,
+        gate,
+        screenshots=True,
+        before_screenshots=before_screenshots,
+    )
     opening = partial(_opened, playwright, proxy, record)
     result: RunResult | None = None
     stops: list[Stop] = []
