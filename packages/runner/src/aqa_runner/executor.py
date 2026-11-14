@@ -10,7 +10,7 @@ they touch (ADR-0026). Probe reads use the same egress gate as the browser."""
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from aqa_core.compiled import (
@@ -61,7 +61,7 @@ from aqa_runner.evaluation import (
     look_for,
     looked,
 )
-from aqa_runner.evidence import capture_evidence
+from aqa_runner.evidence import Shot, capture_evidence
 from aqa_runner.invariants import InvariantResult, invariant_results
 from aqa_runner.locators import Miss, Resolved
 from aqa_runner.reasons import UnansweredError
@@ -98,14 +98,17 @@ type ErrorCode = Literal["egress_blocked"]
 @dataclass(frozen=True)
 class RunSetup:
     """What a replay runs for: the spec and project config, the run's start
-    origin (`aqa_core.project.start_origin`), the run's record, and the
-    repair a drift goes to, if any (#242, #244)."""
+    origin (`aqa_core.project.start_origin`), the run's record, the repair a
+    drift goes to, if any (#242, #244), and whether a step that drifts or
+    fails saves a screenshot in its evidence, which only `strict_replay`
+    asks for (#251)."""
 
     spec: Spec
     config: ProjectConfig
     start: str
     record: RunRecord
     repair: Repair | None = None
+    screenshots: bool = False
 
 
 @dataclass(frozen=True)
@@ -173,7 +176,9 @@ class RunResult:
     preflight's. `evidence` is the page a failure shows explore's next
     attempt (#56): the step's where an enabled invariant first became
     violated, else the last step's. `repairs` holds each drift's repair, in
-    order: a run that passed through one keeps its outcome."""
+    order: a run that passed through one keeps its outcome. `shots` holds, by
+    seq, what became of each screenshot a step's evidence asked for
+    (`RunSetup.screenshots`)."""
 
     run_id: str
     outcome: RunOutcome
@@ -187,6 +192,7 @@ class RunResult:
     policy_events_total: int
     evidence: Evidence | None = None
     repairs: tuple[Repaired, ...] = ()
+    shots: Mapping[int, Shot] = field(default_factory=dict)
 
 
 async def replay(
@@ -238,7 +244,9 @@ async def replay(
 
     After every step it keeps, it saves the step's evidence in the record,
     which scans what it writes with the session's redactor
-    (`aqa_runner.evidence`).
+    (`aqa_runner.evidence`). With `setup.screenshots`, a kept step that
+    drifted or failed saves its masked screenshot there too, and no other
+    step does; a capture that is withheld changes no outcome.
 
     With `setup.repair`, a step whose target drifted, in a run nothing has
     interrupted, goes to that repair (`repairs.Drift`), once. The script it
@@ -275,7 +283,8 @@ class _Replayed:
     """What a replay's browser left: its record and redactor, the hosts
     the project config expects blocked, and every step, assertion,
     invariant and kept policy event, how many it recorded, the evidence a
-    failure shows (`RunResult.evidence`), and each repair."""
+    failure shows (`RunResult.evidence`), each repair, and each step's
+    screenshot (`RunResult.shots`)."""
 
     record: RunRecord
     redactor: Redactor
@@ -287,6 +296,7 @@ class _Replayed:
     policy_events_total: int
     evidence: Evidence
     repairs: tuple[Repaired, ...]
+    shots: Mapping[int, Shot]
 
 
 async def _replayed(
@@ -329,6 +339,7 @@ async def _replayed(
     )
     record = setup.record
     steps: list[StepResult] = []
+    shots: dict[int, Shot] = {}
     async with (
         prepared_session(
             chromium, egress=proxy, settings=script.browser, redactor=redactor
@@ -357,6 +368,7 @@ async def _replayed(
             session,
             run,
             steps,
+            shots,
             await dispatched(
                 session,
                 setup.record,
@@ -408,7 +420,7 @@ async def _replayed(
                     pending, in_use = list(patched.steps[len(ran) :]), patched
                     continue
             pending.pop(0)
-            kept = await _keep_with_evidence(session, run, steps, result)
+            kept = await _keep_with_evidence(session, run, steps, shots, result)
             if not violated:
                 evidence, violated = kept, _violated(session, setup.spec)
         if steps[-1].outcome != "completed" or interrupted():
@@ -437,6 +449,7 @@ async def _replayed(
         events.total,
         evidence,
         () if handing is None else tuple(handing.repaired),
+        shots,
     )
 
 
@@ -550,20 +563,33 @@ def _run_result(replayed: _Replayed, proxy: EgressProxy, gate: EgressGate) -> Ru
         replayed.policy_events_total,
         replayed.evidence,
         replayed.repairs,
+        replayed.shots,
     )
 
 
 async def _keep_with_evidence(
-    session: BrowserSession, run: _Replay, steps: list[StepResult], step: StepResult
+    session: BrowserSession,
+    run: _Replay,
+    steps: list[StepResult],
+    shots: dict[int, Shot],
+    step: StepResult,
 ) -> Evidence:
     """Keep `step`, then save its evidence with the page's snapshot as the
-    step left it, and give that snapshot as plain text."""
+    step left it, and, when the run asks for them and it drifted or failed,
+    its screenshot, noted in `shots`; give that snapshot as plain text."""
     steps.append(step)
     budget = run.setup.config.budgets.resolve_seconds
     snapshot = await _observed(session, budget)
-    await capture_evidence(
-        run.setup.record, session, f"evidence/{step.seq}", step.window, snapshot
+    shot = await capture_evidence(
+        run.setup.record,
+        session,
+        f"evidence/{step.seq}",
+        step.window,
+        snapshot,
+        screenshot=run.setup.screenshots and step.outcome != "completed",
     )
+    if shot is not None:
+        shots[step.seq] = shot
     return Evidence(step.seq, None if snapshot is None else str(snapshot))
 
 

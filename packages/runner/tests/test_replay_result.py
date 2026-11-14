@@ -19,6 +19,7 @@ from aqa_core.spec import InvariantName, Spec
 from aqa_runner.egress import InfrastructureEvent
 from aqa_runner.egress_proxy import EgressBlocks, RefusedHost
 from aqa_runner.evaluation import AssertionResult
+from aqa_runner.evidence import Shot
 from aqa_runner.executor import Evidence, RunResult, StepResult
 from aqa_runner.invariants import InvariantResult
 from aqa_runner.locators import Miss
@@ -636,6 +637,76 @@ def test_the_document_holds_each_verdict_with_its_evidence(tmp_path: Path) -> No
                 "finding": None,
             },
         ],
+    }
+
+
+def stopped_at_2(end: ReplayEnd) -> ReplayEnd:
+    """`end`, whose step 2 stopped the run before any check."""
+    assert end.result is not None
+    return replace(end, result=replace(end.result, assertions=unevaluated(2)))
+
+
+# Step 2's evidence, with the screenshot its step saved.
+SAVED_AT_2 = {
+    "path": "evidence/2",
+    "screenshot": {"path": "evidence/2/screenshot.png", "withheld": None},
+}
+
+
+def test_a_verdict_cites_the_screenshot_of_the_step_its_evidence_is(
+    tmp_path: Path,
+) -> None:
+    end = ending(
+        made(tmp_path),
+        steps=(StepResult(2, "failed", error="the page crashed"),),
+        invariants=(HELD[0], *VIOLATED, HELD[2], HELD[3]),
+        # The page where the invariant was first violated.
+        evidence=Evidence(2, None),
+        shots={2: Shot("evidence/2/screenshot.png")},
+    )
+
+    verdicts = document(stopped_at_2(end))["verdicts"]
+
+    assert [
+        (*next(iter(verdict.items())), verdict["evidence"]) for verdict in verdicts
+    ] == [
+        ("step", 0, evidence(0)),
+        ("step", 1, evidence(1)),
+        ("step", 2, SAVED_AT_2),
+        ("invariant", "js_exceptions", SAVED_AT_2),
+    ]
+
+
+def test_a_withheld_screenshot_is_cited_with_why(tmp_path: Path) -> None:
+    end = ending(
+        made(tmp_path),
+        steps=(StepResult(2, "drifted", misses=MISSED),),
+        shots={2: Shot(withheld="a DevTools call or the render failed")},
+    )
+
+    assert judged(stopped_at_2(end), "step", 2)["evidence"] == {
+        "path": "evidence/2",
+        "screenshot": {
+            "path": None,
+            "withheld": "a DevTools call or the render failed",
+        },
+    }
+
+
+def test_a_withheld_screenshots_reason_is_scanned_with_the_runs_scan(
+    tmp_path: Path,
+) -> None:
+    # Scanned by another scan than the run's, so it still spells the value.
+    leak = NO_SECRETS.redact("fake-bound-value was in it")
+    end = ending(
+        made(tmp_path, BOUND),
+        steps=(StepResult(2, "drifted", misses=MISSED),),
+        shots={2: Shot(withheld=leak)},
+    )
+
+    assert judged(stopped_at_2(end), "step", 2)["evidence"]["screenshot"] == {
+        "path": None,
+        "withheld": "[SECRET:TEST_PASSWORD] was in it",
     }
 
 
