@@ -1,6 +1,6 @@
 # Architecture — Agentic QA Platform
 
-Last updated: 2026-11-13 (a replay's or run's record keeps `run.json`, and `aqa report` writes `report.html` into it, #249); 2026-11-02 (the healer's `rebind`, and what its graph looks at, #244); 2026-10-27 (the M2 decisions: heal observes no screenshot until #251 and returns element refs, #243; a heal adds no navigation and rewrites no step, #19; `visual: model` in explore and verified mode, #255; explore never restarts after an unresolved intent, #230; the action tools refuse a meaning that names a multi-word label, #234); 2026-10-22 (the attempt's evidence in its part of the run record, #53 P22); 2026-10-18 (a `probe_equals` check binds an option its probe offered, #53 P20); 2026-10-08 (hosted compute: one Lambda MicroVM per run, ADR-0032; a navigator reply the model didn't finish runs nothing, #53); 2026-10-07 (each step's evidence in the local run record, #50 B; step intents and completions in the local run record, #46; the browser session's document-origin checks, #44; the local run record under the spec root, #41; the browser session, #36; the sandbox check, #35; M1 design decisions, ADR-0024–0026). Decisions referenced as ADR-NNNN live in [`ADRs/`](ADRs/).
+Last updated: 2026-11-14 (a step that drifts or fails in strict replay, and a heal's first look, keep a masked screenshot as evidence, #251); 2026-11-13 (a replay's or run's record keeps `run.json`, and `aqa report` writes `report.html` into it, #249); 2026-11-02 (the healer's `rebind`, and what its graph looks at, #244); 2026-10-27 (the M2 decisions: heal observes no screenshot before #251 and returns element refs, #243; a heal adds no navigation and rewrites no step, #19; `visual: model` in explore and verified mode, #255; explore never restarts after an unresolved intent, #230; the action tools refuse a meaning that names a multi-word label, #234); 2026-10-22 (the attempt's evidence in its part of the run record, #53 P22); 2026-10-18 (a `probe_equals` check binds an option its probe offered, #53 P20); 2026-10-08 (hosted compute: one Lambda MicroVM per run, ADR-0032; a navigator reply the model didn't finish runs nothing, #53); 2026-10-07 (each step's evidence in the local run record, #50 B; step intents and completions in the local run record, #46; the browser session's document-origin checks, #44; the local run record under the spec root, #41; the browser session, #36; the sandbox check, #35; M1 design decisions, ADR-0024–0026). Decisions referenced as ADR-NNNN live in [`ADRs/`](ADRs/).
 
 ## 1. System context
 
@@ -53,7 +53,7 @@ Last updated: 2026-11-13 (a replay's or run's record keeps `run.json`, and `aqa 
                    ▼ yes                              ▼
             ┌──────────────┐  step fails     ┌──────────────┐
             │ replay_step  │────────────────►│ heal         │ (subgraph)
-            └──────┬───────┘                 │  observe     │ a11y snapshot + logs; screenshot after #251
+            └──────┬───────┘                 │  observe     │ a11y snapshot + logs; masked screenshot, evidence only (#251)
                    │ all steps ok            │  classify    │ drift_consistent | expectation_violated | inconclusive
                    ▼                         │  repair/file │ binding/step patch or finding with evidence
             ┌──────────────┐                 └──────┬───────┘

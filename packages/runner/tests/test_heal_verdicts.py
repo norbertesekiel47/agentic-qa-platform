@@ -95,6 +95,7 @@ def test_a_healed_step_is_drift_consistent_and_proposes_its_patch(
         "record": "heals/1",
         "bound": 'button "Show details"',
         "model_reported": {"confidence": 0.9, "rationale": "it moved"},
+        "screenshot": {"path": "heals/1/screenshot.png", "withheld": None},
     }
     # Its summary's checks read another target, so they just pass.
     assert run.verdict("assertion", "a1")["verdict"] == "pass"
@@ -298,6 +299,7 @@ def test_a_heal_that_found_nothing_is_inconclusive_and_cites_what_it_left(
         "record": "heals/1",
         "bound": None,
         "model_reported": None,
+        "screenshot": {"path": "heals/1/screenshot.png", "withheld": None},
     }
     assert paths_cited(run) == []
 
