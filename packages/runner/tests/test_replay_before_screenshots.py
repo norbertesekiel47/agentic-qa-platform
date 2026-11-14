@@ -99,12 +99,28 @@ def test_a_step_that_fails_saves_its_before_screenshot_beside_its_screenshot(
     # The page's own execCommand throws, so the fill's dispatch fails.
     spec = a_spec(tmp_path, ProjectConfig(), start_url="/page/throws")
 
-    done = run(app, tmp_path, compiled([FILL], targets=FORM_TARGETS), spec=spec)
+    script = compiled([FILL], targets=FORM_TARGETS)
+
+    done = run(app, tmp_path, script, spec=spec)
 
     assert [step.outcome for step in done.result.steps] == ["completed", "failed"]
     assert done.result.shots == {1: Shot(AFTER)}
     assert done.result.before_shots == {1: Shot(BEFORE)}
     assert pngs(done.record.path) == [BEFORE, AFTER]
+    result = done.result
+    end = ReplayEnd(
+        done.record,
+        spec,
+        for_spec(script, spec),
+        result,
+        result.egress_blocks,
+        result.infrastructure_events,
+    )
+    verdicts = cast("list[dict[str, Any]]", present(end)["verdicts"])
+    assert [verdict["evidence"]["before_screenshot"] for verdict in verdicts] == [
+        None,
+        {"path": BEFORE, "withheld": None},
+    ]
 
 
 def test_a_step_that_fails_before_its_dispatch_saves_its_before_screenshot(

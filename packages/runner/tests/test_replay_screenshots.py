@@ -116,12 +116,13 @@ def test_a_step_that_fails_saves_its_screenshot_and_no_other_step_does(
     )
     verdicts = cast("list[dict[str, object]]", present(end)["verdicts"])
     assert [(verdict.get("step"), verdict["evidence"]) for verdict in verdicts] == [
-        (0, {"path": "evidence/0", "screenshot": None}),
+        (0, {"path": "evidence/0", "screenshot": None, "before_screenshot": None}),
         (
             1,
             {
                 "path": "evidence/1",
                 "screenshot": {"path": "evidence/1/screenshot.png", "withheld": None},
+                "before_screenshot": None,
             },
         ),
     ]
