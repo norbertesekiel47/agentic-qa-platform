@@ -196,7 +196,10 @@ class Withheld:
 type Screenshot = Image | Withheld | Gap | None
 """What a verdict or its heal cites of a screenshot (DATA_MODEL §7; #313): its
 image; why it was withheld; `Gap.ABSENT` for any other citation, which shows as
-"not recorded"; or None when it cites none."""
+"not recorded"; or None when it cites none. A field holding one is
+`screenshot_ref`: ADR-0035's guard (`tests/test_image_exits.py`) reads any
+attribute spelled `screenshot` in the packages' source as an image capture, and
+this only cites a file the run saved."""
 
 
 def _screenshot(
@@ -271,7 +274,7 @@ class Heal:
     bound: str | None
     confidence: float | None
     rationale: str | None
-    screenshot: Screenshot
+    screenshot_ref: Screenshot
 
 
 @dataclass(frozen=True)
@@ -291,7 +294,7 @@ class Verdict:
     locator_index: int | None
     evidence_path: str | None
     evidence: Cited
-    screenshot: Screenshot
+    screenshot_ref: Screenshot
     finding: Finding | None
     heal: Heal | None
 

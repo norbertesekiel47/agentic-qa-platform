@@ -658,8 +658,8 @@ def _screenshot_block(n: int, step: _Step) -> str:
     the page as the step left it, with a swipe between them when both are
     images."""
     verdict = step.verdict
-    first_look = None if verdict.heal is None else verdict.heal.screenshot
-    left_it = verdict.screenshot
+    first_look = None if verdict.heal is None else verdict.heal.screenshot_ref
+    left_it = verdict.screenshot_ref
     if first_look is None and left_it is None:
         return f"<p>{_gap('Not recorded for this step.')}</p>"
     about = f"shot-step-{n}"
