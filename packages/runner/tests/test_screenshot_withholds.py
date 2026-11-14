@@ -159,6 +159,37 @@ def test_a_page_that_holds_its_snapshot_back_past_the_bound_withholds_it(
     )
 
 
+# The page goes busy for good while the capture holds its DevTools session,
+# as a page a failed step left can (#251): the bound cancels once, so nothing
+# on the way out may wait on the page.
+@pytest.mark.parametrize("filled", [False, True], ids=["live", "render"])
+def test_a_page_that_never_answers_again_withholds_it_within_the_bound(
+    sites: Sites, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filled: bool
+) -> None:
+    monkeypatch.setattr(screenshots, "CAPTURE_SECONDS", 0.5)
+
+    async def scenario() -> tuple[str, list[Path], int]:
+        async with browsing(sites, redactor=Redactor(bound(sites.app))) as session:
+            await serve_cases(session.page, sites.other)
+            record = RunRecord.create(tmp_path).redacting(session.redactor)
+            if filled:
+                await red_filled(session, sites)
+            else:
+                await session.navigate(f"{sites.app}/shot/plain")
+            await session.page.evaluate("setTimeout(() => { for (;;) {} }, 50)")
+            await asyncio.sleep(0.2)
+            # The test's own limit, which a capture that waits on the page
+            # past its bound runs into.
+            async with asyncio.timeout(10):
+                return await withheld(session, record)
+
+    assert asyncio.run(scenario()) == (
+        "the page's snapshot, its scrub or its render took over 0.5 s",
+        [],
+        0,
+    )
+
+
 def test_a_scrub_past_the_bound_withholds_it_and_holds_up_nothing_else(
     sites: Sites, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

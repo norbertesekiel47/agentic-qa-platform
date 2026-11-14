@@ -515,12 +515,14 @@ def _prepared(
 
 @asynccontextmanager
 async def _devtools(page: Page) -> AsyncIterator[CDPSession]:
-    """A DevTools session of `page`'s own, which the page can't see."""
+    """A DevTools session of `page`'s own, which the page can't see.
+    Detached only once its calls have answered: a busy page never answers
+    `detach` either, and the bound that cancelled a call cancels nothing
+    again. A session left behind by a call that failed ends with its page
+    (`document_origins.isolated_origin`, LAB_NOTES 2026-11-01)."""
     devtools = await page.context.new_cdp_session(page)
-    try:
-        yield devtools
-    finally:
-        await devtools.detach()
+    yield devtools
+    await devtools.detach()
 
 
 def _scrubbed(archive: str, redactor: Redactor) -> tuple[_Parts, str]:
