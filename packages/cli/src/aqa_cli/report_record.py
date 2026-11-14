@@ -5,7 +5,10 @@ defensively and type-checked before use. A file that is missing, linked,
 unreadable or malformed, or an entry in one that is, gives what it would show a
 fixed state (`Gap`), and never stops the report. Nothing here reads the spec, the
 config or a compiled file: what the run's own record doesn't hold is "not
-recorded"."""
+recorded". A screenshot (#313) is only checked: its path must be `screenshot.png`
+in the folder its own verdict or heal cites, `evidence/<seq>/` or
+`heals/<key>/`, and a regular file reached through no link. Its bytes are never
+read."""
 
 import json
 import math
@@ -175,6 +178,54 @@ def _heal_record(run: Path, path: object) -> Cited:
     )
 
 
+@dataclass(frozen=True)
+class Image:
+    """A screenshot the record holds: `screenshot.png` in the folder its verdict
+    or heal cites, a relative path to a regular file inside the run's directory."""
+
+    path: str
+
+
+@dataclass(frozen=True)
+class Withheld:
+    """A screenshot that was withheld, and why, in the record's words."""
+
+    reason: str
+
+
+type Screenshot = Image | Withheld | Gap | None
+"""What a verdict or its heal cites of a screenshot (DATA_MODEL §7; #313): its
+image; why it was withheld; `Gap.ABSENT` for any other citation, which shows as
+"not recorded"; or None when it cites none. A field holding one is
+`screenshot_ref`: ADR-0035's guard (`tests/test_image_exits.py`) reads any
+attribute spelled `screenshot` in the packages' source as an image capture, and
+this only cites a file the run saved."""
+
+
+def _screenshot(
+    run: Path, value: object, folder: object, shape: re.Pattern[str]
+) -> Screenshot:
+    """The screenshot `value` cites, which must be in `folder`, a folder of the
+    record `shape` matches."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        return Gap.ABSENT
+    path, withheld = value.get("path"), value.get("withheld")
+    if path is None and isinstance(withheld, str):
+        return Withheld(withheld)
+    if (
+        withheld is None
+        and isinstance(path, str)
+        and isinstance(folder, str)
+        and shape.fullmatch(folder)
+        and path == f"{folder}/screenshot.png"
+        and _regular(run, path)
+    ):
+        return Image(path)
+    return Gap.ABSENT
+
+
 def _text(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
@@ -214,7 +265,8 @@ class Finding:
 class Heal:
     """What a verdict in a run that heals cites of its heal: the repair, its file
     if the record holds one, the heal's own files, what it bound, the page's ARIA
-    role and name, and what the model reported of that binding."""
+    role and name, what the model reported of that binding, and the screenshot
+    of its first look."""
 
     repair_path: str | None
     repair: Cited
@@ -222,6 +274,7 @@ class Heal:
     bound: str | None
     confidence: float | None
     rationale: str | None
+    screenshot_ref: Screenshot
 
 
 @dataclass(frozen=True)
@@ -229,8 +282,8 @@ class Verdict:
     """One verdict of `replay.json`: what it is on, `kind` None for an entry that
     isn't one; the verdict, None when it isn't one of `VERDICTS`; why; each
     locator's miss; the locator that found its target; the evidence folder it
-    cites, if it is one of the record's, and the files a link may name in it; its
-    finding; and its heal."""
+    cites, if it is one of the record's, and the files a link may name in it; the
+    screenshot of the page as the step left it; its finding; and its heal."""
 
     kind: str | None
     name: str | None
@@ -241,12 +294,13 @@ class Verdict:
     locator_index: int | None
     evidence_path: str | None
     evidence: Cited
+    screenshot_ref: Screenshot
     finding: Finding | None
     heal: Heal | None
 
 
 _UNREADABLE: Final = Verdict(
-    None, None, None, None, None, (), None, None, None, None, None
+    None, None, None, None, None, (), None, None, None, None, None, None
 )
 
 
@@ -271,14 +325,15 @@ def _heal(run: Path, value: object) -> Heal | None:
     reported = value.get("model_reported")
     if not isinstance(reported, dict):
         reported = {}
-    path = value.get("repair")
+    path, record = value.get("repair"), value.get("record")
     return Heal(
         path if isinstance(path, str) and _REPAIR.fullmatch(path) else None,
         _repair(run, path),
-        _heal_record(run, value.get("record")),
+        _heal_record(run, record),
         _text(value.get("bound")),
         _number(reported.get("confidence")),
         _text(reported.get("rationale")),
+        _screenshot(run, value.get("screenshot"), record, _HEAL),
     )
 
 
@@ -291,6 +346,7 @@ def _verdict(run: Path, entry: object) -> Verdict:
     given = entry.get("verdict")
     evidence = entry.get("evidence")
     path = evidence.get("path") if isinstance(evidence, dict) else evidence
+    shot = evidence.get("screenshot") if isinstance(evidence, dict) else None
     cited = _evidence(run, path)
     return Verdict(
         kind,
@@ -302,6 +358,7 @@ def _verdict(run: Path, entry: object) -> Verdict:
         _integer(entry.get("locator_index")),
         path if isinstance(path, str) and cited else None,
         cited,
+        _screenshot(run, shot, path, _EVIDENCE),
         _finding(entry.get("finding")),
         _heal(run, entry.get("heal")),
     )

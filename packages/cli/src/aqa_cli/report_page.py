@@ -1,15 +1,20 @@
-"""The run viewer `aqa report` writes (UX_SPEC §3.5 and §6; API.md §7; #249): one
-HTML document holding the run's header, its step timeline, four tabs of the
-selected step's evidence and the verdict panel, with no Screenshot tab yet.
+"""The run viewer `aqa report` writes (UX_SPEC §3.5 and §6; API.md §7; #249, #313):
+one HTML document holding the run's header, its step timeline, five tabs of the
+selected step's evidence, the Screenshot tab first, and the verdict panel.
 
 Every text from the record, the page, the model or the spec is escaped as the
 CLI's output is (`common._visible`), then by `html.escape`, line by line where it
 spans lines, and is placed only in element content: never in the script, the
 style or an attribute. The only attribute values the record decides are the
-paths `report_record` validated, and integers. Page text and model text are
-shown inside elements that say whose words they are. The style and the script
-are fixed text, each allowed by its hash, and the page's CSP lets nothing else
-load, so the file works offline and a hostile record stays text."""
+paths `report_record` validated, a screenshot's `<img src>` among them, and
+integers; an image's alt text is fixed words and its step's seq. Page text and
+model text are shown inside elements that say whose words they are. The style
+and the script are fixed text, each allowed by its hash, and the page's CSP adds
+only `img-src 'self'`, for the record's own screenshots, so the file works
+offline and a hostile record stays text. On a page opened from `file:`, `'self'`
+matches any `file:` URL, so what keeps each image inside the record is the check
+`report_record` makes of its path as the page is written (ADR-0024's #313
+amendment)."""
 
 import base64
 import hashlib
@@ -27,10 +32,13 @@ from aqa_cli.report_record import (
     Cited,
     ConsoleEntry,
     Gap,
+    Image,
     Log,
     Record,
     Request,
+    Screenshot,
     Verdict,
+    Withheld,
     compiled_action,
     console_log,
     heal_diff,
@@ -130,6 +138,26 @@ a { color: var(--link); }
 .snapshot { max-height: 28rem; overflow: auto; }
 figure { margin: 0.5rem 0; }
 figcaption { font-size: 0.8125rem; margin-bottom: 0.25rem; }
+figure > img, .frame { display: block; max-width: 100%; border: 1px solid var(--line); border-radius: 4px; }
+figure > img { height: auto; }
+/* A swipe's two images share one cell, both its width; the second, the step's
+   own, is cut away left of the split, where the first shows. The swipe is as wide
+   as its images, which stay under 70% of the window's height, so its range stays
+   in view; its label and links wrap to that width rather than set it. */
+.swipe { width: fit-content; max-width: 100%; }
+.swipe label, .swipe .links { contain: inline-size; }
+.frame { display: grid; position: relative; overflow: hidden; --split: 50%; }
+.frame img { grid-area: 1 / 1; display: block; max-width: 100%; max-height: 70vh; }
+.frame img + img { clip-path: inset(0 0 0 var(--split)); }
+.frame::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: var(--split);
+  width: 2px; margin-left: -1px; background: var(--focus); pointer-events: none;
+}
+.ends { display: flex; justify-content: space-between; gap: 0.75rem; font-size: 0.8125rem; color: var(--muted); }
+.swipe label { display: block; margin-top: 0.5rem; }
+.swipe input { display: block; width: 100%; margin: 0.25rem 0 0; }
+/* Two links with no text around them: wrapped, they keep 24px apart (WCAG 2.5.8). */
+.swipe .links { display: flex; flex-wrap: wrap; row-gap: 0.25rem; }
 blockquote { margin: 0; padding: 0.25rem 0.75rem; border-left: 3px solid var(--line); }
 .entries { list-style: none; padding: 0; }
 .entries > li { padding: 0.375rem 0; border-bottom: 1px solid var(--line); }
@@ -146,8 +174,10 @@ blockquote { margin: 0; padding: 0.25rem 0.75rem; border-left: 3px solid var(--l
 """
 
 # The timeline is a listbox, its selection following focus, and the evidence a
-# WAI-ARIA tabs widget with automatic activation. It reads nothing but the page's
-# own roles and the fixed `data-step` integers.
+# WAI-ARIA tabs widget with automatic activation. A swipe's split follows its
+# value, set through the CSSOM, never a `style` attribute, and its
+# `aria-valuetext` says how much of each image shows. It reads nothing but the
+# page's own roles, the fixed `data-step` integers and each swipe's value.
 SCRIPT: Final = """
 "use strict";
 (() => {
@@ -208,8 +238,25 @@ SCRIPT: Final = """
         event.preventDefault();
         open(next);
         tabs[next].focus();
+        // focus() leaves a tab that the strip's scroll box half shows as it is.
+        tabs[next].scrollIntoView({ block: "nearest", inline: "nearest" });
       }
     });
+  });
+  document.querySelectorAll(".swipe").forEach((swipe) => {
+    const frame = swipe.querySelector(".frame");
+    const range = swipe.querySelector('input[type="range"]');
+    // The split, and what a screen reader says of it: how much of each shows.
+    const split = () => {
+      const shown = Number(range.value);
+      frame.style.setProperty("--split", `${shown}%`);
+      range.setAttribute(
+        "aria-valuetext",
+        `${shown}% heal's first look, ${100 - shown}% as the step left it`,
+      );
+    };
+    split();
+    range.addEventListener("input", split);
   });
 })();
 """
@@ -220,7 +267,7 @@ def _sha256(text: str) -> str:
 
 
 CSP: Final = (
-    "default-src 'none'; base-uri 'none'; form-action 'none'; "
+    "default-src 'none'; base-uri 'none'; form-action 'none'; img-src 'self'; "
     f"style-src 'sha256-{_sha256(STYLE)}'; script-src 'sha256-{_sha256(SCRIPT)}'"
 )
 
@@ -254,11 +301,18 @@ _PRIVATE: Final = (
     "commits, issues and chats."
 )
 _TABS: Final = (
+    ("screenshot", "Screenshot"),
     ("a11y", "Accessibility"),
     ("network", "Network"),
     ("console", "Console"),
     ("reasoning", "Agent reasoning"),
 )
+# The tab selected as the page opens: most steps, the ones that pass, have no
+# screenshot.
+_OPENED: Final = "a11y"
+# What each side of a step's screenshots shows, as its alt text says it.
+_FIRST_LOOK: Final = "the page at the heal's first look"
+_LEFT_IT: Final = "the page as the step left it"
 _UNCALIBRATED: Final = "model-reported, uncalibrated"
 
 
@@ -390,12 +444,17 @@ def _code_or_gap(value: str | Gap | None, none: str) -> str:
     return f"<code>{_e(value)}</code>"
 
 
+def _target(step: _Step) -> str:
+    """The target `step` acted on, and its meaning, as element content."""
+    if step.target is None:
+        return _gap("none")
+    meaning = "" if step.meaning is None else f", {_e(step.meaning)}"
+    return f"<code>{_e(step.target)}</code>{meaning}"
+
+
 def _entry(index: int, step: _Step, selected: bool) -> str:
     verdict = step.verdict
-    target = _gap("none")
-    if step.target is not None:
-        meaning = "" if step.meaning is None else f", {_e(step.meaning)}"
-        target = f"<code>{_e(step.target)}</code>{meaning}"
+    target = _target(step)
     why = _why(verdict)
     return (
         f'<div class="step" role="option" id="step-{index}" '
@@ -547,6 +606,77 @@ def _reasoning_block(record: Record, verdict: Verdict) -> str:
     return f"<p>{bound}</p><p>Confidence: {_confidence(heal.confidence)}</p>{rationale}"
 
 
+def _image(seq: int | None, image: Image, said: str, about: str) -> str:
+    """`image`, at the path `report_record` validated: its alt text is fixed
+    words and the step's seq, and the element `about` names describes the step
+    in the record's words."""
+    return (
+        f'<img src="{html.escape(image.path)}" alt="Step {seq}: {said}" '
+        f'aria-describedby="{about}">'
+    )
+
+
+def _side(seq: int | None, shot: Screenshot, said: str, about: str) -> str:
+    """One side of a step's screenshots, which shows `said`: its image and a
+    link to it, why it was withheld, or that it is not recorded; nothing when the
+    record cites none."""
+    if shot is None:
+        return ""
+    if isinstance(shot, Withheld):
+        shown = f"<p>Withheld: {_e(shot.reason)}.</p>"
+    elif isinstance(shot, Gap):
+        shown = f"<p>{_gap(shot)}</p>"
+    else:
+        shown = (
+            f"{_image(seq, shot, said, about)}"
+            f'<p class="links">{_links((shot.path,))}</p>'
+        )
+    return f"<figure><figcaption>{said.capitalize()}</figcaption>{shown}</figure>"
+
+
+def _swipe(
+    n: int, seq: int | None, first_look: Image, left_it: Image, about: str
+) -> str:
+    """The two screenshots of the timeline's entry `n` in one frame, the heal's
+    first look left of the split and the step's own right of it, the split at the
+    swipe's value, which the script sets; and a link to each."""
+    return (
+        '<figure class="swipe"><div class="ends"><span>Heal\'s first look</span> '
+        "<span>As the step left it</span></div>"
+        f'<div class="frame">{_image(seq, first_look, _FIRST_LOOK, about)}'
+        f"{_image(seq, left_it, _LEFT_IT, about)}</div>"
+        f'<label for="swipe-{n}">Swipe between the heal\'s first look and the page '
+        "as the step left it</label>"
+        f'<input type="range" id="swipe-{n}" min="0" max="100" step="1" value="50" '
+        'aria-valuetext="50% heal\'s first look, 50% as the step left it">'
+        f'<p class="links">{_links((first_look.path, left_it.path))}</p></figure>'
+    )
+
+
+def _screenshot_block(n: int, step: _Step) -> str:
+    """The screenshots of the timeline's entry `n`: the heal's first look, then
+    the page as the step left it, with a swipe between them when both are
+    images."""
+    verdict = step.verdict
+    first_look = None if verdict.heal is None else verdict.heal.screenshot_ref
+    left_it = verdict.screenshot_ref
+    if first_look is None and left_it is None:
+        return f"<p>{_gap('Not recorded for this step.')}</p>"
+    about = f"shot-step-{n}"
+    described = (
+        f'<p class="muted" id="{about}">Action: '
+        f"{_code_or_gap(step.action, 'not recorded')} &middot; Target: "
+        f"{_target(step)}</p>"
+    )
+    if isinstance(first_look, Image) and isinstance(left_it, Image):
+        return described + _swipe(n, verdict.seq, first_look, left_it, about)
+    return (
+        described
+        + _side(verdict.seq, first_look, _FIRST_LOOK, about)
+        + _side(verdict.seq, left_it, _LEFT_IT, about)
+    )
+
+
 def _tabs(record: Record, steps: Sequence[_Step], chosen: int) -> str:
     if not steps:
         return ""
@@ -556,22 +686,29 @@ def _tabs(record: Record, steps: Sequence[_Step], chosen: int) -> str:
         ("console", _console_block),
         ("reasoning", _reasoning_block),
     )
+    # Each panel's block for each step, in `_TABS`' order.
+    shown = (
+        ("screenshot", [_screenshot_block(n, step) for n, step in enumerate(steps)]),
+        *(
+            (key, [block(record, step.verdict) for step in steps])
+            for key, block in blocks
+        ),
+    )
     tabs = "".join(
         f'<button type="button" role="tab" id="tab-{key}" aria-controls="panel-{key}" '
-        f'aria-selected="{"true" if i == 0 else "false"}" tabindex="{0 if i == 0 else -1}">'
-        f"{label}</button>"
-        for i, (key, label) in enumerate(_TABS)
+        f'aria-selected="{"true" if key == _OPENED else "false"}" '
+        f'tabindex="{0 if key == _OPENED else -1}">{label}</button>'
+        for key, label in _TABS
     )
     panels = "".join(
         f'<div role="tabpanel" id="panel-{key}" aria-labelledby="tab-{key}" '
-        f'tabindex="0"{"" if i == 0 else " hidden"}>'
+        f'tabindex="0"{"" if key == _OPENED else " hidden"}>'
         + "".join(
-            f'<div data-step="{n}"{"" if n == chosen else " hidden"}>'
-            f"{block(record, step.verdict)}</div>"
-            for n, step in enumerate(steps)
+            f'<div data-step="{n}"{"" if n == chosen else " hidden"}>{each}</div>'
+            for n, each in enumerate(contents)
         )
         + "</div>"
-        for i, (key, block) in enumerate(blocks)
+        for key, contents in shown
     )
     # Which step the panels show, one label per step, shown as the script
     # shows that step's blocks; a live region, so the change is announced.
