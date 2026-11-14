@@ -77,6 +77,9 @@ def rebinding(
 
 SHOW = rebinding("button", "Show details", confidence=0.9, rationale="it moved")
 NO_TOOL = answer(AIMessage(content="nothing on this page fits"))
+# Vision fallback's reply naming no point (#252): a tree turn that found no
+# element is followed by one vision turn, and this one ends the heal as before.
+NO_POINT = NO_TOOL
 FOUND_NONE = "the healer found no element for the meaning"
 
 

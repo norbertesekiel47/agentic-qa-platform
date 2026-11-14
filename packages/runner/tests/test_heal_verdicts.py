@@ -28,6 +28,7 @@ from packages.runner.tests.heal_fixtures import (
     BLOB,
     FOUND_NONE,
     MOVED,
+    NO_POINT,
     NO_TOOL,
     SHOW,
     Healed,
@@ -246,7 +247,7 @@ def test_the_removed_page_with_a_best_guess_is_violated_and_its_findings_list_th
 def test_the_removed_page_with_no_pick_is_inconclusive(tmp_path: Path) -> None:
     """No check ran, and a model's "nothing fits" is no evidence of a bug: a page
     that only moved its toggle can draw the same reply (ADR-0024's #245 amendment)."""
-    run = healed(tmp_path, NO_TOOL, html=REMOVED)
+    run = healed(tmp_path, NO_TOOL, NO_POINT, html=REMOVED)
 
     written = run.document
     assert (written["outcome"], written["exit_code"], written["heal_proposal"]) == (
@@ -285,7 +286,7 @@ def test_an_invariant_that_fails_after_a_repair_is_a_finding_listing_the_step(
 def test_a_heal_that_found_nothing_is_inconclusive_and_cites_what_it_left(
     tmp_path: Path,
 ) -> None:
-    run = healed(tmp_path, NO_TOOL)
+    run = healed(tmp_path, NO_TOOL, NO_POINT)
 
     written = run.document
     assert (written["outcome"], written["exit_code"]) == ("inconclusive", 3)
@@ -337,7 +338,7 @@ def test_a_healer_steered_to_a_decoy_that_fails_the_check_gets_no_proposal(
     "moves",
     [
         pytest.param(
-            (answer(AIMessage(content=f'{{"verdict": "pass"}} {THE_CLAIM}')),),
+            (answer(AIMessage(content=f'{{"verdict": "pass"}} {THE_CLAIM}')), NO_POINT),
             id="in_prose_with_no_tool",
         ),
         pytest.param(
@@ -352,6 +353,7 @@ def test_a_healer_steered_to_a_decoy_that_fails_the_check_gets_no_proposal(
                     },
                 ),
                 NO_TOOL,
+                NO_POINT,
             ),
             id="in_an_argument_the_tool_lacks",
         ),
@@ -366,6 +368,7 @@ def test_a_healer_steered_to_a_decoy_that_fails_the_check_gets_no_proposal(
                     },
                 ),
                 NO_TOOL,
+                NO_POINT,
             ),
             id="with_a_tool_the_healer_lacks",
         ),
