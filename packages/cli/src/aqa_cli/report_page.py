@@ -141,9 +141,13 @@ figcaption { font-size: 0.8125rem; margin-bottom: 0.25rem; }
 figure > img, .frame { display: block; max-width: 100%; border: 1px solid var(--line); border-radius: 4px; }
 figure > img { height: auto; }
 /* A swipe's two images share one cell, both its width; the second, the step's
-   own, is cut away left of the split, where the first shows. */
+   own, is cut away left of the split, where the first shows. The swipe is as wide
+   as its images, which stay under 70% of the window's height, so its range stays
+   in view; its label and links wrap to that width rather than set it. */
+.swipe { width: fit-content; max-width: 100%; }
+.swipe label, .swipe .links { contain: inline-size; }
 .frame { display: grid; position: relative; overflow: hidden; --split: 50%; }
-.frame img { grid-area: 1 / 1; display: block; width: 100%; height: auto; }
+.frame img { grid-area: 1 / 1; display: block; max-width: 100%; max-height: 70vh; }
 .frame img + img { clip-path: inset(0 0 0 var(--split)); }
 .frame::after {
   content: ""; position: absolute; top: 0; bottom: 0; left: var(--split);

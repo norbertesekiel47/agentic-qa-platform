@@ -445,6 +445,25 @@ async def boxes(viewer: Page) -> dict[str, Any]:
                     const panel = e.closest('[role="tabpanel"]').getBoundingClientRect();
                     return box.left >= panel.left && box.right <= panel.right;
                 }),
+            // The shown swipe's parts, each as [left, top, right, bottom] to the
+            // pixel: its end labels, its frame, its two images and its range.
+            swipe: (() => {
+                const swipe = document.querySelector(
+                    '[role="tabpanel"]:not([hidden]) [data-step]:not([hidden]) .swipe');
+                if (swipe === null) {
+                    return null;
+                }
+                const edges = (e) => {
+                    const box = e.getBoundingClientRect();
+                    return [box.left, box.top, box.right, box.bottom].map(Math.round);
+                };
+                return {
+                    ends: edges(swipe.querySelector(".ends")),
+                    frame: edges(swipe.querySelector(".frame")),
+                    images: [...swipe.querySelectorAll("img")].map(edges),
+                    range: edges(swipe.querySelector("input")),
+                };
+            })(),
             // Whether the focused tab lies inside the tab strip's scroll box, to
             // the pixel, which a scrolled edge can miss by a fraction.
             seen: (() => {
@@ -496,6 +515,17 @@ def test_the_timeline_stacks_at_390_and_runs_across_at_1440(
         assert [len(set(each["tabs"])) for each in shown] == [1] * len(TABS)
         # The Screenshot tab's frame, its two images and its swipe.
         assert shown[0]["inside"] == [True] * 4
+        parts = shown[0]["swipe"]
+        left, top, right, bottom = parts["frame"]
+        # Both images fill the frame inside its 1px border, so the split's value
+        # is the share of each image shown; the end labels and the range span it.
+        assert parts["images"] == [[left + 1, top + 1, right - 1, bottom - 1]] * 2
+        assert (parts["ends"][0], parts["ends"][2]) == (left, right)
+        assert (parts["range"][0], parts["range"][2]) == (left, right)
+        # No taller than 70% of the window, so the end labels, the frame and the
+        # range fit on one screen.
+        assert bottom - top <= 0.7 * SIZES[width] + 2
+        assert parts["range"][3] - parts["ends"][1] <= SIZES[width]
     assert focused == [True] * 4
 
     narrow, wide = laid[390]["steps"], laid[1440]["steps"]
