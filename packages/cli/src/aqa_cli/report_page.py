@@ -171,8 +171,9 @@ blockquote { margin: 0; padding: 0.25rem 0.75rem; border-left: 3px solid var(--l
 
 # The timeline is a listbox, its selection following focus, and the evidence a
 # WAI-ARIA tabs widget with automatic activation. A swipe's split follows its
-# value, set through the CSSOM, never a `style` attribute. It reads nothing but
-# the page's own roles, the fixed `data-step` integers and each swipe's value.
+# value, set through the CSSOM, never a `style` attribute, and its
+# `aria-valuetext` says how much of each image shows. It reads nothing but the
+# page's own roles, the fixed `data-step` integers and each swipe's value.
 SCRIPT: Final = """
 "use strict";
 (() => {
@@ -241,7 +242,15 @@ SCRIPT: Final = """
   document.querySelectorAll(".swipe").forEach((swipe) => {
     const frame = swipe.querySelector(".frame");
     const range = swipe.querySelector('input[type="range"]');
-    const split = () => frame.style.setProperty("--split", `${range.value}%`);
+    // The split, and what a screen reader says of it: how much of each shows.
+    const split = () => {
+      const shown = Number(range.value);
+      frame.style.setProperty("--split", `${shown}%`);
+      range.setAttribute(
+        "aria-valuetext",
+        `${shown}% heal's first look, ${100 - shown}% as the step left it`,
+      );
+    };
     split();
     range.addEventListener("input", split);
   });
@@ -634,7 +643,8 @@ def _swipe(
         f"{_image(seq, left_it, _LEFT_IT, about)}</div>"
         f'<label for="swipe-{n}">Swipe between the heal\'s first look and the page '
         "as the step left it</label>"
-        f'<input type="range" id="swipe-{n}" min="0" max="100" step="1" value="50">'
+        f'<input type="range" id="swipe-{n}" min="0" max="100" step="1" value="50" '
+        'aria-valuetext="50% heal\'s first look, 50% as the step left it">'
         f'<p class="links">{_links((first_look.path, left_it.path))}</p></figure>'
     )
 
