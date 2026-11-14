@@ -12,7 +12,7 @@ for at the seam."""
 import json
 import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +56,13 @@ GUARDED = compiled(
             "contract": {"region": SUBJECT[0], "part": SUBJECT[1], "leaf": False},
         }
     },
+    assertions=BUTTON.model_dump(mode="json", exclude_none=True)["assertions"],
+)
+# GUARDED with a click of the toggle first: a decoy the heal bound would be
+# clicked, and its POST would reach the app.
+CLICKING = compiled(
+    [{"seq": 1, "action": "click", "target": "toggle", "side_effect": False}],
+    targets=GUARDED.model_dump(mode="json", exclude_none=True)["targets"],
     assertions=BUTTON.model_dump(mode="json", exclude_none=True)["assertions"],
 )
 # What the app serves in each run: the order page, and nothing a page links or
@@ -341,7 +348,8 @@ def test_a_call_a_page_asks_for_that_the_tool_schema_refuses_runs_nothing(
             id="the_link_in_place_of_the_toggle",
         ),
         pytest.param(
-            DECOY,
+            # A step's drift, whose click the decoy would get if it were bound.
+            replace(DECOY, script=CLICKING, key="1"),
             ("button", "Show the details"),
             OUTSIDE,
             ("POST", "/write/confirm"),
