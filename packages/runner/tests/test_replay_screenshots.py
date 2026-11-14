@@ -26,6 +26,7 @@ from aqa_runner.locator_generation import register_identity_engine
 from aqa_runner.model_router import ModelRouter
 from aqa_runner.model_turns import Spending
 from aqa_runner.redaction import Redactor
+from aqa_runner.replay_result import ReplayEnd, present
 from aqa_runner.replays import Opened, Replaying, replay_run
 from aqa_runner.run_record import RunRecord
 from aqa_runner.screenshots import Screenshot
@@ -97,12 +98,33 @@ def test_a_step_that_fails_saves_its_screenshot_and_no_other_step_does(
     asking_screenshots(monkeypatch)
     # The page's own execCommand throws, so the fill's dispatch fails.
     spec = a_spec(tmp_path, ProjectConfig(), start_url="/page/throws")
+    script = compiled([FILL], targets=FORM_TARGETS)
 
-    done = run(app, tmp_path, compiled([FILL], targets=FORM_TARGETS), spec=spec)
+    done = run(app, tmp_path, script, spec=spec)
 
     assert [step.outcome for step in done.result.steps] == ["completed", "failed"]
     assert done.result.shots == {1: Shot("evidence/1/screenshot.png")}
     assert pngs(done.record.path) == ["evidence/1/screenshot.png"]
+    result = done.result
+    end = ReplayEnd(
+        done.record,
+        spec,
+        for_spec(script, spec),
+        result,
+        result.egress_blocks,
+        result.infrastructure_events,
+    )
+    verdicts = cast("list[dict[str, object]]", present(end)["verdicts"])
+    assert [(verdict.get("step"), verdict["evidence"]) for verdict in verdicts] == [
+        (0, {"path": "evidence/0", "screenshot": None}),
+        (
+            1,
+            {
+                "path": "evidence/1",
+                "screenshot": {"path": "evidence/1/screenshot.png", "withheld": None},
+            },
+        ),
+    ]
 
 
 def test_a_start_navigation_that_fails_saves_its_screenshot(
