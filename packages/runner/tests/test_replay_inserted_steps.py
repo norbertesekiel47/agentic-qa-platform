@@ -225,9 +225,11 @@ def replayed(
     *,
     html: str,
     script: CompiledScript = WITH_CONTACT,
+    screenshots: bool = False,
 ) -> Inserting:
     """`script` replayed with every locator on `html`, for the order spec, with
-    a repair that offers what `offer` gives for each drift."""
+    a repair that offers what `offer` gives for each drift; with `screenshots`,
+    as `strict_replay` asks for them."""
     path = order_spec(tmp_path / "qa", SHIPPING)
     config = load_config(path.parent / "config.yaml")
     spec = load_spec(path, config)
@@ -252,7 +254,12 @@ def replayed(
             # No replay test may hang the suite.
             async with asyncio.timeout(60):
                 return await replay_run(
-                    committed, replaying, opening, every_locator=True, repair=repair
+                    committed,
+                    replaying,
+                    opening,
+                    every_locator=True,
+                    repair=repair,
+                    screenshots=screenshots,
                 )
 
         result = asyncio.run(scenario())

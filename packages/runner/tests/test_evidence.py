@@ -40,6 +40,7 @@ from packages.runner.tests.executor_fixtures import (
     App,
     Run,
     a_spec,
+    asking_screenshots,
     by_role,
     compiled,
     run,
@@ -453,7 +454,11 @@ def hostile(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Hostile]:
         patch.setitem(PAGES, "evidence-hostile", HOSTILE)
         patch.setitem(PAGES, "evidence-response", "<p>fake-response-body-canary</p>")
         spec = secret_spec(tmp_path, start_url="/page/evidence-hostile")
-        done = run(app, tmp_path, compiled(SIGNING_IN, targets=TARGETS), spec=spec)
+        # Only this replay asks, as `strict_replay`'s do: the fixture's other
+        # patches last as long as the module.
+        with pytest.MonkeyPatch.context() as asking:
+            asking_screenshots(asking)
+            done = run(app, tmp_path, compiled(SIGNING_IN, targets=TARGETS), spec=spec)
         yield Hostile(done, app, saved(done.record.path))
 
 
@@ -468,6 +473,7 @@ def test_the_run_record_holds_only_the_steps_and_each_steps_evidence(
         [
             "steps.jsonl",
             *(f"evidence/{seq}/{name}" for seq in range(4) for name in FILES),
+            "evidence/3/screenshot.png",
         ]
     )
     assert logs(files, "evidence/3") == [[], []]

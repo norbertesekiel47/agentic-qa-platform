@@ -10,12 +10,14 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from functools import partial
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+import pytest
 from aqa_core.compiled import CompiledScript
 from aqa_core.config import ProjectConfig
 from aqa_core.project import contracts_fingerprint, load_spec
@@ -655,6 +657,12 @@ def run(
                 )
 
     return Run(asyncio.run(scenario()), record)
+
+
+def asking_screenshots(patch: pytest.MonkeyPatch) -> None:
+    """Have `run`'s replays ask for screenshots in their evidence, as
+    `strict_replay`'s do (#251), until `patch` is undone."""
+    patch.setattr(f"{__name__}.RunSetup", partial(RunSetup, screenshots=True))
 
 
 def by_role(role: str, name: str) -> dict[str, Any]:
