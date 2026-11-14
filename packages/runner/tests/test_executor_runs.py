@@ -22,6 +22,7 @@ from aqa_core.compiled import CompiledScript
 from aqa_core.config import Budgets, ProjectConfig, SubjectContract
 from aqa_core.project import (
     SpecError,
+    contract_problems,
     contracts_fingerprint,
     load_config,
     parse_compiled,
@@ -455,6 +456,16 @@ def refused_before_browser(
     return raised.value.problems
 
 
+# A listed expectation's one check, of its target's contrast.
+CONTRAST_SHOWN = {
+    "id": "a1",
+    "expect_index": 0,
+    "check": "contrast_min",
+    "target": "shown",
+    "min_ratio": 4.5,
+}
+
+
 @pytest.mark.parametrize(
     "assertion",
     [
@@ -474,6 +485,7 @@ def refused_before_browser(
             "min_size_px": [1, 1],
             "in_viewport": True,
         },
+        CONTRAST_SHOWN,
     ],
 )
 def test_replay_refuses_a_listed_expectations_target_without_its_contract_before_the_browser(
@@ -495,6 +507,26 @@ def test_replay_refuses_a_listed_expectations_target_without_its_contract_before
         tmp_path, stamped(script, SUBJECT_CONFIG), SUBJECT_CONFIG
     )
     assert problems == ("targets.shown: lacks subject contract for replay expect 0",)
+
+
+def test_a_listed_expectation_checked_only_by_contrast_min_takes_its_targets_contract() -> (
+    None
+):
+    script = compiled(
+        [],
+        targets={
+            "shown": {
+                "semantic": "the form",
+                "locators": [
+                    {**by_role("button", "Save"), "scope": {"css": "div.banner"}}
+                ],
+                "contract": {"region": "div.banner", "part": "a.author"},
+            }
+        },
+        assertions=[CONTRAST_SHOWN],
+    )
+
+    assert contract_problems(stamped(script, SUBJECT_CONFIG), SUBJECT_CONFIG) == []
 
 
 def test_replay_refuses_other_subject_contracts_before_unsupported_steps(

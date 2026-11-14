@@ -69,6 +69,18 @@ PAGES = SHOPS | {
             if (state === "short") target.style.height = "23px";
             if (state === "missing") target.remove();
         </script>""",
+    # A notice whose block gives it its background, at 4.54 to 1; fainter,
+    # under a gradient, or gone, by its state.
+    "contrast": """<div id="block" style="background:#fff">
+        <p id="contrast" style="color:#767676">Saved</p></div>
+        <script>
+            const state = new URLSearchParams(location.search).get("state");
+            const target = document.querySelector("#contrast");
+            const block = document.querySelector("#block");
+            if (state === "faint") target.style.color = "#777777";
+            if (state === "gradient") block.style.backgroundImage = "linear-gradient(#fff, #eee)";
+            if (state === "missing") target.remove();
+        </script>""",
     "visual-frame": '<iframe src="/page/form"></iframe>',
     "visual-foreign-frame": '<iframe src="data:text/html,<button>Save</button>"></iframe>',
     "probe-cookies": """<script>
