@@ -11,6 +11,7 @@ import os
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Protocol
 
 import pytest
@@ -20,6 +21,8 @@ from aqa_runner.anthropic_client import AnthropicClient
 from langchain_core.messages import HumanMessage
 from langsmith.utils import tracing_is_enabled
 from vcr.errors import CannotOverwriteExistingCassetteException
+
+from packages.runner.tests.conftest import prompt_hash_matches
 
 CASSETTES = Path(__file__).parent / "cassettes"
 Cassette = Callable[..., AbstractContextManager[Any]]
@@ -360,3 +363,34 @@ def test_the_cassette_fixture_drops_the_tracing_a_run_inherits() -> None:
     assert "LANGSMITH_TRACING" not in os.environ
     assert "LANGCHAIN_HANDLER" not in os.environ
     assert not tracing_is_enabled()
+
+
+def with_image(data: str, *, text: str = "Is the badge green?") -> Any:
+    """A request whose one user message holds `text` and a PNG of `data`, in
+    the shape the matcher is handed (a VCR request's `body`)."""
+    content = [
+        {"type": "text", "text": text},
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": data},
+        },
+    ]
+    body = {"messages": [{"role": "user", "content": content}], "model": "m"}
+    return SimpleNamespace(body=json.dumps(body).encode())
+
+
+def test_requests_differing_only_in_an_images_data_have_one_prompt() -> None:
+    # A PNG's bytes vary by host and Chromium build, so a test that sends one
+    # checks the image itself (TESTING §4).
+    assert prompt_hash_matches(with_image("aGVsbG8="), with_image("d29ybGQ="))
+
+
+def test_requests_differing_in_a_text_block_or_an_images_type_dont() -> None:
+    assert not prompt_hash_matches(
+        with_image("aGVsbG8=", text="one"), with_image("aGVsbG8=", text="two")
+    )
+    jpeg = json.loads(with_image("aGVsbG8=").body)
+    jpeg["messages"][0]["content"][1]["source"]["media_type"] = "image/jpeg"
+    assert not prompt_hash_matches(
+        with_image("aGVsbG8="), SimpleNamespace(body=json.dumps(jpeg).encode())
+    )
