@@ -135,6 +135,15 @@ class Budgets(StrictModel):
     heal_model_usd: PositiveNumber = 0.30
 
 
+class Heal(StrictModel):
+    """How `aqa run` heals a drift: with vision fallback, one screenshot sent to
+    the `vision_fallback` role once a tree turn finds no element, unless the
+    project turns it off, which leaves the heal tree-only (ADR-0002's #252
+    amendment)."""
+
+    vision_fallback: StrictBool = True
+
+
 class SubjectContract(StrictModel):
     """A reviewed subject, keyed by spec and expectation (ADR-0025)."""
 
@@ -160,6 +169,7 @@ class ProjectConfig(StrictModel):
     secrets: dict[SecretName, SecretBinding] = Field(default_factory=dict)
     models: dict[NonEmpty, ModelOverride] = Field(default_factory=dict)
     budgets: Budgets = Budgets()
+    heal: Heal = Heal()
 
     subjects: DistinctListOf[SubjectContract] = ()
 

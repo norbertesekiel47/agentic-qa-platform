@@ -56,5 +56,12 @@ def _repair(run_of: StrictRun, spending: Spending) -> Healing:
     """The healer of one run. Building its router makes no model client: one
     comes only when a drift needs a call."""
     router = ModelRouter.from_config(run_of.config, AnthropicClient)
-    budgets = run_of.config.budgets
-    return Healing(router, spending, budgets.heal_turns, budgets.resolve_seconds)
+    config = run_of.config
+    budgets = config.budgets
+    return Healing(
+        router,
+        spending,
+        budgets.heal_turns,
+        budgets.resolve_seconds,
+        config.heal.vision_fallback,
+    )

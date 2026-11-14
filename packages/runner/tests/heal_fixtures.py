@@ -162,6 +162,7 @@ def healed(
             spending,
             loaded.budgets.heal_turns,
             loaded.budgets.resolve_seconds,
+            loaded.heal.vision_fallback,
         )
 
         async def repair(drift: Drift) -> Offer:
@@ -280,7 +281,13 @@ async def heal_recorded(
 
     def heal(spending: Spending) -> Healing:
         budgets = config.budgets
-        return Healing(router, spending, budgets.heal_turns, budgets.resolve_seconds)
+        return Healing(
+            router,
+            spending,
+            budgets.heal_turns,
+            budgets.resolve_seconds,
+            config.heal.vision_fallback,
+        )
 
     with serving(case.html) as app:
         blob = blob_sha(published_text(script).encode())

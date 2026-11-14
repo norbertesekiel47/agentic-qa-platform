@@ -166,17 +166,19 @@ class _Call:
 
 @dataclass
 class Healing:
-    """One run's healer: its router, its spend, its turns and the bound on each
-    look at the page. `repair` is the `Repair` a replay hands each drift to.
-    Spend and turns are the run's, shared by all its drifts: a turn is one
-    `router.call`, a refusal's fallback included, and spend is checked after
-    each priced response, so a run can spend up to its budget and one call's
-    responses."""
+    """One run's healer: its router, its spend, its turns, the bound on each
+    look at the page, and whether a tree turn that finds no element falls back
+    to vision (the project's `heal.vision_fallback`). `repair` is the `Repair`
+    a replay hands each drift to. Spend and turns are the run's, shared by all
+    its drifts: a turn is one `router.call`, a refusal's fallback included, and
+    spend is checked after each priced response, so a run can spend up to its
+    budget and one call's responses."""
 
     router: ModelRouter
     spending: Spending
     turns: int
     seconds: float
+    vision: bool
     taken: int = 0
 
     async def repair(self, drift: Drift) -> Offer:
@@ -471,8 +473,11 @@ async def _looked_at(context: _Heal, number: int) -> Offer | _Stop:
     """Vision fallback's one turn, turn `number`, once a tree turn found no
     element (ADR-0002's #252 amendment): a screenshot of the page sent with
     the target to `vision_fallback`, whose point is read as the element
-    there. Whatever comes of it, the heal ends. Only defects and cancellation
-    raise."""
+    there. Whatever comes of it, the heal ends. A project that turned vision
+    fallback off ends it with the tree turn's words. Only defects and
+    cancellation raise."""
+    if not context.healing.vision:
+        return _Stop(_FOUND_NONE)
     shot = await _shot(context)
     if isinstance(shot, _Stop):
         return shot

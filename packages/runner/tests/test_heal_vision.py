@@ -32,6 +32,7 @@ from packages.runner.tests.drift_fixtures import TOGGLE, page
 from packages.runner.tests.executor_fixtures import compiled
 from packages.runner.tests.explore_graph_fixtures import calling
 from packages.runner.tests.heal_fixtures import (
+    BUDGETS,
     FOUND_NONE,
     NO_TOOL,
     Healed,
@@ -336,6 +337,28 @@ def test_a_vision_reply_that_names_no_point_found_none(tmp_path: Path) -> None:
     assert basis(run).said == FOUND_NONE
     assert vision_record(run)["call"] is None
     assert len(run.requests()) == 2
+
+
+def test_a_project_that_turns_vision_fallback_off_heals_from_the_tree_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    taken: list[object] = []
+
+    async def counted(session: BrowserSession) -> Screenshot:
+        taken.append(session)
+        return await take_screenshot(session)
+
+    monkeypatch.setattr(heal, "take_screenshot", counted)
+    config = f"{BUDGETS}heal: {{ vision_fallback: false }}\n"
+
+    run = healed(tmp_path, NO_TOOL, html=CANVAS, config=config)
+
+    assert basis(run).said == FOUND_NONE
+    assert [tools for tools, _ in run.client.offered] == [("rebind",)]
+    assert taken == []
+    assert [line["role"] for line in costs(run)] == ["healer"]
+    assert not (run.record / "heals/1/vision.json").exists()
+    assert run.document["outcome"] == "inconclusive"
 
 
 def test_no_vision_turn_is_left_once_the_turns_are_used(tmp_path: Path) -> None:

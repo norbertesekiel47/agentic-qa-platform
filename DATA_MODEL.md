@@ -513,6 +513,8 @@ budgets:                      # per run (ADR-0024); `aqa explore --budget NAME=V
   resolve_seconds: 10
   heal_turns: 6               # `aqa run`'s model calls and spend per spec, across its drifts (ADR-0024's #243 and #244 amendments; API.md §7)
   heal_model_usd: 0.30
+heal:                         # ADR-0002's #252 amendment
+  vision_fallback: true       # false: a heal is tree-only, and no screenshot goes to the `vision_fallback` model
 ```
 
 **Subject contracts (ADR-0025's #53 P7a amendment).** Optional `subjects` is a list of reviewed rows. Each row has `spec`, `expect`, `region`, required `part`, and optional `leaf` defaulting to `false`. `spec` is a non-empty spec ID; `expect` is a strict nonnegative integer indexing that spec's expectations from zero; `leaf` is a strict boolean. No `(spec, expect)` pair may occur twice, even with different contract fields. For example:
