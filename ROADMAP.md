@@ -64,7 +64,7 @@ Design: ADR-0024 (explore runs), ADR-0025 (compiled scripts), ADR-0026 (the brow
 
 ## M2 — Replay, heal & verdicts
 - `strict` replay built on M1's executor: verdicts and full deterministic visual checks (`visible_unoccluded`, `pixel_diff`, `contrast_min`); `verified` mode behind a flag.
-- A `visual: model` expectation: the spec marks it, `--mode verified` runs it, and strict replay refuses the spec (exit 5). #256 builds verified mode (ADR-0024's #255 amendment).
+- A `visual: model` expectation: the spec marks it, `--mode verified` runs it, and strict replay refuses the spec (exit 5). #256's slice 1 built `aqa replay --mode verified` of a hand-written `model_verify` check, with hand-written cassettes. Explore planning, compiling and confirming such a spec, and the live recording of the verified cassettes, are follow-ups (ADR-0024's #255 and #256 amendments).
 - A target resolves only when every locator finds the same element; otherwise its step drifts. So a fallback-locator match alone is never a plain pass, and no side-effect step acts through a fallback (ADR-0025's #25 amendment).
 - Heal subgraph: observe → classify (`drift_consistent` / `expectation_violated` / `inconclusive`) → binding/step patch or finding; binding-unresolved vs expectation-failed distinction for assertions; heal-patch validator (target locators and inserted replay-safe steps other than `navigate` only; `browser` and `coverage` immutable); redaction in heal and verified modes.
 - Hybrid perception: screenshot verification and vision fallback, with bound-field masking proven against a hostile page and OCR checks before any image is saved, reaches a model or leaves the machine (ADR-0033, #171).
