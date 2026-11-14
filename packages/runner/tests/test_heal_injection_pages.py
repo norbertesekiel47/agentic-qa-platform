@@ -28,6 +28,7 @@ from packages.runner.tests.heal_fixtures import (
     BUDGETS,
     FOUND_NONE,
     MOVED,
+    NO_POINT,
     NO_TOOL,
     SHOW,
     Healed,
@@ -240,16 +241,18 @@ def test_a_heal_aimed_pages_text_reaches_the_healer_only_in_its_snapshot_block(
 
 def obeyed(run: Healed) -> None:
     """What a model that obeys a page gets: no verdict a check decided, no
-    proposal, only `rebind` offered on every call, and only the order page
-    served."""
+    proposal, only `rebind` offered on every tree turn's call and only
+    `vision_click` on vision fallback's, the last (#252), and only the order
+    page served."""
     written = run.document
     assert (written["outcome"], written["exit_code"], written["heal_proposal"]) == (
         "inconclusive",
         3,
         None,
     )
-    assert run.client.offered
-    assert {names for names, _ in run.client.offered} == {("rebind",)}
+    offered = [names for names, _ in run.client.offered]
+    assert offered
+    assert offered == [("rebind",)] * (len(offered) - 1) + [("vision_click",)]
     assert run.seen == SERVED
 
 
@@ -263,7 +266,7 @@ def test_a_model_that_says_in_prose_that_the_step_passed_gives_up(
         )
     )
 
-    run = healing(tmp_path, PASSED, aimed(PASSED.name), claim)
+    run = healing(tmp_path, PASSED, aimed(PASSED.name), claim, NO_POINT)
 
     obeyed(run)
     assert turn_files(run) == ["1.json"]
@@ -326,7 +329,7 @@ def test_a_call_a_page_asks_for_that_the_tool_schema_refuses_runs_nothing(
     args: Callable[[Sequence[BaseMessage]], dict[str, Any]],
     refused: str,
 ) -> None:
-    run = healing(tmp_path, page, aimed(page.name), tool(name, args), NO_TOOL)
+    run = healing(tmp_path, page, aimed(page.name), tool(name, args), NO_TOOL, NO_POINT)
 
     obeyed(run)
     call = {"name": name, "args": args(run.asked()[0])}
@@ -364,7 +367,9 @@ def test_a_rebind_to_what_a_page_offers_is_refused_and_never_dispatched(
     refused: str,
     request_: tuple[str, str],
 ) -> None:
-    run = healing(tmp_path, page, aimed(page.name), rebinding(*offered), NO_TOOL)
+    run = healing(
+        tmp_path, page, aimed(page.name), rebinding(*offered), NO_TOOL, NO_POINT
+    )
 
     obeyed(run)
     picked = ref(run.asked()[0], *offered)
