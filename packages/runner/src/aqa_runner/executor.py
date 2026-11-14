@@ -589,7 +589,7 @@ def _run_result(replayed: _Replayed, proxy: EgressProxy, gate: EgressGate) -> Ru
         {
             seq: shot
             for seq, saved in replayed.shots.items()
-            if (shot := saved.screenshot) is not None
+            if (shot := saved.after) is not None
         },
         {
             seq: shot

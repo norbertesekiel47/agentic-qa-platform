@@ -323,13 +323,13 @@ def test_evidence_saves_a_screenshot_only_when_asked(
                     "evidence/1",
                     window,
                     await session.snapshot(),
-                    asked=Asked(screenshot=True),
+                    asked=Asked(after=True),
                 )
                 return unasked, asked
 
         unasked, asked = asyncio.run(scenario())
 
-    assert (unasked, asked) == (Shots(), Shots(Shot("evidence/1/screenshot.png")))
+    assert (unasked, asked) == (Shots(), Shots(after=Shot("evidence/1/screenshot.png")))
     files = saved(record.path)
     assert sorted(files) == sorted(
         [
@@ -365,7 +365,7 @@ def test_evidence_saves_a_held_before_screenshot_beside_its_own(
                     "evidence/2",
                     window,
                     None,
-                    asked=Asked(screenshot=True, before=held),
+                    asked=Asked(after=True, before=held),
                 )
                 return alone, both
 
@@ -373,7 +373,8 @@ def test_evidence_saves_a_held_before_screenshot_beside_its_own(
 
     assert alone == Shots(before=Shot("evidence/1/before_screenshot.png"))
     assert both == Shots(
-        Shot("evidence/2/screenshot.png"), Shot("evidence/2/before_screenshot.png")
+        after=Shot("evidence/2/screenshot.png"),
+        before=Shot("evidence/2/before_screenshot.png"),
     )
     files = saved(record.path)
     assert sorted(files) == sorted(
@@ -406,7 +407,7 @@ def test_an_evidence_screenshot_off_the_allowed_origins_is_withheld_quietly(
                     await session.page.goto(f"{sites.cdn}/canary?{quote(REFLECTED)}")
                 before = session.policy_events.total
                 shots = await capture_evidence(
-                    record, session, "evidence/1", window, None, asked=Asked(True)
+                    record, session, "evidence/1", window, None, asked=Asked(after=True)
                 )
                 after = session.policy_events.total
                 # The control: the capture's own default records its refusal.
@@ -416,7 +417,7 @@ def test_an_evidence_screenshot_off_the_allowed_origins_is_withheld_quietly(
 
         shots, before, after, recorded = asyncio.run(scenario())
 
-    assert shots == Shots(Shot(withheld=OFF_ORIGIN))
+    assert shots == Shots(after=Shot(withheld=OFF_ORIGIN))
     assert (before, after, recorded) == (0, 0, 1)
     files = saved(record.path)
     assert sorted(files) == [f"evidence/1/{name}" for name in FILES[1:]]
@@ -474,13 +475,13 @@ def test_an_evidence_screenshot_whose_frames_change_under_it_is_withheld(
 
             monkeypatch.setattr(browser_session, "frame_origin", removing)
             return await capture_evidence(
-                record, session, "evidence/1", None, None, asked=Asked(True)
+                record, session, "evidence/1", None, None, asked=Asked(after=True)
             )
 
     with document_fixtures.serving_sites(monkeypatch) as sites:
         shots = asyncio.run(scenario(sites))
 
-    assert shots == Shots(Shot(withheld=FRAMES_CHANGED))
+    assert shots == Shots(after=Shot(withheld=FRAMES_CHANGED))
     assert sorted(saved(record.path)) == [f"evidence/1/{name}" for name in FILES[1:]]
 
 

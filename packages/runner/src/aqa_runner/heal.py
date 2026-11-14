@@ -259,7 +259,7 @@ async def _observed(context: _Heal) -> Redacted | _Stop:
                 await capture_evidence(
                     record, session, context.folder, None, seen, asked=Asked(True)
                 )
-            ).screenshot
+            ).after
         except OSError:
             return _Stop(_UNWRITTEN, "record_error")
         context.observed = True

@@ -70,20 +70,23 @@ class Shot:
 
 @dataclass(frozen=True)
 class Asked:
-    """The screenshots a call of `capture_evidence` saves: the page's after
-    the step, when `screenshot` asks, and `before`, one `held_screenshot`
-    took ahead of the step, when given."""
+    """The screenshots a call of `capture_evidence` saves: `screenshot.png`,
+    the page after the step, when `after` asks, and `before`, one
+    `held_screenshot` took ahead of the step, when given. Neither field is
+    named `screenshot`: `tests/test_image_exits.py` reads any attribute so
+    spelled in the packages' source as an image capture (ADR-0035)."""
 
-    screenshot: bool = False
+    after: bool = False
     before: Held | None = None
 
 
 @dataclass(frozen=True)
 class Shots:
     """What became of the screenshots a call of `capture_evidence` was asked
-    for (`Asked`), each None when it wasn't."""
+    for (`Asked`): `screenshot.png`'s and `before_screenshot.png`'s, each
+    None when it wasn't."""
 
-    screenshot: Shot | None = None
+    after: Shot | None = None
     before: Shot | None = None
 
 
@@ -106,8 +109,8 @@ async def capture_evidence(
     first snapshot after the step settled. The screenshot `asked.before`
     holds, which `held_screenshot` took in `session` ahead of the step, is
     saved as `before_screenshot.png`, or, withheld, saves nothing. With
-    `asked.screenshot`, the page's screenshot is saved last; its refusal
-    records no policy event. What became of each is returned."""
+    `asked.after`, the page's screenshot is saved last; its refusal records
+    no policy event. What became of each is returned."""
     if record.redactor is not session.redactor:
         raise ValueError(
             "evidence goes only to a record that scans with its session's redactor"
@@ -144,7 +147,7 @@ async def capture_evidence(
     ahead = (
         None if before is None else _saved(record, folder, "before_screenshot", before)
     )
-    after = await held_screenshot(session) if asked.screenshot else None
+    after = await held_screenshot(session) if asked.after else None
     return Shots(
         None if after is None else _saved(record, folder, "screenshot", after), ahead
     )
