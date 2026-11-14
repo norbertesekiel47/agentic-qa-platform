@@ -397,8 +397,8 @@ async def take_screenshot(session: BrowserSession) -> Screenshot:
     or it spells a bound value. In a run that binds a secret, it
     is withheld too when the image's text, as OCR reads it, spells a bound
     value, is over `aqa_runner.ocr.TEXT_CAP`, or takes over `OCR_SECONDS` to
-    read; an error of the OCR engine's, a missing model file's included,
-    propagates, so no `Screenshot` exists."""
+    read, or when the OCR engine raises, a missing model file included
+    (ADR-0035's #251 amendment)."""
     try:
         png = await _captured(session)
     except TimeoutError:
@@ -421,8 +421,8 @@ async def take_screenshot(session: BrowserSession) -> Screenshot:
 
 
 async def _checked(png: bytes, redactor: Redactor) -> None:
-    """Withholds `png` when OCR reads a bound value in its text, or doesn't
-    finish reading it in `OCR_SECONDS`."""
+    """Withholds `png` when OCR reads a bound value in its text, doesn't
+    finish reading it in `OCR_SECONDS`, or its engine fails."""
     try:
         # In a thread, as the scrub is, so OCR holds up neither the event
         # loop nor the egress proxy on it.
@@ -432,6 +432,8 @@ async def _checked(png: bytes, redactor: Redactor) -> None:
         reason = f"the image's OCR took over {OCR_SECONDS} s"
     except ocr.TooMuchTextError:
         reason = "the image has more text than OCR reads in its bound"
+    except _EngineFailedError:
+        reason = "the image's OCR engine failed"
     else:
         if not spelled:
             return
@@ -439,9 +441,19 @@ async def _checked(png: bytes, redactor: Redactor) -> None:
     raise ScreenshotWithheldError(reason)
 
 
+class _EngineFailedError(Exception):
+    """What the OCR engine raised, a missing model file's included: its
+    errors are direct `Exception` subclasses of its libraries' own."""
+
+
 def _read(png: bytes, redactor: Redactor) -> bool:
     with _OCR_TURN:
-        return ocr.spells_a_value(png, redactor)
+        try:
+            return ocr.spells_a_value(png, redactor)
+        except ocr.TooMuchTextError:
+            raise
+        except Exception as error:
+            raise _EngineFailedError from error
 
 
 async def _captured(session: BrowserSession) -> bytes:

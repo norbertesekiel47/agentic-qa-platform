@@ -373,10 +373,52 @@ def test_a_missing_model_file_saves_nothing_and_downloads_nothing(
         (models / name).symlink_to(ocr.MODELS / name)
     monkeypatch.setattr(ocr, "MODELS", models)
 
-    with pytest.raises(FileNotFoundError):
-        reflected(sites, tmp_path, UNBOUND)
+    assert reflected(sites, tmp_path, UNBOUND) == (ENGINE_FAILED, [])
 
     # The run record's own .gitignore: no screenshot, and no model file.
     assert [path.name for path in tmp_path.rglob("*") if path.is_file()] == [
         ".gitignore"
     ]
+
+
+# Why a capture whose OCR engine raised is withheld (ADR-0035's #251
+# amendment).
+ENGINE_FAILED = "the image's OCR engine failed"
+
+
+def test_an_ocr_engine_error_withholds_it_and_keeps_nothing_of_the_error(
+    sites: Sites, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def failing(_png: bytes, _redactor: Redactor) -> bool:
+        raise RuntimeError(f"fake engine failure quoting {RED_VALUE}")
+
+    monkeypatch.setattr(ocr, "spells_a_value", failing)
+
+    async def scenario() -> ScreenshotWithheldError:
+        async with browsing(sites, redactor=Redactor(bound(sites.app))) as session:
+            await session.navigate(f"{sites.app}/kept")
+            with pytest.raises(ScreenshotWithheldError) as withheld:
+                await take_screenshot(session)
+            return withheld.value
+
+    withheld = asyncio.run(scenario())
+    assert str(withheld) == ENGINE_FAILED
+    assert (withheld.__cause__, withheld.__context__) == (None, None)
+
+
+def test_a_defect_outside_the_ocr_engine_still_raises(
+    sites: Sites, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*_: object) -> None:
+        raise RuntimeError("fake defect in the scrub")
+
+    monkeypatch.setattr(screenshots, "_prepared", broken)
+
+    async def scenario() -> None:
+        async with browsing(sites, redactor=Redactor(bound(sites.app))) as session:
+            await serve_cases(session.page, sites.other)
+            await red_filled(session, sites)
+            await take_screenshot(session)
+
+    with pytest.raises(RuntimeError, match="fake defect in the scrub"):
+        asyncio.run(scenario())
