@@ -591,8 +591,9 @@ def test_an_image_from_anywhere_else_is_refused(reports: dict[str, Path]) -> Non
 
 
 async def swiped(viewer: Page) -> dict[str, Any]:
-    """The swipe's value, what is focused and its outline, and which image is at
-    the frame's left and right quarters, the frame scrolled into view."""
+    """The swipe's value and what it reads out, what is focused and its outline,
+    and which image is at the frame's left and right quarters, the frame
+    scrolled into view."""
     state: dict[str, Any] = await viewer.evaluate(
         """() => {
             const frame = document.querySelector("#panel-screenshot .frame");
@@ -602,6 +603,7 @@ async def swiped(viewer: Page) -> dict[str, Any]:
             const at = (x) => document.elementFromPoint(x, y).getAttribute("src");
             return {
                 value: document.querySelector("#swipe-1").value,
+                said: document.querySelector("#swipe-1").getAttribute("aria-valuetext"),
                 focused: document.activeElement.id,
                 outline: getComputedStyle(document.activeElement).outlineStyle,
                 left: at(box.left + box.width / 4),
@@ -644,6 +646,13 @@ def test_the_swipe_works_by_keyboard(reports: dict[str, Path]) -> None:
     ]
     assert [each["focused"] for each in seen] == ["swipe-1"] * 4
     assert all(each["outline"] != "none" for each in seen)
+    # What a screen reader hears of each value: how much of each image shows.
+    assert [each["said"] for each in seen] == [
+        "50% heal's first look, 50% as the step left it",
+        "51% heal's first look, 49% as the step left it",
+        "100% heal's first look, 0% as the step left it",
+        "0% heal's first look, 100% as the step left it",
+    ]
 
 
 def test_the_split_holds_still_without_input(reports: dict[str, Path]) -> None:

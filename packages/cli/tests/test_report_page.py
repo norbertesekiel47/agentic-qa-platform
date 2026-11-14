@@ -940,9 +940,15 @@ def test_a_heal_that_gave_up_gets_a_swipe_between_its_two_images(
     found = block(shown, "screenshot", 1)
     assert images(found) == [HEAL_SHOT, STEP_SHOT]
     [swipe] = found.all(tagged("input"))
-    assert {
-        name: swipe.attrs[name] for name in ("type", "min", "max", "step", "value")
-    } == {"type": "range", "min": "0", "max": "100", "step": "1", "value": "50"}
+    shape = ("type", "min", "max", "step", "value", "aria-valuetext")
+    assert {name: swipe.attrs[name] for name in shape} == {
+        "type": "range",
+        "min": "0",
+        "max": "100",
+        "step": "1",
+        "value": "50",
+        "aria-valuetext": "50% heal's first look, 50% as the step left it",
+    }
     [label] = found.all(tagged("label"))
     assert label.attrs["for"] == swipe.attrs["id"]
     assert label.text == SWIPE
