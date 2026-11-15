@@ -888,14 +888,21 @@ def _cost(cost: Decimal | Gap) -> str:
 def _models(record: Record) -> str:
     if isinstance(record.kept, Gap):
         return _gap(record.kept)
-    healer = record.kept.models.healer
-    if healer is not None:
-        fallback = healer.fallback or "none"
-        effort = healer.effort or "the provider's default"
-        return _e(
-            f"healer: {healer.provider} {healer.model}, effort {effort}, "
-            f"fallback {fallback}"
-        )
+    # Each model the run may call, by its `heal.perception` (ADR-0002's #315
+    # amendment).
+    models = record.kept.models
+    named = (("healer", models.healer), ("vision_fallback", models.vision_fallback))
+    shown = []
+    for role, model in named:
+        if model is not None:
+            fallback = model.fallback or "none"
+            effort = model.effort or "the provider's default"
+            shown.append(
+                f"{role}: {model.provider} {model.model}, effort {effort}, "
+                f"fallback {fallback}"
+            )
+    if shown:
+        return _e("; ".join(shown))
     if record.mode == "strict":
         return _e("none: strict replay calls no model")
     return _gap("no model recorded")

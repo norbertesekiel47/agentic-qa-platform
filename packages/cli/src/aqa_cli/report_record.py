@@ -364,7 +364,7 @@ def _verdict(run: Path, entry: object) -> Verdict:
     )
 
 
-class _Healer(StrictModel):
+class _Model(StrictModel):
     provider: StrictStr
     model: StrictStr
     effort: StrictStr | None
@@ -372,7 +372,11 @@ class _Healer(StrictModel):
 
 
 class _Models(StrictModel):
-    healer: _Healer | None = None
+    """The models a run that heals may call, by its `heal.perception`: either
+    role's, or both (ADR-0002's #315 amendment)."""
+
+    healer: _Model | None = None
+    vision_fallback: _Model | None = None
 
 
 class Kept(StrictModel):
