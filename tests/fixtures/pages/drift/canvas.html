@@ -1,0 +1,33 @@
+<header id="toolbar">
+    <canvas width="640" height="56" style="display: block"></canvas>
+</header>
+<main id="order">
+    <h1>Order 42</h1>
+    <section id="details" hidden>
+        <p id="summary">Order 42 ships on Monday</p>
+    </section>
+</main>
+<footer>
+    <button>Contact us</button>
+</footer>
+<script>
+    // The toolbar's toggle, drawn at the canvas's left end: a click inside
+    // the drawn control shows the details, and one elsewhere does nothing.
+    {
+        const toolbar = document.querySelector("#toolbar canvas");
+        const pen = toolbar.getContext("2d");
+        pen.fillStyle = "#e9e9ed";
+        pen.fillRect(0, 0, 160, 56);
+        pen.strokeStyle = "#8f8f9d";
+        pen.strokeRect(0.5, 0.5, 159, 55);
+        pen.fillStyle = "#000";
+        pen.font = "16px sans-serif";
+        pen.fillText("Show details", 32, 33);
+        toolbar.addEventListener("click", (event) => {
+            if (event.offsetX < 160 && event.offsetY < 56) {
+                document.querySelector("#details").hidden = false;
+                fetch("/did/canvas-click");
+            }
+        });
+    }
+</script>

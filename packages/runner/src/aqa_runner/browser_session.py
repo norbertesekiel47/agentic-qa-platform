@@ -215,6 +215,21 @@ class BrowserSession:
             if self._frame_changes != changes:
                 raise DocumentChangedError
 
+    async def holds_frame_left_out(self) -> bool:
+        """Whether the allowed page holds, at any depth, a frame on none of
+        the run's allowed origins: one whose content `snapshot` leaves out,
+        and a screenshot of the live page would show. Every frame Chromium
+        reports counts, an `<embed>`'s or an `<object>`'s too, and its origin
+        is `frame_origin`'s, which the page's scripts can't forge."""
+        async with self._turn:
+            await self._require_allowed_page()
+            for frame in self.page.frames:
+                if frame.parent_frame is None:
+                    continue
+                if await frame_origin(frame) not in self._policy.allowed_origins:
+                    return True
+            return False
+
     async def snapshot(self, *, record_refusal: bool = True) -> Redacted:
         """The page's accessibility snapshot in Playwright's AI mode
         (https://playwright.dev/python/docs/api/class-page#page-aria-snapshot),
