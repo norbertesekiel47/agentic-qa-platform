@@ -185,16 +185,20 @@ def image_blocks_built(tree: ast.AST) -> int:
     )
 
 
-def test_only_the_vision_request_builds_an_image_block() -> None:
-    """The send check reads no image block's data, so only `vision_request`,
-    which takes only a `Screenshot`, may build one (SECURITY §5)."""
+def test_only_the_two_screenshot_requests_build_an_image_block() -> None:
+    """Only `vision_request` and the verifier's `verify_request` (#256), each
+    of which takes only a `Screenshot`, build an image block, so no other
+    image reaches a model (SECURITY §5)."""
     builders = {
         path.relative_to(REPO).as_posix(): count
         for path in sorted(REPO.glob("packages/*/src/**/*.py"))
         if (count := image_blocks_built(ast.parse(path.read_text())))
     }
 
-    assert builders == {"packages/runner/src/aqa_runner/vision_fallback.py": 1}
+    assert builders == {
+        "packages/runner/src/aqa_runner/verifier.py": 1,
+        "packages/runner/src/aqa_runner/vision_fallback.py": 1,
+    }
 
 
 def test_a_vision_request_reaches_the_provider_as_a_png_and_one_strict_tool(
