@@ -17,6 +17,7 @@ from aqa_core.compiled import (
     ByCss,
     Click,
     CompiledScript,
+    ContrastMin,
     Fill,
     FillSecret,
     HeldValue,
@@ -24,6 +25,7 @@ from aqa_core.compiled import (
     ProbeEqualsBaseline,
     Reload,
     Select,
+    TargetCheck,
     TextInTarget,
     VisibleUnoccluded,
 )
@@ -297,8 +299,7 @@ def contract_problems(script: CompiledScript, config: ProjectConfig) -> list[str
         names = {
             assertion.target
             for assertion in script.assertions
-            if assertion.expect_index == expect
-            and isinstance(assertion, TextInTarget | NotVisible | VisibleUnoccluded)
+            if assertion.expect_index == expect and isinstance(assertion, TargetCheck)
         }
         if not names:
             problems.append(
@@ -470,6 +471,7 @@ def _assertion_names(script: CompiledScript) -> Iterator[str]:
                 TextInTarget(target=target)
                 | NotVisible(target=target)
                 | VisibleUnoccluded(target=target)
+                | ContrastMin(target=target)
             ) if target not in script.targets:
                 yield f"{where}.target: {target!r} names no target in targets"
             case ProbeEqualsBaseline(probe=probe) if (

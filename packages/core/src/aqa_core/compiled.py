@@ -630,6 +630,17 @@ class VisibleUnoccluded(_Assertion):
     in_viewport: StrictBool
 
 
+class ContrastMin(_Assertion):
+    """The WCAG contrast ratio of the target's rendered text against what is
+    behind it, computed from styles, is at least `min_ratio` (ADR-0025's
+    #254 amendment)."""
+
+    check: Literal["contrast_min"]
+    target: NonEmpty
+    # Any ratio two colours can have, an integer or a fraction.
+    min_ratio: Annotated[float, Field(ge=1, le=21, allow_inf_nan=False)]
+
+
 Assertion = Annotated[
     TextVisible
     | TextInTarget
@@ -639,9 +650,16 @@ Assertion = Annotated[
     | NetworkSeen
     | ProbeEquals
     | ProbeEqualsBaseline
-    | VisibleUnoccluded,
+    | VisibleUnoccluded
+    | ContrastMin,
     Field(discriminator="check"),
 ]
+
+# The checks that read a target, and those of them that need it there, so
+# that its drift goes to a repair: a `not_visible` check's element may
+# rightly be gone.
+TargetCheck = TextInTarget | NotVisible | VisibleUnoccluded | ContrastMin
+PositiveCheck = TextInTarget | VisibleUnoccluded | ContrastMin
 
 
 class ExpectationCoverage(StrictModel):
