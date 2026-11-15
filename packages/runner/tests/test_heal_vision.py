@@ -10,12 +10,13 @@ import json
 import struct
 from base64 import b64decode
 from collections.abc import Sequence
+from functools import partial
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 import pytest
-from aqa_runner import heal
+from aqa_runner import executor, heal
 from aqa_runner.browser_session import BrowserSession
 from aqa_runner.chat_client import Reply
 from aqa_runner.document_origins import (
@@ -23,11 +24,14 @@ from aqa_runner.document_origins import (
     PolicyEvent,
     PolicyEventError,
 )
+from aqa_runner.evidence import Held, held_screenshot
 from aqa_runner.repairs import Drift
+from aqa_runner.replays import Replaying
 from aqa_runner.screenshots import Screenshot, take_screenshot
 from aqa_runner.vision_fallback import VISION_INSTRUCTIONS, vision_request
 from langchain_core.messages import BaseMessage, HumanMessage
 
+from packages.runner.tests import heal_fixtures
 from packages.runner.tests.drift_fixtures import TOGGLE, page
 from packages.runner.tests.executor_fixtures import compiled
 from packages.runner.tests.explore_graph_fixtures import calling
@@ -594,3 +598,49 @@ def test_a_vision_pick_that_passes_every_check_is_a_heal_proposal(
         ("rebind",),
         ("vision_click",),
     ]
+
+
+# The canvas page, whose canvas also draws the time at every frame, so no two
+# captures of it are alike.
+TICKING = CANVAS + (
+    "<script>{const pen = document.querySelector('#toolbar canvas')"
+    ".getContext('2d'); pen.font = '16px sans-serif'; const tick = () => {"
+    "pen.clearRect(400, 0, 240, 56);"
+    "pen.fillText(String(performance.now()), 420, 33);"
+    "requestAnimationFrame(tick);}; tick();}</script>"
+)
+
+
+def test_the_vision_turn_sends_its_own_capture_never_a_held_before_screenshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With `--before-screenshots` (#314), each step's page is captured ahead
+    of it and held in memory; the vision turn takes a fresh screenshot of its
+    own, and sends only that."""
+    held: list[bytes] = []
+    taken: list[bytes] = []
+
+    async def holding(session: BrowserSession) -> Held:
+        shot = await held_screenshot(session)
+        if isinstance(shot, Screenshot):
+            held.append(shot.png)
+        return shot
+
+    async def counted(session: BrowserSession) -> Screenshot:
+        shot = await take_screenshot(session)
+        taken.append(shot.png)
+        return shot
+
+    monkeypatch.setattr(executor, "held_screenshot", holding)
+    monkeypatch.setattr(heal, "take_screenshot", counted)
+    # The replay `aqa run --before-screenshots` makes.
+    monkeypatch.setattr(
+        heal_fixtures, "Replaying", partial(Replaying, before_screenshots=True)
+    )
+
+    run = healed(tmp_path, NO_TOOL, clicking(*INSIDE), html=TICKING)
+
+    sent = image_of(run.asked()[1][-1])
+    assert held
+    assert taken == [sent]
+    assert sent not in held
