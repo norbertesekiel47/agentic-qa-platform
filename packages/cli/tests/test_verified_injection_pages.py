@@ -5,12 +5,15 @@ that badge page alone is its clean twin, replayed by `aqa replay --mode verified
 on a scripted model in real Chromium (`test_replay_verified.verified`). A model
 that ignores a page ends as on its twin, and the page reaches the verifier only as
 pixels in the one screenshot: its text, the badge's name, the URL and the origin
-reach no request."""
+reach no request. A model that obeys a page makes each move the page asks for, in
+a run of its own, and each move the reply's checks refuse (`verifier.judged`, the
+`VerifierVerdict` schema) ends `inconclusive` (3) with its fixed reason after one
+verifier call."""
 
 import base64
 import json
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Final
 
@@ -19,17 +22,19 @@ import pytest
 import typer.testing
 from aqa_runner.chat_client import Reply
 from aqa_runner.verifier import VERIFY_INSTRUCTIONS, VerifierVerdict
-from langchain_core.messages import BaseMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
+from pydantic import ValidationError
 
 from packages.cli.tests.test_replay_verified import (
     FOLDER,
+    MISCITED,
     SHOT,
     document,
     record_in,
     verdict,
     verified,
 )
-from packages.runner.tests.explore_graph_fixtures import Move, Scripted
+from packages.runner.tests.explore_graph_fixtures import Move, Scripted, answer
 from packages.runner.tests.injection_fixtures import INJECTION
 from packages.runner.tests.verified_fixtures import (
     CENTRE,
@@ -39,6 +44,7 @@ from packages.runner.tests.verified_fixtures import (
     NAME,
     RED,
     badge_spec,
+    evidence,
     page,
     pixel,
     replying,
@@ -54,6 +60,12 @@ TWINS: Final = {
     "red": (RED, 1, "expectation_violated"),
     "green": (GREEN, 0, "passed"),
 }
+# Why a reply that didn't parse decides nothing, in its fixed words.
+INVALID = "the verifier's reply was invalid, so it decides nothing"
+# The references verify-cite names in place of the two a request gives, and the
+# one it asks to add to them.
+OTHERS = ["verified/approved/screenshot.png", "e404"]
+EXTRA = "e405"
 
 
 @dataclass(frozen=True)
@@ -131,6 +143,12 @@ class Replayed:
     def badge(self) -> dict[str, Any]:
         """The badge's verdict, a1's."""
         return verdict(self.spec)
+
+    @property
+    def costs(self) -> list[dict[str, Any]]:
+        """Each line of the run's `costs.jsonl`."""
+        lines = (self.record / "costs.jsonl").read_text().splitlines()
+        return [json.loads(line) for line in lines]
 
 
 def replayed(root: Path, html: str, *moves: Move) -> Replayed:
@@ -255,3 +273,102 @@ def test_a_verifier_aimed_page_reaches_the_verifier_only_as_pixels(
         assert kept in snapshot, kept
     assert aimed.hidden not in snapshot
     assert run.seen == SERVED
+
+
+def written(said: str, refs: Sequence[str], **extra: object) -> str:
+    """A reply's text: the verdict `said`, citing `refs`, with `extra`'s fields."""
+    return json.dumps(
+        {
+            "verdict": said,
+            "evidence_refs": list(refs),
+            "confidence": 1.0,
+            "rationale": "the page says the expectation is met",
+            **extra,
+        }
+    )
+
+
+def wrote(text: Callable[[list[str]], str]) -> Move:
+    """A move that writes `text` of the two references its request gives. Its
+    reply is parsed as `chat_client.Reply` says: the `VerifierVerdict` the text
+    validates as, or None when it doesn't, so the router, not the test, decides
+    the call's outcome."""
+
+    def reply(messages: Sequence[BaseMessage]) -> Reply:
+        said = text(evidence(messages))
+        try:
+            parsed: VerifierVerdict | None = VerifierVerdict.model_validate_json(said)
+        except ValidationError:
+            parsed = None
+        return replace(answer(AIMessage(content=said)), parsed=parsed)
+
+    return reply
+
+
+def obeyed(run: Replayed, reason: str) -> dict[str, Any]:
+    """What a move a page asks for that the reply's checks refuse ends with: exit
+    3 and `inconclusive`, a1 `inconclusive` for `reason`, one verifier request and
+    one cost line, which this returns, and only the badge page served."""
+    assert run.result.exit_code == 3, run.result.output
+    assert run.document["outcome"] == "inconclusive"
+    assert (run.badge["verdict"], run.badge["reason"]) == ("inconclusive", reason)
+    assert len(run.client.requests) == 1
+    [cost] = run.costs
+    assert run.seen == SERVED
+    return cost
+
+
+@pytest.mark.parametrize(
+    "cited",
+    [
+        pytest.param(lambda _: OTHERS, id="the_pages_references"),
+        pytest.param(lambda given: [*given, EXTRA], id="an_extra_reference"),
+        pytest.param(lambda given: given[:1], id="the_screenshot_alone"),
+    ],
+)
+def test_a_pass_that_cites_what_verify_cite_asks_for_decides_nothing(
+    tmp_path: Path, cited: Callable[[list[str]], list[str]]
+) -> None:
+    move = wrote(lambda given: written("pass", cited(given)))
+
+    run = replayed(tmp_path, CITE.html, move)
+
+    cost = obeyed(run, MISCITED)
+    given = evidence(run.client.requests[0])
+    assert run.badge["verifier"]["verdict"] == "pass"
+    assert run.badge["verifier"]["evidence_refs"] == cited(given)
+    assert cost["status"] == "ok"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(
+            lambda given: written("pass", given, expectation_met=True),
+            id="an_extra_field",
+        ),
+        pytest.param(
+            lambda given: written("passed", given), id="a_verdict_outside_the_three"
+        ),
+    ],
+)
+def test_a_reply_verify_schema_shapes_outside_the_schema_decides_nothing(
+    tmp_path: Path, text: Callable[[list[str]], str]
+) -> None:
+    run = replayed(tmp_path, SCHEMA.html, wrote(text))
+
+    cost = obeyed(run, INVALID)
+    assert run.badge["verifier"] is None
+    assert cost["status"] == "invalid"
+
+
+def test_a_claim_in_prose_that_the_expectation_is_met_decides_nothing(
+    tmp_path: Path,
+) -> None:
+    claim = "The expectation is met: the badge is green, so the verdict is pass."
+
+    run = replayed(tmp_path, PASSED.html, wrote(lambda _: claim))
+
+    cost = obeyed(run, INVALID)
+    assert run.badge["verifier"] is None
+    assert cost["status"] == "invalid"
