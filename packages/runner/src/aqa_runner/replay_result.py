@@ -321,6 +321,7 @@ def _judged(end: ReplayEnd) -> list[_Judged]:
         last,
         last if result.evidence is None else result.evidence.seq,
         result.shots,
+        result.before_shots,
     )
     checks = {check.id: check for check in end.script.assertions}
     expect = end.spec.frontmatter.expect
@@ -345,14 +346,16 @@ class _Judging:
     steps that ran, each finding's repro steps; the last step, whose
     evidence is the page the assertions were evaluated on; the step whose
     evidence a violated invariant cites, the page that first showed a
-    violation (`RunResult.evidence`); and each step's screenshot, by seq
-    (`RunResult.shots`)."""
+    violation (`RunResult.evidence`); and each step's screenshot and each
+    failed step's "before", by seq (`RunResult.shots`,
+    `RunResult.before_shots`)."""
 
     redactor: Redactor
     ran: list[int]
     last: int
     violated_at: int
     shots: Mapping[int, Shot]
+    before_shots: Mapping[int, Shot]
 
     def step(self, step: StepResult) -> _Judged:
         judged = self._judged(
@@ -400,9 +403,10 @@ class _Judging:
         about: tuple[Category, str] | None = None,
     ) -> _Judged:
         """The verdict on `subject`, where it was `located`, and its reason,
-        citing step `evidence`'s evidence and that step's screenshot, if its
-        evidence asked for one (DATA_MODEL §7). A violation's finding is
-        `about` its category and title."""
+        citing step `evidence`'s evidence, that step's screenshot, if its
+        evidence asked for one, and its "before", if it failed and kept one
+        (DATA_MODEL §7). A violation's finding is `about` its category and
+        title."""
         verdict, reason = judgement
         scan = self.redactor.redact
         finding = None
@@ -424,6 +428,9 @@ class _Judging:
                 "evidence": {
                     "path": f"evidence/{evidence}",
                     "screenshot": _shot(self.shots.get(evidence), self.redactor),
+                    "before_screenshot": _shot(
+                        self.before_shots.get(evidence), self.redactor
+                    ),
                 },
                 "finding": finding,
             },
@@ -432,7 +439,8 @@ class _Judging:
 
 def _shot(shot: Shot | None, redactor: Redactor) -> dict[str, object] | None:
     """A screenshot as a verdict cites it: the file it was saved as, or why it
-    was withheld, scanned as every reason is; None when none was asked for.
+    was withheld, scanned as every reason is; None when none was asked for or
+    kept.
     The file's name is ours, so it isn't scanned, as `evidence.path` isn't."""
     if shot is None:
         return None

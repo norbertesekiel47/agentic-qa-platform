@@ -49,6 +49,16 @@ def replay(
     quiet: Annotated[
         bool, typer.Option("--quiet", help="Print only the runs that didn't pass.")
     ] = False,
+    before_screenshots: Annotated[
+        bool,
+        typer.Option(
+            "--before-screenshots",
+            help=(
+                "Capture the page before each step, and save it beside the "
+                "screenshot of a step that fails."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Replay specs' compiled scripts in strict mode, with no model call and
     no heal, each in a sandboxed browser, and write each run's verdicts to
@@ -58,7 +68,13 @@ def replay(
     try:
         runs = admitted_runs(spec_paths, url)
         scan = scan_of(runs)
-        ended = replayed_runs(runs, scan, lines=not as_json, quiet=quiet)
+        ended = replayed_runs(
+            runs,
+            scan,
+            lines=not as_json,
+            quiet=quiet,
+            before_screenshots=before_screenshots,
+        )
     except typer.Exit:
         # A stop before any run.
         if as_json:

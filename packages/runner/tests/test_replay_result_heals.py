@@ -87,7 +87,11 @@ def test_a_healed_step_is_drift_consistent_citing_its_heal(tmp_path: Path) -> No
         "misses": [],
         "verdict": "drift_consistent",
         "reason": None,
-        "evidence": {"path": "evidence/1", "screenshot": None},
+        "evidence": {
+            "path": "evidence/1",
+            "screenshot": None,
+            "before_screenshot": None,
+        },
         "finding": None,
         "heal": HEAL_CITED,
     }

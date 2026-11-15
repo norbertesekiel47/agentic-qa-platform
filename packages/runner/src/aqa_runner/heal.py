@@ -46,7 +46,7 @@ from aqa_runner.binding import element_at, is_among
 from aqa_runner.browser_session import BrowserSession, RefError
 from aqa_runner.document_origins import DocumentChangedError, PolicyEventError
 from aqa_runner.evaluation import bounded, looked
-from aqa_runner.evidence import Shot, capture_evidence
+from aqa_runner.evidence import Asked, Shot, capture_evidence
 from aqa_runner.healer import Rebind, Unfit, decided, heal_request, healer_tools
 from aqa_runner.locator_generation import (
     BindingRefusedError,
@@ -314,9 +314,11 @@ async def _observed(context: _Heal) -> Redacted | _Stop:
     if not context.observed:
         record = context.healing.spending.record
         try:
-            context.shot = await capture_evidence(
-                record, session, context.folder, None, seen, screenshot=True
-            )
+            context.shot = (
+                await capture_evidence(
+                    record, session, context.folder, None, seen, asked=Asked(True)
+                )
+            ).after
         except OSError:
             return _Stop(_UNWRITTEN, "record_error")
         context.observed = True
