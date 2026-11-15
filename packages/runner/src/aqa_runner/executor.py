@@ -2,7 +2,9 @@
 compiled script's steps, run in a fresh browser session with the script's
 recorded settings, each step's intent on disk before its action and its
 completion after (ARCHITECTURE §3.3). No model is involved: nothing here
-imports or builds a model client.
+imports or builds a model client. In a verified replay, each `model_verify`
+check goes to the verifier the caller gives (`RunSetup.verify`, ADR-0024's
+#256 amendment), and the script is admitted as verified replay admits it.
 
 Browser observations use the session methods, which check every document
 they touch (ADR-0026). Probe reads use the same egress gate as the browser."""
@@ -54,6 +56,7 @@ from aqa_runner.evaluation import (
     MARGIN_SECONDS,
     AssertionResult,
     Evaluation,
+    Verify,
     bounded,
     capture_baselines,
     evaluate_each,
@@ -107,9 +110,10 @@ class RunSetup:
     origin (`aqa_core.project.start_origin`), the run's record, the repair a
     drift goes to, if any (#242, #244), whether a step that drifts or fails
     saves a screenshot in its evidence, which only `strict_replay` asks for
-    (#251), and whether each compiled step's page is captured before it runs
+    (#251), whether each compiled step's page is captured before it runs
     and saved as the "before" of a step that fails, which only
-    `strict_replay` asks for, when `--before-screenshots` does (#314)."""
+    `strict_replay` asks for, when `--before-screenshots` does (#314), and
+    the verifier of a verified replay, if this is one (#256)."""
 
     spec: Spec
     config: ProjectConfig
@@ -118,6 +122,7 @@ class RunSetup:
     repair: Repair | None = None
     screenshots: bool = False
     before_screenshots: bool = False
+    verify: Verify | None = None
 
 
 @dataclass(frozen=True)
@@ -328,7 +333,11 @@ async def _replayed(
     context has closed when this returns, and whose browser has when it
     raises, unless its caller launched it."""
     runnable, checks, bound, redactor = admitted(
-        script, setup.spec, setup.config, setup.start
+        script,
+        setup.spec,
+        setup.config,
+        setup.start,
+        mode="strict" if setup.verify is None else "verified",
     )
     if all(map(setup.record.redactor.covers, bound.values())):
         redactor = setup.record.redactor
@@ -350,6 +359,7 @@ async def _replayed(
             redactor,
             script.probe_baselines,
             every_locator=every_locator,
+            verify=setup.verify,
         ),
         script.model_copy(deep=True),
     )
@@ -370,12 +380,7 @@ async def _replayed(
             navigation_seconds=NAVIGATION_SECONDS,
         )
         expected = setup.config.egress.expected_blocked
-
-        def interrupted() -> bool:
-            return (
-                bool(gate.infrastructure_events)
-                or proxy.egress_blocks(expected).blocked
-            )
+        interrupted = interruption(gate, proxy, expected)
 
         # Seq 0 is no compiled step: a compiled script's steps start at 1.
         first = start_url(setup.spec, setup.start)
@@ -537,6 +542,20 @@ def _next_drift(
             if not handing.handed(at):
                 return at, result.misses
     return None
+
+
+def interruption(
+    gate: EgressGate, proxy: EgressProxy, expected: tuple[str, ...]
+) -> Callable[[], bool]:
+    """Whether a run through `gate` and `proxy` is interrupted yet: an
+    infrastructure event, or an egress block of a host `expected` doesn't
+    list. A replay stops then, and so does a verified replay's verifier
+    (`aqa_runner.verification`)."""
+
+    def interrupted() -> bool:
+        return bool(gate.infrastructure_events) or proxy.egress_blocks(expected).blocked
+
+    return interrupted
 
 
 def _violated(session: BrowserSession, spec: Spec) -> bool:

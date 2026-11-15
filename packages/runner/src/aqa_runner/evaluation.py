@@ -1,16 +1,19 @@
 """Evaluating a compiled script's assertions on the page as it stands
-(DATA_MODEL §7, Replay outcomes; ADR-0024's #48 amendment), and the bounded
-looks the executor shares with it: a target looked for within the run's
-`resolve_seconds`, a look cut off when the page stops answering."""
+(DATA_MODEL §7, Replay outcomes; ADR-0024's #48 amendment), a `model_verify`
+check by the verifier only a verified replay gives (`Evaluation.verify`,
+ADR-0024's #256 amendment), and the bounded looks the executor shares with
+it: a target looked for within the run's `resolve_seconds`, a look cut off
+when the page stops answering."""
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Literal, assert_never, overload
+from typing import Final, Literal, assert_never, overload
 
 from aqa_core.compiled import (
     Assertion,
     ContrastMin,
+    ModelVerify,
     NetworkNone,
     NetworkSeen,
     NotVisible,
@@ -26,13 +29,14 @@ from aqa_core.compiled import (
 from aqa_core.project import probe_url
 from aqa_core.spec import Spec
 from aqa_core.text import SearchTimeoutError
-from playwright.async_api import Error
+from playwright.async_api import ElementHandle, Error
 
 from aqa_runner import network, probes, reasons
 from aqa_runner.browser_session import BrowserSession, UnsupportedVisualFrameError
 from aqa_runner.contrast import ContrastRefusedError
 from aqa_runner.document_origins import DocumentChangedError, PolicyEventError
 from aqa_runner.egress import EgressGate, EgressRefusedError, EgressUpstreamError
+from aqa_runner.evidence import Shot
 from aqa_runner.locators import Absent, Miss, Resolved, Shown, Unresolved, Use
 from aqa_runner.reasons import Raised, UnansweredError
 from aqa_runner.redaction import Redacted, Redactor
@@ -51,10 +55,57 @@ MARGIN_SECONDS = 1
 # its target the match its use needs within `resolve_seconds`; its text
 # search ran out of time, which establishes neither (DATA_MODEL §7); or it
 # wasn't evaluated, since a step stopped the run first or a look at the page
-# raised.
+# raised, or, for a `model_verify` check, the verifier wasn't asked or its
+# reply decided nothing (`AssertionResult.verified` says why).
 type AssertionOutcome = Literal[
     "pass", "failed", "binding_unresolved", "check_timed_out", "not_evaluated"
 ]
+
+# Why a `model_verify` check reached with no verifier isn't evaluated: only
+# `aqa replay --mode verified` has one (ADR-0024's #256 amendment).
+NO_VERIFIER: Final = "model_verify needs a verified replay"
+
+
+@dataclass(frozen=True)
+class VerifierSaid:
+    """A verifier's reply that parsed, each text scanned and on one line: its
+    verdict, the references it cites, and its own report, which decides
+    nothing (CONTEXT.md, "Verdict")."""
+
+    verdict: str
+    evidence_refs: tuple[Redacted, ...]
+    confidence: float
+    rationale: Redacted
+
+
+@dataclass(frozen=True)
+class Verified:
+    """What a `model_verify` check came to (ADR-0024's #256 amendment): its
+    verdict, and the fixed reason of one the verifier didn't give; the
+    verifier's reply, when it parsed; and the folder of the run record its
+    evidence was saved in, with what became of that folder's screenshot,
+    when it was saved."""
+
+    verdict: Literal["pass", "expectation_violated", "inconclusive"]
+    reason: str | None = None
+    said: VerifierSaid | None = None
+    folder: str | None = None
+    shot: Shot | None = None
+
+
+# What judges a `model_verify` check whose target resolved, in a verified
+# replay (`aqa_runner.verification`): given the session, the check and the
+# element its target resolved to, which it doesn't dispose of.
+type Verify = Callable[
+    [BrowserSession, ModelVerify, ElementHandle], Awaitable[Verified]
+]
+
+# The outcome each of a verifier's verdicts gives its check.
+_VERIFIED: Final[Mapping[str, Literal["pass", "failed", "not_evaluated"]]] = {
+    "pass": "pass",
+    "expectation_violated": "failed",
+    "inconclusive": "not_evaluated",
+}
 
 
 @dataclass(frozen=True)
@@ -63,9 +114,10 @@ class Evaluation:
     the spec and the run's start origin its probes are read from, through
     the run's egress gate; the run's `resolve_seconds`; the scan of every
     value the run binds; the probe baselines, captured into
-    `baseline_values` as the run goes; and whether every locator of a
-    target must resolve at each use. Captured baselines stay in memory;
-    they never enter a result or the run record."""
+    `baseline_values` as the run goes; whether every locator of a target
+    must resolve at each use; and, in a verified replay, the verifier a
+    `model_verify` check goes to. Captured baselines stay in memory; they
+    never enter a result or the run record."""
 
     targets: Mapping[str, Target]
     spec: Spec
@@ -76,6 +128,7 @@ class Evaluation:
     baseline_definitions: Mapping[str, ProbeBaseline] = field(default_factory=dict)
     baseline_values: dict[str, probes.JsonValue] = field(default_factory=dict)
     every_locator: bool = False
+    verify: Verify | None = None
 
     @property
     def withheld(self) -> bool:
@@ -101,7 +154,9 @@ class AssertionResult:
     the step that stopped the run before any assertion was evaluated, or
     `error`, what a look at the page raised (the rest after it aren't
     evaluated either). One whose target resolved, then passed, failed or
-    timed out, has the index of the locator that resolved it."""
+    timed out, has the index of the locator that resolved it. A
+    `model_verify` check that was evaluated has what it came to,
+    `verified`."""
 
     id: str
     outcome: AssertionOutcome
@@ -109,6 +164,7 @@ class AssertionResult:
     stopped_at: int | None = None
     error: str | None = None
     locator_index: int | None = None
+    verified: Verified | None = None
 
 
 async def evaluate(
@@ -150,8 +206,15 @@ async def evaluate(
         )
     if isinstance(held, Unresolved):
         return AssertionResult(check.id, "binding_unresolved", held.misses)
+    if isinstance(held, Verified):
+        return AssertionResult(check.id, "not_evaluated", verified=held)
     if isinstance(held, _Located):
-        return AssertionResult(check.id, held.outcome, locator_index=held.locator_index)
+        return AssertionResult(
+            check.id,
+            held.outcome,
+            locator_index=held.locator_index,
+            verified=held.verified,
+        )
     return AssertionResult(check.id, "pass" if held else "failed")
 
 
@@ -181,10 +244,12 @@ async def evaluate_each(
 @dataclass(frozen=True)
 class _Located:
     """A target's check once a locator resolved the target: its outcome,
-    and that locator's index."""
+    that locator's index, and, for a `model_verify` check, what the verifier
+    came to."""
 
-    outcome: Literal["pass", "failed", "check_timed_out"]
+    outcome: Literal["pass", "failed", "check_timed_out", "not_evaluated"]
     locator_index: int
+    verified: Verified | None = None
 
 
 async def _held(
@@ -192,11 +257,12 @@ async def _held(
     check: Assertion,
     evaluation: Evaluation,
     budget: float,
-) -> bool | _Located | Unresolved:
+) -> bool | _Located | Unresolved | Verified:
     """Whether `check` holds, through the session's observations and the
     bounded text search, or the drift that kept its target from being found.
     What it looks at on the page takes at most `budget` seconds and
-    `MARGIN_SECONDS` past them."""
+    `MARGIN_SECONDS` past them, but for the verifier's own look and call,
+    which bound themselves (`aqa_runner.verification`)."""
     match check:
         case TextVisible() | TextInTarget():
             return await _text_held(session, check, evaluation)
@@ -204,8 +270,8 @@ async def _held(
             return await url_matches(pattern, await bounded(session.url(), budget))
         case NotVisible(target=name):
             return await bounded(_absent(session, evaluation, name), budget)
-        case VisibleUnoccluded() | ContrastMin():
-            return await bounded(_visual(session, evaluation, check), budget)
+        case VisibleUnoccluded() | ContrastMin() | ModelVerify():
+            return await _seen(session, evaluation, check)
         case NetworkNone() | NetworkSeen():
             return await session.network_held(check)
         case ProbeEquals() | ProbeEqualsBaseline():
@@ -219,6 +285,42 @@ async def _held(
             return probes.same(value, expected)
         case _:
             assert_never(check)
+
+
+async def _seen(
+    session: BrowserSession,
+    evaluation: Evaluation,
+    check: VisibleUnoccluded | ContrastMin | ModelVerify,
+) -> _Located | Unresolved | Verified:
+    """A visual check of a target: deterministic (`visible_unoccluded`,
+    `contrast_min`), bounded by the run's `resolve_seconds`, or the
+    verifier's (`_verified`)."""
+    if isinstance(check, ModelVerify):
+        return await _verified(session, evaluation, check)
+    return await bounded(_visual(session, evaluation, check), evaluation.budget)
+
+
+async def _verified(
+    session: BrowserSession, evaluation: Evaluation, check: ModelVerify
+) -> _Located | Unresolved | Verified:
+    """What the verifier came to on `check`'s target, resolved as a
+    `text_in_target` target is; the drift that kept it from being found,
+    with no evidence and no call; or, with no verifier, why it isn't
+    evaluated, never a pass."""
+    if evaluation.verify is None:
+        return Verified("inconclusive", NO_VERIFIER)
+    budget = evaluation.budget
+    found = _answered(
+        await bounded(look_for(session, evaluation, check.target, "assertion"), budget),
+        budget,
+    )
+    if not isinstance(found, Resolved):
+        return found
+    try:
+        verified = await evaluation.verify(session, check, found.element)
+    finally:
+        await found.element.dispose()
+    return _Located(_VERIFIED[verified.verdict], found.locator_index, verified)
 
 
 async def _text_held(

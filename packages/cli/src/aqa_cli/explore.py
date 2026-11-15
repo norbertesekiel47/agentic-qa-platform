@@ -5,7 +5,9 @@ browser.
 
 Everything the command line names is resolved first: the spec root, the
 spec and the project config, the start origin and each budget `--budget`
-lays over the config's. A problem with any of them is a spec error (exit 5).
+lays over the config's. A problem with any of them is a spec error (exit 5),
+and so is an expectation marked `visual: model`, which explore can't plan or
+confirm yet (`admission.explorable`).
 Then, unless `--force`, a compiled script that is up to date is kept, with
 no model call and no browser: it loads, was compiled from the spec and the
 subject contracts as they are, agrees with them, as replay's contract check
@@ -42,7 +44,7 @@ from aqa_core.project import (
     with_budgets,
 )
 from aqa_core.spec import Spec
-from aqa_runner.admission import accepted
+from aqa_runner.admission import accepted, explorable
 from aqa_runner.anthropic_client import (
     KEY_VARIABLE,
     AnthropicClient,
@@ -255,6 +257,7 @@ def _plan(spec_path: Path, url: str | None) -> None:
     """Write the spec's coverage plan to a run record, and stop."""
     try:
         root, spec, config, _ = resolve(spec_path, url)
+        explorable(spec)
         router = _router(config)
     except SpecError as error:
         stop("spec_error", str(spec_path), "nothing was planned", error.problems)
@@ -351,6 +354,7 @@ def _explore(
     began = time.monotonic()
     try:
         root, spec, config, start = resolve(spec_path, url)
+        explorable(spec)
         config = with_budgets(config, budgets)
         kept = None if force else _kept(root, spec, config)
     except SpecError as error:

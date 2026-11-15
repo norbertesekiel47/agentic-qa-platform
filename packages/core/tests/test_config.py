@@ -6,7 +6,7 @@ import typing
 from pathlib import Path
 
 import pytest
-from aqa_core.config import Budgets, RoleField
+from aqa_core.config import Budgets, ProjectConfig, RoleField
 from aqa_core.project import SpecError, load_config
 from aqa_core.schema import AriaRole, authority
 from pydantic import ValidationError
@@ -55,6 +55,7 @@ def test_the_documented_example_loads(tmp_path: Path) -> None:
         "resolve_seconds": 10,
         "heal_turns": 6,
         "heal_model_usd": 0.3,
+        "verified_model_usd": 0.3,
     }
 
 
@@ -73,11 +74,16 @@ def test_every_key_is_optional(tmp_path: Path) -> None:
         "resolve_seconds": 10,
         "heal_turns": 6,
         "heal_model_usd": 0.30,
+        "verified_model_usd": 0.30,
     }
 
 
 def test_heal_budgets_default_to_6_turns_and_030_usd() -> None:
     assert (Budgets().heal_turns, Budgets().heal_model_usd) == (6, 0.30)
+
+
+def test_the_verified_budget_defaults_to_030_usd() -> None:
+    assert ProjectConfig().budgets.verified_model_usd == 0.30
 
 
 def test_a_project_sets_its_heal_budgets(tmp_path: Path) -> None:
@@ -334,6 +340,11 @@ def test_authority_refuses_what_is_not_an_origin(text: str) -> None:
             "budgets: { heal_model_usd: true }\n",
             "budgets.heal_model_usd",
             "valid number",
+        ),
+        (
+            "budgets: { verified_model_usd: 0 }\n",
+            "budgets.verified_model_usd",
+            "greater than 0",
         ),
         # Browser settings, as BrowserSettings validates them.
         (

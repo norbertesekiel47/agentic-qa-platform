@@ -1,7 +1,9 @@
 """Evidence (ADR-0026, Evidence, and its #50 B amendment): what a run keeps
-of each step, under `evidence/<seq>/` in the record it is given, and of a heal's
-first look, under `heals/<key>/`. Replay (`aqa_runner.executor`), exploring
-(#53) and heal (`aqa_runner.heal`) all save it here.
+of each step, under `evidence/<seq>/` in the record it is given, of a heal's
+first look, under `heals/<key>/`, and of a verified replay's look for each
+`model_verify` check, under `verified/assertion-<index>/`. Replay
+(`aqa_runner.executor`), exploring (#53), heal (`aqa_runner.heal`) and the
+verifier (`aqa_runner.verification`) all save it here.
 
 - `a11y_snapshot.yaml`: the caller's own scanned snapshot of the page after
   the step, the one a model is shown, so saving it takes no look of its own
@@ -13,9 +15,10 @@ first look, under `heals/<key>/`. Replay (`aqa_runner.executor`), exploring
 - `screenshot.png`, only when its caller asks: the page as `take_screenshot`
   captures it, masked, and OCR-checked in a run that binds a secret
   (ADR-0034, ADR-0035). Replay asks for one at a step that drifted or
-  failed in `aqa replay`, `aqa run` and `aqa heal <spec>`, and heal at its
-  first look; explore, the bench pilot and a completed step never do
-  (ADR-0033's #251 amendment).
+  failed in `aqa replay`, `aqa run` and `aqa heal <spec>`, heal at its
+  first look, and the verifier for each check it would ask about, whose
+  image, the `Shot`'s, is the one sent; explore, the bench pilot and a
+  completed step never do (ADR-0033's #251 and #256 amendments).
 - `before_screenshot.png`, only when its caller passes one in: the page as
   `held_screenshot` captured it ahead of the step, in the same way, held in
   memory until the step's outcome was known. With `--before-screenshots`,
@@ -30,7 +33,7 @@ screenshot the capture withholds is too, so no page makes evidence decide a
 run; a write the disk or a link refuses raises, as a steps line's does."""
 
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Final
 
 from aqa_runner.browser_session import BrowserSession
@@ -62,22 +65,29 @@ type Held = Screenshot | str
 class Shot:
     """What became of a screenshot evidence was asked for: the file it was
     saved as, by its name in the record, or why it was withheld, in words of
-    ours that never quote the page."""
+    ours that never quote the page. Only the verifier's, asked for with
+    `Asked.sent`, keeps the `Screenshot` its file was written from, the one
+    image a verifier is sent (ADR-0024's #256 amendment), out of every repr,
+    comparison and document; every other `Shot` keeps no image."""
 
     path: str | None = None
     withheld: str | None = None
+    image: Screenshot | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
 class Asked:
     """The screenshots a call of `capture_evidence` saves: `screenshot.png`,
     the page after the step, when `after` asks, and `before`, one
-    `held_screenshot` took ahead of the step, when given. Neither field is
-    named `screenshot`: `tests/test_image_exits.py` reads any attribute so
-    spelled in the packages' source as an image capture (ADR-0035)."""
+    `held_screenshot` took ahead of the step, when given; and with `sent`,
+    which only the verifier asks for, the after's `Shot` keeps the
+    `Screenshot` it saved, to be sent. No field is named `screenshot`:
+    `tests/test_image_exits.py` reads any attribute so spelled in the
+    packages' source as an image capture (ADR-0035)."""
 
     after: bool = False
     before: Held | None = None
+    sent: bool = False
 
 
 @dataclass(frozen=True)
@@ -148,9 +158,10 @@ async def capture_evidence(
         None if before is None else _saved(record, folder, "before_screenshot", before)
     )
     after = await held_screenshot(session) if asked.after else None
-    return Shots(
-        None if after is None else _saved(record, folder, "screenshot", after), ahead
-    )
+    saved = None if after is None else _saved(record, folder, "screenshot", after)
+    if saved is not None and asked.sent and not isinstance(after, str):
+        saved = replace(saved, image=after)
+    return Shots(saved, ahead)
 
 
 async def held_screenshot(session: BrowserSession) -> Held:

@@ -21,6 +21,7 @@ from aqa_core.compiled import (
     Fill,
     FillSecret,
     HeldValue,
+    ModelVerify,
     NotVisible,
     ProbeEqualsBaseline,
     Reload,
@@ -472,6 +473,7 @@ def _assertion_names(script: CompiledScript) -> Iterator[str]:
                 | NotVisible(target=target)
                 | VisibleUnoccluded(target=target)
                 | ContrastMin(target=target)
+                | ModelVerify(target=target)
             ) if target not in script.targets:
                 yield f"{where}.target: {target!r} names no target in targets"
             case ProbeEqualsBaseline(probe=probe) if (
@@ -692,10 +694,14 @@ def with_budgets(config: ProjectConfig, overrides: Sequence[str]) -> ProjectConf
     checked as the config file's are (DATA_MODEL §9). Each problem names the
     budget and the rule, never what was given: an override that isn't
     NAME=VALUE with an explore budget's name, a name given twice, or a value
-    the config file couldn't hold. A heal budget's name is no such name:
-    explore would take it and do nothing with it."""
+    the config file couldn't hold. A heal budget's name is no such name, nor
+    the verified one's: explore would take it and do nothing with it."""
     budgets = config.budgets.model_dump()
-    names = [name for name in budgets if not name.startswith("heal_")]
+    names = [
+        name
+        for name in budgets
+        if not name.startswith("heal_") and name != "verified_model_usd"
+    ]
     given: dict[str, object] = {}
     problems: list[str] = []
     for override in overrides:

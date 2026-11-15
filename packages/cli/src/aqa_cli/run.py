@@ -21,7 +21,7 @@ from aqa_runner.model_turns import Spending
 from aqa_runner.replay_result import EXIT_CODES, rolled_up
 from aqa_runner.strict_replay import StrictRun
 
-from aqa_cli.common import admitted_runs, replayed_runs, scan_of, stop
+from aqa_cli.common import Asking, admitted_runs, replayed_runs, scan_of, stop
 
 _UNKEYED: Final = "nothing was replayed, since a drift could only fail without it"
 
@@ -57,9 +57,8 @@ def run(
         subject = ", ".join(each.spec.frontmatter.id for each in runs)
         problems = (f"{KEY_VARIABLE}: not set: the healer's model is Anthropic's",)
         stop("spec_error", subject, _UNKEYED, problems, scan=scan_of(runs))
-    ended = replayed_runs(
-        runs, scan_of(runs), heal=_repair, before_screenshots=before_screenshots
-    )
+    asking = Asking(heal=_repair, before_screenshots=before_screenshots)
+    ended = replayed_runs(runs, scan_of(runs), asking=asking)
     if code := EXIT_CODES[rolled_up(each.outcome for each in ended)]:
         raise typer.Exit(code)
 

@@ -17,12 +17,15 @@ from aqa_core.compiled import (
     ByRole,
     CompiledScript,
     ContrastMin,
+    ModelVerify,
     NetworkNone,
     Target,
     TextInTarget,
     TextVisible,
     VisibleUnoccluded,
 )
+from aqa_core.config import ProjectConfig
+from aqa_core.project import SpecError, parse_compiled
 from aqa_core.schema import Contract
 from aqa_core.spec import spec_hash
 from pydantic import ValidationError
@@ -331,10 +334,9 @@ def test_a_navigate_url_is_a_path_held_to_start_urls_rules(url: str) -> None:
     ("part", "index", "field", "value"),
     [
         ("steps", 0, "action", "hover"),
-        # Checks whose fields DATA_MODEL §7 doesn't give yet: pixel_diff and
-        # model_verify get them in M2.
+        # A check whose fields DATA_MODEL §7 doesn't give yet: pixel_diff
+        # gets them with a follow-up to #254.
         ("assertions", 5, "check", "pixel_diff"),
-        ("assertions", 0, "check", "model_verify"),
     ],
 )
 def test_an_unknown_action_or_check_is_refused_by_name(
@@ -413,6 +415,59 @@ def test_a_contrast_min_check_breaking_its_rule_is_refused(
     [(location, found, _)] = errors(script)
 
     assert (location, found) == (("assertions", 6, "contrast_min", field), kind)
+
+
+def with_model_verify(**fields: object) -> dict[str, Any]:
+    """DATA_MODEL §7's example, its expectation 4 checked by `model_verify` on
+    the pay button, with `fields` laid over that assertion."""
+    script = example()
+    script["assertions"][5] = {
+        "id": "a6",
+        "expect_index": 4,
+        "check": "model_verify",
+        "target": "pay_button",
+    } | fields
+    return script
+
+
+def test_a_model_verify_assertion_names_only_its_target() -> None:
+    script = CompiledScript.model_validate_json(json.dumps(with_model_verify()))
+
+    check = script.assertions[5]
+    assert isinstance(check, ModelVerify)
+    assert check.model_dump() == {
+        "id": "a6",
+        "expect_index": 4,
+        "check": "model_verify",
+        "target": "pay_button",
+    }
+    # Adding a check leaves the format at schema version 1.
+    assert script.schema_version == 1
+
+
+def test_a_model_verify_assertion_takes_no_other_field() -> None:
+    [(location, kind, _)] = errors(with_model_verify(min_size_px=[44, 24]))
+
+    assert (location, kind) == (
+        ("assertions", 5, "model_verify", "min_size_px"),
+        "extra_forbidden",
+    )
+
+
+def test_a_model_verify_target_must_be_one_of_the_targets(tmp_path: Path) -> None:
+    source = tmp_path / "checkout-expired-card.json"
+    config = ProjectConfig.model_validate(
+        {"secrets": {"TEST_PASSWORD": {"origins": ["start"], "field": "password"}}}
+    )
+
+    text = json.dumps(with_model_verify(target="nowhere"))
+
+    with pytest.raises(SpecError) as refused:
+        parse_compiled(text, config, source=source)
+
+    assert refused.value.problems == (
+        f"{source}: assertions[5].target: 'nowhere' names no target in targets",
+    )
 
 
 @pytest.mark.parametrize("version", [True, 1.0, "1", 2, 0])
