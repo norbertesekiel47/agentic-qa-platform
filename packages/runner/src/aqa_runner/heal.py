@@ -185,6 +185,12 @@ class Healing:
     perception: Perception
     taken: int = 0
 
+    def __post_init__(self) -> None:
+        # Read once here, so a `perception` outside the three raises when the
+        # healer is built: `strict_replay` builds it before the run's browser
+        # opens, so nothing has been looked at, called or captured.
+        _ = self.roles
+
     @property
     def roles(self) -> tuple[ModelRoleName, ...]:
         """The roles this healer may call, by its `perception`: `healer` for

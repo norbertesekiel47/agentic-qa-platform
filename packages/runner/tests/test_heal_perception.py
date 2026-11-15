@@ -4,20 +4,32 @@ turn per drift, through the same guards as `hybrid`'s, and `hybrid` a vision
 turn once a tree turn finds no element. Real Chromium against #240's drift
 pages and the canvas one, a scripted model, through `replays.replay_run`."""
 
+import asyncio
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 from aqa_core.config import Perception
+from aqa_core.heal_patch import blob_sha
+from aqa_core.project import load_config, load_spec
 from aqa_runner import heal
 from aqa_runner.chat_client import Reply
 from aqa_runner.heal import Healing
+from aqa_runner.model_router import ModelRouter
+from aqa_runner.model_turns import Spending
+from aqa_runner.publication import published_text
+from aqa_runner.redaction import NO_SECRETS
 from aqa_runner.screenshots import Screenshot, take_screenshot
+from aqa_runner.strict_replay import StrictRun, strict_replay
 from aqa_runner.vision_fallback import VISION_INSTRUCTIONS, VISION_ONLY_INSTRUCTIONS
 from langchain_core.messages import BaseMessage
+from playwright.async_api import Playwright
 
 from packages.runner.tests import heal_fixtures
+from packages.runner.tests.drift_fixtures import DETAILS, SHIPPING, order_spec
+from packages.runner.tests.executor_fixtures import for_spec
+from packages.runner.tests.explore_graph_fixtures import Scripted
 from packages.runner.tests.heal_fixtures import (
     BUDGETS,
     FOUND_NONE,
@@ -215,3 +227,40 @@ def test_a_perception_outside_the_three_fails_closed(
         healed(tmp_path, asked, asked, html=CANVAS)
 
     assert (sent, taken) == ([], [])
+    # Not even the first look's evidence, whose capture is its own.
+    assert list(tmp_path.rglob("heals")) == []
+
+
+def test_a_perception_outside_the_three_stops_the_run_before_the_browser_opens(
+    tmp_path: Path,
+) -> None:
+    """`Healing` checks its `perception` when it is built (the maintainer's
+    answer on #315), and `strict_replay` builds it before the egress proxy,
+    the reset and the browser, so such a value stops the run there."""
+    opened: list[str] = []
+
+    class Unopened:
+        """A Playwright that notes each use and has no browser to launch."""
+
+        def __getattr__(self, name: str) -> object:
+            opened.append(name)
+            raise RuntimeError(f"the replay reached Playwright's {name}")
+
+    root = tmp_path / "qa"
+    path = order_spec(root, SHIPPING)
+    config = load_config(root / "config.yaml")
+    spec = load_spec(path, config)
+    script = for_spec(DETAILS, spec)
+    router = ModelRouter.from_config(config, Scripted())
+
+    def unknown(spending: Spending) -> Healing:
+        return Healing(router, spending, 1, 1.0, cast(Perception, "pixels_please"))
+
+    blob = blob_sha(published_text(script).encode())
+    run = StrictRun(root, spec, config, "http://127.0.0.1:9", script, {}, blob)
+    playwright = cast(Playwright, Unopened())
+
+    with pytest.raises(AssertionError, match="pixels_please"):
+        asyncio.run(strict_replay(run, playwright, NO_SECRETS, heal=unknown))
+
+    assert opened == []
