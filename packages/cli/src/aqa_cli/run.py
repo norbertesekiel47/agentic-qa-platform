@@ -21,7 +21,7 @@ from aqa_runner.model_turns import Spending
 from aqa_runner.replay_result import EXIT_CODES, rolled_up
 from aqa_runner.strict_replay import StrictRun
 
-from aqa_cli.common import admitted_runs, replayed_runs, scan_of, stop
+from aqa_cli.common import Asking, admitted_runs, replayed_runs, scan_of, stop
 
 _UNKEYED: Final = "nothing was replayed, since a drift could only fail without it"
 
@@ -37,6 +37,16 @@ def run(
             "--url", help="The start origin; the project config's base_url if omitted."
         ),
     ] = None,
+    before_screenshots: Annotated[
+        bool,
+        typer.Option(
+            "--before-screenshots",
+            help=(
+                "Capture the page before each step, and save it beside the "
+                "screenshot of a step that fails."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Replay specs' compiled scripts with every locator, each in a sandboxed
     browser; a target that drifted goes to the healer, whose rebinding is a
@@ -47,7 +57,8 @@ def run(
         subject = ", ".join(each.spec.frontmatter.id for each in runs)
         problems = (f"{KEY_VARIABLE}: not set: the healer's model is Anthropic's",)
         stop("spec_error", subject, _UNKEYED, problems, scan=scan_of(runs))
-    ended = replayed_runs(runs, scan_of(runs), heal=_repair)
+    asking = Asking(heal=_repair, before_screenshots=before_screenshots)
+    ended = replayed_runs(runs, scan_of(runs), asking=asking)
     if code := EXIT_CODES[rolled_up(each.outcome for each in ended)]:
         raise typer.Exit(code)
 

@@ -19,6 +19,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any, Final, Literal, NoReturn
@@ -320,23 +321,38 @@ def scan_of(runs: Sequence[StrictRun], more: Iterable[BoundSecret] = ()) -> Reda
     return Redactor([*(s for run in runs for s in run.bound.values()), *more])
 
 
+@dataclass(frozen=True)
+class Asking:
+    """What each run asks for beyond a strict replay: the repair of a drift, by
+    the healing `heal` builds for the run (`aqa run`); the verdict on each
+    `model_verify` check, by the verifier `verify` builds for it (`aqa replay
+    --mode verified`); and a failed step's "before", when `before_screenshots`
+    (`--before-screenshots`)."""
+
+    heal: Callable[[StrictRun, Spending], Healing] | None = None
+    verify: Verifier | None = None
+    before_screenshots: bool = False
+
+
+# What a strict replay asks for: nothing beyond it.
+_STRICT: Final = Asking()
+
+
 def replayed_runs(
     runs: Sequence[StrictRun],
     scan: Redactor,
     *,
     lines: bool = True,
     quiet: bool = False,
-    heal: Callable[[StrictRun, Spending], Healing] | None = None,
-    verify: Verifier | None = None,
+    asking: Asking = _STRICT,
 ) -> list[Replayed]:
-    """Each run, in order, on one Playwright driver, a drift going to the repair
-    of the healing `heal` builds for it when given, each `model_verify` check
-    to the verifier `verify` builds for it when given, and, with `lines`, its
-    line as it ends, unless `quiet` and it passed; or a stop (13) when the
-    driver or the egress listener couldn't start."""
+    """Each run, in order, on one Playwright driver, with what `asking` asks
+    for (`strict_replay`), and, with `lines`, its line as it ends, unless
+    `quiet` and it passed; or a stop (13) when the driver or the egress
+    listener couldn't start."""
     try:
         return asyncio.run(
-            _replayed(runs, scan, lines=lines, quiet=quiet, heal=heal, verify=verify)
+            _replayed(runs, scan, lines=lines, quiet=quiet, asking=asking)
         )
     except UnstartedError as error:
         subject = ", ".join(run.spec.frontmatter.id for run in runs)
@@ -349,10 +365,10 @@ async def _replayed(
     *,
     lines: bool,
     quiet: bool,
-    heal: Callable[[StrictRun, Spending], Healing] | None,
-    verify: Verifier | None,
+    asking: Asking,
 ) -> list[Replayed]:
     ended: list[Replayed] = []
+    heal, verify = asking.heal, asking.verify
     async with started(async_playwright().start()) as playwright:
         # Once per Playwright: a second registration is refused.
         await register_identity_engine(playwright)
@@ -363,6 +379,7 @@ async def _replayed(
                 scan,
                 heal=None if heal is None else partial(heal, run),
                 verify=None if verify is None else partial(verify, run),
+                before_screenshots=asking.before_screenshots,
             )
             if lines and not (quiet and replayed.outcome == "passed"):
                 _said(scan, run.spec.frontmatter.id, replayed)

@@ -2,9 +2,10 @@
 ADR-0024's #238 and #244 amendments): a run record and an egress gate, then the
 spec's reset hook and the script replayed through `replays.replay_run`, in a
 fresh browser on the caller's driver, a step that drifts or fails saving its
-masked screenshot as evidence (#251); then the run's `run.json`, what the run
-viewer reads of it (#249), and its `replay.json` (`replay_result.present`),
-whose outcome decides. With no `heal`, a strict replay, nothing here builds a
+masked screenshot as evidence (#251), and, when `--before-screenshots` asks, a
+step that fails saving the page as it found it beside it (#314); then the run's
+`run.json`, what the run viewer reads of it (#249), and its `replay.json`
+(`replay_result.present`), whose outcome decides. With no `heal`, a strict replay, nothing here builds a
 model client. With one, what `aqa run` gives, a drift goes to the repair of the
 healing it builds for the run. With `verify`, what `aqa replay --mode verified`
 gives, each `model_verify` check goes to the verifier it builds for the run
@@ -103,6 +104,7 @@ async def strict_replay(
     *,
     heal: Callable[[Spending], Healing] | None = None,
     verify: Callable[[Spending, Callable[[], bool]], Verifying] | None = None,
+    before_screenshots: bool = False,
 ) -> Replayed:
     """Replay `run` once in a new record under its spec root, launching its
     browser from `playwright`, whose selector engines are registered, and
@@ -112,8 +114,10 @@ async def strict_replay(
     goes to the repair of the healing it builds, once, for the run's spend
     (`heal_model_usd`). With `verify`, each `model_verify` check goes to the
     verifier it builds, once, for the run's spend (`verified_model_usd`) and
-    whether the run is interrupted yet. The run's time is taken once, from
-    before its record is made."""
+    whether the run is interrupted yet. With `before_screenshots`, each
+    compiled step's page is captured ahead of it, and a step that fails saves
+    its capture as its "before" (`executor.RunSetup`). The run's time is
+    taken once, from before its record is made."""
     began = time.monotonic()
     spec = run.spec
     try:
@@ -136,8 +140,15 @@ async def strict_replay(
         if verify is None
         else verify(spending, interruption(gate, proxy, expected))
     )
-    verified = None if verifying is None else verifying.verify
-    replaying = Replaying(spec, run.config, run.start, gate, verified)
+    replaying = Replaying(
+        spec,
+        run.config,
+        run.start,
+        gate,
+        screenshots=True,
+        before_screenshots=before_screenshots,
+        verify=None if verifying is None else verifying.verify,
+    )
     opening = partial(_opened, playwright, proxy, record)
     result: RunResult | None = None
     stops: list[Stop] = []
@@ -148,7 +159,6 @@ async def strict_replay(
             opening,
             every_locator=True,
             repair=repair,
-            screenshots=True,
         )
     except ResetFailedError as error:
         stops.append(Stop("reset_unsafe", record.redactor.redact(str(error))))

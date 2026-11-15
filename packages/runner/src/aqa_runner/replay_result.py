@@ -351,6 +351,7 @@ def _judged(end: ReplayEnd) -> list[_Judged]:
         last,
         last if result.evidence is None else result.evidence.seq,
         result.shots,
+        result.before_shots,
         verifying=end.verified is not None,
     )
     checks = {check.id: check for check in end.script.assertions}
@@ -376,15 +377,17 @@ class _Judging:
     steps that ran, each finding's repro steps; the last step, whose
     evidence is the page the assertions were evaluated on; the step whose
     evidence a violated invariant cites, the page that first showed a
-    violation (`RunResult.evidence`); each step's screenshot, by seq
-    (`RunResult.shots`); and whether the run is a verified replay, whose
-    every verdict says what its verifier said, if anything."""
+    violation (`RunResult.evidence`); each step's screenshot and each failed
+    step's "before", by seq (`RunResult.shots`, `RunResult.before_shots`);
+    and whether the run is a verified replay, whose every verdict says what
+    its verifier said, if anything."""
 
     redactor: Redactor
     ran: list[int]
     last: int
     violated_at: int
     shots: Mapping[int, Shot]
+    before_shots: Mapping[int, Shot]
     verifying: bool = False
 
     def step(self, step: StepResult) -> _Judged:
@@ -437,12 +440,13 @@ class _Judging:
         verified: Verified | None = None,
     ) -> _Judged:
         """The verdict on `subject`, where it was `located`, and its reason,
-        citing step `evidence`'s evidence and that step's screenshot, if its
-        evidence asked for one (DATA_MODEL §7), or, for a `model_verify`
-        check whose evidence was saved, its own folder and screenshot. A
-        violation's finding is `about` its category and title. In a verified
-        replay, it says what the verifier said of it, null for all but a
-        `model_verify` check whose reply parsed."""
+        citing step `evidence`'s evidence, that step's screenshot, if its
+        evidence asked for one, and its "before", if it failed and kept one
+        (DATA_MODEL §7), or, for a `model_verify` check whose evidence was
+        saved, its own folder and screenshot, with no "before". A violation's
+        finding is `about` its category and title. In a verified replay, it
+        says what the verifier said of it, null for all but a `model_verify`
+        check whose reply parsed."""
         verdict, reason = judgement
         scan = self.redactor.redact
         finding = None
@@ -456,11 +460,13 @@ class _Judging:
         cited = {
             "path": f"evidence/{evidence}",
             "screenshot": _shot(self.shots.get(evidence), self.redactor),
+            "before_screenshot": _shot(self.before_shots.get(evidence), self.redactor),
         }
         if verified is not None and verified.folder is not None:
             cited = {
                 "path": verified.folder,
                 "screenshot": _shot(verified.shot, self.redactor),
+                "before_screenshot": None,
             }
         said = None if verified is None else verified.said
         return _Judged(
@@ -496,7 +502,8 @@ def _said(said: VerifierSaid | None, redactor: Redactor) -> dict[str, object] | 
 
 def _shot(shot: Shot | None, redactor: Redactor) -> dict[str, object] | None:
     """A screenshot as a verdict cites it: the file it was saved as, or why it
-    was withheld, scanned as every reason is; None when none was asked for.
+    was withheld, scanned as every reason is; None when none was asked for or
+    kept.
     The file's name is ours, so it isn't scanned, as `evidence.path` isn't."""
     if shot is None:
         return None

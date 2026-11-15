@@ -29,7 +29,7 @@ from aqa_runner.anthropic_client import ProviderError
 from aqa_runner.binding import same_element
 from aqa_runner.browser_session import BrowserSession, RefError
 from aqa_runner.evaluation import Verified, bounded, looked
-from aqa_runner.evidence import Shot, capture_evidence
+from aqa_runner.evidence import Asked, Shot, capture_evidence
 from aqa_runner.model_router import ModelCallError, ModelRouter
 from aqa_runner.model_turns import (
     UNRECORDED,
@@ -58,6 +58,10 @@ NO_REF: Final = (
     "wasn't called"
 )
 WITHHELD: Final = "the screenshot was withheld, so the verifier wasn't called"
+
+# What a check's evidence saves of the page: its screenshot after the look,
+# the one sent, and no "before".
+_AFTER: Final = Asked(after=True)
 
 # An element's ref in a session's snapshot: page text that imitates one reads
 # `(ref=` (`snapshot_refs.as_text`).
@@ -99,9 +103,10 @@ class Verifying:
         seconds = self.seconds
         snapshot = await bounded(looked(session.snapshot, seconds), seconds)
         ref = await bounded(_ref_of(session, snapshot, element), seconds)
-        shot = await capture_evidence(
-            self.spending.record, session, folder, None, snapshot, screenshot=True
+        saved = await capture_evidence(
+            self.spending.record, session, folder, None, snapshot, asked=_AFTER
         )
+        shot = saved.after
         verdict = await self._asked(session, check, ref, shot)
         return replace(verdict, folder=folder, shot=shot)
 

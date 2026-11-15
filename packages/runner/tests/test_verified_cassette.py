@@ -131,6 +131,7 @@ def test_the_pass_cassette_cites_the_screenshot_and_the_badges_ref(
     assert run.badge["evidence"] == {
         "path": FOLDER,
         "screenshot": {"path": SHOT, "withheld": None},
+        "before_screenshot": None,
     }
     assert run.badge["verifier"]["evidence_refs"] == [SHOT, ref]
     models = json.loads((run.record / "run.json").read_text())["models"]

@@ -91,6 +91,12 @@ def test_heal_without_the_providers_key_exits_5(
             "with no --url",
             id="apply-and-a-url",
         ),
+        pytest.param(
+            ["apply", "ah_0123456789ab", "--before-screenshots"],
+            2,
+            "with no --url or --before-screenshots",
+            id="apply-and-before-screenshots",
+        ),
         # A path, not the word: it reaches the project, which says it holds no such
         # spec, where the word alone is a usage error.
         pytest.param(

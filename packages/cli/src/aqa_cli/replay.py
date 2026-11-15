@@ -35,7 +35,7 @@ from aqa_runner.replay_result import EXIT_CODES, rolled_up
 from aqa_runner.strict_replay import StrictRun
 from aqa_runner.verification import Verifying
 
-from aqa_cli.common import admitted_runs, replayed_runs, say, scan_of, stop
+from aqa_cli.common import Asking, admitted_runs, replayed_runs, say, scan_of, stop
 
 _UNPRINTABLE: Final = (
     "the runs' documents are withheld, since they would spell a bound value"
@@ -75,6 +75,16 @@ def replay(
     quiet: Annotated[
         bool, typer.Option("--quiet", help="Print only the runs that didn't pass.")
     ] = False,
+    before_screenshots: Annotated[
+        bool,
+        typer.Option(
+            "--before-screenshots",
+            help=(
+                "Capture the page before each step, and save it beside the "
+                "screenshot of a step that fails."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Replay specs' compiled scripts in strict mode, with no model call and
     no heal, each in a sandboxed browser, and write each run's verdicts to
@@ -91,8 +101,11 @@ def replay(
                 f"{KEY_VARIABLE}: not set: the verifier's model is Anthropic's",
             )
             stop("spec_error", subject, _UNKEYED, problems, scan=scan)
-        verify = _verifier if mode == "verified" else None
-        ended = replayed_runs(runs, scan, lines=not as_json, quiet=quiet, verify=verify)
+        asking = Asking(
+            verify=_verifier if mode == "verified" else None,
+            before_screenshots=before_screenshots,
+        )
+        ended = replayed_runs(runs, scan, lines=not as_json, quiet=quiet, asking=asking)
     except typer.Exit:
         # A stop before any run.
         if as_json:

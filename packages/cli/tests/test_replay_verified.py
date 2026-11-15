@@ -324,6 +324,7 @@ def test_a_pass_sends_the_saved_screenshot_and_cites_its_folder(
     assert found["evidence"] == {
         "path": FOLDER,
         "screenshot": {"path": SHOT, "withheld": None},
+        "before_screenshot": None,
     }
     assert found["verifier"] == {
         "verdict": "pass",
