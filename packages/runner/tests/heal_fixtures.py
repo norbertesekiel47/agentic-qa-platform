@@ -77,6 +77,9 @@ def rebinding(
 
 SHOW = rebinding("button", "Show details", confidence=0.9, rationale="it moved")
 NO_TOOL = answer(AIMessage(content="nothing on this page fits"))
+# Vision fallback's reply naming no point (#252): a tree turn that found no
+# element is followed by one vision turn, and this one ends the heal as before.
+NO_POINT = NO_TOOL
 FOUND_NONE = "the healer found no element for the meaning"
 
 
@@ -159,6 +162,7 @@ def healed(
             spending,
             loaded.budgets.heal_turns,
             loaded.budgets.resolve_seconds,
+            loaded.heal.vision_fallback,
         )
 
         async def repair(drift: Drift) -> Offer:
@@ -277,7 +281,13 @@ async def heal_recorded(
 
     def heal(spending: Spending) -> Healing:
         budgets = config.budgets
-        return Healing(router, spending, budgets.heal_turns, budgets.resolve_seconds)
+        return Healing(
+            router,
+            spending,
+            budgets.heal_turns,
+            budgets.resolve_seconds,
+            config.heal.vision_fallback,
+        )
 
     with serving(case.html) as app:
         blob = blob_sha(published_text(script).encode())

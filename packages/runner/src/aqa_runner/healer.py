@@ -74,6 +74,18 @@ def healer_tools() -> tuple[BaseTool, ...]:
     )
 
 
+def target_text(meaning: str, locators: Sequence[Locator]) -> str:
+    """A drifted target as a request's `<target>` block holds it: its meaning
+    and its locators, as JSON."""
+    target = {
+        "meaning": meaning,
+        "locators": [
+            locator.model_dump(mode="json", exclude_none=True) for locator in locators
+        ],
+    }
+    return json.dumps(target, indent=2, sort_keys=True, ensure_ascii=False)
+
+
 def heal_request(
     meaning: str,
     locators: Sequence[Locator],
@@ -90,14 +102,8 @@ def heal_request(
         raise TypeError(
             "a heal's snapshot is the Redacted text BrowserSession.snapshot gives"
         )
-    target = {
-        "meaning": meaning,
-        "locators": [
-            locator.model_dump(mode="json", exclude_none=True) for locator in locators
-        ],
-    }
     blocks = (
-        ("target", json.dumps(target, indent=2, sort_keys=True, ensure_ascii=False)),
+        ("target", target_text(meaning, locators)),
         ("results", results),
         ("snapshot", snapshot),
     )

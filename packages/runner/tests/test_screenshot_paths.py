@@ -40,7 +40,7 @@ from playwright.async_api import CDPSession, Error, async_playwright
 from packages.runner.tests.document_fixtures import Sites, run_gate, serving_sites
 from packages.runner.tests.executor_fixtures import a_spec, compiled, for_spec
 from packages.runner.tests.explore_graph_fixtures import Scripted
-from packages.runner.tests.heal_fixtures import NO_TOOL
+from packages.runner.tests.heal_fixtures import NO_POINT, NO_TOOL
 from packages.runner.tests.screenshot_pages import (
     CASES,
     MARKED,
@@ -170,10 +170,14 @@ async def replayed(
     record = RunRecord.create(tmp_path).redacting(Redactor(bound(sites.app)))
     repair: Repair | None = None
     if through == "heal":
-        router = ModelRouter.from_config(CONFIG, Scripted(NO_TOOL))
+        router = ModelRouter.from_config(CONFIG, Scripted(NO_TOOL, NO_POINT))
         spending = Spending(record, Decimal(str(CONFIG.budgets.heal_model_usd)))
         repair = Healing(
-            router, spending, CONFIG.budgets.heal_turns, HEAL_SECONDS
+            router,
+            spending,
+            CONFIG.budgets.heal_turns,
+            HEAL_SECONDS,
+            CONFIG.heal.vision_fallback,
         ).repair
     script: CompiledScript = FAILS if through in ("failed", "before") else DRIFTS
     # The heal's replay doesn't ask, so its one image is the heal's; only the

@@ -48,7 +48,7 @@ from packages.runner.tests.executor_fixtures import (
     serving_app,
 )
 from packages.runner.tests.explore_graph_fixtures import Scripted
-from packages.runner.tests.heal_fixtures import BLOB, NO_TOOL
+from packages.runner.tests.heal_fixtures import BLOB, NO_POINT, NO_TOOL
 from packages.runner.tests.screenshot_pages import RED, red_pixels
 from packages.runner.tests.secret_fixtures import (
     BOUND_AT_START,
@@ -301,9 +301,15 @@ def test_every_image_a_hostile_run_keeps_is_one_write_screenshot_wrote(
     monkeypatch.setattr(RunRecord, "write_screenshot", spying)
 
     def heal(spending: Spending) -> Healing:
-        router = ModelRouter.from_config(config, Scripted(NO_TOOL))
+        router = ModelRouter.from_config(config, Scripted(NO_TOOL, NO_POINT))
         budgets = config.budgets
-        return Healing(router, spending, budgets.heal_turns, budgets.resolve_seconds)
+        return Healing(
+            router,
+            spending,
+            budgets.heal_turns,
+            budgets.resolve_seconds,
+            config.heal.vision_fallback,
+        )
 
     async def scenario() -> tuple[Replayed, list[int]]:
         async with async_playwright() as playwright:

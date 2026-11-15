@@ -47,7 +47,7 @@ from packages.runner.tests.explore_graph_fixtures import (
     Scripted,
     calling,
 )
-from packages.runner.tests.heal_fixtures import NO_TOOL, rebinding
+from packages.runner.tests.heal_fixtures import NO_POINT, NO_TOOL, rebinding
 from packages.runner.tests.secret_fixtures import (
     BOUND_AT_START,
     OTHER_FAKE_VALUE,
@@ -557,7 +557,11 @@ def test_the_removed_page_with_no_pick_exits_3_with_no_proposal(
     spec = order_at(tmp_path / "qa")
 
     with serving(page("removed")) as app:
-        result = run(monkeypatch, [str(spec), "--url", app.origin], Scripted(NO_TOOL))
+        result = run(
+            monkeypatch,
+            [str(spec), "--url", app.origin],
+            Scripted(NO_TOOL, NO_POINT),
+        )
 
     assert result.exit_code == 3, result.output
     assert result.stderr.startswith("inconclusive order: ")

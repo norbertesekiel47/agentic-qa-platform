@@ -94,6 +94,16 @@ def test_a_project_sets_its_heal_budgets(tmp_path: Path) -> None:
     assert (budgets.heal_turns, budgets.heal_model_usd) == (2, 0.05)
 
 
+def test_heals_vision_fallback_is_on_unless_the_project_turns_it_off(
+    tmp_path: Path,
+) -> None:
+    """Off, a heal is tree-only (ADR-0002's #252 amendment)."""
+    unset = load_config(write(tmp_path, "# nothing set yet\n"))
+    off = load_config(write(tmp_path, "heal: { vision_fallback: false }\n"))
+
+    assert (unset.heal.vision_fallback, off.heal.vision_fallback) == (True, False)
+
+
 @pytest.mark.parametrize(
     ("written", "stored"),
     [
@@ -341,6 +351,9 @@ def test_authority_refuses_what_is_not_an_origin(text: str) -> None:
             "budgets.heal_model_usd",
             "valid number",
         ),
+        ("heal: { vision_fallback: 'no' }\n", "heal.vision_fallback", "valid boolean"),
+        ("heal: { vision_fallback: 0 }\n", "heal.vision_fallback", "valid boolean"),
+        ("heal: { vision: false }\n", "heal.vision", "unknown key"),
         (
             "budgets: { verified_model_usd: 0 }\n",
             "budgets.verified_model_usd",

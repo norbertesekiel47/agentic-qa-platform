@@ -163,6 +163,60 @@ def test_a_cross_origin_iframes_content_is_left_out_of_the_snapshot(
     assert events == 0
 
 
+@pytest.mark.parametrize(
+    ("path", "held"),
+    [
+        # The subresource host's frame and a data: URL's, which the snapshot
+        # leaves out (above).
+        pytest.param("/frames", True, id="frames"),
+        # One inside a frame of the start origin.
+        pytest.param("/deep", True, id="nested"),
+        # Only the start origin's frames, and none at all.
+        pytest.param("/transformed-own", False, id="own_frame"),
+        pytest.param("/own", False, id="own_srcdoc"),
+        pytest.param("/kept", False, id="no_frame"),
+    ],
+)
+def test_a_page_holds_a_frame_left_out_when_one_is_off_the_allowed_origins(
+    sites: Sites, path: str, held: bool
+) -> None:
+    """What a screenshot of the live page would show and the snapshot leaves
+    out, so heal's vision fallback takes none (#252)."""
+
+    async def scenario() -> bool:
+        async with browsing(sites) as session:
+            await session.page.goto(f"{sites.app}{path}")
+            return await session.holds_frame_left_out()
+
+    assert asyncio.run(scenario()) is held
+
+
+@pytest.mark.parametrize(
+    ("framed", "held"),
+    [
+        # Another allowed origin's frame, which the snapshot shows.
+        pytest.param('<iframe src="{other}/kept"></iframe>', False, id="allowed"),
+        # The subresource host's document in an <embed>, which has a frame.
+        pytest.param('<embed type="text/html" src="{cdn}/kept">', True, id="an_embed"),
+    ],
+)
+def test_a_frame_left_out_is_one_on_no_allowed_origin_whatever_holds_it(
+    sites: Sites, framed: str, held: bool
+) -> None:
+    body = framed.format(other=sites.other, cdn=sites.cdn)
+
+    async def scenario() -> bool:
+        async with browsing(sites) as session:
+            await session.page.route(
+                "**/framing",
+                lambda route: route.fulfill(body=body, content_type="text/html"),
+            )
+            await session.page.goto(f"{sites.app}/framing")
+            return await session.holds_frame_left_out()
+
+    assert asyncio.run(scenario()) is held
+
+
 def test_a_frame_that_navigates_during_a_snapshot_discards_it(
     sites: Sites, monkeypatch: pytest.MonkeyPatch
 ) -> None:
