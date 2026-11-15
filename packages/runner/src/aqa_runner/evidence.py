@@ -33,7 +33,7 @@ screenshot the capture withholds is too, so no page makes evidence decide a
 run; a write the disk or a link refuses raises, as a steps line's does."""
 
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Final
 
 from aqa_runner.browser_session import BrowserSession
@@ -65,9 +65,10 @@ type Held = Screenshot | str
 class Shot:
     """What became of a screenshot evidence was asked for: the file it was
     saved as, by its name in the record, or why it was withheld, in words of
-    ours that never quote the page. A saved one keeps the `Screenshot` that
-    file was written from, the only image a verifier is sent (ADR-0024's #256
-    amendment), out of every repr, comparison and document."""
+    ours that never quote the page. Only the verifier's, asked for with
+    `Asked.sent`, keeps the `Screenshot` its file was written from, the one
+    image a verifier is sent (ADR-0024's #256 amendment), out of every repr,
+    comparison and document; every other `Shot` keeps no image."""
 
     path: str | None = None
     withheld: str | None = None
@@ -78,12 +79,15 @@ class Shot:
 class Asked:
     """The screenshots a call of `capture_evidence` saves: `screenshot.png`,
     the page after the step, when `after` asks, and `before`, one
-    `held_screenshot` took ahead of the step, when given. Neither field is
-    named `screenshot`: `tests/test_image_exits.py` reads any attribute so
-    spelled in the packages' source as an image capture (ADR-0035)."""
+    `held_screenshot` took ahead of the step, when given; and with `sent`,
+    which only the verifier asks for, the after's `Shot` keeps the
+    `Screenshot` it saved, to be sent. No field is named `screenshot`:
+    `tests/test_image_exits.py` reads any attribute so spelled in the
+    packages' source as an image capture (ADR-0035)."""
 
     after: bool = False
     before: Held | None = None
+    sent: bool = False
 
 
 @dataclass(frozen=True)
@@ -154,9 +158,10 @@ async def capture_evidence(
         None if before is None else _saved(record, folder, "before_screenshot", before)
     )
     after = await held_screenshot(session) if asked.after else None
-    return Shots(
-        None if after is None else _saved(record, folder, "screenshot", after), ahead
-    )
+    saved = None if after is None else _saved(record, folder, "screenshot", after)
+    if saved is not None and asked.sent and not isinstance(after, str):
+        saved = replace(saved, image=after)
+    return Shots(saved, ahead)
 
 
 async def held_screenshot(session: BrowserSession) -> Held:
@@ -175,12 +180,12 @@ async def held_screenshot(session: BrowserSession) -> Held:
 
 def _saved(record: RunRecord, folder: str, name: str, held: Held) -> Shot:
     """Save `held` in `folder` as `<name>.png`, or nothing when it was
-    withheld; what became of it, keeping the `Screenshot` it wrote."""
+    withheld; what became of it."""
     if isinstance(held, str):
         return Shot(withheld=held)
     path = f"{folder}/{name}.png"
     record.write_screenshot(path, held)
-    return Shot(path, image=held)
+    return Shot(path)
 
 
 def _console_entry(entry: ConsoleEntry, *, withheld: bool) -> dict[str, object]:

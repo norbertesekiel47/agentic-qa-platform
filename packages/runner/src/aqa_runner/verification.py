@@ -61,7 +61,7 @@ WITHHELD: Final = "the screenshot was withheld, so the verifier wasn't called"
 
 # What a check's evidence saves of the page: its screenshot after the look,
 # the one sent, and no "before".
-_AFTER: Final = Asked(after=True)
+_AFTER: Final = Asked(after=True, sent=True)
 
 # An element's ref in a session's snapshot: page text that imitates one reads
 # `(ref=` (`snapshot_refs.as_text`).
