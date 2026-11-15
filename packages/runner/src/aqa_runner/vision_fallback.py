@@ -103,11 +103,12 @@ def vision_request(
     redactor: Redactor,
     after_tree: bool,
 ) -> list[BaseMessage]:
-    """One vision request: the instructions, `VISION_INSTRUCTIONS` `after_tree`
-    turns and `VISION_ONLY_INSTRUCTIONS` with none, then the target and the
-    image's size, each block scanned with the run's `redactor` as it is built,
-    and `shot`'s PNG. `shot` must be a `Screenshot` of the run's own session,
-    which `take_screenshot` checked, never an image's raw bytes."""
+    """One vision request: the instructions, `VISION_INSTRUCTIONS` when it
+    comes `after_tree` turns and `VISION_ONLY_INSTRUCTIONS` when none ran, then
+    the target and the image's size, each block scanned with the run's
+    `redactor` as it is built, and `shot`'s PNG. `shot` must be a `Screenshot`
+    of the run's own session, which `take_screenshot` checked, never an image's
+    raw bytes."""
     if not isinstance(shot, Screenshot):
         raise TypeError("a vision request's image is a Screenshot take_screenshot made")
     if shot.redactor is not redactor:
