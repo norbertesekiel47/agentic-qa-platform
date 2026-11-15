@@ -24,6 +24,8 @@ def data_models_example() -> str:
 
 
 BINDING = "{ origins: [ start ], field: password }"
+# What a value `heal.perception` doesn't take is told.
+PERCEPTIONS = "Input should be 'tree_only', 'vision_only' or 'hybrid'"
 
 
 def write(tmp_path: Path, text: str) -> Path:
@@ -57,6 +59,7 @@ def test_the_documented_example_loads(tmp_path: Path) -> None:
         "heal_model_usd": 0.3,
         "verified_model_usd": 0.3,
     }
+    assert config.heal.model_dump(exclude_unset=True) == {"perception": "hybrid"}
 
 
 def test_every_key_is_optional(tmp_path: Path) -> None:
@@ -94,14 +97,21 @@ def test_a_project_sets_its_heal_budgets(tmp_path: Path) -> None:
     assert (budgets.heal_turns, budgets.heal_model_usd) == (2, 0.05)
 
 
-def test_heals_vision_fallback_is_on_unless_the_project_turns_it_off(
+def test_heals_perception_is_hybrid_unless_the_project_sets_it(
     tmp_path: Path,
 ) -> None:
-    """Off, a heal is tree-only (ADR-0002's #252 amendment)."""
+    """Hybrid: tree turns, then one vision turn once a tree turn finds no
+    element (ADR-0002's #252 and #315 amendments)."""
     unset = load_config(write(tmp_path, "# nothing set yet\n"))
-    off = load_config(write(tmp_path, "heal: { vision_fallback: false }\n"))
 
-    assert (unset.heal.vision_fallback, off.heal.vision_fallback) == (True, False)
+    assert unset.heal.perception == "hybrid"
+
+
+@pytest.mark.parametrize("perception", ["tree_only", "vision_only", "hybrid"])
+def test_a_project_sets_its_heals_perception(tmp_path: Path, perception: str) -> None:
+    config = load_config(write(tmp_path, f"heal: {{ perception: {perception} }}\n"))
+
+    assert config.heal.perception == perception
 
 
 @pytest.mark.parametrize(
@@ -351,8 +361,12 @@ def test_authority_refuses_what_is_not_an_origin(text: str) -> None:
             "budgets.heal_model_usd",
             "valid number",
         ),
-        ("heal: { vision_fallback: 'no' }\n", "heal.vision_fallback", "valid boolean"),
-        ("heal: { vision_fallback: 0 }\n", "heal.vision_fallback", "valid boolean"),
+        ("heal: { perception: tree-only }\n", "heal.perception", PERCEPTIONS),
+        ("heal: { perception: Hybrid }\n", "heal.perception", PERCEPTIONS),
+        ("heal: { perception: true }\n", "heal.perception", PERCEPTIONS),
+        # Replaced by `perception`, with no alias (ADR-0002's #315 amendment).
+        ("heal: { vision_fallback: false }\n", "heal.vision_fallback", "unknown key"),
+        ("heal: { vision_fallback: 'no' }\n", "heal.vision_fallback", "unknown key"),
         ("heal: { vision: false }\n", "heal.vision", "unknown key"),
         (
             "budgets: { verified_model_usd: 0 }\n",

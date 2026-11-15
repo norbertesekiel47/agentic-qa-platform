@@ -347,7 +347,7 @@ def test_a_vision_reply_that_names_no_point_found_none(tmp_path: Path) -> None:
     assert len(run.requests()) == 2
 
 
-def test_a_project_that_turns_vision_fallback_off_heals_from_the_tree_only(
+def test_a_tree_only_project_heals_from_the_tree_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     taken: list[object] = []
@@ -357,7 +357,7 @@ def test_a_project_that_turns_vision_fallback_off_heals_from_the_tree_only(
         return await take_screenshot(session)
 
     monkeypatch.setattr(heal, "take_screenshot", counted)
-    config = f"{BUDGETS}heal: {{ vision_fallback: false }}\n"
+    config = f"{BUDGETS}heal: {{ perception: tree_only }}\n"
 
     run = healed(tmp_path, NO_TOOL, html=CANVAS, config=config)
 

@@ -162,7 +162,7 @@ def healed(
             spending,
             loaded.budgets.heal_turns,
             loaded.budgets.resolve_seconds,
-            loaded.heal.vision_fallback,
+            loaded.heal.perception,
         )
 
         async def repair(drift: Drift) -> Offer:
@@ -286,7 +286,7 @@ async def heal_recorded(
             spending,
             budgets.heal_turns,
             budgets.resolve_seconds,
-            config.heal.vision_fallback,
+            config.heal.perception,
         )
 
     with serving(case.html) as app:
