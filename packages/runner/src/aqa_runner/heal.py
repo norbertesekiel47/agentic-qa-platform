@@ -11,10 +11,14 @@ takes back one element's ref. Deterministic code checks that element
 any dispatch), then the generator writes its locators inside the target's
 contract. The model never writes a locator, a step or an assertion.
 
-A tree turn whose reply calls no tool falls back to vision once (ADR-0002's #252
-amendment): one screenshot goes to the `vision_fallback` role, which names a
-point, and the element there, read without a click, goes through the same checks
-and generator. A canvas can't be confirmed, and the heal ends after that turn.
+The project's `heal.perception` decides how a heal sees the page (ADR-0002's
+#252 and #315 amendments). Under `hybrid`, a tree turn whose reply calls no tool
+falls back to vision once: one screenshot goes to the `vision_fallback` role,
+which names a point, and the element there, read without a click, goes through
+the same checks and generator. A canvas can't be confirmed, and the heal ends
+after that turn. Under `tree_only` there is no vision turn, and under
+`vision_only` no tree turn: the first look is evidence only, and that vision
+turn, with every guard, is the drift's first and last.
 
 Each priced response is on disk in `costs.jsonl` before the next call, and each
 request sent leaves `heals/<key>/<n>.json`, or `vision.json`, whatever came
@@ -268,12 +272,24 @@ async def _turn(state: _Turns, runtime: Runtime[_Heal]) -> _Turns:
 
 
 async def _taken(context: _Heal, state: _Turns) -> _Turns | Offer | _Stop:
-    """The turn's new state, or what ends the turns."""
+    """The turn's new state, or what ends the turns. A `vision_only` heal's
+    first look sends no model its snapshot: its vision turn is the drift's
+    first."""
     if (stop := _spent(context)) is not None:
         return stop
     snapshot = await _observed(context)
     if isinstance(snapshot, _Stop):
         return snapshot
+    if context.healing.perception == "vision_only":
+        return await _looked_at(context, state["turn"] + 1)
+    return await _tree_turn(context, state, snapshot)
+
+
+async def _tree_turn(
+    context: _Heal, state: _Turns, snapshot: Redacted
+) -> _Turns | Offer | _Stop:
+    """A tree turn with `snapshot`: the turn's new state, or what ends the
+    turns, the vision turn among them when its reply calls no tool."""
     reply = await _asked(context, state, snapshot)
     if isinstance(reply, _Stop):
         return reply
@@ -472,12 +488,12 @@ async def _bound(
 
 
 async def _looked_at(context: _Heal, number: int) -> Offer | _Stop:
-    """Vision fallback's one turn, turn `number`, once a tree turn found no
-    element (ADR-0002's #252 amendment): a screenshot of the page sent with
-    the target to `vision_fallback`, whose point is read as the element
-    there. Whatever comes of it, the heal ends. A `tree_only` heal takes no
-    vision turn, and ends with the tree turn's words. Only defects and
-    cancellation raise."""
+    """The one vision turn, turn `number`, once a `hybrid` heal's tree turn
+    found no element, or a `vision_only` heal's first (ADR-0002's #252 and
+    #315 amendments): a screenshot of the page sent with the target to
+    `vision_fallback`, whose point is read as the element there. Whatever
+    comes of it, the heal ends. A `tree_only` heal takes no vision turn, and
+    ends with the tree turn's words. Only defects and cancellation raise."""
     if context.healing.perception == "tree_only":
         return _Stop(_FOUND_NONE)
     shot = await _shot(context)
@@ -539,6 +555,7 @@ async def _shown(context: _Heal, number: int, shot: Screenshot) -> Routed | _Sto
         shot,
         context.session.settings.viewport,
         redactor=context.redactor,
+        after_tree=context.healing.perception == "hybrid",
     )
     try:
         unspelled(context.redactor, [shot])(messages)

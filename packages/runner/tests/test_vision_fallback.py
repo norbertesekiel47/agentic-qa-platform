@@ -64,7 +64,12 @@ def requested(
             shot = await take_screenshot(session)
             built = session.redactor if redactor is None else redactor
             messages = vision_request(
-                MEANING, LOCATORS, shot, session.settings.viewport, redactor=built
+                MEANING,
+                LOCATORS,
+                shot,
+                session.settings.viewport,
+                redactor=built,
+                after_tree=True,
             )
             return shot, messages
 
@@ -83,7 +88,9 @@ def test_a_vision_request_takes_only_a_screenshot() -> None:
     raw = cast(Screenshot, b"\x89PNG\r\n\x1a\n")
 
     with pytest.raises(TypeError, match="Screenshot"):
-        vision_request(MEANING, LOCATORS, raw, (1280, 800), redactor=NO_SECRETS)
+        vision_request(
+            MEANING, LOCATORS, raw, (1280, 800), redactor=NO_SECRETS, after_tree=True
+        )
 
 
 def test_a_vision_request_refuses_a_screenshot_another_scan_made(
