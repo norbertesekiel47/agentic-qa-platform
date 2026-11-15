@@ -235,6 +235,10 @@ def locator_lines(text: str) -> range:
     return range(start + 1, end)
 
 
+# A role's model as `aqa run`'s default config resolves it (TECH_STACK §3).
+SONNET = "anthropic claude-sonnet-5-5, effort the provider's default, fallback none"
+
+
 def test_a_run_that_healed_shows_its_classification_binding_and_diff(
     drift: Ran, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -245,8 +249,7 @@ def test_a_run_that_healed_shows_its_classification_binding_and_diff(
         drift,
         "⇄ heal proposed: UI drift, expectations hold",
         "run",
-        "healer: anthropic claude-sonnet-5-5, effort the provider's default, "
-        "fallback none",
+        f"healer: {SONNET}; vision_fallback: {SONNET}",
     )
     assert steps(shown) == [
         STEP_0,
@@ -512,6 +515,38 @@ def ways(name: str) -> list[Any]:
         pytest.param(garbage(name), id=f"{name}-garbage"),
         pytest.param(linked(name), id=f"{name}-linked"),
     ]
+
+
+@pytest.mark.parametrize(
+    ("roles", "shown"),
+    [
+        pytest.param(["healer"], f"healer: {SONNET}", id="tree_only"),
+        pytest.param(
+            ["vision_fallback"], f"vision_fallback: {SONNET}", id="vision_only"
+        ),
+    ],
+)
+def test_the_model_config_shows_each_model_the_run_may_call(
+    drift: Ran,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    roles: list[str],
+    shown: str,
+) -> None:
+    """A run's `models` names the roles its `heal.perception` may call
+    (ADR-0002's #315 amendment): the healer's alone under `tree_only`, as a
+    record made before #315 does, and the vision fallback's alone under
+    `vision_only`. The page shows each it names."""
+
+    def named(ran: Ran) -> None:
+        run_json = ran.record / "run.json"
+        kept = json.loads(run_json.read_text())
+        kept["models"] = {role: kept["models"][role] for role in roles}
+        run_json.write_text(json.dumps(kept))
+
+    _, page_tree = report_of(drift, tmp_path, monkeypatch, named)
+
+    assert facts(page_tree)["Model config"] == shown
 
 
 @pytest.mark.parametrize("edit", ways("run.json"))

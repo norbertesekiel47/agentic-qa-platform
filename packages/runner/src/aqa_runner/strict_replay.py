@@ -208,10 +208,10 @@ async def _opened(
 
 def _models(healing: Healing | None, verifying: Verifying | None) -> dict[str, object]:
     """The models a run's router resolved, as `run.json` holds them: none in a
-    strict replay, the healer's in a run that heals, and the verifier's in a
-    verified replay."""
+    strict replay, those of the roles its `heal.perception` may call in a run
+    that heals (`Healing.roles`), and the verifier's in a verified replay."""
     if healing is not None:
-        return {"healer": _resolved(healing.router, "healer")}
+        return {role: _resolved(healing.router, role) for role in healing.roles}
     if verifying is not None:
         return {"verifier": _resolved(verifying.router, "verifier")}
     return {}

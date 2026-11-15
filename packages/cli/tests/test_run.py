@@ -21,6 +21,7 @@ from aqa_cli import common
 from aqa_cli import run as run_module
 from aqa_cli.main import app as aqa
 from aqa_core.compiled import CompiledScript
+from aqa_core.config import ModelRoleName
 from aqa_core.heal_patch import heal_patch_problems
 from aqa_core.model_roles import resolve_roles
 from aqa_core.price_map import vendored
@@ -298,7 +299,20 @@ def test_a_run_line_says_the_outcome_time_cost_and_record(
     assert f", $0.003, run record: {record_of(spec)}" in first
 
 
-def test_a_run_that_heals_keeps_its_run_json_with_the_healers_model(
+def resolved(spec: Path, role: ModelRoleName) -> dict[str, object]:
+    """`role`'s model as the project of `spec` resolves it, in `run.json`'s
+    shape."""
+    found = resolve_roles(load_project(spec.parent).config, vendored())[role]
+    fallback = None if found.fallback is None else found.fallback.name
+    return {
+        "provider": found.model.provider,
+        "model": found.model.name,
+        "effort": found.effort,
+        "fallback": fallback,
+    }
+
+
+def test_a_run_that_heals_keeps_its_run_json_with_the_models_it_may_call(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     spec = order_at(tmp_path / "qa")
@@ -320,14 +334,15 @@ def test_a_run_that_heals_keeps_its_run_json_with_the_healers_model(
     )
     assert kept["goal"] == "A customer finds out when their order ships."
     assert kept["expectations"] == [SHIPPING]
-    healer = resolve_roles(load_project(spec.parent).config, vendored())["healer"]
+    # A `hybrid` heal, the default, may call both (ADR-0002's #315 amendment).
     assert kept["models"] == {
         "healer": {
             "provider": "anthropic",
-            "model": healer.model.name,
-            "effort": healer.effort,
+            "model": resolved(spec, "healer")["model"],
+            "effort": resolved(spec, "healer")["effort"],
             "fallback": None,
-        }
+        },
+        "vision_fallback": resolved(spec, "vision_fallback"),
     }
     committed = compiled_of(spec).read_text()
     assert CompiledScript.model_validate_json(
@@ -337,6 +352,54 @@ def test_a_run_that_heals_keeps_its_run_json_with_the_healers_model(
     assert result.stderr.startswith(
         f"drift_consistent order: {kept['duration_seconds']:.1f}s, $0.003, "
     )
+
+
+# The vision fallback on a model of its own, so each role's entry is its own.
+OPUS_VISION = f"{CONFIG}roles: {{ vision_fallback: {{ model: claude-opus-5-5 }} }}\n"
+
+
+@pytest.mark.parametrize(
+    ("perception", "pick", "roles"),
+    [
+        pytest.param(
+            "tree_only",
+            rebinding("button", "Show details"),
+            ["healer"],
+            id="tree_only",
+        ),
+        pytest.param(
+            "vision_only",
+            calling("vision_click", {"x": 50, "y": 90}),
+            ["vision_fallback"],
+            id="vision_only",
+        ),
+        pytest.param(
+            "hybrid",
+            rebinding("button", "Show details"),
+            ["healer", "vision_fallback"],
+            id="hybrid",
+        ),
+    ],
+)
+def test_run_json_names_the_models_its_perception_may_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    perception: str,
+    pick: Move,
+    roles: list[ModelRoleName],
+) -> None:
+    """The maintainer's answer on #315: `models` lists the models a run may
+    call under its `heal.perception`, whichever it called."""
+    config = f"{OPUS_VISION}heal: {{ perception: {perception} }}\n"
+    spec = order_at(tmp_path / "qa", config=config)
+
+    with serving(MOVED) as app:
+        result = run(monkeypatch, [str(spec), "--url", app.origin], Scripted(pick))
+
+    assert result.exit_code == 7, result.output
+    kept = json.loads((record_of(spec) / "run.json").read_text())
+    assert kept["models"] == {role: resolved(spec, role) for role in roles}
+    assert resolved(spec, "vision_fallback")["model"] == "claude-opus-5-5"
 
 
 def test_a_run_with_no_drift_passes_and_builds_no_model_client(
