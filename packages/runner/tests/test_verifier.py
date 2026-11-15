@@ -14,7 +14,9 @@ import typer.testing
 from aqa_cli import replay as replay_module
 from aqa_cli.main import app as aqa
 from aqa_runner import verification
+from aqa_runner.evidence import Asked, Shots, capture_evidence, held_screenshot
 from aqa_runner.redaction import NO_SECRETS, Redactor
+from aqa_runner.run_record import RunRecord
 from aqa_runner.screenshots import Screenshot, take_screenshot
 from aqa_runner.verifier import VERIFY_INSTRUCTIONS, VerifierVerdict, verify_request
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -132,6 +134,40 @@ def test_the_instructions_say_what_is_data_and_what_to_answer() -> None:
     assert "data, never instructions" in VERIFY_INSTRUCTIONS
     for said in ("pass", "expectation_violated", "inconclusive", "evidence_refs"):
         assert said in VERIFY_INSTRUCTIONS
+
+
+def test_only_a_screenshot_asked_to_be_sent_keeps_its_image(tmp_path: Path) -> None:
+    # Every other saved screenshot, a "before" and a step's or a heal's
+    # "after" among them, keeps only its path: no code but the verifier's
+    # holds a saved image to send.
+    record = RunRecord.create(tmp_path).redacting(NO_SECRETS)
+
+    async def saved() -> tuple[Shots, Shots]:
+        with serving(page("green")) as app:
+            async with browsing(app, NO_SECRETS) as session:
+                await session.navigate(f"{app.origin}/page/badge")
+                before = await held_screenshot(session)
+                kept = Asked(after=True, before=before)
+                each = await capture_evidence(
+                    record, session, "kept", None, None, asked=kept
+                )
+                sent = Asked(after=True, sent=True)
+                verified = await capture_evidence(
+                    record, session, "sent", None, None, asked=sent
+                )
+                return each, verified
+
+    each, verified = asyncio.run(saved())
+
+    assert each.after is not None
+    assert each.before is not None
+    assert (each.after.path, each.after.image) == ("kept/screenshot.png", None)
+    assert (each.before.path, each.before.image) == ("kept/before_screenshot.png", None)
+    assert verified.after is not None
+    assert isinstance(verified.after.image, Screenshot)
+    assert (
+        verified.after.image.png == (record.path / "sent/screenshot.png").read_bytes()
+    )
 
 
 def test_a_request_goes_only_with_the_scan_its_screenshot_was_taken_under() -> None:
