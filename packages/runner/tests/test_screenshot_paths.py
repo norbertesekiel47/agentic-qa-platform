@@ -177,7 +177,7 @@ async def replayed(
             spending,
             CONFIG.budgets.heal_turns,
             HEAL_SECONDS,
-            CONFIG.heal.vision_fallback,
+            CONFIG.heal.perception,
         ).repair
     script: CompiledScript = FAILS if through in ("failed", "before") else DRIFTS
     # The heal's replay doesn't ask, so its one image is the heal's; only the

@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from typing import Final, Literal, TypedDict
 
 from aqa_core.compiled import Locator, TargetCheck, TextInTarget
-from aqa_core.config import ModelRoleName
+from aqa_core.config import ModelRoleName, Perception
 from aqa_core.heal_patch import literal_claim_spelled, text_claims
 from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
@@ -167,8 +167,8 @@ class _Call:
 @dataclass
 class Healing:
     """One run's healer: its router, its spend, its turns, the bound on each
-    look at the page, and whether a tree turn that finds no element falls back
-    to vision (the project's `heal.vision_fallback`). `repair` is the `Repair`
+    look at the page, and how it sees the page (the project's
+    `heal.perception`, module docstring). `repair` is the `Repair`
     a replay hands each drift to. Spend and turns are the run's, shared by all
     its drifts: a turn is one `router.call`, a refusal's fallback included, and
     spend is checked after each priced response, so a run can spend up to its
@@ -178,7 +178,7 @@ class Healing:
     spending: Spending
     turns: int
     seconds: float
-    vision: bool
+    perception: Perception
     taken: int = 0
 
     async def repair(self, drift: Drift) -> Offer:
@@ -475,10 +475,10 @@ async def _looked_at(context: _Heal, number: int) -> Offer | _Stop:
     """Vision fallback's one turn, turn `number`, once a tree turn found no
     element (ADR-0002's #252 amendment): a screenshot of the page sent with
     the target to `vision_fallback`, whose point is read as the element
-    there. Whatever comes of it, the heal ends. A project that turned vision
-    fallback off ends it with the tree turn's words. Only defects and
+    there. Whatever comes of it, the heal ends. A `tree_only` heal takes no
+    vision turn, and ends with the tree turn's words. Only defects and
     cancellation raise."""
-    if not context.healing.vision:
+    if context.healing.perception == "tree_only":
         return _Stop(_FOUND_NONE)
     shot = await _shot(context)
     if isinstance(shot, _Stop):

@@ -139,13 +139,18 @@ class Budgets(StrictModel):
     verified_model_usd: PositiveNumber = 0.30
 
 
-class Heal(StrictModel):
-    """How `aqa run` heals a drift: with vision fallback, one screenshot sent to
-    the `vision_fallback` role once a tree turn finds no element, unless the
-    project turns it off, which leaves the heal tree-only (ADR-0002's #252
-    amendment)."""
+# How a heal sees the page (ADR-0002's #252 and #315 amendments).
+Perception = Literal["tree_only", "vision_only", "hybrid"]
 
-    vision_fallback: StrictBool = True
+
+class Heal(StrictModel):
+    """How `aqa run` heals a drift, by its `perception`: `tree_only`, the
+    `healer`'s tree turns only, so no screenshot goes to a model; `vision_only`,
+    no tree turn, only one screenshot sent to the `vision_fallback` role; and
+    `hybrid`, tree turns first, then that one vision turn once a tree turn
+    finds no element (ADR-0002's #252 and #315 amendments)."""
+
+    perception: Perception = "hybrid"
 
 
 class SubjectContract(StrictModel):

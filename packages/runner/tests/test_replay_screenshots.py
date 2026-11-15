@@ -308,7 +308,7 @@ def test_every_image_a_hostile_run_keeps_is_one_write_screenshot_wrote(
             spending,
             budgets.heal_turns,
             budgets.resolve_seconds,
-            config.heal.vision_fallback,
+            config.heal.perception,
         )
 
     async def scenario() -> tuple[Replayed, list[int]]:

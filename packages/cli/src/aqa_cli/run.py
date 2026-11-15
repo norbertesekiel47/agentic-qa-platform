@@ -74,5 +74,5 @@ def _repair(run_of: StrictRun, spending: Spending) -> Healing:
         spending,
         budgets.heal_turns,
         budgets.resolve_seconds,
-        config.heal.vision_fallback,
+        config.heal.perception,
     )
