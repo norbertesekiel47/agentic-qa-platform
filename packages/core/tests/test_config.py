@@ -24,7 +24,7 @@ def data_models_example() -> str:
 
 
 BINDING = "{ origins: [ start ], field: password }"
-# What a value `heal.perception` doesn't take is told.
+# The problem a value `heal.perception` doesn't take gives.
 PERCEPTIONS = "Input should be 'tree_only', 'vision_only' or 'hybrid'"
 
 
