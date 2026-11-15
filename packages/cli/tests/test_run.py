@@ -355,7 +355,7 @@ def test_a_run_that_heals_keeps_its_run_json_with_the_models_it_may_call(
 
 
 # The vision fallback on a model of its own, so each role's entry is its own.
-OPUS_VISION = f"{CONFIG}roles: {{ vision_fallback: {{ model: claude-opus-5-5 }} }}\n"
+OPUS_VISION = f"{CONFIG}roles:\n  vision_fallback: {{ model: claude-opus-5-5 }}\n"
 
 
 @pytest.mark.parametrize(
