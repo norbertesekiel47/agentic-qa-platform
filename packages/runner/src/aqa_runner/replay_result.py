@@ -1,5 +1,6 @@
-"""A replay's outcome and its run document, `replay.json` (ADR-0024's #238 and
-#244 amendments, DATA_MODEL §7), for a strict replay and for a run that heals.
+"""A replay's outcome and its run document, `replay.json` (ADR-0024's #238,
+#244 and #256 amendments, DATA_MODEL §7), for a strict replay, a run that heals
+and a verified replay.
 
 `present` projects a run into `replay.json`: a verdict for each step that
 ran, each assertion evaluated or whose look raised, and each invariant the
@@ -17,32 +18,37 @@ is scanned again with that scan, and so is every reason assembled here.
 `rolled_up` picks the run that decides when several specs ran, by the same
 order. Spec and secret errors (5, 12) are found before any run, so they
 never reach here. No strict replay calls a model or heals, so only a run that
-heals can end 11 or 7, and only its document has `heal_proposal` and each
-verdict's `heal`.
+heals or a verified replay can end 11, only a run that heals 7, and only its
+document has `heal_proposal` and each verdict's `heal`. Only a verified
+replay's has `verified_cost_usd` and each verdict's `verifier`.
 
 Neither touches a browser, file or clock: a record is read for its ID, scan
 and the intents it holds unresolved in memory."""
 
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
+from decimal import MAX_PREC, Decimal, localcontext
 from typing import Final, Literal
 
 from aqa_core.compiled import (
     Assertion,
     Click,
     CompiledScript,
+    ContrastMin,
     Fill,
     FillSecret,
-    NotVisible,
+    ModelVerify,
     Select,
-    TextInTarget,
+    TargetCheck,
     VisibleUnoccluded,
 )
+from aqa_core.model_costs import CostRecord
+from aqa_core.price_map import plain
 from aqa_core.spec import InvariantName, Spec
 
 from aqa_runner.egress import InfrastructureEvent
 from aqa_runner.egress_proxy import EgressBlocks
-from aqa_runner.evaluation import AssertionResult
+from aqa_runner.evaluation import AssertionResult, Verified, VerifierSaid
 from aqa_runner.evidence import Shot
 from aqa_runner.executor import RunResult, StepResult
 from aqa_runner.heal_proposal import final_script, proposal_document, rebinds
@@ -125,9 +131,11 @@ class ReplayEnd:
     unresolved; the spec and the compiled script it replayed; replay's result,
     None when replay raised; the egress blocks and the gate's infrastructure
     events as the run left them, which hold whether or not replay returned or
-    its record took them, as explore's do; each cause it stopped on; and, in a
+    its record took them, as explore's do; each cause it stopped on; in a
     run that heals, the blob SHA of the compiled file it replayed
-    (`heal_patch.blob_sha`), None in a strict replay, which never heals."""
+    (`heal_patch.blob_sha`), None in a strict replay, which never heals; and,
+    in a verified replay, the cost record of each response its verifier
+    calls got, None in any other run."""
 
     record: RunRecord
     spec: Spec
@@ -137,6 +145,7 @@ class ReplayEnd:
     infrastructure_events: tuple[InfrastructureEvent, ...]
     stops: tuple[Stop, ...] = ()
     base: str | None = None
+    verified: tuple[CostRecord, ...] | None = None
 
     @property
     def stopped_on(self) -> tuple[Stop, ...]:
@@ -188,7 +197,8 @@ def present(end: ReplayEnd) -> dict[str, object]:
     """`end` as `replay.json` holds it, JSON-ready: schema 1. Every
     non-resumable step is listed whatever the outcome. A run that heals says so
     in its `mode`, and adds `heal_proposal`, null unless it ended
-    `drift_consistent`."""
+    `drift_consistent`. A verified replay says so too, and adds
+    `verified_cost_usd`, what its verifier calls cost."""
     outcome = final_outcome(end)
     withheld = not end.record.redactor.empty
     events = end.infrastructure_events
@@ -197,7 +207,7 @@ def present(end: ReplayEnd) -> dict[str, object]:
         "schema_version": 1,
         "run_id": end.record.run_id,
         "spec_id": end.spec.frontmatter.id,
-        "mode": "strict" if end.base is None else "run",
+        "mode": _mode(healing=end.base is not None, verified=end.verified is not None),
         "outcome": outcome,
         "exit_code": EXIT_CODES[outcome],
         "withheld": withheld,
@@ -215,7 +225,21 @@ def present(end: ReplayEnd) -> dict[str, object]:
         },
         "verdicts": [verdict.entry for verdict in judged],
         **({} if end.base is None else {"heal_proposal": _proposal(end, outcome)}),
+        **({} if end.verified is None else {"verified_cost_usd": _usd(end.verified)}),
     }
+
+
+def _mode(*, healing: bool, verified: bool) -> str:
+    """What a run's document says it was: `run`, a run that heals; `verified`,
+    a verified replay; or `strict`."""
+    return "run" if healing else "verified" if verified else "strict"
+
+
+def _usd(calls: Sequence[CostRecord]) -> str:
+    """What `calls` cost, exactly, written as `costs.jsonl` writes a call's
+    `cost_usd`: `0` for none."""
+    with localcontext(prec=MAX_PREC):
+        return str(plain(sum((call.cost_usd for call in calls), Decimal(0))))
 
 
 def _proposal(end: ReplayEnd, outcome: Outcome) -> dict[str, object] | None:
@@ -226,18 +250,23 @@ def _proposal(end: ReplayEnd, outcome: Outcome) -> dict[str, object] | None:
 
 
 def unrecorded(
-    spec: Spec, redactor: Redactor, reason: str, *, healing: bool = False
+    spec: Spec,
+    redactor: Redactor,
+    reason: str,
+    *,
+    healing: bool = False,
+    verified: bool = False,
 ) -> dict[str, object]:
     """The document of a run of `spec` whose record couldn't be made, which
     no file holds: `present`'s fields, with no run ID, nothing that ran, and
     `reason`, scanned with `redactor`, the run's, its one reason. `healing` says
-    it was a run that heals."""
+    it was a run that heals, and `verified` a verified replay."""
     withheld = not redactor.empty
     return {
         "schema_version": 1,
         "run_id": None,
         "spec_id": spec.frontmatter.id,
-        "mode": "run" if healing else "strict",
+        "mode": _mode(healing=healing, verified=verified),
         "outcome": "record_error",
         "exit_code": EXIT_CODES["record_error"],
         "withheld": withheld,
@@ -247,6 +276,7 @@ def unrecorded(
         "infrastructure_events": {"count": 0, "events": None if withheld else []},
         "verdicts": [],
         **({"heal_proposal": None} if healing else {}),
+        **({"verified_cost_usd": _usd(())} if verified else {}),
     }
 
 
@@ -322,6 +352,7 @@ def _judged(end: ReplayEnd) -> list[_Judged]:
         last if result.evidence is None else result.evidence.seq,
         result.shots,
         result.before_shots,
+        verifying=end.verified is not None,
     )
     checks = {check.id: check for check in end.script.assertions}
     expect = end.spec.frontmatter.expect
@@ -346,9 +377,10 @@ class _Judging:
     steps that ran, each finding's repro steps; the last step, whose
     evidence is the page the assertions were evaluated on; the step whose
     evidence a violated invariant cites, the page that first showed a
-    violation (`RunResult.evidence`); and each step's screenshot and each
-    failed step's "before", by seq (`RunResult.shots`,
-    `RunResult.before_shots`)."""
+    violation (`RunResult.evidence`); each step's screenshot and each failed
+    step's "before", by seq (`RunResult.shots`, `RunResult.before_shots`);
+    and whether the run is a verified replay, whose every verdict says what
+    its verifier said, if anything."""
 
     redactor: Redactor
     ran: list[int]
@@ -356,6 +388,7 @@ class _Judging:
     violated_at: int
     shots: Mapping[int, Shot]
     before_shots: Mapping[int, Shot]
+    verifying: bool = False
 
     def step(self, step: StepResult) -> _Judged:
         judged = self._judged(
@@ -370,7 +403,9 @@ class _Judging:
         self, result: AssertionResult, check: Assertion, expectation: str
     ) -> _Judged:
         category: Category = (
-            "visual" if isinstance(check, VisibleUnoccluded) else "functional"
+            "visual"
+            if isinstance(check, VisibleUnoccluded | ContrastMin | ModelVerify)
+            else "functional"
         )
         judged = self._judged(
             _Subject("assertion", result.id),
@@ -378,6 +413,7 @@ class _Judging:
             _assertion_verdict(result),
             self.last,
             about=(category, expectation),
+            verified=result.verified,
         )
         drifted = result.outcome == "binding_unresolved"
         return replace(judged, drift=result.misses if drifted else None)
@@ -401,12 +437,16 @@ class _Judging:
         evidence: int,
         *,
         about: tuple[Category, str] | None = None,
+        verified: Verified | None = None,
     ) -> _Judged:
         """The verdict on `subject`, where it was `located`, and its reason,
         citing step `evidence`'s evidence, that step's screenshot, if its
         evidence asked for one, and its "before", if it failed and kept one
-        (DATA_MODEL §7). A violation's finding is `about` its category and
-        title."""
+        (DATA_MODEL §7), or, for a `model_verify` check whose evidence was
+        saved, its own folder and screenshot, with no "before". A violation's
+        finding is `about` its category and title. In a verified replay, it
+        says what the verifier said of it, null for all but a `model_verify`
+        check whose reply parsed."""
         verdict, reason = judgement
         scan = self.redactor.redact
         finding = None
@@ -417,6 +457,18 @@ class _Judging:
                 "title": scan(title),
                 "repro_steps": self.ran,
             }
+        cited = {
+            "path": f"evidence/{evidence}",
+            "screenshot": _shot(self.shots.get(evidence), self.redactor),
+            "before_screenshot": _shot(self.before_shots.get(evidence), self.redactor),
+        }
+        if verified is not None and verified.folder is not None:
+            cited = {
+                "path": verified.folder,
+                "screenshot": _shot(verified.shot, self.redactor),
+                "before_screenshot": None,
+            }
+        said = None if verified is None else verified.said
         return _Judged(
             subject,
             verdict,
@@ -425,16 +477,27 @@ class _Judging:
                 **located,
                 "verdict": verdict,
                 "reason": None if reason is None else scan(reason),
-                "evidence": {
-                    "path": f"evidence/{evidence}",
-                    "screenshot": _shot(self.shots.get(evidence), self.redactor),
-                    "before_screenshot": _shot(
-                        self.before_shots.get(evidence), self.redactor
-                    ),
-                },
+                "evidence": cited,
                 "finding": finding,
+                **({"verifier": _said(said, self.redactor)} if self.verifying else {}),
             },
         )
+
+
+def _said(said: VerifierSaid | None, redactor: Redactor) -> dict[str, object] | None:
+    """What a verifier said, as its verdict cites it, each text scanned again:
+    its verdict, the references it cited, and its own report, which decides
+    nothing (CONTEXT.md, "Verdict"); None when its reply didn't parse."""
+    if said is None:
+        return None
+    return {
+        "verdict": redactor.redact(said.verdict),
+        "evidence_refs": [redactor.redact(ref) for ref in said.evidence_refs],
+        "model_reported": {
+            "confidence": said.confidence,
+            "rationale": redactor.redact(said.rationale),
+        },
+    }
 
 
 def _shot(shot: Shot | None, redactor: Redactor) -> dict[str, object] | None:
@@ -463,7 +526,10 @@ def _step_verdict(step: StepResult) -> tuple[Verdict, str | None]:
 def _assertion_verdict(result: AssertionResult) -> tuple[Verdict, str | None]:
     """A false check is a violation. Drift, a timed-out check and a look at
     the page that raised establish neither verdict (ADR-0024's 2026-10-02
-    and #238 amendments)."""
+    and #238 amendments). A `model_verify` check has the verdict and the
+    fixed reason it came to (#256)."""
+    if result.verified is not None:
+        return result.verified.verdict, result.verified.reason
     if result.outcome == "pass":
         return "pass", None
     if result.outcome == "failed":
@@ -512,7 +578,7 @@ class _Healed:
         } | {
             _Subject("assertion", check.id): check.target
             for check in end.script.assertions
-            if isinstance(check, TextInTarget | NotVisible | VisibleUnoccluded)
+            if isinstance(check, TargetCheck)
         }
         return cls(
             end.record.redactor,

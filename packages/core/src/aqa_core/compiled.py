@@ -630,6 +630,26 @@ class VisibleUnoccluded(_Assertion):
     in_viewport: StrictBool
 
 
+class ContrastMin(_Assertion):
+    """The WCAG contrast ratio of the target's rendered text against what is
+    behind it, computed from styles, is at least `min_ratio` (ADR-0025's
+    #254 amendment)."""
+
+    check: Literal["contrast_min"]
+    target: NonEmpty
+    # Any ratio two colours can have, an integer or a fraction.
+    min_ratio: Annotated[float, Field(ge=1, le=21, allow_inf_nan=False)]
+
+
+class ModelVerify(_Assertion):
+    """A `visual: model` expectation judged by the verifier role on the page's
+    masked screenshot, with the target's element cited: only `aqa replay
+    --mode verified` evaluates one (ADR-0024's #256 amendment)."""
+
+    check: Literal["model_verify"]
+    target: NonEmpty
+
+
 Assertion = Annotated[
     TextVisible
     | TextInTarget
@@ -639,9 +659,20 @@ Assertion = Annotated[
     | NetworkSeen
     | ProbeEquals
     | ProbeEqualsBaseline
-    | VisibleUnoccluded,
+    | VisibleUnoccluded
+    | ContrastMin
+    | ModelVerify,
     Field(discriminator="check"),
 ]
+
+# The checks that read a target, and those of them that need it there, so
+# that its drift goes to a repair: a `not_visible` check's element may
+# rightly be gone. `model_verify` is in neither, by the maintainer's call:
+# its target isn't asserted for a heal patch, a subject contract doesn't
+# count it, and its drift goes to no repair, since only a verified replay,
+# which never heals, runs one (ADR-0024's #256 amendment).
+TargetCheck = TextInTarget | NotVisible | VisibleUnoccluded | ContrastMin
+PositiveCheck = TextInTarget | VisibleUnoccluded | ContrastMin
 
 
 class ExpectationCoverage(StrictModel):

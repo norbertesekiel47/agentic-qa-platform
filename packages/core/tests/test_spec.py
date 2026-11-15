@@ -95,6 +95,21 @@ def test_the_documented_example_loads(tmp_path: Path) -> None:
     assert len(spec.frontmatter.expect) == 5
 
 
+def test_an_expectation_marked_visual_model_loads(tmp_path: Path) -> None:
+    # Only `aqa replay --mode verified` checks one; admission refuses it
+    # everywhere else (ADR-0024's #256 amendment).
+    text = LOGIN.replace(
+        "  - The home page is shown\n",
+        "  - { text: The home page is shown, visual: model }\n",
+    )
+
+    spec = load_spec(write(tmp_path, text), CONFIG).frontmatter
+
+    assert [(e.text, e.visual) for e in spec.expect] == [
+        ("The home page is shown", "model")
+    ]
+
+
 def test_start_url_may_carry_a_query_and_a_fragment(tmp_path: Path) -> None:
     text = LOGIN.replace("start_url: /login", "start_url: /login?next=%2Fhome#form")
 
@@ -236,13 +251,7 @@ def test_start_url_may_carry_a_query_and_a_fragment(tmp_path: Path) -> None:
             "preconditions.account.password",
             "must be a string, or { secret: NAME }",
         ),
-        # Expectations: visual: model is a spec error in M1 (ADR-0024).
-        (
-            "  - The home page is shown\n",
-            "  - { text: The home page is shown, visual: model }\n",
-            "expect[0].visual",
-            "model-assisted",
-        ),
+        # Expectations: deterministic or model, and nothing else.
         (
             "  - The home page is shown\n",
             "  - { text: The home page is shown, visual: pixel }\n",

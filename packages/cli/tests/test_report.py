@@ -296,6 +296,13 @@ def shaped(**fields: object) -> Callable[[Path], tuple[str, str]]:
     return holding
 
 
+def verified_run(root: Path) -> tuple[str, str]:
+    # A verified replay's record, which the page doesn't show yet (#256).
+    [run_id] = run_ids(1)
+    recorded(root, run_id, finished(run_id, mode="verified"))
+    return run_id, "a verified run's record, which aqa report doesn't read yet"
+
+
 def a_list(root: Path) -> tuple[str, str]:
     [run_id] = run_ids(1)
     recorded(root, run_id, [finished(run_id)])
@@ -325,7 +332,8 @@ def another_run(root: Path) -> tuple[str, str]:
         pytest.param(shaped(schema_version=2), 5, "spec_error", id="schema-2"),
         pytest.param(shaped(schema_version=True), 5, "spec_error", id="schema-true"),
         pytest.param(shaped(schema_version=1.0), 5, "spec_error", id="schema-float"),
-        pytest.param(shaped(mode="verified"), 5, "spec_error", id="mode"),
+        pytest.param(shaped(mode="explore"), 5, "spec_error", id="mode"),
+        pytest.param(verified_run, 5, "spec_error", id="verified"),
         pytest.param(shaped(outcome="won"), 5, "spec_error", id="outcome"),
         pytest.param(shaped(verdicts={}), 5, "spec_error", id="verdicts"),
         pytest.param(another_run, 5, "spec_error", id="run-id"),

@@ -17,6 +17,7 @@ from playwright.async_api import Browser, BrowserType
 from aqa_runner import executor
 from aqa_runner.egress import EgressGate
 from aqa_runner.egress_proxy import EgressProxy
+from aqa_runner.evaluation import Verify
 from aqa_runner.repairs import Repair
 from aqa_runner.reset import reset
 from aqa_runner.run_record import RunRecord
@@ -27,10 +28,11 @@ class Replaying:
     """What a replay is for and goes through: the spec and project config,
     the run's start origin (`aqa_core.project.start_origin`), and the run's
     egress gate, which sends the reset and every request the replay makes;
-    and the screenshots its evidence saves, which only `strict_replay` asks
+    the screenshots its evidence saves, which only `strict_replay` asks
     for: one at each step that drifts or fails (#251), and with
     `before_screenshots`, the page as each step that fails found it (#314;
-    `executor.RunSetup`)."""
+    `executor.RunSetup`); and, in a verified replay, the verifier each
+    `model_verify` check goes to (#256)."""
 
     spec: Spec
     config: ProjectConfig
@@ -38,6 +40,7 @@ class Replaying:
     gate: EgressGate
     screenshots: bool = False
     before_screenshots: bool = False
+    verify: Verify | None = None
 
 
 @dataclass(frozen=True)
@@ -64,10 +67,12 @@ async def replay_run(
     within `resolve_seconds` (`aqa_runner.reset.reset`), then enter
     `opening()` and replay `script` in what it yields (`executor.replay`):
     with every locator at each use when `every_locator`, else first-match,
-    with a drift handed to `repair` when given (#242, #244), and with the
+    with a drift handed to `repair` when given (#242, #244), with the
     screenshots `replaying` asks for, as only `strict_replay`'s does: one in
     the evidence of a step that drifts or fails (#251), and with
-    `replaying.before_screenshots`, the "before" of a step that fails (#314).
+    `replaying.before_screenshots`, the "before" of a step that fails (#314);
+    and with each `model_verify` check handed to the verifier `replaying`
+    has, if any (#256).
     A failed reset raises `ResetFailedError` before `opening` is entered, so
     no browser starts before the reset passed. What replay raises reaches
     `opening`'s exit, so the caller can tell it before what it opened
@@ -88,6 +93,7 @@ async def replay_run(
                 repair,
                 replaying.screenshots,
                 replaying.before_screenshots,
+                replaying.verify,
             ),
             chromium=opened.chromium,
             proxy=opened.proxy,

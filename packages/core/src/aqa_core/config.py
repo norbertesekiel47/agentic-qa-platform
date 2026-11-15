@@ -124,7 +124,10 @@ class Budgets(StrictModel):
     `heal_` keys: per `aqa run` of a spec, across all its drifts, a turn being
     one model call, and spend checked after each priced response, so a run can
     spend up to `heal_model_usd` and one call's responses (ADR-0024's #244
-    amendment)."""
+    amendment); and for `verified_model_usd`: per run of a spec under `aqa
+    replay --mode verified`, across its `model_verify` checks, spend checked
+    before each verifier call, so a run can spend up to it and one call's
+    responses (ADR-0024's #256 amendment)."""
 
     attempts: _PositiveCount = 3
     actions_per_attempt: _PositiveCount = 40
@@ -133,6 +136,7 @@ class Budgets(StrictModel):
     resolve_seconds: PositiveNumber = 10
     heal_turns: _PositiveCount = 6
     heal_model_usd: PositiveNumber = 0.30
+    verified_model_usd: PositiveNumber = 0.30
 
 
 class Heal(StrictModel):

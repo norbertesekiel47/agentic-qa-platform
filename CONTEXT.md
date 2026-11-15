@@ -176,7 +176,7 @@ The part of a run that handles drift: it re-observes the page, repairs bindings,
 _Avoid_: auto-fix
 
 **Verdict**:
-The classified outcome of a step, an assertion or an invariant: `pass`, `drift_consistent`, `expectation_violated` or `inconclusive`. Every verdict cites evidence. A heal's `confidence` beside a verdict is the model's own report, uncalibrated, and decides nothing. `aqa run`'s run document says `mode: run`, `aqa replay`'s `mode: strict`.
+The classified outcome of a step, an assertion or an invariant: `pass`, `drift_consistent`, `expectation_violated` or `inconclusive`. Every verdict cites evidence. A heal's `confidence` beside a verdict is the model's own report, uncalibrated, and decides nothing, and so is a verifier's. `aqa run`'s run document says `mode: run`, `aqa replay`'s `mode: strict`, and `aqa replay --mode verified`'s `mode: verified`.
 
 **`drift_consistent`**:
 The verdict that the UI changed, and that after rebinding targets and inserting replay-safe steps every assertion evaluates and passes and every invariant holds. It produces a heal proposal and claims nothing about why the UI changed.
@@ -206,7 +206,7 @@ The report of an `expectation_violated` verdict: category, title, repro steps an
 _Avoid_: bug report, issue
 
 **Evidence**:
-What a verdict cites: before and after screenshots, an accessibility-snapshot diff, network and console logs, and the model's rationale. Today a step that drifted or failed, and a heal's first look, keep one masked screenshot each, or say why it was withheld (#251); with `--before-screenshots`, a step that failed also keeps its "before", the page as the step found it (#314).
+What a verdict cites: before and after screenshots, an accessibility-snapshot diff, network and console logs, and the model's rationale. Today a step that drifted or failed, and a heal's first look, keep one masked screenshot each, or say why it was withheld (#251); with `--before-screenshots`, a step that failed also keeps its "before", the page as the step found it (#314). In a verified replay, a `model_verify` assertion keeps its own screenshot, the one the verifier is sent, with the snapshot that gives the element ref its reply must cite (#256).
 
 **Triage label**:
 A person's judgment on a verdict (correct, should have been `expectation_violated`, should have been `drift_consistent`, or not a bug). Triage labels are the ground truth for evaluating the healer.

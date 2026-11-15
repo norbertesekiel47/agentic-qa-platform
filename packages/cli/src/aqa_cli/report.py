@@ -147,7 +147,9 @@ def _named(runs: Path, run_id: str) -> Path:
 
 def _document(record: Path) -> dict[str, object]:
     """The run's `replay.json`, read through no link, when it is a document aqa
-    writes: schema 1, this run's id, a mode, an outcome and a list of verdicts."""
+    writes: schema 1, this run's id, a mode, an outcome and a list of verdicts.
+    A verified replay's is refused: the page doesn't show its verifier's
+    verdicts yet (ADR-0024's #256 amendment)."""
     run_id = record.name
     try:
         handle = os.open(record / "replay.json", os.O_RDONLY | os.O_NOFOLLOW)
@@ -157,6 +159,12 @@ def _document(record: Path) -> dict[str, object]:
     except OSError, ValueError, RecursionError:
         _refuse("record_error", run_id, "its replay.json could not be read")
     match document:
+        case {"mode": "verified"}:
+            _refuse(
+                "spec_error",
+                run_id,
+                "a verified run's record, which aqa report doesn't read yet",
+            )
         case {
             "schema_version": int() as version,
             "run_id": str() as held,
