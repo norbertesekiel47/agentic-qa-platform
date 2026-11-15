@@ -61,7 +61,7 @@ Model-agnostic by design (ADR-0007): any provider can fill any role that its mod
 | `navigator` | High while exploring, but once per spec version | tools, structured output | Claude Sonnet 5.5 (`claude-sonnet-5-5`) | $2 / $10 |
 | `verifier` | Medium (visual assertions) | vision, structured output | Claude Sonnet 5.5 (`claude-sonnet-5-5`) | $2 / $10 |
 | `healer` | Low (on drift) | tools, vision, structured output | Claude Sonnet 5.5 (`claude-sonnet-5-5`) | $2 / $10 |
-| `vision_fallback` | Rare | vision, tools (coordinate actions are tool calls) | Claude Sonnet 5.5 (`claude-sonnet-5-5`) | $2 / $10 |
+| `vision_fallback` | Rare: once a `hybrid` heal's tree turn finds nothing, but at every drift under `heal.perception: vision_only` (ADR-0002's #315 amendment) | vision, tools (coordinate actions are tool calls) | Claude Sonnet 5.5 (`claude-sonnet-5-5`) | $2 / $10 |
 
 \*Anthropic first-party list prices from the Anthropic API reference (cached 2026-09-25). **Re-verify before publishing any cost figure**; cost accounting reads prices from the pinned price map, not from this table.
 
