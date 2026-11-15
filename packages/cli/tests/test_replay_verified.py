@@ -302,6 +302,37 @@ def test_a_verified_replay_with_no_model_verify_builds_no_client_and_costs_nothi
 # The verifier's verdicts, on a scripted model.
 
 
+def test_with_before_screenshots_each_request_sends_only_its_own_capture(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A step's "before" is captured ahead of it (#314) and dropped once it
+    # completes; neither it nor any other image reaches the verifier.
+    navigated = compiled(
+        [{"seq": 1, "action": "navigate", "url": "/page/badge", "side_effect": False}],
+        targets={"badge": BADGE},
+        assertions=[{"id": "a1", **MODEL_VERIFY}, {"id": "a2", **MODEL_VERIFY}],
+    )
+    client = Scripted(replying("pass"), replying("pass"))
+    spec = badge_spec(tmp_path / "qa", navigated)
+
+    result = verified(monkeypatch, app, spec, client, "--before-screenshots")
+
+    assert result.exit_code == 0, result.output
+    record = record_in(spec)
+    for index, request in enumerate(client.requests):
+        images = [
+            part
+            for part in request[-1].content
+            if isinstance(part, dict) and part["type"] == "image"
+        ]
+        [image] = images
+        own = record / f"verified/assertion-{index}/screenshot.png"
+        assert base64.b64decode(image["base64"]) == own.read_bytes()
+        assert sum(isinstance(m.content, list) for m in request) == 1
+    assert len(client.requests) == 2
+    assert list(record.rglob("before_screenshot.png")) == []
+
+
 def test_a_pass_sends_the_saved_screenshot_and_cites_its_folder(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
