@@ -32,7 +32,7 @@ from aqa_runner.vision_fallback import VISION_INSTRUCTIONS, vision_request
 from langchain_core.messages import BaseMessage, HumanMessage
 
 from packages.runner.tests import heal_fixtures
-from packages.runner.tests.drift_fixtures import TOGGLE, page
+from packages.runner.tests.drift_fixtures import CONTRASTED, TOGGLE, page
 from packages.runner.tests.executor_fixtures import compiled
 from packages.runner.tests.explore_graph_fixtures import calling
 from packages.runner.tests.heal_fixtures import (
@@ -43,6 +43,7 @@ from packages.runner.tests.heal_fixtures import (
     Healed,
     basis,
     healed,
+    in_view_at,
     turn_files,
     with_budgets,
 )
@@ -644,3 +645,65 @@ def test_the_vision_turn_sends_its_own_capture_never_a_held_before_screenshot(
     assert held
     assert taken == [sent]
     assert sent not in held
+
+
+# The moved page, its toggle labelled too (#309's page): an action's locators
+# may find it by that label, and an assertion's may not.
+LABELLED = MOVED.replace(
+    "<footer>", '<footer><label for="show">Show details</label>'
+).replace("<button onclick", '<button id="show" onclick', 1)
+
+
+def test_a_vision_pick_on_a_contrast_min_target_is_rebound_for_an_assertions_use(
+    tmp_path: Path,
+) -> None:
+    """#309 lets a drifted `contrast_min` target reach a heal. A vision pick
+    goes through the same generator as a tree pick, so its locators are an
+    assertion's, never the label's, and the check is evaluated again."""
+    run = healed(
+        tmp_path,
+        NO_TOOL,
+        clicking(*ON_THE_MOVED_TOGGLE),
+        script=CONTRASTED,
+        spec_at=in_view_at,
+        html=LABELLED,
+    )
+
+    [repaired] = run.result.repairs
+    assert repaired.at.key == "assertion-0"
+    assert repaired.script is not None
+    assert [
+        locator.model_dump(mode="json", exclude_none=True)
+        for locator in repaired.script.targets["toggle"].locators
+    ] == [{"css": "button", "scope": {"css": "#order"}}]
+    assert [check.outcome for check in run.result.assertions] == ["pass"]
+    assert (run.document["outcome"], run.document["exit_code"]) == (
+        "drift_consistent",
+        7,
+    )
+    assert basis(run).model_reported is None
+    assert [tools for tools, _ in run.client.offered] == [
+        ("rebind",),
+        ("vision_click",),
+    ]
+
+
+def test_a_canvas_drawn_contrast_min_target_cant_be_confirmed(tmp_path: Path) -> None:
+    """A drawn control's colours are pixels, which no `contrast_min` reads, and
+    the canvas is refused before any check."""
+    run = healed(
+        tmp_path,
+        NO_TOOL,
+        clicking(*INSIDE),
+        script=CONTRASTED,
+        spec_at=in_view_at,
+        html=CANVAS,
+    )
+
+    assert basis(run).said == A_CANVAS
+    assert run.result.repairs[0].script is None
+    assert run.verdict("assertion", "a1")["verdict"] == "inconclusive"
+    assert (run.document["outcome"], run.document["heal_proposal"]) == (
+        "inconclusive",
+        None,
+    )
