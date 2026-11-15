@@ -22,11 +22,10 @@ from aqa_core.compiled import (
     Fill,
     FillSecret,
     Navigate,
-    NotVisible,
+    PositiveCheck,
     Press,
     Reload,
-    TextInTarget,
-    VisibleUnoccluded,
+    TargetCheck,
 )
 from aqa_core.config import ProjectConfig
 from aqa_core.project import path_on_origin, start_url
@@ -521,8 +520,7 @@ async def _evaluated(
         again = [
             index
             for index, check in enumerate(checks)
-            if isinstance(check, TextInTarget | NotVisible | VisibleUnoccluded)
-            and check.target in changed
+            if isinstance(check, TargetCheck) and check.target in changed
         ]
         fresh = await evaluate_each(
             session, [checks[index] for index in again], evaluation
@@ -539,9 +537,7 @@ def _next_drift(
     repair, with its misses. A `not_visible` check's drift goes to none: its
     element may rightly be gone."""
     for index, (check, result) in enumerate(zip(checks, results, strict=True)):
-        if result.outcome == "binding_unresolved" and isinstance(
-            check, TextInTarget | VisibleUnoccluded
-        ):
+        if result.outcome == "binding_unresolved" and isinstance(check, PositiveCheck):
             at = AssertionAt(index, check)
             if not handing.handed(at):
                 return at, result.misses

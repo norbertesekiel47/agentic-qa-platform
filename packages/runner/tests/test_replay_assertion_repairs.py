@@ -15,6 +15,7 @@ from aqa_runner.repairs import Drift
 from packages.runner.tests import executor_fixtures as fx
 from packages.runner.tests.drift_fixtures import (
     BUTTON,
+    CONTRASTED,
     IN_VIEW,
     TOGGLE,
     order_spec,
@@ -57,6 +58,23 @@ def test_a_drifted_assertion_target_goes_to_the_repair_and_is_evaluated_again(
         "problems": [],
         "script": rebound(run.committed).model_dump(mode="json", exclude_none=True),
     }
+
+
+def test_a_drifted_contrast_min_target_goes_to_the_repair_and_is_evaluated_again(
+    tmp_path: Path,
+) -> None:
+    run = repairing(
+        tmp_path,
+        lambda drift: rebound(drift.script),
+        script=CONTRASTED,
+        spec_at=in_view_spec,
+    )
+
+    assert [(drift.at.key, drift.misses) for drift in run.handed] == [
+        ("assertion-0", MISSES)
+    ]
+    assert run.result.assertions == (AssertionResult("a1", "pass", locator_index=0),)
+    assert run.result.outcome == "passed"
 
 
 HEADING = {"semantic": "the order's heading", "locators": [{"css": "h1"}]}

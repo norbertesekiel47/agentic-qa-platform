@@ -639,6 +639,48 @@ def test_a_heal_changes_nothing_outside_targets_and_steps(
     ]
 
 
+def a_contrast_notice(data: dict[str, Any]) -> None:
+    """Adds a notice that only a contrast_min check reads."""
+    data["targets"]["notice"] = {
+        "semantic": "the payment step's notice",
+        "locators": [{"testid": "notice"}],
+    }
+    data["assertions"].append(
+        {
+            "id": "a7",
+            "expect_index": 4,
+            "check": "contrast_min",
+            "target": "notice",
+            "min_ratio": 4.5,
+        }
+    )
+
+
+def test_a_heal_never_changes_a_contrast_min_ratio() -> None:
+    assert heal(
+        lambda d: d["assertions"][6].update(min_ratio=3), base=a_contrast_notice
+    ) == ["/assertions: a heal changes nothing but target locators and inserted steps"]
+
+
+@pytest.mark.parametrize(
+    "locator",
+    [{"label": "Notice"}, {"placeholder": "Notice"}],
+    ids=["label", "placeholder"],
+)
+def test_a_heal_finds_no_contrast_min_target_by_a_label_or_placeholder(
+    locator: dict[str, Any],
+) -> None:
+    assert heal(
+        lambda d: d["targets"]["notice"].update(locators=[locator]),
+        base=a_contrast_notice,
+    ) == [
+        (
+            "/targets/notice/locators/0: a heal finds no assertion's target by a "
+            "label or placeholder, or by a name when its text is checked"
+        )
+    ]
+
+
 def ops(*changes: dict[str, Any]) -> list[PatchOp]:
     return [PatchOp.model_validate(change) for change in changes]
 

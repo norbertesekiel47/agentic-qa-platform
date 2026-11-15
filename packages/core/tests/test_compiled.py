@@ -16,6 +16,7 @@ from aqa_core.compiled import (
     ByCss,
     ByRole,
     CompiledScript,
+    ContrastMin,
     ModelVerify,
     NetworkNone,
     Target,
@@ -333,10 +334,9 @@ def test_a_navigate_url_is_a_path_held_to_start_urls_rules(url: str) -> None:
     ("part", "index", "field", "value"),
     [
         ("steps", 0, "action", "hover"),
-        # Checks whose fields DATA_MODEL §7 doesn't give yet: pixel_diff and
-        # contrast_min get them with #254.
+        # A check whose fields DATA_MODEL §7 doesn't give yet: pixel_diff
+        # gets them with a follow-up to #254.
         ("assertions", 5, "check", "pixel_diff"),
-        ("assertions", 5, "check", "contrast_min"),
     ],
 )
 def test_an_unknown_action_or_check_is_refused_by_name(
@@ -349,6 +349,72 @@ def test_an_unknown_action_or_check_is_refused_by_name(
 
     assert (location, kind) == ((part, index), "union_tag_invalid")
     assert repr(value) in message
+
+
+# A contrast_min check of the pay button, which the example doesn't use.
+CONTRAST: dict[str, Any] = {
+    "id": "a7",
+    "expect_index": 4,
+    "check": "contrast_min",
+    "target": "pay_button",
+    "min_ratio": 4.5,
+}
+
+
+@pytest.mark.parametrize("ratio", [4.5, 3, 1, 21])
+def test_a_contrast_min_check_loads(ratio: float) -> None:
+    script = example()
+    script["assertions"].append(CONTRAST | {"min_ratio": ratio})
+
+    compiled = CompiledScript.model_validate_json(json.dumps(script))
+
+    assert compiled.assertions[-1] == ContrastMin(
+        id="a7",
+        expect_index=4,
+        check="contrast_min",
+        target="pay_button",
+        min_ratio=ratio,
+    )
+
+
+@pytest.mark.parametrize(
+    ("change", "field", "kind"),
+    [
+        ({"min_ratio": 0.99}, "min_ratio", "greater_than_equal"),
+        ({"min_ratio": 21.5}, "min_ratio", "less_than_equal"),
+        ({"min_ratio": True}, "min_ratio", "float_type"),
+        ({"min_ratio": "4.5"}, "min_ratio", "float_type"),
+        ({"min_ratio": float("nan")}, "min_ratio", "finite_number"),
+        ({"min_ratio": float("inf")}, "min_ratio", "finite_number"),
+        ({"min_ratio": None}, "min_ratio", "missing"),
+        ({"target": None}, "target", "missing"),
+        ({"in_viewport": True}, "in_viewport", "extra_forbidden"),
+    ],
+    ids=[
+        "below 1",
+        "above 21",
+        "boolean",
+        "string",
+        "NaN",
+        "Infinity",
+        "no min_ratio",
+        "no target",
+        "unknown field",
+    ],
+)
+def test_a_contrast_min_check_breaking_its_rule_is_refused(
+    change: dict[str, object], field: str, kind: str
+) -> None:
+    # None stands for a field left out: the check names exactly its own.
+    check = {
+        key: value for key, value in (CONTRAST | change).items() if value is not None
+    }
+    script = example()
+    script["assertions"].append(check)
+
+    [(location, found, _)] = errors(script)
+
+    assert (location, found) == (("assertions", 6, "contrast_min", field), kind)
 
 
 def with_model_verify(**fields: object) -> dict[str, Any]:

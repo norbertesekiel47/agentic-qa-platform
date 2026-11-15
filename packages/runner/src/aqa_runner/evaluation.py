@@ -12,6 +12,7 @@ from typing import Final, Literal, assert_never, overload
 
 from aqa_core.compiled import (
     Assertion,
+    ContrastMin,
     ModelVerify,
     NetworkNone,
     NetworkSeen,
@@ -32,6 +33,7 @@ from playwright.async_api import ElementHandle, Error
 
 from aqa_runner import network, probes, reasons
 from aqa_runner.browser_session import BrowserSession, UnsupportedVisualFrameError
+from aqa_runner.contrast import ContrastRefusedError
 from aqa_runner.document_origins import DocumentChangedError, PolicyEventError
 from aqa_runner.egress import EgressGate, EgressRefusedError, EgressUpstreamError
 from aqa_runner.evidence import Shot
@@ -197,6 +199,7 @@ async def evaluate(
         network.WindowsOverflowError,
         network.UnrecordedRequestError,
         UnsupportedVisualFrameError,
+        ContrastRefusedError,
     ) as error:
         return AssertionResult(
             check.id, "not_evaluated", error=evaluation.reason(error)
@@ -267,7 +270,7 @@ async def _held(
             return await url_matches(pattern, await bounded(session.url(), budget))
         case NotVisible(target=name):
             return await bounded(_absent(session, evaluation, name), budget)
-        case VisibleUnoccluded() | ModelVerify():
+        case VisibleUnoccluded() | ContrastMin() | ModelVerify():
             return await _seen(session, evaluation, check)
         case NetworkNone() | NetworkSeen():
             return await session.network_held(check)
@@ -287,10 +290,11 @@ async def _held(
 async def _seen(
     session: BrowserSession,
     evaluation: Evaluation,
-    check: VisibleUnoccluded | ModelVerify,
+    check: VisibleUnoccluded | ContrastMin | ModelVerify,
 ) -> _Located | Unresolved | Verified:
-    """A visual check of a target: deterministic, bounded by the run's
-    `resolve_seconds`, or the verifier's (`_verified`)."""
+    """A visual check of a target: deterministic (`visible_unoccluded`,
+    `contrast_min`), bounded by the run's `resolve_seconds`, or the
+    verifier's (`_verified`)."""
     if isinstance(check, ModelVerify):
         return await _verified(session, evaluation, check)
     return await bounded(_visual(session, evaluation, check), evaluation.budget)
@@ -338,8 +342,12 @@ async def _text_held(
 
 
 async def _visual(
-    session: BrowserSession, evaluation: Evaluation, check: VisibleUnoccluded
+    session: BrowserSession,
+    evaluation: Evaluation,
+    check: VisibleUnoccluded | ContrastMin,
 ) -> _Located | Unresolved:
+    """A visual check of the element its target resolves to for
+    "assertion" use, read through the session, then let go of."""
     found = _answered(
         await look_for(session, evaluation, check.target, "assertion"),
         evaluation.budget,
@@ -347,9 +355,12 @@ async def _visual(
     if not isinstance(found, Resolved):
         return found
     try:
-        held = await session.unoccluded(
-            found.element, check.min_size_px, check.in_viewport
-        )
+        if isinstance(check, ContrastMin):
+            held = await session.contrast(found.element) >= check.min_ratio
+        else:
+            held = await session.unoccluded(
+                found.element, check.min_size_px, check.in_viewport
+            )
     finally:
         await found.element.dispose()
     return _Located("pass" if held else "failed", found.locator_index)

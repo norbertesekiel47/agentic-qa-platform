@@ -25,6 +25,7 @@ from playwright.async_api import Error
 
 from aqa_runner import network, probes
 from aqa_runner.browser_session import RefError, UnsupportedVisualFrameError
+from aqa_runner.contrast import ContrastRefusedError
 from aqa_runner.document_origins import (
     REFUSED_BY_KIND,
     DocumentChangedError,
@@ -63,6 +64,7 @@ type Raised = (
     | network.WindowsOverflowError
     | network.UnrecordedRequestError
     | UnsupportedVisualFrameError
+    | ContrastRefusedError
     | RefusedWriteError
     | RefError
     | LocatorError
@@ -173,6 +175,7 @@ def _owned(error: Raised, *, withheld: bool) -> str | None:
         | SecretRefusedError
         | SecretNotFilledError
         | network.WindowsOverflowError
+        | ContrastRefusedError
         | RefusedWriteError
         | RefError
         | LocatorError,

@@ -34,12 +34,12 @@ from aqa_core.compiled import (
     Assertion,
     Click,
     CompiledScript,
+    ContrastMin,
     Fill,
     FillSecret,
     ModelVerify,
-    NotVisible,
     Select,
-    TextInTarget,
+    TargetCheck,
     VisibleUnoccluded,
 )
 from aqa_core.model_costs import CostRecord
@@ -404,7 +404,7 @@ class _Judging:
     ) -> _Judged:
         category: Category = (
             "visual"
-            if isinstance(check, VisibleUnoccluded | ModelVerify)
+            if isinstance(check, VisibleUnoccluded | ContrastMin | ModelVerify)
             else "functional"
         )
         judged = self._judged(
@@ -578,7 +578,7 @@ class _Healed:
         } | {
             _Subject("assertion", check.id): check.target
             for check in end.script.assertions
-            if isinstance(check, TextInTarget | NotVisible | VisibleUnoccluded)
+            if isinstance(check, TargetCheck)
         }
         return cls(
             end.record.redactor,
