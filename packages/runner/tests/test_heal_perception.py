@@ -4,14 +4,20 @@ turn per drift, through the same guards as `hybrid`'s, and `hybrid` a vision
 turn once a tree turn finds no element. Real Chromium against #240's drift
 pages and the canvas one, a scripted model, through `replays.replay_run`."""
 
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from aqa_core.config import Perception
 from aqa_runner import heal
-from aqa_runner.screenshots import Screenshot
+from aqa_runner.chat_client import Reply
+from aqa_runner.heal import Healing
+from aqa_runner.screenshots import Screenshot, take_screenshot
 from aqa_runner.vision_fallback import VISION_INSTRUCTIONS, VISION_ONLY_INSTRUCTIONS
+from langchain_core.messages import BaseMessage
 
+from packages.runner.tests import heal_fixtures
 from packages.runner.tests.heal_fixtures import (
     BUDGETS,
     FOUND_NONE,
@@ -177,3 +183,35 @@ def test_a_vision_only_request_says_no_tree_turn_ran(tmp_path: Path) -> None:
     # The claim removed, and nothing else changed.
     claim = ", and the page's accessibility tree showed no element for it"
     assert VISION_INSTRUCTIONS.replace(claim, "") == VISION_ONLY_INSTRUCTIONS
+
+
+def test_a_perception_outside_the_three_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A value `heal.perception` never loads, which only a defect could hand a
+    `Healing`, raises before any call or capture, so it never acts as `hybrid`
+    and sends the page's pixels."""
+    sent: list[Sequence[BaseMessage]] = []
+    taken: list[object] = []
+
+    def asked(messages: Sequence[BaseMessage]) -> Reply:
+        sent.append(messages)
+        return NO_TOOL
+
+    async def counted(session: Any) -> Screenshot:
+        taken.append(session)
+        return await take_screenshot(session)
+
+    def unknown(*args: Any) -> Healing:
+        router, spending, turns, seconds, _ = args
+        return Healing(
+            router, spending, turns, seconds, cast(Perception, "pixels_please")
+        )
+
+    monkeypatch.setattr(heal, "take_screenshot", counted)
+    monkeypatch.setattr(heal_fixtures, "Healing", unknown)
+
+    with pytest.raises(AssertionError, match="pixels_please"):
+        healed(tmp_path, asked, asked, html=CANVAS)
+
+    assert (sent, taken) == ([], [])

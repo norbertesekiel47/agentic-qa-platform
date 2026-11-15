@@ -32,7 +32,7 @@ import json
 import struct
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
-from typing import Final, Literal, TypedDict
+from typing import Final, Literal, TypedDict, assert_never
 
 from aqa_core.compiled import Locator, TargetCheck, TextInTarget
 from aqa_core.config import ModelRoleName, Perception
@@ -185,6 +185,22 @@ class Healing:
     perception: Perception
     taken: int = 0
 
+    @property
+    def roles(self) -> tuple[ModelRoleName, ...]:
+        """The roles this healer may call, by its `perception`: `healer` for
+        the tree turns, `vision_fallback` for the vision turn. Every choice of
+        how a heal sees the page reads them, and `run.json` names their
+        models. A value outside the three raises, so none acts as `hybrid`."""
+        match self.perception:
+            case "tree_only":
+                return ("healer",)
+            case "vision_only":
+                return ("vision_fallback",)
+            case "hybrid":
+                return ("healer", "vision_fallback")
+            case unknown:
+                assert_never(unknown)
+
     async def repair(self, drift: Drift) -> Offer:
         """What the turns on `drift` offer (module docstring): the script it was
         handed, with only the drifted target's locators replaced, or that
@@ -280,7 +296,7 @@ async def _taken(context: _Heal, state: _Turns) -> _Turns | Offer | _Stop:
     snapshot = await _observed(context)
     if isinstance(snapshot, _Stop):
         return snapshot
-    if context.healing.perception == "vision_only":
+    if "healer" not in context.healing.roles:
         return await _looked_at(context, state["turn"] + 1)
     return await _tree_turn(context, state, snapshot)
 
@@ -494,7 +510,7 @@ async def _looked_at(context: _Heal, number: int) -> Offer | _Stop:
     `vision_fallback`, whose point is read as the element there. Whatever
     comes of it, the heal ends. A `tree_only` heal takes no vision turn, and
     ends with the tree turn's words. Only defects and cancellation raise."""
-    if context.healing.perception == "tree_only":
+    if "vision_fallback" not in context.healing.roles:
         return _Stop(_FOUND_NONE)
     shot = await _shot(context)
     if isinstance(shot, _Stop):
@@ -555,7 +571,7 @@ async def _shown(context: _Heal, number: int, shot: Screenshot) -> Routed | _Sto
         shot,
         context.session.settings.viewport,
         redactor=context.redactor,
-        after_tree=context.healing.perception == "hybrid",
+        after_tree="healer" in context.healing.roles,
     )
     try:
         unspelled(context.redactor, [shot])(messages)
