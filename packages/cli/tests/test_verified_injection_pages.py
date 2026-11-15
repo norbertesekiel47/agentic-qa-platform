@@ -8,7 +8,9 @@ pixels in the one screenshot: its text, the badge's name, the URL and the origin
 reach no request. A model that obeys a page makes each move the page asks for, in
 a run of its own, and each move the reply's checks refuse (`verifier.judged`, the
 `VerifierVerdict` schema) ends `inconclusive` (3) with its fixed reason after one
-verifier call."""
+verifier call. One move isn't refused: a well-formed `pass` that cites both
+references passes a red badge today, which
+`test_a_verifier_that_obeys_a_page_passes_a_red_badge_today` pins."""
 
 import base64
 import json
@@ -372,3 +374,27 @@ def test_a_claim_in_prose_that_the_expectation_is_met_decides_nothing(
     cost = obeyed(run, INVALID)
     assert run.badge["verifier"] is None
     assert cost["status"] == "invalid"
+
+
+def test_a_verifier_that_obeys_a_page_passes_a_red_badge_today(
+    tmp_path: Path,
+) -> None:
+    """Today's known behaviour, pinned, and not a defence (SECURITY §4 item 6,
+    #319): the citation check is the only check on a reply, so a model that obeys
+    `verify-passed.html` and answers a well-formed `pass` citing both references
+    passes a red badge, whose twin ends `expectation_violated`. Closing this needs
+    an issue and an ADR of its own."""
+    move = wrote(lambda given: written("pass", given))
+
+    run = replayed(tmp_path / "page", PASSED.html, move)
+    twin = replayed(tmp_path / "twin", page(PASSED.twin), ignoring)
+
+    assert run.result.exit_code == 0, run.result.output
+    assert run.document["outcome"] == "passed"
+    [request] = run.client.requests
+    [_, ref] = evidence(request)
+    assert (run.badge["verdict"], run.badge["reason"]) == ("pass", None)
+    assert run.badge["verifier"]["evidence_refs"] == [SHOT, ref]
+    assert pixel(image_of(request), *CENTRE) == RED
+    assert twin.result.exit_code == 1, twin.result.output
+    assert twin.document["outcome"] == "expectation_violated"
