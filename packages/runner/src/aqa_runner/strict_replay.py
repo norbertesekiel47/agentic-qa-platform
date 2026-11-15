@@ -5,11 +5,11 @@ fresh browser on the caller's driver, a step that drifts or fails saving its
 masked screenshot as evidence (#251), and, when `--before-screenshots` asks, a
 step that fails saving the page as it found it beside it (#314); then the run's
 `run.json`, what the run viewer reads of it (#249), and its `replay.json`
-(`replay_result.present`), whose outcome decides. With no `heal`, a strict replay, nothing here builds a
-model client. With one, what `aqa run` gives, a drift goes to the repair of the
-healing it builds for the run. With `verify`, what `aqa replay --mode verified`
-gives, each `model_verify` check goes to the verifier it builds for the run
-(#256).
+(`replay_result.present`), whose outcome decides. With no `heal`, a strict
+replay, nothing here builds a model client. With one, what `aqa run` gives, a
+drift goes to the repair of the healing it builds for the run. With `verify`,
+what `aqa replay --mode verified` gives, each `model_verify` check goes to the
+verifier it builds for the run (#256).
 
 The caller admits the script and binds its test secrets first, for every
 spec before any run (`aqa replay`), so nothing here sends a reset for a
