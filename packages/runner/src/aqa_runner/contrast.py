@@ -80,43 +80,46 @@ MAX_LAYERS = 64
 # parent's text colour; whether the parent or an ancestor has an effect a
 # colour can't account for; and, from the parent out to the root element,
 # each background colour and whether that element paints more behind the
-# text than its colour. It runs in the page's world, so it is the page's
-# word, as the hit test of `visible_unoccluded` is; what it reads decides
-# nothing here.
-READ_STYLES = r"""(element) => {
+# text than its colour. It stops once it holds `MAX_NODES` + 1 nodes, so an
+# honest target over the cap answers quickly. It runs in the page's world,
+# so it is the page's word, as the hit test of `visible_unoccluded` is; what
+# it reads decides nothing here, and the page can undo the stop:
+# `lowest_ratio` checks the answer's size first, and refuses an answer over
+# either cap as `unread`.
+READ_STYLES = rf"""(element) => {{
     const owner = element.ownerDocument;
-    const answer = { shadow: false, width: innerWidth, height: innerHeight, nodes: [] };
-    if (element.getRootNode() !== owner) return { ...answer, shadow: true };
-    const generated = (at, pseudo) => {
+    const answer = {{ shadow: false, width: innerWidth, height: innerHeight, nodes: [] }};
+    if (element.getRootNode() !== owner) return {{ ...answer, shadow: true }};
+    const generated = (at, pseudo) => {{
         const style = getComputedStyle(at, pseudo);
         return style.content !== "none" && style.content !== "normal" && (
             style.backgroundColor !== "rgba(0, 0, 0, 0)" || style.backgroundImage !== "none"
         );
-    };
+    }};
     const read = new Map();
-    const styled = (at) => {
-        if (!read.has(at)) {
+    const styled = (at) => {{
+        if (!read.has(at)) {{
             const style = getComputedStyle(at);
             const clips = ["background-clip", "-webkit-background-clip"].map(
                 (name) => style.getPropertyValue(name).split(", ")
             );
-            read.set(at, {
+            read.set(at, {{
                 effects: style.opacity !== "1" || style.filter !== "none" ||
                     style.backdropFilter !== "none" ||
                     style.getPropertyValue("mask-image") !== "none" ||
                     style.mixBlendMode !== "normal",
-                layer: {
+                layer: {{
                     colour: style.backgroundColor,
                     image: style.backgroundImage !== "none" ||
                         clips.some((clip) => clip.includes("text")) ||
                         generated(at, "::before") || generated(at, "::after"),
-                },
-            });
-        }
+                }},
+            }});
+        }}
         return read.get(at);
-    };
+    }};
     const walker = owner.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {{
         const parent = node.parentNode;
         if (!/\S/.test(node.data) || !(parent instanceof HTMLElement)) continue;
         const style = getComputedStyle(parent);
@@ -132,7 +135,7 @@ READ_STYLES = r"""(element) => {
         const up = [];
         for (let at = parent; at !== null; at = at.parentElement) up.push(at);
         const [first, ...rest] = owner.elementsFromPoint(x, y);
-        answer.nodes.push({
+        answer.nodes.push({{
             slotted: node.assignedSlot !== null || up.some((at) => at.assignedSlot !== null),
             x,
             y,
@@ -140,10 +143,11 @@ READ_STYLES = r"""(element) => {
             colour: style.getPropertyValue("-webkit-text-fill-color"),
             effects: up.some((at) => styled(at).effects),
             layers: up.map((at) => styled(at).layer),
-        });
-    }
+        }});
+        if (answer.nodes.length > {MAX_NODES}) break;
+    }}
     return answer;
-}"""
+}}"""
 
 # The page script's answer, in exactly this shape: any other is unread.
 _SHAPE = ConfigDict(strict=True, extra="forbid", allow_inf_nan=False)
