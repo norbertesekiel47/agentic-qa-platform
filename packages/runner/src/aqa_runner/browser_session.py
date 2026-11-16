@@ -15,7 +15,7 @@ from typing import Literal, overload
 
 from aqa_core.browser import BrowserSettings
 from aqa_core.compiled import NetworkNone, NetworkSeen, Target
-from playwright.async_api import Browser, ElementHandle, Error, Frame, Page
+from playwright.async_api import Browser, ElementHandle, Error, FloatRect, Frame, Page
 
 from aqa_runner import keys, settling, snapshot_refs
 from aqa_runner.bound_secrets import BoundSecret
@@ -49,6 +49,7 @@ from aqa_runner.locators import (
 )
 from aqa_runner.locators import resolve as resolve_target
 from aqa_runner.page_scripts import CONTAINS, FILL, SERVICE_WORKERS_REFUSED, TRANSFORMED
+from aqa_runner.pixel_diff import PixelDiffRefusedError
 from aqa_runner.redaction import NO_SECRETS, Redacted, Redactor
 from aqa_runner.routing import install_routes
 from aqa_runner.sandbox import (
@@ -612,6 +613,21 @@ class BrowserSession:
             if frame is not self.page.main_frame:
                 raise ContrastRefusedError("frame")
             return lowest_ratio(await element.evaluate(READ_STYLES))
+
+    async def box(self, element: ElementHandle) -> FloatRect | None:
+        """`element`'s box, as `pixel_diff` crops it (`aqa_runner.pixel_diff`),
+        in CSS pixels relative to the viewport, or None for an element that
+        has none, without scrolling. After the origin checks, a child-frame
+        target is refused, as `unoccluded` refuses one. Playwright 1.63 reads
+        it from DevTools' box model (`DOM.getBoxModel`), so no page script
+        reads it and the page can't override it, as it could
+        `getBoundingClientRect`
+        (https://playwright.dev/python/docs/api/class-elementhandle#element-handle-bounding-box)."""
+        async with self._turn:
+            frame = await self._require_allowed_element(element)
+            if frame is not self.page.main_frame:
+                raise PixelDiffRefusedError("frame")
+            return await element.bounding_box()
 
     async def text_of(self, element: ElementHandle) -> Redacted:
         """`element`'s rendered text, as `text_in_target` reads it, once the

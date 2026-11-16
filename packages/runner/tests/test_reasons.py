@@ -26,6 +26,8 @@ from aqa_runner.egress import (
 )
 from aqa_runner.locator_generation import BindingRefusedError, LocatorError
 from aqa_runner.locators import Use
+from aqa_runner.pixel_diff import PixelDiffRefusedError
+from aqa_runner.pixel_diff import Refusal as PixelDiffRefusal
 from aqa_runner.reasons import Raised, UnansweredError, reason
 from aqa_runner.redaction import NO_SECRETS, Redactor
 from aqa_runner.run_record import RefusedWriteError
@@ -310,6 +312,32 @@ def test_outside_a_withheld_run_every_reason_is_presented_as_before(
     error: Raised, expected: str
 ) -> None:
     assert reason(error, NO_SECRETS) == expected
+
+
+# Each pixel_diff refusal, P1 to P11, and its fixed text (DATA_MODEL §7).
+PIXEL_DIFF_REASONS: list[tuple[PixelDiffRefusal, str]] = [
+    ("frame", "pixel_diff does not support elements inside frames"),
+    ("no_box", "pixel_diff's target has no box to compare"),
+    ("viewport", "pixel_diff compares only a target wholly inside the viewport"),
+    ("withheld", "pixel_diff's screenshot was withheld"),
+    ("moved", "pixel_diff's target moved while the page was captured"),
+    ("page", "pixel_diff could not read the page's screenshot at the viewport's size"),
+    ("missing", "pixel_diff's baseline file is missing"),
+    ("unread", "pixel_diff could not read its baseline file"),
+    ("pinned", "pixel_diff's baseline file isn't the one baseline_sha256 pins"),
+    ("undecodable", "pixel_diff could not decode its baseline as a PNG"),
+    ("size", "pixel_diff's baseline isn't the size of its target's crop"),
+]
+
+
+@pytest.mark.parametrize("scan", [BOUND, NO_SECRETS], ids=["withheld", "unwithheld"])
+@pytest.mark.parametrize(
+    ("case", "expected"), PIXEL_DIFF_REASONS, ids=[c for c, _ in PIXEL_DIFF_REASONS]
+)
+def test_each_pixel_diff_refusal_is_its_fixed_text_withheld_or_not(
+    scan: Redactor, case: PixelDiffRefusal, expected: str
+) -> None:
+    assert reason(PixelDiffRefusedError(case), scan) == expected
 
 
 COUNT = Contract(region="div.banner", part="span.counter", leaf=True)

@@ -2,18 +2,22 @@
 §7, Pixel diff; ADR-0025's #324 amendment), with no browser: the crop
 rectangle Playwright's own element screenshots would cut from the target's
 box, and whether it lies wholly inside the viewport; the page's PNG read at
-the viewport's size and cut to that rectangle; the baseline's size, read
-from its PNG header before any pixel is decoded, then its pixels; and how
-many pixels differ, compared with `max_diff_ratio` exactly. A refusal is
+the viewport's size and cut to that rectangle; the baseline, read through
+no link and checked against its sha256; its size, read from its PNG header
+before any pixel is decoded, then its pixels; and how many pixels differ,
+compared with `max_diff_ratio` exactly. A refusal is
 never a pass and never a failure: it carries one of the fixed reasons in
 `REASONS`."""
 
+import hashlib
 import io
 import math
 import struct
 from fractions import Fraction
+from pathlib import Path
 from typing import Final, Literal, NamedTuple, TypedDict
 
+from aqa_core.unlinked import Unread, read_below
 from PIL import Image, ImageChops
 
 type Refusal = Literal[
@@ -140,6 +144,20 @@ def cropped_png(png: bytes, rectangle: Rectangle) -> bytes:
     out = io.BytesIO()
     image.crop(rectangle).save(out, format="PNG")
     return out.getvalue()
+
+
+def read_baseline(root: Path, baseline: str, pinned: str) -> bytes:
+    """The bytes of the baseline `baseline`, below `.compiled/baselines/` of
+    the spec root `root`, read through no link and only as a regular file
+    (`aqa_core.unlinked`): P7 when it or a directory on the way is missing,
+    P8 for a link, anything but a regular file or an `OSError`, and P9 when
+    their sha256 isn't `pinned`. These same bytes are the ones decoded."""
+    data = read_below(root, f".compiled/baselines/{baseline}")
+    if isinstance(data, Unread):
+        raise PixelDiffRefusedError("missing" if data is Unread.ABSENT else "unread")
+    if f"sha256:{hashlib.sha256(data).hexdigest()}" != pinned:
+        raise PixelDiffRefusedError("pinned")
+    return data
 
 
 # A PNG's signature, then its first chunk's length and type: IHDR, always

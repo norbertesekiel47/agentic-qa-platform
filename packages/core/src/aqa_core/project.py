@@ -11,7 +11,7 @@ from typing import Self
 
 from pydantic import BaseModel, ValidationError
 
-from aqa_core import strict_yaml
+from aqa_core import strict_yaml, unlinked
 from aqa_core.browser import BrowserSettings
 from aqa_core.compiled import (
     ByCss,
@@ -23,6 +23,7 @@ from aqa_core.compiled import (
     HeldValue,
     ModelVerify,
     NotVisible,
+    PixelDiff,
     ProbeEqualsBaseline,
     Reload,
     Select,
@@ -473,6 +474,7 @@ def _assertion_names(script: CompiledScript) -> Iterator[str]:
                 | NotVisible(target=target)
                 | VisibleUnoccluded(target=target)
                 | ContrastMin(target=target)
+                | PixelDiff(target=target)
                 | ModelVerify(target=target)
             ) if target not in script.targets:
                 yield f"{where}.target: {target!r} names no target in targets"
@@ -641,7 +643,25 @@ def read_compiled(path: Path, config: ProjectConfig) -> tuple[CompiledScript, by
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         raise SpecError([f"{path}: not UTF-8 text"]) from None
-    return parse_compiled(text, config, source=path), raw
+    script = parse_compiled(text, config, source=path)
+    if problems := list(_linked_baselines(script, path)):
+        raise SpecError(problems)
+    return script, raw
+
+
+def _linked_baselines(script: CompiledScript, path: Path) -> Iterator[str]:
+    """Each `pixel_diff` check whose baseline, below `baselines/` beside the
+    compiled file at `path`, is a symbolic link or is reached through one
+    (`aqa_core.unlinked.linked`). A missing one is no problem here: replay
+    refuses it, and reads the file itself through no link."""
+    for index, check in enumerate(script.assertions):
+        name = f"baselines/{check.baseline}" if isinstance(check, PixelDiff) else None
+        if name is not None and unlinked.linked(path.parent, name):
+            yield (
+                f"{path}: assertions[{index}].baseline: {name} beside this file is "
+                "a symbolic link or is reached through one: a baseline is a PNG "
+                "committed there itself"
+            )
 
 
 def parse_compiled(text: str, config: ProjectConfig, *, source: Path) -> CompiledScript:

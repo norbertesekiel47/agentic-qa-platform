@@ -14,7 +14,7 @@ from aqa_core.compiled import CompiledScript
 from aqa_core.config import ProjectConfig
 from aqa_core.project import SpecError, load_compiled, read_compiled
 
-from packages.core.tests.test_compiled import data_models_example
+from packages.core.tests.test_compiled import PIXEL_DIFF, data_models_example
 
 # The project config the example script's fill_secret step needs.
 DECLARES_TEST_PASSWORD = ProjectConfig.model_validate(
@@ -283,6 +283,11 @@ def assertion(script: dict[str, Any], check: str) -> dict[str, Any]:
             "'nowhere' names no target in targets",
         ),
         (
+            lambda s: s["assertions"].append(PIXEL_DIFF | {"target": "nowhere"}),
+            "assertions[6].target",
+            "'nowhere' names no target in targets",
+        ),
+        (
             lambda s: assertion(s, "url_matches").update(expect_index=7),
             "assertions[4].expect_index",
             "7 names no expectation in coverage.expectations",
@@ -317,6 +322,7 @@ def assertion(script: dict[str, Any], check: str) -> dict[str, Any]:
         "visible_unoccluded target",
         "not_visible target",
         "contrast_min target",
+        "pixel_diff target",
         "expect_index",
         "coverage assertion",
         "satisfies",
@@ -333,6 +339,77 @@ def test_a_name_the_script_uses_must_exist(
     found = problems(tmp_path, edited(change), DECLARES_TEST_PASSWORD)
 
     assert found == (f"{key}: {problem}",)
+
+
+def with_pixel_diff(baseline: str = "order/badge.png") -> str:
+    """DATA_MODEL §7's example with a pixel_diff check of the pay button
+    against `baseline`."""
+    return edited(lambda s: s["assertions"].append(PIXEL_DIFF | {"baseline": baseline}))
+
+
+# What the loader says of a baseline reached through a link.
+LINKED = (
+    "assertions[6].baseline: baselines/order/badge.png beside this file is a "
+    "symbolic link or is reached through one: a baseline is a PNG committed "
+    "there itself"
+)
+
+
+@pytest.mark.parametrize(
+    "link",
+    ["baselines", "baselines/order", "baselines/order/badge.png"],
+    ids=["the baselines directory", "a directory on the way", "the file"],
+)
+def test_a_pixel_diff_baseline_reached_through_a_link_is_refused(
+    tmp_path: Path, link: str
+) -> None:
+    path = write(tmp_path, with_pixel_diff())
+    real = tmp_path / "elsewhere" / "baselines"
+    (real / "order").mkdir(parents=True)
+    (real / "order" / "badge.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    placed = path.parent / link
+    placed.parent.mkdir(parents=True, exist_ok=True)
+    placed.symlink_to(real.parent / link)
+
+    found = problems(tmp_path, with_pixel_diff(), DECLARES_TEST_PASSWORD)
+
+    assert found == (LINKED,)
+
+
+def test_a_pixel_diff_baseline_that_is_a_link_to_nothing_is_refused(
+    tmp_path: Path,
+) -> None:
+    path = write(tmp_path, with_pixel_diff())
+    (path.parent / "baselines" / "order").mkdir(parents=True)
+    (path.parent / "baselines" / "order" / "badge.png").symlink_to(tmp_path / "gone")
+
+    found = problems(tmp_path, with_pixel_diff(), DECLARES_TEST_PASSWORD)
+
+    assert found == (LINKED,)
+
+
+@pytest.mark.parametrize(
+    "made",
+    ["", "baselines", "baselines/order"],
+    ids=["no baselines directory", "no directory on the way", "no file"],
+)
+def test_a_missing_pixel_diff_baseline_loads(tmp_path: Path, made: str) -> None:
+    path = write(tmp_path, with_pixel_diff())
+    (path.parent / made).mkdir(parents=True, exist_ok=True)
+
+    script = load_compiled(path, DECLARES_TEST_PASSWORD)
+
+    assert [check.check for check in script.assertions][-1] == "pixel_diff"
+
+
+def test_a_pixel_diff_baseline_committed_as_a_file_loads(tmp_path: Path) -> None:
+    path = write(tmp_path, with_pixel_diff("order/badge.png"))
+    (path.parent / "baselines" / "order").mkdir(parents=True)
+    (path.parent / "baselines" / "order" / "badge.png").write_bytes(b"not checked")
+
+    script = load_compiled(path, DECLARES_TEST_PASSWORD)
+
+    assert [check.check for check in script.assertions][-1] == "pixel_diff"
 
 
 def test_a_fill_secret_step_names_a_secret_the_project_config_declares(

@@ -1,13 +1,16 @@
 """Evaluating a compiled script's assertions on the page as it stands
 (DATA_MODEL §7, Replay outcomes; ADR-0024's #48 amendment), a `model_verify`
 check by the verifier only a verified replay gives (`Evaluation.verify`,
-ADR-0024's #256 amendment), and the bounded looks the executor shares with
+ADR-0024's #256 amendment), a `pixel_diff` check against the baseline below
+the spec root (`Evaluation.spec_root`, ADR-0025's #324 amendment), and the
+bounded looks the executor shares with
 it: a target looked for within the run's `resolve_seconds`, a look cut off
 when the page stops answering."""
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Final, Literal, assert_never, overload
 
 from aqa_core.compiled import (
@@ -17,6 +20,7 @@ from aqa_core.compiled import (
     NetworkNone,
     NetworkSeen,
     NotVisible,
+    PixelDiff,
     ProbeBaseline,
     ProbeEquals,
     ProbeEqualsBaseline,
@@ -36,10 +40,20 @@ from aqa_runner.browser_session import BrowserSession, UnsupportedVisualFrameErr
 from aqa_runner.contrast import ContrastRefusedError
 from aqa_runner.document_origins import DocumentChangedError, PolicyEventError
 from aqa_runner.egress import EgressGate, EgressRefusedError, EgressUpstreamError
-from aqa_runner.evidence import Shot
+from aqa_runner.evidence import Shot, held_screenshot
 from aqa_runner.locators import Absent, Miss, Resolved, Shown, Unresolved, Use
+from aqa_runner.pixel_diff import (
+    PixelDiffRefusedError,
+    baseline_pixels,
+    crop_rectangle,
+    enclosing,
+    matches,
+    page_crop,
+    read_baseline,
+)
 from aqa_runner.reasons import Raised, UnansweredError
 from aqa_runner.redaction import Redacted, Redactor
+from aqa_runner.screenshots import Screenshot
 from aqa_runner.text_search import text_matches, url_matches
 
 # How often resolution looks again for a target that hasn't resolved.
@@ -100,6 +114,12 @@ type Verify = Callable[
     [BrowserSession, ModelVerify, ElementHandle], Awaitable[Verified]
 ]
 
+# What saves a `pixel_diff` check's crop once the check failed or its
+# baseline was refused (P7 to P11), given the check and the crop: only strict
+# replay's run asks for one (`RunSetup.screenshots`, ADR-0033's #324
+# amendment).
+type KeepCrop = Callable[[PixelDiff, Screenshot], object]
+
 # The outcome each of a verifier's verdicts gives its check.
 _VERIFIED: Final[Mapping[str, Literal["pass", "failed", "not_evaluated"]]] = {
     "pass": "pass",
@@ -115,8 +135,11 @@ class Evaluation:
     the run's egress gate; the run's `resolve_seconds`; the scan of every
     value the run binds; the probe baselines, captured into
     `baseline_values` as the run goes; whether every locator of a target
-    must resolve at each use; and, in a verified replay, the verifier a
-    `model_verify` check goes to. Captured baselines stay in memory; they
+    must resolve at each use; in a verified replay, the verifier a
+    `model_verify` check goes to; the spec root a `pixel_diff` check's
+    baseline is read below, none in explore's confirmation and the bench
+    pilot, which have no baselines place; and what saves a `pixel_diff`
+    check's crop, in strict replay. Captured baselines stay in memory; they
     never enter a result or the run record."""
 
     targets: Mapping[str, Target]
@@ -129,6 +152,8 @@ class Evaluation:
     baseline_values: dict[str, probes.JsonValue] = field(default_factory=dict)
     every_locator: bool = False
     verify: Verify | None = None
+    spec_root: Path | None = None
+    keep_crop: KeepCrop | None = None
 
     @property
     def withheld(self) -> bool:
@@ -200,6 +225,7 @@ async def evaluate(
         network.UnrecordedRequestError,
         UnsupportedVisualFrameError,
         ContrastRefusedError,
+        PixelDiffRefusedError,
     ) as error:
         return AssertionResult(
             check.id, "not_evaluated", error=evaluation.reason(error)
@@ -270,7 +296,7 @@ async def _held(
             return await url_matches(pattern, await bounded(session.url(), budget))
         case NotVisible(target=name):
             return await bounded(_absent(session, evaluation, name), budget)
-        case VisibleUnoccluded() | ContrastMin() | ModelVerify():
+        case VisibleUnoccluded() | ContrastMin() | PixelDiff() | ModelVerify():
             return await _seen(session, evaluation, check)
         case NetworkNone() | NetworkSeen():
             return await session.network_held(check)
@@ -290,13 +316,16 @@ async def _held(
 async def _seen(
     session: BrowserSession,
     evaluation: Evaluation,
-    check: VisibleUnoccluded | ContrastMin | ModelVerify,
+    check: VisibleUnoccluded | ContrastMin | PixelDiff | ModelVerify,
 ) -> _Located | Unresolved | Verified:
     """A visual check of a target: deterministic (`visible_unoccluded`,
-    `contrast_min`), bounded by the run's `resolve_seconds`, or the
+    `contrast_min`), bounded by the run's `resolve_seconds`; against its
+    baseline (`_compared`), whose capture has bounds of its own; or the
     verifier's (`_verified`)."""
     if isinstance(check, ModelVerify):
         return await _verified(session, evaluation, check)
+    if isinstance(check, PixelDiff):
+        return await _compared(session, evaluation, check)
     return await bounded(_visual(session, evaluation, check), evaluation.budget)
 
 
@@ -364,6 +393,59 @@ async def _visual(
     finally:
         await found.element.dispose()
     return _Located("pass" if held else "failed", found.locator_index)
+
+
+async def _compared(
+    session: BrowserSession, evaluation: Evaluation, check: PixelDiff
+) -> _Located | Unresolved:
+    """`check`'s target compared with its baseline (`aqa_runner.pixel_diff`),
+    resolved within the run's `resolve_seconds` as a `visible_unoccluded`
+    target is: the drift that kept it from being found, or whether its crop
+    matched; else the first case P1 to P11 met is raised, and with no
+    baselines place, P7 at once, before the target is looked for. Its box
+    is read before the page's masked screenshot is taken, within the
+    capture's own bounds, and again after. With `evaluation.keep_crop`, a
+    crop that failed or whose baseline was refused is saved."""
+    root, budget = evaluation.spec_root, evaluation.budget
+    if root is None:
+        raise PixelDiffRefusedError("missing")
+    found = _answered(
+        await bounded(look_for(session, evaluation, check.target, "assertion"), budget),
+        budget,
+    )
+    if not isinstance(found, Resolved):
+        return found
+    viewport = session.settings.viewport
+    try:
+        box = await bounded(session.box(found.element), budget)
+        rectangle = crop_rectangle(box, viewport)
+        shot = await held_screenshot(session)
+        if isinstance(shot, str):
+            raise PixelDiffRefusedError("withheld")
+        if enclosing(await bounded(session.box(found.element), budget)) != rectangle:
+            raise PixelDiffRefusedError("moved")
+    finally:
+        await found.element.dispose()
+    crop = page_crop(shot.png, viewport, rectangle)
+    try:
+        data = read_baseline(root, check.baseline, check.baseline_sha256)
+        held = matches(
+            crop,
+            baseline_pixels(data, crop.size),
+            pixel_threshold=check.pixel_threshold,
+            max_diff_ratio=check.max_diff_ratio,
+        )
+    except PixelDiffRefusedError:
+        _keep(evaluation, check, shot.cropped(rectangle))
+        raise
+    if not held:
+        _keep(evaluation, check, shot.cropped(rectangle))
+    return _Located("pass" if held else "failed", found.locator_index)
+
+
+def _keep(evaluation: Evaluation, check: PixelDiff, crop: Screenshot) -> None:
+    if evaluation.keep_crop is not None:
+        evaluation.keep_crop(check, crop)
 
 
 async def _read_probe(evaluation: Evaluation, name: str, path: str) -> probes.JsonValue:

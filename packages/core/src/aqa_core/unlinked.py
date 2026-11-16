@@ -63,6 +63,23 @@ def read_below(root: Path, name: str) -> bytes | Unread:
         return Unread.BROKEN
 
 
+def linked(root: Path, name: str) -> bool:
+    """Whether a directory on the way to `name`, a relative path of names
+    below the directory `root`, or the file itself, is a symbolic link, as
+    far as each exists: the walk ends, with none found, at the first that is
+    missing or can't be opened."""
+    names = name.split("/")
+    for depth, leaf in enumerate(names):
+        try:
+            with folder(root, names[:depth]) as handle:
+                found = os.stat(leaf, dir_fd=handle, follow_symlinks=False)
+        except OSError:
+            return False
+        if stat.S_ISLNK(found.st_mode):
+            return True
+    return False
+
+
 def _whole(file: int) -> bytes:
     chunks = []
     while chunk := os.read(file, 1 << 16):
