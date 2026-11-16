@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 from aqa_core import text
-from aqa_core.compiled import ByCss, ByTestId, CompiledScript, TextInTarget
+from aqa_core.compiled import ByCss, ByTestId, CompiledScript, Target, TextInTarget
 from aqa_core.heal_patch import (
     PatchOp,
     apply_patch,
@@ -21,7 +21,12 @@ from aqa_core.project import SpecError, parse_compiled
 
 from packages.core.tests.test_compiled import data_models_example
 from packages.core.tests.test_load_compiled import DECLARES_TEST_PASSWORD
-from packages.runner.tests.drift_fixtures import NO_THANKS
+from packages.runner.tests.drift_fixtures import (
+    DETAILS,
+    DISMISSED_PATCH,
+    NO_THANKS,
+    dismissed,
+)
 
 # A change to DATA_MODEL §7's example, made in place on its JSON.
 type Change = Callable[[dict[str, Any]], object]
@@ -878,6 +883,104 @@ def test_json_patch_replaces_each_rebound_targets_locators() -> None:
 
 def test_json_patch_of_a_script_with_its_own_locators_is_empty() -> None:
     assert json_patch(script(unchanged), script(unchanged)) == []
+
+
+def round_trip(committed: CompiledScript, final: CompiledScript) -> None:
+    """Applying the patch to `committed` as JSON gives `final` as JSON."""
+    document = committed.model_dump(mode="json", exclude_none=True)
+    apply_patch(document, ops(*json_patch(committed, final)))
+    assert document == final.model_dump(mode="json", exclude_none=True)
+
+
+def test_json_patch_adds_the_modal_repairs_target_then_its_click() -> None:
+    final = dismissed(DETAILS)
+
+    assert json_patch(DETAILS, final) == DISMISSED_PATCH
+    round_trip(DETAILS, final)
+
+
+def test_json_patch_replaces_a_rebound_targets_locators_before_any_add() -> None:
+    dismissing = dismissed(DETAILS)
+    moved = Target.model_validate(
+        {"semantic": DETAILS.targets["toggle"].semantic, "locators": [{"css": "#t"}]}
+    )
+    final = dismissing.model_copy(
+        update={"targets": {**dismissing.targets, "toggle": moved}}
+    )
+
+    assert json_patch(DETAILS, final) == [
+        {"op": "replace", "path": "/targets/toggle/locators", "value": [{"css": "#t"}]},
+        *DISMISSED_PATCH,
+    ]
+    round_trip(DETAILS, final)
+
+
+def rebinds_adds_and_inserts(data: dict[str, Any]) -> None:
+    """Rebinds the email field, adds two targets, and inserts a press before the
+    first step, a click on one added target after the password fill and one on
+    the other last."""
+    data["targets"]["email_input"]["locators"] = [{"css": "#login-email"}]
+    data["targets"]["no_thanks"] = deepcopy(NO_THANKS)
+    data["targets"]["a/b"] = {"semantic": "a close button", "locators": [{"css": "#x"}]}
+    data["steps"].insert(
+        0, {"seq": 10, "action": "press", "key": "Escape", "side_effect": False}
+    )
+    data["steps"].insert(4, {"seq": 11, **CLICKS_NO_THANKS})
+    data["steps"].append({"seq": 12, **CLICKS_NO_THANKS, "target": "a/b"})
+
+
+def test_json_patch_adds_targets_in_finals_order_then_steps_by_their_index() -> None:
+    committed, final = script(unchanged), script(rebinds_adds_and_inserts)
+
+    patch = json_patch(committed, final)
+
+    assert patch == [
+        {
+            "op": "replace",
+            "path": "/targets/email_input/locators",
+            "value": [{"css": "#login-email"}],
+        },
+        {"op": "add", "path": "/targets/no_thanks", "value": NO_THANKS},
+        {
+            "op": "add",
+            "path": "/targets/a~1b",
+            "value": {"semantic": "a close button", "locators": [{"css": "#x"}]},
+        },
+        {
+            "op": "add",
+            "path": "/steps/0",
+            "value": {
+                "seq": 10,
+                "side_effect": False,
+                "satisfies": [],
+                "action": "press",
+                "key": "Escape",
+            },
+        },
+        {
+            "op": "add",
+            "path": "/steps/4",
+            "value": {
+                "seq": 11,
+                "side_effect": False,
+                "satisfies": [],
+                "action": "click",
+                "target": "no_thanks",
+            },
+        },
+        {
+            "op": "add",
+            "path": "/steps/7",
+            "value": {
+                "seq": 12,
+                "side_effect": False,
+                "satisfies": [],
+                "action": "click",
+                "target": "a/b",
+            },
+        },
+    ]
+    round_trip(committed, final)
 
 
 def test_blob_sha_is_gits_for_the_bytes_as_they_are() -> None:
