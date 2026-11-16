@@ -72,7 +72,10 @@ PAGES = SHOPS | {
             if (state === "missing") target.remove();
         </script>""",
     # A notice whose block gives it its background, at 4.54 to 1; fainter,
-    # under a gradient, or gone, by its state.
+    # under a gradient, or gone, by its state. Or a page whose own script
+    # makes contrast_min's answer, which would still pass, hold 5,000 copies
+    # of the notice's node, or the node 100 copies of its first layer more,
+    # by overriding the built-ins that answer is built with.
     "contrast": """<div id="block" style="background:#fff">
         <p id="contrast" style="color:#767676">Saved</p></div>
         <script>
@@ -82,6 +85,17 @@ PAGES = SHOPS | {
             if (state === "faint") target.style.color = "#777777";
             if (state === "gradient") block.style.backgroundImage = "linear-gradient(#fff, #eee)";
             if (state === "missing") target.remove();
+            const push = Array.prototype.push;
+            if (state === "inflated-nodes") Array.prototype.push = function (...items) {
+                if (items[0]?.layers === undefined) return push.apply(this, items);
+                return push.apply(this, Array(5000).fill(items[0]));
+            };
+            const map = Array.prototype.map;
+            if (state === "inflated-layers") Array.prototype.map = function (...args) {
+                const mapped = map.apply(this, args);
+                if (mapped[0]?.image === undefined) return mapped;
+                return Array(100).fill(mapped[0]).concat(mapped);
+            };
         </script>""",
     "visual-frame": '<iframe src="/page/form"></iframe>',
     "visual-foreign-frame": '<iframe src="data:text/html,<button>Save</button>"></iframe>',
