@@ -655,8 +655,10 @@ def _linked_baselines(script: CompiledScript, path: Path) -> Iterator[str]:
     (`aqa_core.unlinked.linked`). A missing one is no problem here: replay
     refuses it, and reads the file itself through no link."""
     for index, check in enumerate(script.assertions):
-        name = f"baselines/{check.baseline}" if isinstance(check, PixelDiff) else None
-        if name is not None and unlinked.linked(path.parent, name):
+        if not isinstance(check, PixelDiff):
+            continue
+        name = f"baselines/{check.baseline}"
+        if unlinked.linked(path.parent, name):
             yield (
                 f"{path}: assertions[{index}].baseline: {name} beside this file is "
                 "a symbolic link or is reached through one: a baseline is a PNG "
