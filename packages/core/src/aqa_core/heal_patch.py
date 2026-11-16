@@ -308,21 +308,47 @@ def heal_patch_problems(script: CompiledScript, healed: CompiledScript) -> list[
 def json_patch(
     committed: CompiledScript, final: CompiledScript
 ) -> list[dict[str, object]]:
-    """The RFC 6902 patch from `committed` to `final`: one `replace` of a
-    target's locators for each target whose locators differ, in `committed`'s
-    order, and nothing else, since a heal changes nothing else that has a
-    producer until #246. `final` must hold every target of `committed`, as a
-    script the validator took does."""
+    """The RFC 6902 patch from `committed` to `final`, in this order: a
+    `replace` of a target's locators for each target whose locators differ, in
+    `committed`'s order; an `add` of each target `committed` lacks, in
+    `final`'s order; then an `add` of each inserted step at its index in
+    `final`, lowest first, so each index reads against what the adds before it
+    left. A patch of rebindings alone is as it was, and so is its proposal's
+    id. `final` must hold every target and step of `committed`, its steps in
+    order, as a script the validator took does. `apply_patch` appends an added
+    target, so one that isn't last in `final` lands in another place among the
+    targets, with the same document."""
+    existing = {step.seq for step in committed.steps}
     return [
-        {
-            "op": "replace",
-            "path": f"/targets/{pointer(name)}/locators",
-            "value": final.targets[name].model_dump(mode="json", exclude_none=True)[
-                "locators"
-            ],
-        }
-        for name, target in committed.targets.items()
-        if final.targets[name].locators != target.locators
+        *(
+            {
+                "op": "replace",
+                "path": f"/targets/{pointer(name)}/locators",
+                "value": final.targets[name].model_dump(mode="json", exclude_none=True)[
+                    "locators"
+                ],
+            }
+            for name, target in committed.targets.items()
+            if final.targets[name].locators != target.locators
+        ),
+        *(
+            {
+                "op": "add",
+                "path": f"/targets/{pointer(name)}",
+                "value": target.model_dump(mode="json", exclude_none=True),
+            }
+            for name, target in final.targets.items()
+            if name not in committed.targets
+        ),
+        *(
+            {
+                "op": "add",
+                "path": f"/steps/{index}",
+                "value": step.model_dump(mode="json", exclude_none=True),
+            }
+            for index, step in enumerate(final.steps)
+            if step.seq not in existing
+        ),
     ]
 
 
@@ -368,9 +394,9 @@ _BARE_TILDE: Final = re.compile(r"~(?![01])")
 
 class PatchOp(StrictModel):
     """One change a proposal asks for: RFC 6902's `add` and `replace`. A heal writes
-    only `replace` until #246 gives `add` a producer. A proposal file is untrusted
-    input, so `remove`, `move`, `copy`, `test` and any other member are refused
-    rather than ignored."""
+    `replace` of a target's locators, and `add` of a target it adds or a step it
+    inserts (`json_patch`). A proposal file is untrusted input, so `remove`, `move`,
+    `copy`, `test` and any other member are refused rather than ignored."""
 
     op: Literal["add", "replace"]
     path: StrictStr
