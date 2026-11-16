@@ -725,7 +725,10 @@ async def _run_targeted(
     interrupted: Callable[[], bool],
 ) -> StepResult | None:
     """Find `step`'s target, gate it when a repair rebound it
-    (`repairs.rebind_refusal`), then record and dispatch `step`."""
+    (`repairs.rebind_refusal`), then record and dispatch `step`. A target a
+    repair added has no committed binding to gate against, and the heal-patch
+    validator lets only an inserted replay-safe click act on it, so it is
+    dispatched ungated, and the click is judged once it settled (`_shown`)."""
     budget = run.setup.config.budgets.resolve_seconds
     try:
         found = await look_for(session, run.evaluation, step.target, "action")
@@ -736,8 +739,8 @@ async def _run_targeted(
         return StepResult(step.seq, "failed", error=run.evaluation.reason(error))
     if not isinstance(found, Resolved):
         return StepResult(step.seq, "drifted", misses=found.misses)
-    committed = run.committed.targets[step.target]
-    if run.evaluation.targets[step.target] != committed:
+    committed = run.committed.targets.get(step.target)
+    if committed is not None and run.evaluation.targets[step.target] != committed:
         refused = await rebind_refusal(
             session,
             step,
