@@ -4,19 +4,28 @@ dialog's "No thanks" button, a scripted repair adds it and inserts a click on it
 before the covered toggle's step. Replay takes it, the click shows it changed
 nothing, the run ends `drift_consistent` and its proposal adds the target and the
 step. The same repair with one planted fault is refused and proposes nothing.
-`replays.replay_run(..., repair=...)` in real Chromium, with no model and no
-cassette."""
+Behind the validator, replay fails any other step through an added target before
+its intent, shown with a fault planted in the validator (the maintainer's
+backstop). `replays.replay_run(..., repair=...)` in real Chromium, with no model
+and no cassette."""
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from aqa_core.compiled import Click
+import pytest
+from aqa_core.compiled import Click, CompiledScript, Fill, FillSecret, Select
+from aqa_runner import repairs
+from aqa_runner.admission import Targeted
 from aqa_runner.heal_proposal import diff, final_script, proposal_lines
+from aqa_runner.redaction import NO_SECRETS
+from aqa_runner.repairs import Drift, StepAt, added_target_refusal
 
 from packages.runner.tests.drift_fixtures import (
     DETAILS,
     DISMISS,
     DISMISSED_PATCH,
+    dismissed,
     dismissing,
     page,
 )
@@ -115,3 +124,115 @@ def test_an_added_target_no_inserted_click_goes_through_is_refused(
     )
     assert run.verdict(1) == ("inconclusive", f"{reason} {COVERED}")
     assert 2 not in {seq for seq, _ in run.states()}
+
+
+# Why a step through a target a repair added didn't run: only a replay-safe click
+# a repair inserted may act through one (the maintainer's backstop on #325).
+UNVOUCHED = (
+    "a repair added this step's target, which only a replay-safe click a repair "
+    "inserted acts through, so the step did not run"
+)
+SIDE_EFFECT_CLICK = DISMISS.model_copy(
+    update={"side_effect": True, "side_effect_basis": "network: a write request"}
+)
+FILL = Fill(seq=2, action="fill", target="no_thanks", value="x", side_effect=False)
+
+
+@pytest.mark.parametrize(
+    ("step", "inserted", "refused"),
+    [
+        pytest.param(DISMISS, True, None, id="an-inserted-replay-safe-click"),
+        pytest.param(SIDE_EFFECT_CLICK, True, UNVOUCHED, id="a-side-effect-click"),
+        pytest.param(DISMISS, False, UNVOUCHED, id="a-committed-click"),
+        pytest.param(FILL, True, UNVOUCHED, id="a-fill"),
+        pytest.param(
+            Select(
+                seq=2,
+                action="select",
+                target="no_thanks",
+                option="x",
+                side_effect=False,
+            ),
+            True,
+            UNVOUCHED,
+            id="a-select",
+        ),
+        pytest.param(
+            FillSecret.model_validate(
+                {
+                    "seq": 2,
+                    "action": "fill_secret",
+                    "target": "no_thanks",
+                    "secret": "TEST_PASSWORD",
+                    "side_effect": False,
+                }
+            ),
+            True,
+            UNVOUCHED,
+            id="a-fill-secret",
+        ),
+    ],
+)
+def test_only_an_inserted_replay_safe_click_acts_through_an_added_target(
+    step: Targeted, inserted: bool, refused: str | None
+) -> None:
+    assert added_target_refusal(step, inserted=inserted, redactor=NO_SECRETS) == (
+        refused
+    )
+
+
+def taking_any_script(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A fault planted in the heal-patch validator: it takes any script, so
+    replay's own backstop is all that stands between an added target and the
+    page."""
+    monkeypatch.setattr(repairs, "heal_patch_problems", lambda *_: [])
+
+
+def retargeting(drift: Drift) -> CompiledScript:
+    """A repair that adds the dismiss button and points the drifted step, a
+    committed one, at it."""
+    assert isinstance(drift.at, StepAt)
+    pointed = drift.at.step.model_copy(update={"target": "no_thanks"})
+    return dismissed(drift.script).model_copy(update={"steps": (pointed,)})
+
+
+@pytest.mark.parametrize(
+    ("offer", "seq"),
+    [
+        pytest.param(
+            dismissing(SIDE_EFFECT_CLICK), 2, id="an-inserted-side-effect-click"
+        ),
+        pytest.param(dismissing(FILL), 2, id="an-inserted-fill"),
+        pytest.param(retargeting, 1, id="a-committed-step-retargeted"),
+    ],
+)
+def test_a_step_through_an_added_target_the_validator_let_through_fails_with_no_intent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    offer: Callable[[Drift], CompiledScript],
+    seq: int,
+) -> None:
+    taking_any_script(monkeypatch)
+
+    run = replayed(tmp_path, offer, html=MODAL, script=DETAILS)
+
+    assert run.outcomes() == [(0, "completed", None), (seq, "failed", UNVOUCHED)]
+    assert run.states() == [(0, "intent"), (0, "completed")]
+    assert run.ended() == INCONCLUSIVE
+    assert run.verdict(seq) == ("inconclusive", UNVOUCHED)
+
+
+def test_the_backstop_lets_an_inserted_replay_safe_click_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same planted fault, with the repair the validator would take."""
+    taking_any_script(monkeypatch)
+
+    run = dismissed_on_the_modal(tmp_path)
+
+    assert [(step.seq, step.outcome) for step in run.result.steps] == [
+        (0, "completed"),
+        (2, "completed"),
+        (1, "completed"),
+    ]
+    assert run.ended()[:2] == ("drift_consistent", 7)
