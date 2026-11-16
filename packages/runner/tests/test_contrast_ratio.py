@@ -265,6 +265,16 @@ def test_an_answer_at_both_caps_is_read_as_today() -> None:
     assert lowest_ratio(answer(*[AT_THE_CAP] * 1_000)) == 21
 
 
+def black(length: int, alpha: str = "1") -> str:
+    """Black at `alpha`, 1 or 0, its alpha padded with zeros to `length`
+    characters."""
+    return f"rgba(0, 0, 0, {alpha}." + "0" * (length - 17) + ")"
+
+
+def test_a_colour_at_the_cap_of_128_characters_is_read_as_today() -> None:
+    assert lowest_ratio(answer(node(black(128), black(128, "0"), WHITE))) == 21
+
+
 @pytest.mark.parametrize(
     "read",
     [
@@ -276,6 +286,10 @@ def test_an_answer_at_both_caps_is_read_as_today() -> None:
         answer(*[node("rgb(204, 204, 204)")] * 1_001),
         answer(*[node()] * 1_001, shadow=True),
         answer(OVER_THE_CAP | {"slotted": True}),
+        answer(node(black(129))),
+        answer(node(BLACK, black(129, "0"), WHITE)),
+        answer(node(extra=True)),
+        answer(node(layers=[{"colour": WHITE, "image": False, "extra": True}])),
     ],
     ids=[
         "1,001 nodes",
@@ -286,6 +300,10 @@ def test_an_answer_at_both_caps_is_read_as_today() -> None:
         "1,001 nodes that each give a ratio",
         "1,001 nodes in a shadow tree",
         "65 layers on a slotted node",
+        "a text colour of 129 characters",
+        "a background colour of 129 characters",
+        "an eighth key on a node",
+        "a third key on a layer",
     ],
 )
 def test_an_answer_over_a_cap_is_unread_whatever_it_holds(read: object) -> None:
@@ -297,6 +315,33 @@ def test_an_oversized_answer_is_refused_before_its_shape_is_checked() -> None:
     held the runner for 10.55 s once read."""
     read = answer(nodes=[node(BLACK, *[CLEAR] * 30, WHITE)] * 100_000)
 
+    started = time.perf_counter()
+    assert refused(read) == "unread"
+    assert time.perf_counter() - started < 1
+
+
+# A layer with 100 keys more than a layer has.
+SPARE_KEYS = {"colour": WHITE, "image": False} | {f"k{i}": 0 for i in range(100)}
+
+
+@pytest.mark.parametrize(
+    "read",
+    [
+        answer(nodes=[node(layers=[SPARE_KEYS] * 64)] * 1_000),
+        answer(nodes=[node() | {f"k{i}": 0 for i in range(10_000)}] * 1_000),
+        answer(nodes=[node(BLACK, *[black(10_000, "0")] * 63, WHITE)] * 1_000),
+    ],
+    ids=[
+        "a layer with 100 keys more, in every slot",
+        "a node with 10,000 keys more, in every slot",
+        "a colour of 10,000 characters, in every layer",
+    ],
+)
+def test_a_dict_shared_by_reference_over_a_cap_is_refused_in_time(read: object) -> None:
+    """A page can send a dict once, and Playwright's serializer sends it
+    again only by reference, so it is read once per slot it fills (#326's
+    security review): within the node and layer caps, its keys and its
+    colour are capped too."""
     started = time.perf_counter()
     assert refused(read) == "unread"
     assert time.perf_counter() - started < 1
