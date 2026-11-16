@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Final
 from unittest.mock import patch
 
-from aqa_core.compiled import Click, CompiledScript, Target
+from aqa_core.compiled import Click, CompiledScript, Step, Target
 from aqa_runner.repairs import Drift, StepAt
 
 from packages.runner.tests.executor_fixtures import (
@@ -122,9 +122,9 @@ DISMISSED_PATCH: Final[list[dict[str, Any]]] = [
 
 
 def dismissed(
-    script: CompiledScript, before: int = 1, click: Click = DISMISS
+    script: CompiledScript, before: int = 1, inserted: Step = DISMISS
 ) -> CompiledScript:
-    """`script` with `no_thanks` added as its last target and `click` inserted
+    """`script` with `no_thanks` added as its last target and `inserted`
     right before its step `before`."""
     seqs = [step.seq for step in script.steps]
     at = seqs.index(before)
@@ -134,18 +134,18 @@ def dismissed(
                 **script.targets,
                 "no_thanks": Target.model_validate(NO_THANKS),
             },
-            "steps": (*script.steps[:at], click, *script.steps[at:]),
+            "steps": (*script.steps[:at], inserted, *script.steps[at:]),
         }
     )
 
 
-def dismissing(click: Click = DISMISS) -> Callable[[Drift], CompiledScript]:
+def dismissing(inserted: Step = DISMISS) -> Callable[[Drift], CompiledScript]:
     """A repair for the modal page: the script it was handed, `dismissed` with
-    `click` right before the drifted step."""
+    `inserted` right before the drifted step."""
 
     def offer(drift: Drift) -> CompiledScript:
         assert isinstance(drift.at, StepAt)
-        return dismissed(drift.script, drift.at.step.seq, click)
+        return dismissed(drift.script, drift.at.step.seq, inserted)
 
     return offer
 
