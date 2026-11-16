@@ -2,11 +2,12 @@
 #254 and #326 amendments). `READ_STYLES`, a page script, reads the computed
 styles of each text node that counts and the hit test at its point;
 `lowest_ratio` checks the size of what it read, refusing as `unread` an
-answer over `MAX_NODES` nodes or a node over `MAX_LAYERS` layers, then its
-shape, refuses the first case styles can't settle, and works out WCAG 2.2's
-contrast ratio of each node in Python, so the arithmetic needs no browser. A
-refusal is never a pass and never a guess: it carries one of the fixed
-reasons in `REASONS`."""
+answer over a cap (`MAX_NODES` nodes, `MAX_LAYERS` layers on a node,
+`MAX_COLOUR_CHARS` characters in a colour, and no more keys than a shape
+names), then its shape, refuses the first case styles can't settle, and
+works out WCAG 2.2's contrast ratio of each node in Python, so the
+arithmetic needs no browser. A refusal is never a pass and never a guess: it
+carries one of the fixed reasons in `REASONS`."""
 
 import math
 import re
@@ -61,12 +62,17 @@ class ContrastRefusedError(RuntimeError):
         self.case: Refusal = case
 
 
-# The most counted text nodes an answer may hold, and the most background
-# layers one node may. Checking an answer's shape holds the event loop for
-# as long as the answer is big, and no timeout can cut it short, so an
-# answer over either cap is unread, refused before its shape is checked.
+# The most counted text nodes an answer may hold, the most background
+# layers one node may, and the most characters in a colour, more than twice
+# the longest Chromium serializes. Checking an answer's shape holds the
+# event loop for as long as the answer is big, and no timeout can cut it
+# short, so an answer over a cap is unread, refused before its shape is
+# checked. A dict the page sent once can fill any number of slots by
+# reference, and is checked once in each, so a node or a layer may hold no
+# more keys than its shape names either.
 MAX_NODES = 1_000
 MAX_LAYERS = 64
+MAX_COLOUR_CHARS = 128
 
 
 # What `lowest_ratio` needs of a target, read in one evaluation so the page
@@ -85,7 +91,7 @@ MAX_LAYERS = 64
 # so it is the page's word, as the hit test of `visible_unoccluded` is; what
 # it reads decides nothing here, and the page can undo the stop:
 # `lowest_ratio` checks the answer's size first, and refuses an answer over
-# either cap as `unread`.
+# any cap as `unread`.
 READ_STYLES = rf"""(element) => {{
     const owner = element.ownerDocument;
     const answer = {{ shadow: false, width: innerWidth, height: innerHeight, nodes: [] }};
@@ -201,8 +207,10 @@ _RGBA = re.compile(
 def lowest_ratio(answer: object) -> float:
     """The lowest WCAG contrast ratio over the text that `answer`, the page
     script's, describes; or `ContrastRefusedError` with the first case met:
-    an answer over `MAX_NODES` nodes, or with a node over `MAX_LAYERS`
-    layers, which is unread whatever it holds; then one of any other shape,
+    an answer over a cap, `MAX_NODES` nodes, `MAX_LAYERS` layers on a node,
+    `MAX_COLOUR_CHARS` characters in a colour, or more keys on a node or a
+    layer than its shape names, which is unread whatever it holds; then one
+    of any other shape,
     which is unread too; then the target's own (in a shadow tree, then no
     text), then each node's, in document order. A refusal wins over any
     ratio."""
@@ -221,21 +229,38 @@ def lowest_ratio(answer: object) -> float:
 
 
 def _oversized(answer: object) -> bool:
-    """Whether `answer` holds more than `MAX_NODES` nodes, or a node more
-    than `MAX_LAYERS` layers, read from list lengths alone in one pass over
-    at most `MAX_NODES` nodes, so an answer of any size costs little. A value
-    of another type than the one looked for is left to the shape check."""
+    """Whether `answer` is over a cap: more than `MAX_NODES` nodes, or a
+    node with more than `MAX_LAYERS` layers, more keys than `_Node` names or
+    a colour over `MAX_COLOUR_CHARS` characters, or a layer with more keys
+    than `_Layer` names or such a colour. It reads lengths alone, in one pass
+    over at most `MAX_NODES` nodes and their layers, so an answer of any
+    size costs little, however many slots one dict fills. A value of
+    another type than the one looked for is left to the shape check."""
     nodes = answer.get("nodes") if isinstance(answer, dict) else None
     if not isinstance(nodes, list):
         return False
-    if len(nodes) > MAX_NODES:
+    return len(nodes) > MAX_NODES or any(_node_oversized(node) for node in nodes)
+
+
+def _node_oversized(node: object) -> bool:
+    if not isinstance(node, dict):
+        return False
+    if len(node) > len(_Node.__required_keys__) or _long(node.get("colour")):
         return True
-    return any(
-        isinstance(node, dict)
-        and isinstance(layers := node.get("layers"), list)
-        and len(layers) > MAX_LAYERS
-        for node in nodes
+    layers = node.get("layers")
+    if not isinstance(layers, list):
+        return False
+    return len(layers) > MAX_LAYERS or any(_layer_oversized(at) for at in layers)
+
+
+def _layer_oversized(layer: object) -> bool:
+    return isinstance(layer, dict) and (
+        len(layer) > len(_Layer.__required_keys__) or _long(layer.get("colour"))
     )
+
+
+def _long(colour: object) -> bool:
+    return isinstance(colour, str) and len(colour) > MAX_COLOUR_CHARS
 
 
 def _ratio_of(node: _Node, width: float, height: float) -> float:
