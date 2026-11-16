@@ -863,13 +863,16 @@ def test_contrast_observation_is_bounded_and_stops_later_checks(
     assert time.monotonic() - started < 10
 
 
-@pytest.mark.parametrize("state", ["inflated-nodes", "inflated-layers"])
+@pytest.mark.parametrize(
+    "state", ["inflated-nodes", "inflated-layers", "shared-keys", "shared-colour"]
+)
 def test_a_page_that_inflates_the_contrast_answer_over_a_cap_is_refused_in_time(
     app: App, tmp_path: Path, state: str
 ) -> None:
-    """A page can make `READ_STYLES` answer more than either cap allows,
-    whatever the script's own stop; the runner refuses the answer unread
-    before it checks its shape, inside the check's bound."""
+    """A page can make `READ_STYLES` answer more than a cap allows, whatever
+    the script's own stop, or repeat one layer it sent once in every slot
+    the caps allow; the runner refuses the answer unread before it checks
+    its shape, inside the check's bound."""
     config = ProjectConfig.model_validate({"budgets": {"resolve_seconds": 1}})
     started = time.monotonic()
     result = contrast_run(app, tmp_path, state, config)

@@ -75,7 +75,10 @@ PAGES = SHOPS | {
     # under a gradient, or gone, by its state. Or a page whose own script
     # makes contrast_min's answer, which would still pass, hold 5,000 copies
     # of the notice's node, or the node 100 copies of its first layer more,
-    # by overriding the built-ins that answer is built with.
+    # by overriding the built-ins that answer is built with. Or, within the
+    # node and layer caps, 1,000 copies of the node whose first 60 layers
+    # are one clear layer, sent once, with 200 keys more than a layer has
+    # or a colour of 20,000 characters.
     "contrast": """<div id="block" style="background:#fff">
         <p id="contrast" style="color:#767676">Saved</p></div>
         <script>
@@ -96,6 +99,20 @@ PAGES = SHOPS | {
                 if (mapped[0]?.image === undefined) return mapped;
                 return Array(100).fill(mapped[0]).concat(mapped);
             };
+            const clear = { colour: "rgba(0, 0, 0, 0)", image: false };
+            if (state === "shared-keys") for (let i = 0; i < 200; i++) clear["k" + i] = 0;
+            if (state === "shared-colour") clear.colour = "rgba(0, 0, 0, 0." + "0".repeat(20000) + ")";
+            if (state?.startsWith("shared-")) {
+                Array.prototype.push = function (...items) {
+                    if (items[0]?.layers === undefined) return push.apply(this, items);
+                    return push.apply(this, Array(1000).fill(items[0]));
+                };
+                Array.prototype.map = function (...args) {
+                    const mapped = map.apply(this, args);
+                    if (mapped[0]?.image === undefined) return mapped;
+                    return Array(60).fill(clear).concat(mapped);
+                };
+            }
         </script>""",
     "visual-frame": '<iframe src="/page/form"></iframe>',
     "visual-foreign-frame": '<iframe src="data:text/html,<button>Save</button>"></iframe>',
