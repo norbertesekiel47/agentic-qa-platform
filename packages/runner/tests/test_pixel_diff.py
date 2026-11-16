@@ -336,6 +336,30 @@ def test_a_target_that_moves_while_the_page_is_captured_is_refused(
     assert saved(done) is None
 
 
+def test_a_screenshot_not_at_the_viewports_size_is_refused(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resolve = BrowserSession.resolve
+
+    async def widening(
+        session: BrowserSession, target: Target, use: Use, *, every: bool = False
+    ) -> object:
+        # The page stays 1280 px wide, and its capture too; the session now
+        # says its viewport is 1281.
+        session.settings = session.settings.model_copy(update={"viewport": (1281, 800)})
+        return await resolve(session, target, use, every=every)
+
+    monkeypatch.setattr(BrowserSession, "resolve", widening)
+    committed(tmp_path, png(BLUE))
+
+    done = replayed(app, tmp_path, monkeypatch, "clear", check())
+
+    refused_with(
+        done, "pixel_diff could not read the page's screenshot at the viewport's size"
+    )
+    assert saved(done) is None
+
+
 def test_a_missing_baseline_is_refused_and_saves_the_crop(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
