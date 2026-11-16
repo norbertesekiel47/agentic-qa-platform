@@ -1,15 +1,19 @@
 """Fixtures the drift pages' tests share (#240): an order page whose toggle
 shows its details, five drifts of it, each one change (the toggle moved,
-renamed, removed or drawn in a canvas (#252), or a modal over the page), and
-the scripts recorded against the order page. Later tickets compose a page
-from these rather than edit one. Imported by its path, as pytest names the
-runner's test modules (TESTING.md §1, Shared egress fixtures)."""
+renamed, removed or drawn in a canvas (#252), or a modal over the page), the
+scripts recorded against the order page, and the scripted repair that
+dismisses the modal (#325). Later tickets compose a page from these rather
+than edit one. Imported by its path, as pytest names the runner's test
+modules (TESTING.md §1, Shared egress fixtures)."""
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 from unittest.mock import patch
+
+from aqa_core.compiled import Click, CompiledScript, Target
+from aqa_runner.repairs import Drift, StepAt
 
 from packages.runner.tests.executor_fixtures import (
     PAGES,
@@ -88,6 +92,62 @@ CONTRASTED = compiled(
         }
     ],
 )
+
+
+# The modal's dismiss button, which no committed target names: the target a
+# repair adds for the click it inserts (#325).
+NO_THANKS: Final[dict[str, Any]] = {
+    "semantic": "the newsletter dialog's dismiss button",
+    "locators": [
+        by_role("button", "No thanks"),
+        {"css": "button", "scope": {"css": "#overlay"}},
+    ],
+}
+DISMISS = Click(seq=2, action="click", target="no_thanks", side_effect=False)
+# The patch from `DETAILS` to `dismissed(DETAILS)`.
+DISMISSED_PATCH: Final[list[dict[str, Any]]] = [
+    {"op": "add", "path": "/targets/no_thanks", "value": NO_THANKS},
+    {
+        "op": "add",
+        "path": "/steps/0",
+        "value": {
+            "seq": 2,
+            "side_effect": False,
+            "satisfies": [],
+            "action": "click",
+            "target": "no_thanks",
+        },
+    },
+]
+
+
+def dismissed(
+    script: CompiledScript, before: int = 1, click: Click = DISMISS
+) -> CompiledScript:
+    """`script` with `no_thanks` added as its last target and `click` inserted
+    right before its step `before`."""
+    seqs = [step.seq for step in script.steps]
+    at = seqs.index(before)
+    return script.model_copy(
+        update={
+            "targets": {
+                **script.targets,
+                "no_thanks": Target.model_validate(NO_THANKS),
+            },
+            "steps": (*script.steps[:at], click, *script.steps[at:]),
+        }
+    )
+
+
+def dismissing(click: Click = DISMISS) -> Callable[[Drift], CompiledScript]:
+    """A repair for the modal page: the script it was handed, `dismissed` with
+    `click` right before the drifted step."""
+
+    def offer(drift: Drift) -> CompiledScript:
+        assert isinstance(drift.at, StepAt)
+        return dismissed(drift.script, drift.at.step.seq, click)
+
+    return offer
 
 
 def page(name: str) -> str:
