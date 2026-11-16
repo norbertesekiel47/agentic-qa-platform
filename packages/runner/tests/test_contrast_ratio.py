@@ -5,6 +5,7 @@ ancestors, the lowest deciding, and the first case styles can't settle
 refused by its fixed reason. No browser: each answer is written here as the
 page script gives one. Every expected value is a literal."""
 
+import time
 from typing import Any
 
 import pytest
@@ -252,6 +253,53 @@ def test_the_first_case_met_is_the_one_refused(
         assert lowest_ratio(read) == 21
     else:
         assert refused(read) == case
+
+
+# A node at the layer cap, 64 layers, all clear but the outermost; and one
+# over it, with 65.
+AT_THE_CAP = node(BLACK, *[CLEAR] * 63, WHITE)
+OVER_THE_CAP = node(BLACK, *[CLEAR] * 64, WHITE)
+
+
+def test_an_answer_at_both_caps_is_read_as_today() -> None:
+    assert lowest_ratio(answer(*[AT_THE_CAP] * 1_000)) == 21
+
+
+@pytest.mark.parametrize(
+    "read",
+    [
+        answer(*[node()] * 1_001),
+        answer(OVER_THE_CAP),
+        answer(*[node()] * 999, OVER_THE_CAP),
+        answer(*[node(x=-1)] * 1_001),
+        answer(*[node(hit=False)] * 1_001),
+        answer(*[node("rgb(204, 204, 204)")] * 1_001),
+        answer(*[node()] * 1_001, shadow=True),
+        answer(OVER_THE_CAP | {"slotted": True}),
+    ],
+    ids=[
+        "1,001 nodes",
+        "65 layers",
+        "65 layers on the 1,000th node",
+        "1,001 nodes outside the viewport",
+        "1,001 nodes another element hits",
+        "1,001 nodes that each give a ratio",
+        "1,001 nodes in a shadow tree",
+        "65 layers on a slotted node",
+    ],
+)
+def test_an_answer_over_a_cap_is_unread_whatever_it_holds(read: object) -> None:
+    assert refused(read) == "unread"
+
+
+def test_an_oversized_answer_is_refused_before_its_shape_is_checked() -> None:
+    """The issue's figure (#326): 100,000 nodes of 31 layers each, which
+    held the runner for 10.55 s once read."""
+    read = answer(nodes=[node(BLACK, *[CLEAR] * 30, WHITE)] * 100_000)
+
+    started = time.perf_counter()
+    assert refused(read) == "unread"
+    assert time.perf_counter() - started < 1
 
 
 @pytest.mark.parametrize(
