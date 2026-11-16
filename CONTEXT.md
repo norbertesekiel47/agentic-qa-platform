@@ -94,6 +94,10 @@ The link between a target's meaning and the locators that currently find it. A b
 A compiled check that establishes all or part of an expectation's claim, never a weaker proxy.
 _Avoid_: using "expectation" for the compiled check
 
+**Baseline image**:
+The PNG a `pixel_diff` assertion compares its target's crop with: committed below `.compiled/baselines/` and pinned by its sha256 in the assertion, so no heal can change it. A person makes one by copying the crop that a failed or refused check left in its run record; the tool never writes one.
+_Avoid_: "baseline" alone where a probe's baseline value (`probe_baselines`) could be meant; "region" for the crop, which names a subject contract's element
+
 **Coverage plan**:
 The first thing exploring a spec produces, from the spec alone and before the browser opens: each expectation's subject and the checks that would establish its claim, or why no check can, plus any condition the goal requires, such as checking after a reload. It stays fixed for the whole explore run, and an expectation it can't cover fails compilation by name.
 _Avoid_: test plan
