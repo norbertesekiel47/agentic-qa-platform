@@ -7,10 +7,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from aqa_core.compiled import CompiledScript
 from langchain_core.messages import AIMessage
 
 from packages.runner.tests.drift_fixtures import (
     BUTTON,
+    CONTRASTED,
     SHIPPING,
     SUMMARY,
     TOGGLE,
@@ -393,14 +395,21 @@ def test_a_healer_reply_that_claims_success_changes_no_verdict(
     assert [each for each in written["verdicts"] if "assertion" in each] == []
 
 
-def test_a_decoy_that_satisfies_a_weak_check_heals_today(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "script", [BUTTON, CONTRASTED], ids=["visible_unoccluded", "contrast_min"]
+)
+def test_a_decoy_that_satisfies_a_weak_check_heals_today(
+    tmp_path: Path, script: CompiledScript
+) -> None:
     """The residual ADR-0024 names, and where #248 starts: `visible_unoccluded`
-    with `min_size_px` [1, 1] holds of any button, so a steered model gets a
-    proposal, whose evidence is the locator diff a person reviews."""
+    with `min_size_px` [1, 1] holds of any button, and `contrast_min` of any
+    element whose text inside the viewport meets `min_ratio`, such as another
+    button, so a steered model gets a proposal, whose evidence is the locator
+    diff a person reviews (SECURITY §4, item 4's Residuals)."""
     run = healed(
         tmp_path,
         rebinding("button", "Contact us"),
-        script=BUTTON,
+        script=script,
         spec_at=in_view_at,
     )
 
