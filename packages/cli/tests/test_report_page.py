@@ -36,8 +36,11 @@ from packages.cli.tests.report_fixtures import (
 from packages.runner.tests.drift_fixtures import (
     BUTTON,
     DETAILS,
+    DISMISSED_PATCH,
     IN_VIEW,
+    NO_THANKS,
     SHIPPING,
+    dismissed,
     page,
 )
 
@@ -328,6 +331,27 @@ def with_patch(
     return edit
 
 
+def test_a_proposal_that_adds_a_target_and_a_click_on_it_shows_its_diff(
+    drift: Ran, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The patch a run that dismissed the modal proposes (#325), with the id of
+    its content: the validator allows it, so the diff shows it."""
+    _, shown = report_of(drift, tmp_path, monkeypatch, with_patch(DISMISSED_PATCH))
+
+    kept = json.loads((drift.record / "run.json").read_text())
+    recorded = CompiledScript.model_validate_json(json.dumps(kept["script"]))
+    shown_diff = shown.one(having("class", "diff")).raw_text.split("\n")
+    assert shown_diff == diff("order", recorded, dismissed(recorded))
+    added = [line for line in shown_diff if line.startswith("+")]
+    assert any('"no_thanks"' in line for line in added)
+    assert any('"seq": 2' in line for line in added)
+    blob = drift.replay_json()["heal_proposal"]["base"]["blob_sha"]
+    proposal = proposal_id("order", blob, DISMISSED_PATCH)
+    assert f"To accept it, run aqa heal apply {proposal} in this project" in panel(
+        shown
+    )
+
+
 def another_id(ran: Ran) -> None:
     ran.edit_replay_json(lambda d: d["heal_proposal"].update(id="ah_000000000000"))
 
@@ -361,6 +385,12 @@ def another_id(ran: Ran) -> None:
                 ]
             ),
             id="an-added-assertion",
+        ),
+        pytest.param(
+            with_patch(
+                [{"op": "add", "path": "/targets/no_thanks", "value": NO_THANKS}]
+            ),
+            id="an-added-target-no-step-uses",
         ),
         pytest.param(
             with_patch(
