@@ -681,6 +681,73 @@ def test_a_heal_finds_no_contrast_min_target_by_a_label_or_placeholder(
     ]
 
 
+def a_pixel_diff_badge(data: dict[str, Any]) -> None:
+    """Adds a badge that only a pixel_diff check reads."""
+    data["targets"]["badge"] = {
+        "semantic": "the payment step's badge",
+        "locators": [{"testid": "badge"}],
+    }
+    data["assertions"].append(
+        {
+            "id": "a7",
+            "expect_index": 4,
+            "check": "pixel_diff",
+            "target": "badge",
+            "baseline": "checkout/badge.png",
+            "baseline_sha256": "sha256:" + "ab" * 32,
+            "max_diff_ratio": 0.01,
+            "pixel_threshold": 8,
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"baseline": "checkout/other.png"},
+        {"baseline_sha256": "sha256:" + "cd" * 32},
+        {"max_diff_ratio": 0.5},
+        {"pixel_threshold": 254},
+    ],
+    ids=["baseline", "baseline_sha256", "max_diff_ratio", "pixel_threshold"],
+)
+def test_a_heal_never_changes_what_a_pixel_diff_compares(
+    change: dict[str, Any],
+) -> None:
+    assert heal(
+        lambda d: d["assertions"][6].update(change), base=a_pixel_diff_badge
+    ) == ["/assertions: a heal changes nothing but target locators and inserted steps"]
+
+
+@pytest.mark.parametrize(
+    "locator",
+    [{"label": "Badge"}, {"placeholder": "Badge"}],
+    ids=["label", "placeholder"],
+)
+def test_a_heal_finds_no_pixel_diff_target_by_a_label_or_placeholder(
+    locator: dict[str, Any],
+) -> None:
+    assert heal(
+        lambda d: d["targets"]["badge"].update(locators=[locator]),
+        base=a_pixel_diff_badge,
+    ) == [
+        (
+            "/targets/badge/locators/0: a heal finds no assertion's target by a "
+            "label or placeholder, or by a name when its text is checked"
+        )
+    ]
+
+
+def test_a_heal_may_rebind_a_pixel_diff_target_by_css() -> None:
+    assert (
+        heal(
+            lambda d: d["targets"]["badge"].update(locators=[{"css": "#badge"}]),
+            base=a_pixel_diff_badge,
+        )
+        == []
+    )
+
+
 def ops(*changes: dict[str, Any]) -> list[PatchOp]:
     return [PatchOp.model_validate(change) for change in changes]
 

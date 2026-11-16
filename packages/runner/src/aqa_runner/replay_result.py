@@ -38,6 +38,7 @@ from aqa_core.compiled import (
     Fill,
     FillSecret,
     ModelVerify,
+    PixelDiff,
     Select,
     TargetCheck,
     VisibleUnoccluded,
@@ -404,7 +405,9 @@ class _Judging:
     ) -> _Judged:
         category: Category = (
             "visual"
-            if isinstance(check, VisibleUnoccluded | ContrastMin | ModelVerify)
+            if isinstance(
+                check, VisibleUnoccluded | ContrastMin | PixelDiff | ModelVerify
+            )
             else "functional"
         )
         judged = self._judged(

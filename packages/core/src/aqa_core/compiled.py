@@ -713,8 +713,8 @@ Assertion = Annotated[
 # its target isn't asserted for a heal patch, a subject contract doesn't
 # count it, and its drift goes to no repair, since only a verified replay,
 # which never heals, runs one (ADR-0024's #256 amendment).
-TargetCheck = TextInTarget | NotVisible | VisibleUnoccluded | ContrastMin
-PositiveCheck = TextInTarget | VisibleUnoccluded | ContrastMin
+TargetCheck = TextInTarget | NotVisible | VisibleUnoccluded | ContrastMin | PixelDiff
+PositiveCheck = TextInTarget | VisibleUnoccluded | ContrastMin | PixelDiff
 
 
 class ExpectationCoverage(StrictModel):

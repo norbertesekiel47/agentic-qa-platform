@@ -5,14 +5,17 @@ evaluated again and the rest keep their results. Real Chromium against #240's
 drift pages, with every locator, as heal runs."""
 
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 
 import pytest
 from aqa_core.compiled import CompiledScript, Press, Target
 from aqa_runner.evaluation import AssertionResult
 from aqa_runner.repairs import Drift
+from aqa_runner.replays import Replaying
 
 from packages.runner.tests import executor_fixtures as fx
+from packages.runner.tests import test_replay_repairs
 from packages.runner.tests.drift_fixtures import (
     BUTTON,
     CONTRASTED,
@@ -75,6 +78,52 @@ def test_a_drifted_contrast_min_target_goes_to_the_repair_and_is_evaluated_again
     ]
     assert run.result.assertions == (AssertionResult("a1", "pass", locator_index=0),)
     assert run.result.outcome == "passed"
+
+
+# The toggle's pixels, against a baseline the spec root doesn't hold.
+PIXEL_DIFFED = fx.compiled(
+    [],
+    targets={"toggle": TOGGLE},
+    assertions=[
+        {
+            "id": "a1",
+            "expect_index": 0,
+            "check": "pixel_diff",
+            "target": "toggle",
+            "baseline": "order/toggle.png",
+            "baseline_sha256": "sha256:" + "0" * 64,
+            "max_diff_ratio": 0,
+            "pixel_threshold": 0,
+        }
+    ],
+)
+
+
+def test_a_drifted_pixel_diff_target_goes_to_the_repair_and_is_compared_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A baselines place, as strict replay has: without one, the check is
+    # refused before its target is looked for.
+    monkeypatch.setattr(
+        test_replay_repairs, "Replaying", partial(Replaying, spec_root=tmp_path / "qa")
+    )
+
+    run = repairing(
+        tmp_path,
+        lambda drift: rebound(drift.script),
+        script=PIXEL_DIFFED,
+        spec_at=in_view_spec,
+    )
+
+    assert [(drift.at.key, drift.misses) for drift in run.handed] == [
+        ("assertion-0", MISSES)
+    ]
+    # Found where the repair bound it, then compared: its baseline is missing.
+    assert run.result.assertions == (
+        AssertionResult(
+            "a1", "not_evaluated", error="pixel_diff's baseline file is missing"
+        ),
+    )
 
 
 HEADING = {"semantic": "the order's heading", "locators": [{"css": "h1"}]}
