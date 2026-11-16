@@ -21,7 +21,7 @@ from packages.cli.tests.heal_apply_fixtures import (
     files,
     recorded,
 )
-from packages.runner.tests.drift_fixtures import SHIPPING
+from packages.runner.tests.drift_fixtures import NO_THANKS, SHIPPING
 
 # What a refusal says after the first line, by why.
 EDITED = "the proposal doesn't match its id, so it was edited after its run"
@@ -39,6 +39,9 @@ def replacing(path: str, value: object) -> list[dict[str, Any]]:
 
 def inserting(step: dict[str, Any]) -> list[dict[str, Any]]:
     return [{"op": "add", "path": "/steps/0", "value": step}]
+
+
+ADDS_NO_THANKS = {"op": "add", "path": "/targets/no_thanks", "value": NO_THANKS}
 
 
 @pytest.mark.parametrize(
@@ -205,6 +208,28 @@ def test_a_proposal_takes_only_a_heals_changes(
             replacing("/spec_hash", "sha256:" + "1" * 64),
             f"/spec_hash: {OUTSIDE}",
             id="the-spec-hash",
+        ),
+        # A target a heal adds is for a click it inserts, and only that (#325).
+        pytest.param(
+            [ADDS_NO_THANKS],
+            "/targets/no_thanks: a heal adds a target only for a click it inserts",
+            id="an-added-target-no-step-uses",
+        ),
+        pytest.param(
+            [
+                ADDS_NO_THANKS,
+                *inserting(
+                    {
+                        "seq": 9,
+                        "action": "fill",
+                        "target": "no_thanks",
+                        "value": "x",
+                        "side_effect": False,
+                    }
+                ),
+            ],
+            "/steps/0/action: a heal acts on a target it adds only by a click",
+            id="a-fill-on-an-added-target",
         ),
     ],
 )
