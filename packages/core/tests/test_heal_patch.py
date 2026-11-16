@@ -1,6 +1,7 @@
 import json
 import subprocess
 from collections.abc import Callable
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from aqa_core.project import SpecError, parse_compiled
 
 from packages.core.tests.test_compiled import data_models_example
 from packages.core.tests.test_load_compiled import DECLARES_TEST_PASSWORD
+from packages.runner.tests.drift_fixtures import NO_THANKS
 
 # A change to DATA_MODEL §7's example, made in place on its JSON.
 type Change = Callable[[dict[str, Any]], object]
@@ -368,7 +370,7 @@ SPARE = {"semantic": "the cart's close button", "locators": [{"css": "#close"}]}
         (
             unchanged,
             lambda d: d["targets"].update(spare=SPARE),
-            "/targets/spare: a heal adds no target",
+            "/targets/spare: a heal adds a target only for a click it inserts",
         ),
     ],
     ids=["removed", "added"],
@@ -377,6 +379,156 @@ def test_a_heal_neither_adds_nor_removes_a_target(
     base: Change, change: Change, problem: str
 ) -> None:
     assert heal(change, base) == [problem]
+
+
+CLICKS_NO_THANKS = {"action": "click", "target": "no_thanks", "side_effect": False}
+
+
+def dismissing(data: dict[str, Any]) -> None:
+    """Adds the modal's dismiss button as `no_thanks`, and inserts a replay-safe
+    click on it, as seq 10, before the sign-in click (index 3)."""
+    data["targets"]["no_thanks"] = deepcopy(NO_THANKS)
+    data["steps"].insert(3, {"seq": 10, **CLICKS_NO_THANKS})
+
+
+def then(change: Change) -> Change:
+    """`dismissing`, then `change`."""
+
+    def both(data: dict[str, Any]) -> None:
+        dismissing(data)
+        change(data)
+
+    return both
+
+
+def test_a_heal_may_add_a_target_for_a_replay_safe_click_it_inserts() -> None:
+    assert heal(dismissing) == []
+
+
+@pytest.mark.parametrize(
+    "locator",
+    [{"label": "No thanks"}, {"placeholder": "No thanks"}, {"testid": "no-thanks"}],
+    ids=["label", "placeholder", "testid"],
+)
+def test_a_target_a_heal_adds_may_be_found_as_an_actions_target_may(
+    locator: dict[str, Any],
+) -> None:
+    """No assertion reads it, so only the grammar every written locator meets
+    holds."""
+    added = then(lambda d: d["targets"]["no_thanks"]["locators"].append(locator))
+    assert heal(added) == []
+
+
+def test_a_target_a_heal_adds_may_be_clicked_by_several_inserted_steps() -> None:
+    step = {"seq": 11, **CLICKS_NO_THANKS}
+    assert heal(then(lambda d: d["steps"].insert(5, step))) == []
+
+
+ADDED = "/targets/no_thanks"
+UNUSED = f"{ADDED}: a heal adds a target only for a click it inserts"
+NOT_A_CLICK = "a heal acts on a target it adds only by a click"
+POSITIONAL = "a heal finds no element by its position among its siblings"
+
+
+@pytest.mark.parametrize(
+    ("fault", "problem"),
+    [
+        pytest.param(lambda d: d["steps"].pop(3), UNUSED, id="unused"),
+        pytest.param(
+            lambda d: d["steps"][3].update(target="sign_in"),
+            UNUSED,
+            id="its-click-through-another-target",
+        ),
+        pytest.param(
+            lambda d: d["steps"][3].update(action="fill", value="x"),
+            f"/steps/3/action: {NOT_A_CLICK}",
+            id="a-fill",
+        ),
+        pytest.param(
+            lambda d: d["steps"][3].update(action="select", option="x"),
+            f"/steps/3/action: {NOT_A_CLICK}",
+            id="a-select",
+        ),
+        pytest.param(
+            lambda d: d["steps"].insert(
+                5, {"seq": 11, **CLICKS_NO_THANKS, "action": "fill", "value": "x"}
+            ),
+            f"/steps/5/action: {NOT_A_CLICK}",
+            id="a-fill-beside-its-click",
+        ),
+        pytest.param(
+            lambda d: d["targets"]["no_thanks"].update(
+                contract={"region": "div#overlay", "part": "button"}
+            ),
+            (
+                f"{ADDED}/contract: a heal adds no target with a subject contract, "
+                "which only the reviewed config gives"
+            ),
+            id="a-contract",
+        ),
+        pytest.param(
+            lambda d: d["targets"]["no_thanks"]["locators"][1].update(
+                css="li:nth-child(2)"
+            ),
+            f"{ADDED}/locators/1/css: {POSITIONAL}",
+            id="a-positional-css",
+        ),
+        pytest.param(
+            lambda d: d["targets"]["no_thanks"]["locators"][1].update(
+                scope={"css": "h2 + #overlay"}
+            ),
+            f"{ADDED}/locators/1/scope/css: {POSITIONAL}",
+            id="a-sibling-in-its-scope",
+        ),
+        pytest.param(
+            lambda d: d["steps"][3].update(
+                side_effect=True, side_effect_basis="network: a write request"
+            ),
+            "/steps/3/side_effect: a heal inserts only replay-safe steps",
+            id="a-side-effect-click",
+        ),
+        pytest.param(
+            # The pay click, index 4 in the committed script.
+            lambda d: d["steps"][5].update(target="no_thanks"),
+            "/steps/4/target: a heal rewrites no existing step",
+            id="a-committed-step-retargeted",
+        ),
+        pytest.param(
+            lambda d: d["assertions"].append(
+                {
+                    "id": "a7",
+                    "expect_index": 4,
+                    "check": "visible_unoccluded",
+                    "target": "no_thanks",
+                    "min_size_px": [1, 1],
+                    "in_viewport": True,
+                }
+            ),
+            "/assertions: a heal changes nothing but target locators and inserted steps",
+            id="an-assertion-on-it",
+        ),
+        pytest.param(
+            lambda d: d["steps"][3].update(
+                {"action": "fill_secret", "secret": "TEST_PASSWORD"}
+            ),
+            (
+                "/steps/3/action: a heal inserts no fill_secret, which could steer "
+                "a bound secret into another field"
+            ),
+            id="a-fill-secret",
+        ),
+    ],
+)
+def test_a_target_a_heal_adds_is_refused_with_each_fault(
+    fault: Change, problem: str
+) -> None:
+    assert heal(then(fault)) == [problem]
+
+
+def test_a_path_escapes_an_added_targets_name() -> None:
+    assert heal(lambda d: d["targets"].update({"a/b~c": SPARE})) == [
+        "/targets/a~1b~0c: a heal adds a target only for a click it inserts"
+    ]
 
 
 # Selectors Level 4, §13.3 and §13.4: every child-indexed pseudo-class.

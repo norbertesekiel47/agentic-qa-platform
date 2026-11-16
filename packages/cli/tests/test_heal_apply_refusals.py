@@ -374,4 +374,7 @@ def test_a_refusal_escapes_control_characters(
 
     assert result.exit_code == 5, result.output
     assert "\x1b" not in result.stderr
-    assert "  /targets/\\x1b[31mred: a heal adds no target\n" in result.stderr
+    assert (
+        "  /targets/\\x1b[31mred: a heal adds a target only for a click it inserts\n"
+        in result.stderr
+    )
