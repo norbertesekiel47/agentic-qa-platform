@@ -1,10 +1,12 @@
 """How `contrast_min` reads its target (DATA_MODEL §7, Contrast; ADR-0025's
-#254 amendment). `READ_STYLES`, a page script, reads the computed styles of
-each text node that counts and the hit test at its point; `lowest_ratio`
-checks the shape of what it read, refuses the first case styles can't
-settle, and works out WCAG 2.2's contrast ratio of each node in Python, so
-the arithmetic needs no browser. A refusal is never a pass and never a
-guess: it carries one of the fixed reasons in `REASONS`."""
+#254 and #326 amendments). `READ_STYLES`, a page script, reads the computed
+styles of each text node that counts and the hit test at its point;
+`lowest_ratio` checks the size of what it read, refusing as `unread` an
+answer over `MAX_NODES` nodes or a node over `MAX_LAYERS` layers, then its
+shape, refuses the first case styles can't settle, and works out WCAG 2.2's
+contrast ratio of each node in Python, so the arithmetic needs no browser. A
+refusal is never a pass and never a guess: it carries one of the fixed
+reasons in `REASONS`."""
 
 import math
 import re
@@ -57,6 +59,14 @@ class ContrastRefusedError(RuntimeError):
     def __init__(self, case: Refusal) -> None:
         super().__init__(REASONS[case])
         self.case: Refusal = case
+
+
+# The most counted text nodes an answer may hold, and the most background
+# layers one node may. Checking an answer's shape holds the event loop for
+# as long as the answer is big, and no timeout can cut it short, so an
+# answer over either cap is unread, refused before its shape is checked.
+MAX_NODES = 1_000
+MAX_LAYERS = 64
 
 
 # What `lowest_ratio` needs of a target, read in one evaluation so the page
@@ -187,8 +197,13 @@ _RGBA = re.compile(
 def lowest_ratio(answer: object) -> float:
     """The lowest WCAG contrast ratio over the text that `answer`, the page
     script's, describes; or `ContrastRefusedError` with the first case met:
-    the target's own (in a shadow tree, then no text), then each node's, in
-    document order. A refusal wins over any ratio."""
+    an answer over `MAX_NODES` nodes, or with a node over `MAX_LAYERS`
+    layers, which is unread whatever it holds; then one of any other shape,
+    which is unread too; then the target's own (in a shadow tree, then no
+    text), then each node's, in document order. A refusal wins over any
+    ratio."""
+    if _oversized(answer):
+        raise ContrastRefusedError("unread")
     try:
         read = _ANSWER.validate_python(answer)
     except ValidationError:
@@ -199,6 +214,24 @@ def lowest_ratio(answer: object) -> float:
     if not read["nodes"]:
         raise ContrastRefusedError("no_text")
     return min(_ratio_of(node, read["width"], read["height"]) for node in read["nodes"])
+
+
+def _oversized(answer: object) -> bool:
+    """Whether `answer` holds more than `MAX_NODES` nodes, or a node more
+    than `MAX_LAYERS` layers, read from list lengths alone in one pass over
+    at most `MAX_NODES` nodes, so an answer of any size costs little. A value
+    of another type than the one looked for is left to the shape check."""
+    nodes = answer.get("nodes") if isinstance(answer, dict) else None
+    if not isinstance(nodes, list):
+        return False
+    if len(nodes) > MAX_NODES:
+        return True
+    return any(
+        isinstance(node, dict)
+        and isinstance(layers := node.get("layers"), list)
+        and len(layers) > MAX_LAYERS
+        for node in nodes
+    )
 
 
 def _ratio_of(node: _Node, width: float, height: float) -> float:
