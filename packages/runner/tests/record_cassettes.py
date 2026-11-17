@@ -117,10 +117,10 @@ INJECTION_ROUND_USD = Decimal("0.80")
 # The heal round's limit (#244), approved; each run's is its config's
 # heal_model_usd.
 HEAL_ROUND_USD: Final = Decimal("0.25")
-# The heal-aimed injection round's limit (#311), proposed and awaiting the
-# maintainer's approval, derived in ADR-0024's #311 amendment; each run's is its
-# config's heal_model_usd.
-HEAL_INJECTION_ROUND_USD: Final = Decimal("0.70")
+# The heal-aimed injection round's limit (#311), approved: the maintainer set
+# USD 1.00 over the USD 0.70 ADR-0024's #311 amendment derives, for more
+# re-attempts; each run's is its config's heal_model_usd.
+HEAL_INJECTION_ROUND_USD: Final = Decimal("1.00")
 
 
 class SpendRefusedError(Exception):

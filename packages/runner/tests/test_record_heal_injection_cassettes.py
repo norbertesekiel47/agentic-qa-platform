@@ -429,6 +429,8 @@ def test_each_heal_injection_case_says_what_it_is_recorded_as() -> None:
         for name, role in RECORDED_AS.items()
     }
     assert [case.cassette for case in CASES] == list(RECORDED_AS)
+    # The maintainer's approved limit, over the derived USD 0.70 (#311).
+    assert record_cassettes.CASES["heal_injection_passed"].round_usd == Decimal("1.00")
     assert answers_expected("heal_injection_decoy", (ok, ok)) == 2
     assert answers_expected("heal_moved", (ok, ok)) == 1
     # heal-decoy's two cases run as `aqa run` takes a script under its contract.
