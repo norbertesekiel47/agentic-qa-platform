@@ -1,10 +1,13 @@
 """How `contrast_min` reads its target (DATA_MODEL §7, Contrast; ADR-0025's
-#254 amendment). `READ_STYLES`, a page script, reads the computed styles of
-each text node that counts and the hit test at its point; `lowest_ratio`
-checks the shape of what it read, refuses the first case styles can't
-settle, and works out WCAG 2.2's contrast ratio of each node in Python, so
-the arithmetic needs no browser. A refusal is never a pass and never a
-guess: it carries one of the fixed reasons in `REASONS`."""
+#254 and #326 amendments). `READ_STYLES`, a page script, reads the computed
+styles of each text node that counts and the hit test at its point;
+`lowest_ratio` checks the size of what it read, refusing as `unread` an
+answer over a cap (`MAX_NODES` nodes, `MAX_LAYERS` layers on a node,
+`MAX_COLOUR_CHARS` characters in a colour, and no more keys than a shape
+names), then its shape, refuses the first case styles can't settle, and
+works out WCAG 2.2's contrast ratio of each node in Python, so the
+arithmetic needs no browser. A refusal is never a pass and never a guess: it
+carries one of the fixed reasons in `REASONS`."""
 
 import math
 import re
@@ -59,6 +62,19 @@ class ContrastRefusedError(RuntimeError):
         self.case: Refusal = case
 
 
+# The most counted text nodes an answer may hold, the most background
+# layers one node may, and the most characters in a colour, more than twice
+# the longest Chromium serializes. Checking an answer's shape holds the
+# event loop for as long as the answer is big, and no timeout can cut it
+# short, so an answer over a cap is unread, refused before its shape is
+# checked. A dict the page sent once can fill any number of slots by
+# reference, and is checked once in each, so a node or a layer may hold no
+# more keys than its shape names either.
+MAX_NODES = 1_000
+MAX_LAYERS = 64
+MAX_COLOUR_CHARS = 128
+
+
 # What `lowest_ratio` needs of a target, read in one evaluation so the page
 # can't change between the reads: whether the target is in a shadow tree,
 # the viewport's size, and each text node that counts, in document order (a
@@ -70,43 +86,46 @@ class ContrastRefusedError(RuntimeError):
 # parent's text colour; whether the parent or an ancestor has an effect a
 # colour can't account for; and, from the parent out to the root element,
 # each background colour and whether that element paints more behind the
-# text than its colour. It runs in the page's world, so it is the page's
-# word, as the hit test of `visible_unoccluded` is; what it reads decides
-# nothing here.
-READ_STYLES = r"""(element) => {
+# text than its colour. It stops once it holds `MAX_NODES` + 1 nodes, so an
+# honest target over the cap answers quickly. It runs in the page's world,
+# so it is the page's word, as the hit test of `visible_unoccluded` is; what
+# it reads decides nothing here, and the page can undo the stop:
+# `lowest_ratio` checks the answer's size first, and refuses an answer over
+# any cap as `unread`.
+READ_STYLES = rf"""(element) => {{
     const owner = element.ownerDocument;
-    const answer = { shadow: false, width: innerWidth, height: innerHeight, nodes: [] };
-    if (element.getRootNode() !== owner) return { ...answer, shadow: true };
-    const generated = (at, pseudo) => {
+    const answer = {{ shadow: false, width: innerWidth, height: innerHeight, nodes: [] }};
+    if (element.getRootNode() !== owner) return {{ ...answer, shadow: true }};
+    const generated = (at, pseudo) => {{
         const style = getComputedStyle(at, pseudo);
         return style.content !== "none" && style.content !== "normal" && (
             style.backgroundColor !== "rgba(0, 0, 0, 0)" || style.backgroundImage !== "none"
         );
-    };
+    }};
     const read = new Map();
-    const styled = (at) => {
-        if (!read.has(at)) {
+    const styled = (at) => {{
+        if (!read.has(at)) {{
             const style = getComputedStyle(at);
             const clips = ["background-clip", "-webkit-background-clip"].map(
                 (name) => style.getPropertyValue(name).split(", ")
             );
-            read.set(at, {
+            read.set(at, {{
                 effects: style.opacity !== "1" || style.filter !== "none" ||
                     style.backdropFilter !== "none" ||
                     style.getPropertyValue("mask-image") !== "none" ||
                     style.mixBlendMode !== "normal",
-                layer: {
+                layer: {{
                     colour: style.backgroundColor,
                     image: style.backgroundImage !== "none" ||
                         clips.some((clip) => clip.includes("text")) ||
                         generated(at, "::before") || generated(at, "::after"),
-                },
-            });
-        }
+                }},
+            }});
+        }}
         return read.get(at);
-    };
+    }};
     const walker = owner.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {{
         const parent = node.parentNode;
         if (!/\S/.test(node.data) || !(parent instanceof HTMLElement)) continue;
         const style = getComputedStyle(parent);
@@ -122,7 +141,7 @@ READ_STYLES = r"""(element) => {
         const up = [];
         for (let at = parent; at !== null; at = at.parentElement) up.push(at);
         const [first, ...rest] = owner.elementsFromPoint(x, y);
-        answer.nodes.push({
+        answer.nodes.push({{
             slotted: node.assignedSlot !== null || up.some((at) => at.assignedSlot !== null),
             x,
             y,
@@ -130,10 +149,11 @@ READ_STYLES = r"""(element) => {
             colour: style.getPropertyValue("-webkit-text-fill-color"),
             effects: up.some((at) => styled(at).effects),
             layers: up.map((at) => styled(at).layer),
-        });
-    }
+        }});
+        if (answer.nodes.length > {MAX_NODES}) break;
+    }}
     return answer;
-}"""
+}}"""
 
 # The page script's answer, in exactly this shape: any other is unread.
 _SHAPE = ConfigDict(strict=True, extra="forbid", allow_inf_nan=False)
@@ -187,8 +207,15 @@ _RGBA = re.compile(
 def lowest_ratio(answer: object) -> float:
     """The lowest WCAG contrast ratio over the text that `answer`, the page
     script's, describes; or `ContrastRefusedError` with the first case met:
-    the target's own (in a shadow tree, then no text), then each node's, in
-    document order. A refusal wins over any ratio."""
+    an answer over a cap, `MAX_NODES` nodes, `MAX_LAYERS` layers on a node,
+    `MAX_COLOUR_CHARS` characters in a colour, or more keys on a node or a
+    layer than its shape names, which is unread whatever it holds; then one
+    of any other shape,
+    which is unread too; then the target's own (in a shadow tree, then no
+    text), then each node's, in document order. A refusal wins over any
+    ratio."""
+    if _oversized(answer):
+        raise ContrastRefusedError("unread")
     try:
         read = _ANSWER.validate_python(answer)
     except ValidationError:
@@ -199,6 +226,41 @@ def lowest_ratio(answer: object) -> float:
     if not read["nodes"]:
         raise ContrastRefusedError("no_text")
     return min(_ratio_of(node, read["width"], read["height"]) for node in read["nodes"])
+
+
+def _oversized(answer: object) -> bool:
+    """Whether `answer` is over a cap: more than `MAX_NODES` nodes, or a
+    node with more than `MAX_LAYERS` layers, more keys than `_Node` names or
+    a colour over `MAX_COLOUR_CHARS` characters, or a layer with more keys
+    than `_Layer` names or such a colour. It reads lengths alone, in one pass
+    over at most `MAX_NODES` nodes and their layers, so an answer of any
+    size costs little, however many slots one dict fills. A value of
+    another type than the one looked for is left to the shape check."""
+    nodes = answer.get("nodes") if isinstance(answer, dict) else None
+    if not isinstance(nodes, list):
+        return False
+    return len(nodes) > MAX_NODES or any(_node_oversized(node) for node in nodes)
+
+
+def _node_oversized(node: object) -> bool:
+    if not isinstance(node, dict):
+        return False
+    if len(node) > len(_Node.__required_keys__) or _long(node.get("colour")):
+        return True
+    layers = node.get("layers")
+    if not isinstance(layers, list):
+        return False
+    return len(layers) > MAX_LAYERS or any(_layer_oversized(at) for at in layers)
+
+
+def _layer_oversized(layer: object) -> bool:
+    return isinstance(layer, dict) and (
+        len(layer) > len(_Layer.__required_keys__) or _long(layer.get("colour"))
+    )
+
+
+def _long(colour: object) -> bool:
+    return isinstance(colour, str) and len(colour) > MAX_COLOUR_CHARS
 
 
 def _ratio_of(node: _Node, width: float, height: float) -> float:

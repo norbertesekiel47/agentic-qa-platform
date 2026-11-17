@@ -6,10 +6,11 @@ Real Chromium: each refused page meets one case."""
 
 import asyncio
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from aqa_core.compiled import ByCss, Target
-from aqa_runner.contrast import ContrastRefusedError
+from aqa_runner.contrast import READ_STYLES, ContrastRefusedError
 from aqa_runner.document_origins import PolicyEvent, PolicyEventError
 from aqa_runner.locators import Resolved
 
@@ -177,6 +178,62 @@ def test_a_case_styles_cant_settle_is_refused_with_its_reason(
     sites: Sites, html: str, reason: str
 ) -> None:
     assert read(sites, html) == reason
+
+
+UNREAD = "contrast_min could not read its target's styles"
+
+
+def answered(sites: Sites, html: str) -> dict[str, Any]:
+    """What `READ_STYLES` answers for the element marked `data-is="t"` on a
+    page of `html`, evaluated as `contrast` evaluates it."""
+
+    async def scenario() -> dict[str, Any]:
+        async with browsing(sites) as session:
+            await session.navigate(f"{sites.app}/kept")
+            await session.page.set_content(html)
+            element = await session.page.query_selector('[data-is="t"]')
+            assert element is not None
+            read: dict[str, Any] = await element.evaluate(READ_STYLES)
+            return read
+
+    return asyncio.run(scenario())
+
+
+def words(count: int) -> str:
+    """`count` counted text nodes, each a word in its own span."""
+    return "".join("<span>Save</span> " for _ in range(count))
+
+
+def test_a_target_of_1000_counted_nodes_is_read_at_the_node_cap(sites: Sites) -> None:
+    html = on_white(f'<p data-is="t" style="font-size: 8px">{words(1_000)}</p>')
+
+    assert len(answered(sites, html)["nodes"]) == 1_000
+    assert read(sites, html) == 21
+
+
+def test_a_target_over_the_node_cap_is_unread_and_its_walk_stops_at_1001(
+    sites: Sites,
+) -> None:
+    html = on_white(f'<p data-is="t" style="font-size: 8px">{words(3_000)}</p>')
+
+    assert read(sites, html) == UNREAD
+    assert len(answered(sites, html)["nodes"]) == 1_001
+
+
+@pytest.mark.parametrize(
+    ("depth", "seen"), [(64, 21), (65, UNREAD)], ids=["at the cap", "over it"]
+)
+def test_text_whose_parent_is_deeper_than_the_layer_cap_is_unread(
+    sites: Sites, depth: int, seen: float | str
+) -> None:
+    """`depth` elements from the text's parent up to `<html>`: the parent,
+    the divs around it, the white block, `<body>` and `<html>`."""
+    html = on_white(
+        "<div>" * (depth - 4) + '<p data-is="t">Save</p>' + "</div>" * (depth - 4)
+    )
+
+    assert [len(each["layers"]) for each in answered(sites, html)["nodes"]] == [depth]
+    assert read(sites, html) == seen
 
 
 def test_contrast_refuses_an_element_off_the_allowed_origins(sites: Sites) -> None:
