@@ -56,7 +56,7 @@ from packages.runner.tests.test_heal_vision import ON_THE_MOVED_TOGGLE
 from packages.runner.tests.test_record_heal_cassettes import picking, receipt
 
 pytestmark = pytest.mark.usefixtures("reset_tracing")
-# What each test's vision request reserved, for the round limit's derivation
+# What each test's requests reserved, and their sizes, for the round limit's derivation
 # (ADR-0024's #311 amendment): `--log-cli-level=INFO` shows it.
 LOG = logging.getLogger(__name__)
 
@@ -136,6 +136,18 @@ def promoted(name: str, attempt: Path, library: Path) -> list[tuple[str, str]]:
     return [(line["role"], line["mode"]) for line in lines]
 
 
+def image_bytes(body: bytes) -> int:
+    """How many of a request's bytes are its images' base64 data."""
+    messages = json.loads(body)["messages"]
+    return sum(
+        len(part["source"]["data"])
+        for message in messages
+        if isinstance(message["content"], list)
+        for part in message["content"]
+        if part.get("type") == "image"
+    )
+
+
 def reserved(name: str, attempt: Path, sent: list[bytes]) -> list[Decimal]:
     """What each request `sent` reserved, as the recorder's bound for `name`
     prices it."""
@@ -146,7 +158,14 @@ def reserved(name: str, attempt: Path, sent: list[bytes]) -> list[Decimal]:
     reservations = [allowance.reserve(body) for body in sent]
     assert None not in reservations
     usd = [each.usd for each in reservations if each is not None]
-    LOG.info("%s: its requests reserved USD %s", name, ", ".join(map(str, usd)))
+    LOG.info(
+        "%s: its requests reserved USD %s",
+        name,
+        "; ".join(
+            f"{each} ({len(body)} bytes, {image_bytes(body)} of them image data)"
+            for each, body in zip(usd, sent, strict=True)
+        ),
+    )
     return usd
 
 
