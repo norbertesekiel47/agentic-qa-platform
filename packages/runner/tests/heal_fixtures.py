@@ -259,14 +259,23 @@ def heal_spec(case: HealCase, root: Path) -> Spec:
     return load_spec(path, load_config(root / "config.yaml"))
 
 
+# Why a recording isn't what its case records, in fixed words: its proposal binds
+# another element, or it ended as its case doesn't allow (`unallowed`).
+ANOTHER_ELEMENT = "its proposal binds another element than this case's"
+
+
+def unallowed(outcome: str) -> str:
+    return f"it ended {outcome}, which this case doesn't allow"
+
+
 def heal_disallowed(case: HealCase, replayed: Replayed) -> str | None:
     """Why `replayed` isn't what `case` records, in fixed words, or None."""
     proposal = replayed.document.get("heal_proposal")
     if not isinstance(proposal, dict):
-        return f"it ended {replayed.outcome}, which this case doesn't allow"
+        return unallowed(replayed.outcome)
     [change] = proposal["patch"]
     if change["value"] != case.locators:
-        return "its proposal binds another element than this case's"
+        return ANOTHER_ELEMENT
     return None
 
 
