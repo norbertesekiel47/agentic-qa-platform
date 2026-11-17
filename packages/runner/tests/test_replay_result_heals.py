@@ -10,7 +10,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from aqa_core.compiled import Click, NotVisible, Select, Target, VisibleUnoccluded
+from aqa_core.compiled import (
+    Click,
+    NotVisible,
+    Press,
+    Select,
+    Step,
+    Target,
+    VisibleUnoccluded,
+)
 from aqa_runner.evaluation import AssertionResult
 from aqa_runner.evidence import Shot
 from aqa_runner.executor import RunResult, StepResult
@@ -793,3 +801,358 @@ def test_a_run_that_heals_and_raised_proposes_nothing(tmp_path: Path) -> None:
     written = document(raised)
     assert (written["mode"], written["heal_proposal"]) == ("run", None)
     assert written["outcome"] == "inconclusive"
+
+
+# A step a repair inserts before the click, and a target it may add.
+PRESS = Press.model_validate(
+    {"seq": 2, "action": "press", "key": "Escape", "side_effect": False}
+)
+DISMISS = Target.model_validate(
+    {"semantic": "a dialog's dismiss button", "locators": [{"css": "#dismiss"}]}
+)
+CLICKS_DISMISS = Click.model_validate(
+    {"seq": 2, "action": "click", "target": "dismiss", "side_effect": False}
+)
+# What an inserted step cites: the repair that inserted it, and no binding.
+INSERTED_CITED = HEAL_CITED | {"bound": None, "model_reported": None}
+NOT_PASSED = "heal inserted this step, but the run didn't pass"
+
+
+def inserting(run: Made, step: Step, **added: Target) -> Repaired:
+    """The click's repair, with `step` inserted right before it and `added`
+    added as targets, binding nothing anew."""
+    patched = run.script.model_copy(
+        update={
+            "targets": {**run.script.targets, **added},
+            "steps": (step, *run.script.steps),
+        }
+    )
+    return Repaired(
+        the_click(run.script),
+        MISSED,
+        (),
+        patched,
+        Basis(BOUND_AS, REPORTED, None, "heals/1"),
+    )
+
+
+def ran(end: ReplayEnd, *steps: StepResult) -> ReplayEnd:
+    """`end`, whose steps are `steps`, in the order they ran."""
+    return replace(end, result=replace(cast_result(end), steps=steps))
+
+
+# Step 2, which a repair inserted, ran before step 1, whose drift it was for.
+DISMISSED = (
+    StepResult(0, "completed"),
+    StepResult(2, "completed"),
+    StepResult(1, "completed", locator_index=0),
+)
+
+
+def test_a_run_whose_repair_only_inserts_a_step_is_drift_consistent(
+    tmp_path: Path,
+) -> None:
+    run = made(tmp_path)
+
+    end = ran(
+        passing_with(run, repairs=(inserting(run, PRESS),), base=BLOB), *DISMISSED
+    )
+    written = document(end)
+
+    assert (written["outcome"], written["exit_code"]) == ("drift_consistent", 7)
+    assert written["reasons"] == []
+    assert written["heal_proposal"]["patch"] == [
+        {
+            "op": "add",
+            "path": "/steps/0",
+            "value": {
+                "seq": 2,
+                "side_effect": False,
+                "satisfies": [],
+                "action": "press",
+                "key": "Escape",
+            },
+        }
+    ]
+    assert judged(end, "step", 2) == {
+        "step": 2,
+        "locator_index": None,
+        "misses": [],
+        "verdict": "drift_consistent",
+        "reason": None,
+        "evidence": {
+            "path": "evidence/2",
+            "screenshot": None,
+            "before_screenshot": None,
+        },
+        "finding": None,
+        "heal": INSERTED_CITED,
+    }
+    # The click's own binding is unchanged, so it passes and cites no repair.
+    clicked, seen = judged(end, "step", 1), judged(end, "assertion", "a4")
+    assert (clicked["verdict"], clicked["heal"]) == ("pass", None)
+    assert (seen["verdict"], seen["heal"]) == ("pass", None)
+
+
+def test_an_inserted_step_in_a_run_that_didnt_pass_is_inconclusive_and_listed(
+    tmp_path: Path,
+) -> None:
+    run = made(tmp_path)
+
+    end = ran(
+        passing_with(
+            run,
+            repairs=(inserting(run, PRESS),),
+            base=BLOB,
+            **violated("console_errors"),
+        ),
+        *DISMISSED,
+    )
+    written = document(end)
+
+    assert (written["outcome"], written["heal_proposal"]) == (
+        "expectation_violated",
+        None,
+    )
+    entry = judged(end, "step", 2)
+    assert (entry["verdict"], entry["reason"], entry["heal"]) == (
+        "inconclusive",
+        NOT_PASSED,
+        INSERTED_CITED,
+    )
+    assert f"step 2: inconclusive, {NOT_PASSED}" in written["reasons"]
+    assert judged(end, "step", 1)["verdict"] == "pass"
+    finding = judged(end, "invariant", "console_errors")["finding"]
+    assert finding["rebound_steps"] == [2]
+
+
+def test_a_failed_inserted_step_keeps_its_own_reason_and_cites_its_repair(
+    tmp_path: Path,
+) -> None:
+    run = made(tmp_path)
+    failed = StepResult(
+        2, "failed", Window(heard=True, wrote=True), None, "idle", error="it wrote"
+    )
+
+    end = ran(
+        ending(run, repairs=(inserting(run, PRESS),), base=BLOB),
+        StepResult(0, "completed"),
+        failed,
+    )
+
+    entry = judged(end, "step", 2)
+    assert (entry["verdict"], entry["reason"], entry["heal"]) == (
+        "inconclusive",
+        "it wrote",
+        INSERTED_CITED,
+    )
+
+
+@pytest.mark.parametrize(
+    ("second", "listed"),
+    [
+        pytest.param(StepResult(2, "completed"), [2], id="dispatched"),
+        pytest.param(StepResult(2, "drifted", misses=MISSED), [], id="drifted"),
+    ],
+)
+def test_an_inserted_click_on_an_added_target_is_listed_once_dispatched(
+    tmp_path: Path, second: StepResult, listed: list[int]
+) -> None:
+    run = made(tmp_path)
+    taken = inserting(run, CLICKS_DISMISS, dismiss=DISMISS)
+    # A drift of the inserted click goes to the repair, which gives up.
+    gave_up = Repaired(StepAt(CLICKS_DISMISS), MISSED, (), None, None)
+
+    end = ran(
+        ending(run, repairs=(taken, gave_up), base=BLOB, **violated("console_errors")),
+        StepResult(0, "completed"),
+        second,
+    )
+
+    entry = judged(end, "invariant", "console_errors")
+    assert entry["finding"]["rebound_steps"] == listed
+
+
+def test_a_drifted_inserted_click_says_what_became_of_its_own_repair(
+    tmp_path: Path,
+) -> None:
+    run = made(tmp_path)
+    taken = inserting(run, CLICKS_DISMISS, dismiss=DISMISS)
+    gave_up = Repaired(StepAt(CLICKS_DISMISS), MISSED, (), None, None)
+
+    end = ran(
+        ending(run, repairs=(taken, gave_up), base=BLOB),
+        StepResult(0, "completed"),
+        StepResult(2, "drifted", misses=MISSED),
+    )
+
+    entry = judged(end, "step", 2)
+    assert (entry["verdict"], entry["reason"]) == (
+        "inconclusive",
+        "drift: heal gave up (no match)",
+    )
+    assert entry["heal"]["repair"] == "repairs/2.json"
+    assert document(end)["heal_proposal"] is None
+
+
+def test_an_inserted_click_on_an_added_target_is_drift_consistent_and_proposed(
+    tmp_path: Path,
+) -> None:
+    run = made(tmp_path)
+    taken = inserting(run, CLICKS_DISMISS, dismiss=DISMISS)
+
+    end = ran(passing_with(run, repairs=(taken,), base=BLOB), *DISMISSED)
+    written = document(end)
+
+    assert written["outcome"] == "drift_consistent"
+    assert written["heal_proposal"]["patch"] == [
+        {
+            "op": "add",
+            "path": "/targets/dismiss",
+            "value": {
+                "semantic": "a dialog's dismiss button",
+                "locators": [{"css": "#dismiss"}],
+            },
+        },
+        {
+            "op": "add",
+            "path": "/steps/0",
+            "value": {
+                "seq": 2,
+                "side_effect": False,
+                "satisfies": [],
+                "action": "click",
+                "target": "dismiss",
+            },
+        },
+    ]
+    assert judged(end, "step", 2)["verdict"] == "drift_consistent"
+    assert judged(end, "step", 2)["heal"] == INSERTED_CITED
+
+
+def test_an_inserted_step_on_a_rebound_target_cites_the_repair_that_inserted_it(
+    tmp_path: Path,
+) -> None:
+    run = made(tmp_path)
+    inserted = Click.model_validate(
+        {"seq": 2, "action": "click", "target": "save", "side_effect": False}
+    )
+    first = inserting(run, inserted)
+    assert first.script is not None
+    # An assertion's repair, later, rebinds the target both clicks go through.
+    check = run.script.assertions[3]
+    assert isinstance(check, VisibleUnoccluded)
+    later = Repaired(
+        AssertionAt(3, check),
+        MISSED,
+        (),
+        rebinding(first.script, save=NEW_SAVE),
+        Basis(NO_SECRETS.redact("later"), REPORTED, None, "heals/assertion-3"),
+    )
+
+    end = ran(passing_with(run, repairs=(first, later), base=BLOB), *DISMISSED)
+
+    assert judged(end, "step", 2)["heal"] == INSERTED_CITED
+    assert judged(end, "step", 1)["verdict"] == "drift_consistent"
+    assert judged(end, "step", 1)["heal"]["repair"] == "repairs/assertion-3.json"
+
+
+def test_an_inserted_step_cites_the_first_repair_holding_it_as_the_run_ended(
+    tmp_path: Path,
+) -> None:
+    """The inserted click drifted, and its own repair clicked another added
+    target instead."""
+    run = made(tmp_path)
+    first = inserting(run, CLICKS_DISMISS, dismiss=DISMISS)
+    instead = CLICKS_DISMISS.model_copy(update={"target": "close"})
+    close = DISMISS.model_copy(update={"semantic": "a dialog's close button"})
+    rewritten = Repaired(
+        StepAt(CLICKS_DISMISS),
+        MISSED,
+        (),
+        run.script.model_copy(
+            update={
+                "targets": {**run.script.targets, "close": close},
+                "steps": (instead, *run.script.steps),
+            }
+        ),
+        Basis(NO_SECRETS.redact("dismissed"), None, None, "heals/2"),
+    )
+
+    end = ran(passing_with(run, repairs=(first, rewritten), base=BLOB), *DISMISSED)
+
+    assert judged(end, "step", 2)["heal"] == {
+        "repair": "repairs/2.json",
+        "record": "heals/2",
+        "bound": None,
+        "model_reported": None,
+        "screenshot": None,
+    }
+
+
+def evidence(seq: int) -> dict[str, object]:
+    return {"path": f"evidence/{seq}", "screenshot": None, "before_screenshot": None}
+
+
+def test_a_repair_that_rebinds_and_inserts_nothing_keeps_its_document(
+    tmp_path: Path,
+) -> None:
+    """The whole document, as it was before an inserted step joined the rebound
+    set (#325)."""
+    run = made(tmp_path)
+
+    written = document(passing_with(run, **healing_the_step(run)))
+
+    assert written.pop("run_id") == run.record.run_id
+    plain = {"reason": None, "finding": None}
+    held = {"verdict": "pass", **plain, "evidence": evidence(1), "heal": None}
+    invariants = ("console_errors", "js_exceptions", "http_5xx", "broken_images")
+    assert written == {
+        "schema_version": 1,
+        "spec_id": "replay",
+        "mode": "run",
+        "outcome": "drift_consistent",
+        "exit_code": 7,
+        "withheld": False,
+        "error_code": None,
+        "reasons": [],
+        "non_resumable": [],
+        "infrastructure_events": {"count": 0, "events": []},
+        "verdicts": [
+            {
+                "step": 0,
+                "locator_index": None,
+                "misses": [],
+                "verdict": "pass",
+                **plain,
+                "evidence": evidence(0),
+                "heal": None,
+            },
+            {
+                "step": 1,
+                "locator_index": 0,
+                "misses": [],
+                "verdict": "drift_consistent",
+                **plain,
+                "evidence": evidence(1),
+                "heal": HEAL_CITED,
+            },
+            {"assertion": "a1", "locator_index": None, "misses": [], **held},
+            {
+                "assertion": "a4",
+                "locator_index": 0,
+                "misses": [],
+                "verdict": "drift_consistent",
+                **plain,
+                "evidence": evidence(1),
+                "heal": HEAL_CITED,
+            },
+            *({"invariant": name, **held} for name in invariants),
+        ],
+        "heal_proposal": {
+            "id": "ah_9db4e5e9c798",
+            "compiled": ".compiled/replay.json",
+            "base": {"blob_sha": BLOB, "pr_head_sha": None},
+            "patch": PATCH,
+        },
+    }

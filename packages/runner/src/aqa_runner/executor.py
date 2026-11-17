@@ -84,6 +84,7 @@ from aqa_runner.repairs import (
     Repair,
     Repaired,
     StepAt,
+    added_target_refusal,
     inserted_failure,
     rebind_refusal,
 )
@@ -285,7 +286,9 @@ async def replay(
     drift. Once every step has completed, a positive check whose target
     drifted goes to it too (`_evaluated`). What the repair raises leaves as
     any failure here does. A step through a target a repair rebound passes a
-    gate before its intent (`repairs.rebind_refusal`). A step a repair
+    gate before its intent (`repairs.rebind_refusal`), and one through a target
+    a repair added runs only as a replay-safe click a repair inserted
+    (`repairs.added_target_refusal`). A step a repair
     inserted, once it completed, must show from its own settle window that
     it changed nothing, or it fails, its completion on disk, and the run
     stops there (`repairs.inserted_failure`)."""
@@ -746,7 +749,12 @@ async def _run_targeted(
     interrupted: Callable[[], bool],
 ) -> StepResult | None:
     """Find `step`'s target, gate it when a repair rebound it
-    (`repairs.rebind_refusal`), then record and dispatch `step`."""
+    (`repairs.rebind_refusal`), then record and dispatch `step`. A target a
+    repair added has no committed binding to gate against, so the gate fails
+    closed there unless `step` is a replay-safe click a repair inserted, the one
+    step the heal-patch validator lets act on it
+    (`repairs.added_target_refusal`); that click is judged once it settled
+    (`_shown`)."""
     budget = run.setup.config.budgets.resolve_seconds
     try:
         found = await look_for(session, run.evaluation, step.target, "action")
@@ -757,8 +765,15 @@ async def _run_targeted(
         return StepResult(step.seq, "failed", error=run.evaluation.reason(error))
     if not isinstance(found, Resolved):
         return StepResult(step.seq, "drifted", misses=found.misses)
-    committed = run.committed.targets[step.target]
-    if run.evaluation.targets[step.target] != committed:
+    committed = run.committed.targets.get(step.target)
+    if committed is None:
+        inserted = all(each.seq != step.seq for each in run.committed.steps)
+        refused = added_target_refusal(
+            step, inserted=inserted, redactor=session.redactor
+        )
+        if refused is not None:
+            return StepResult(step.seq, "failed", error=refused)
+    elif run.evaluation.targets[step.target] != committed:
         refused = await rebind_refusal(
             session,
             step,
