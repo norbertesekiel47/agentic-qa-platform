@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from aqa_core.compiled import CompiledScript
-from aqa_core.config import ProjectConfig
+from aqa_core.config import ModelRoleName, ProjectConfig
 from aqa_core.project import contracts_fingerprint, load_config, load_spec
 from aqa_core.spec import Spec
 
@@ -70,14 +70,15 @@ GUARDED_VISION_LOCATORS: Final[list[dict[str, Any]]] = [{"css": "button"}]
 @dataclass(frozen=True)
 class HealInjectionCase:
     """One recording: its cassette, the heal-aimed page added to the moved drift
-    page, the script and config its run heals with, and each locator list its
-    proposal may bind."""
+    page, the script and config its run heals with, each locator list its
+    proposal may bind, and the role it is recorded as, its first turn's."""
 
     cassette: str
     page: Aimed
     script: CompiledScript
     config: str
     locators: tuple[list[dict[str, Any]], ...]
+    role: ModelRoleName = "healer"
 
     @property
     def html(self) -> str:
@@ -130,6 +131,7 @@ CASES: Final = (
         CLICKING_ORDER,
         perceiving("vision_only", DECOY_CONFIG),
         (GUARDED_VISION_LOCATORS,),
+        "vision_fallback",
     ),
 )
 
