@@ -1,8 +1,9 @@
 """What a heal patch may change in a compiled script (DATA_MODEL §7, #19): a
-heal rebinds targets' locators and inserts replay-safe steps, and changes
-nothing else. Product code owns these rules; the benchmark's rebindings pass
-through them too. A proposal's parts are here as well: its patch, the blob SHA
-of the file it applies to, and its id (ADR-0024's #243 and #244 amendments)."""
+heal rebinds targets' locators and inserts replay-safe steps, adds a target only
+for a click it inserts, and changes nothing else. Product code owns these rules;
+the benchmark's rebindings pass through them too. A proposal's parts are here as
+well: its patch, the blob SHA of the file it applies to, and its id (ADR-0024's
+#243, #244 and #246 amendments)."""
 
 import hashlib
 import json
@@ -15,9 +16,14 @@ from pydantic import JsonValue, StrictStr
 from aqa_core.compiled import (
     ByCss,
     ByTestId,
+    Click,
     CompiledScript,
+    Fill,
+    FillSecret,
     Locator,
+    Select,
     Step,
+    Target,
     TargetCheck,
     TextInTarget,
     allowed_for_assertion,
@@ -145,17 +151,50 @@ def text_claims(script: CompiledScript) -> dict[str, list[TextInTarget]]:
     return claims
 
 
+def _added_problems(
+    name: str, target: Target, steps: Sequence[Step], healed: Sequence[Step]
+) -> Iterator[str]:
+    """Problems with `target`, which the heal adds as `name`: nothing committed
+    vouches for its element, so some step must name it, an inserted step acts
+    on it only by a click, it has no subject contract, and every locator of it
+    is one the heal wrote. An inserted `fill_secret` is refused as any is
+    (`_inserted_steps`), and a step that existed as one rewritten
+    (`_existing_steps`). A path indexes a step in `healed`."""
+    path = f"/targets/{pointer(name)}"
+    existing = {step.seq for step in steps}
+    naming = [
+        (index, step)
+        for index, step in enumerate(healed)
+        if isinstance(step, Click | Fill | FillSecret | Select) and step.target == name
+    ]
+    if not naming:
+        yield f"{path}: a heal adds a target only for a click it inserts"
+    for index, step in naming:
+        if step.seq not in existing and isinstance(step, Fill | Select):
+            yield f"/steps/{index}/action: a heal acts on a target it adds only by a click"
+    if target.contract is not None:
+        yield (
+            f"{path}/contract: a heal adds no target with a subject contract, which "
+            "only the reviewed config gives"
+        )
+    for index, locator in enumerate(target.locators):
+        yield from _written(
+            f"{path}/locators/{index}", locator, asserted=False, claims=[]
+        )
+
+
 def _target_problems(script: CompiledScript, healed: CompiledScript) -> Iterator[str]:
-    """Targets match by name: each keeps its meaning and contract. Only a
-    locator the heal wrote, one its target didn't have, is held to the
-    grammar here, so a person's reviewed edit stands."""
+    """Targets match by name: each committed one keeps its meaning and
+    contract, and one the heal adds is for a click it inserts
+    (`_added_problems`). Only a locator the heal wrote, one its target didn't
+    have, is held to the grammar here, so a person's reviewed edit stands."""
     asserted = {
         check.target for check in script.assertions if isinstance(check, TargetCheck)
     }
     claims = text_claims(script)
-    for name in healed.targets:
+    for name, added in healed.targets.items():
         if name not in script.targets:
-            yield f"/targets/{pointer(name)}: a heal adds no target"
+            yield from _added_problems(name, added, script.steps, healed.steps)
     for name, target in script.targets.items():
         path = f"/targets/{pointer(name)}"
         if name not in healed.targets:
@@ -241,7 +280,9 @@ def heal_patch_problems(script: CompiledScript, healed: CompiledScript) -> list[
     """Why `healed` is no heal of `script`, each problem a fixed reason after
     the JSON pointer of what it names; none when it is one. `healed` must
     have been read by `aqa_core.project.parse_compiled`, so the loader's
-    rules already hold for it.
+    rules already hold for it. A target `script` lacks is one the heal adds,
+    for an inserted replay-safe click only, and found only by locators the
+    heal wrote (`_added_problems`).
 
     Nothing here runs the script, so an inserted step's `side_effect: false`
     is only a flag here: the heal step must still show that, after the patch,
@@ -267,21 +308,47 @@ def heal_patch_problems(script: CompiledScript, healed: CompiledScript) -> list[
 def json_patch(
     committed: CompiledScript, final: CompiledScript
 ) -> list[dict[str, object]]:
-    """The RFC 6902 patch from `committed` to `final`: one `replace` of a
-    target's locators for each target whose locators differ, in `committed`'s
-    order, and nothing else, since a heal changes nothing else that has a
-    producer until #246. `final` must hold every target of `committed`, as a
-    script the validator took does."""
+    """The RFC 6902 patch from `committed` to `final`, in this order: a
+    `replace` of a target's locators for each target whose locators differ, in
+    `committed`'s order; an `add` of each target `committed` lacks, in
+    `final`'s order; then an `add` of each inserted step at its index in
+    `final`, lowest first, so each index reads against what the adds before it
+    left. A patch of rebindings alone is as it was, and so is its proposal's
+    id. `final` must hold every target and step of `committed`, its steps in
+    order, as a script the validator took does. `apply_patch` appends an added
+    target, so one that isn't last in `final` lands in another place among the
+    targets, with the same document."""
+    existing = {step.seq for step in committed.steps}
     return [
-        {
-            "op": "replace",
-            "path": f"/targets/{pointer(name)}/locators",
-            "value": final.targets[name].model_dump(mode="json", exclude_none=True)[
-                "locators"
-            ],
-        }
-        for name, target in committed.targets.items()
-        if final.targets[name].locators != target.locators
+        *(
+            {
+                "op": "replace",
+                "path": f"/targets/{pointer(name)}/locators",
+                "value": final.targets[name].model_dump(mode="json", exclude_none=True)[
+                    "locators"
+                ],
+            }
+            for name, target in committed.targets.items()
+            if final.targets[name].locators != target.locators
+        ),
+        *(
+            {
+                "op": "add",
+                "path": f"/targets/{pointer(name)}",
+                "value": target.model_dump(mode="json", exclude_none=True),
+            }
+            for name, target in final.targets.items()
+            if name not in committed.targets
+        ),
+        *(
+            {
+                "op": "add",
+                "path": f"/steps/{index}",
+                "value": step.model_dump(mode="json", exclude_none=True),
+            }
+            for index, step in enumerate(final.steps)
+            if step.seq not in existing
+        ),
     ]
 
 
@@ -327,9 +394,9 @@ _BARE_TILDE: Final = re.compile(r"~(?![01])")
 
 class PatchOp(StrictModel):
     """One change a proposal asks for: RFC 6902's `add` and `replace`. A heal writes
-    only `replace` until #246 gives `add` a producer. A proposal file is untrusted
-    input, so `remove`, `move`, `copy`, `test` and any other member are refused
-    rather than ignored."""
+    `replace` of a target's locators, and `add` of a target it adds or a step it
+    inserts (`json_patch`). A proposal file is untrusted input, so `remove`, `move`,
+    `copy`, `test` and any other member are refused rather than ignored."""
 
     op: Literal["add", "replace"]
     path: StrictStr

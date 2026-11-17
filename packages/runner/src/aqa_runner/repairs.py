@@ -67,6 +67,12 @@ _UNANCHORED: Final = (
 _BROKE: Final = (
     "the page broke the checks on this step's rebound target, so it did not run"
 )
+# Why a step through a target a repair added didn't run (ADR-0024's #246
+# amendment, slice 2), in fixed words.
+_UNVOUCHED: Final = (
+    "a repair added this step's target, which only a replay-safe click a repair "
+    "inserted acts through, so the step did not run"
+)
 # Why a step a repair inserted failed once it settled, in fixed words
 # (ADR-0024's #246 amendment), each missing piece of evidence in this order.
 # Three are explore's words for the same evidence (`aqa_core.compiler`).
@@ -371,6 +377,20 @@ async def rebind_refusal(
         # Playwright's general error type: the page broke a read, or closed.
         refused = _BROKE
     return None if refused is None else redactor.redact(refused)
+
+
+def added_target_refusal(
+    step: Targeted, *, inserted: bool, redactor: Redactor
+) -> Redacted | None:
+    """Why `step`, whose target the committed script lacks, one a repair added,
+    may not act through it, or None, read before its intent (ADR-0024's #246
+    amendment, slice 2): no committed binding vouches for the element, so only a
+    `click` with `side_effect: false` that a repair `inserted` may. The
+    heal-patch validator already refuses every other such step, so this fails
+    closed behind it, scanned with `redactor`."""
+    if isinstance(step, Click) and not step.side_effect and inserted:
+        return None
+    return redactor.redact(_UNVOUCHED)
 
 
 async def _refusal(

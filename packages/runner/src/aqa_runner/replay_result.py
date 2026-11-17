@@ -111,8 +111,10 @@ _CATEGORIES: Final[Mapping[InvariantName, Category]] = {
 # The reason an infrastructure event gives (exit 13, API.md §7), in fixed
 # words: an event's host and cause are withheld in a run that binds a secret.
 _UNREACHED: Final = "an allowed host or the egress proxy couldn't be reached"
-# Why a completed step on a rebound target gets no verdict of its own (Q12).
+# Why a completed step on a rebound target gets no verdict of its own (Q12),
+# and why a completed step a repair inserted gets none (#325).
 _NOT_PASSED: Final = "heal rebound its target, but the run didn't pass"
+_INSERTED_NOT_PASSED: Final = "heal inserted this step, but the run didn't pass"
 
 
 @dataclass(frozen=True)
@@ -548,21 +550,24 @@ def _drift(misses: tuple[Miss, ...], why: str = "strict replay doesn't heal") ->
 
 @dataclass(frozen=True)
 class _Healed:
-    """What a run that heals changes in its verdicts (ADR-0024's #244
-    amendment). A subject is on the rebound set when it is a step that ran
+    """What a run that heals changes in its verdicts (ADR-0024's #244 and #246
+    amendments). A subject is on the rebound set when it is a step that ran
     through a target whose locators differ between the committed script and the
-    final one, or an assertion of any kind on such a target. `by_subject` is each
-    repair by what it was handed, `first` each target's first repair to change
-    it, `targets` what each subject reads, `dispatched` each step that completed,
-    that keeps its settle window, as one a repair inserted that failed once it
-    settled does (#246), or whose intent has no completion, so not one refused
-    before dispatch or one that drifted, which write none, and `untroubled` says
-    nothing stopped, blocked or left unresolved the run."""
+    final one, an assertion of any kind on such a target, or a step a repair
+    inserted, whatever it acts on, so the set is empty exactly when the final
+    patch is. `by_subject` is each repair by what it was handed, `first` each
+    target's first repair to change it, `inserted` each inserted step's repair
+    (`_inserting`), `targets` what each subject reads, `dispatched` each step
+    that completed, that keeps its settle window, as one a repair inserted that
+    failed once it settled does (#246), or whose intent has no completion, so not
+    one refused before dispatch or one that drifted, which write none, and
+    `untroubled` says nothing stopped, blocked or left unresolved the run."""
 
     redactor: Redactor
     rebound: frozenset[str]
     by_subject: Mapping[_Subject, Repaired]
     first: Mapping[str, Repaired]
+    inserted: Mapping[_Subject, Repaired]
     targets: Mapping[_Subject, str]
     dispatched: frozenset[_Subject]
     untroubled: bool
@@ -571,6 +576,7 @@ class _Healed:
     def of(cls, end: ReplayEnd, result: RunResult) -> _Healed:
         final = final_script(end.script, result.repairs)
         unresolved = {intent.seq for intent in end.record.unresolved()}
+        committed = {step.seq for step in end.script.steps}
         targets = {
             _Subject("step", step.seq): step.target
             for step in final.steps
@@ -589,6 +595,13 @@ class _Healed:
             ),
             {_subject(repaired): repaired for repaired in result.repairs},
             dict(reversed(list(rebinds(end.script, result.repairs)))),
+            {
+                _Subject("step", step.seq): repaired
+                for step in result.steps
+                if step.seq not in committed
+                and (repaired := _inserting(step.seq, final, result.repairs))
+                is not None
+            },
             targets,
             frozenset(
                 _Subject("step", step.seq)
@@ -615,17 +628,22 @@ class _Healed:
             each.subject.name
             for each in judged
             if each.subject in self.dispatched
-            and self.targets.get(each.subject) in self.rebound
+            and (
+                each.subject in self.inserted
+                or self.targets.get(each.subject) in self.rebound
+            )
         ]
         return [
             self._marked(each, passed=passed).listing(rebound_steps) for each in judged
         ]
 
     def _marked(self, judged: _Judged, *, passed: bool) -> _Judged:
-        """`judged`, with its `heal`: a drift says what became of its repair; a
-        subject on the rebound set cites the repair that first changed its
-        target. There a completed step in a run that didn't pass is `inconclusive`
-        (Q12), and an assertion keeps its own verdict (#245)."""
+        """`judged`, with its `heal`: a drift says what became of its repair; an
+        inserted step cites the repair that inserted it, with no binding, since
+        what that repair bound is the drifted target's; any other subject on the
+        rebound set cites the repair that first changed its target. There a
+        completed step in a run that didn't pass is `inconclusive` (Q12), and an
+        assertion keeps its own verdict (#245)."""
         target = self.targets.get(judged.subject)
         if judged.drift is not None:
             first = None if target is None else self.first.get(target)
@@ -635,16 +653,38 @@ class _Healed:
                 None if repair is None else _cited(repair, self.redactor, bound=False)
             )
             return judged.ruled("inconclusive", self.redactor.redact(said), cited)
-        if target is None or target not in self.rebound:
+        inserting = self.inserted.get(judged.subject)
+        if inserting is not None:
+            cited = _cited(inserting, self.redactor, bound=False)
+            unpassed = _INSERTED_NOT_PASSED
+        elif target is not None and target in self.rebound:
+            cited = _cited(self.first[target], self.redactor, bound=True)
+            unpassed = _NOT_PASSED
+        else:
             return judged.cited(None)
-        cited = _cited(self.first[target], self.redactor, bound=True)
         if passed:
             return judged.ruled("drift_consistent", None, cited)
         if judged.subject.kind == "step" and judged.verdict == "pass":
-            return judged.ruled(
-                "inconclusive", self.redactor.redact(_NOT_PASSED), cited
-            )
+            return judged.ruled("inconclusive", self.redactor.redact(unpassed), cited)
         return judged.cited(cited)
+
+
+def _inserting(
+    seq: int, final: CompiledScript, repairs: tuple[Repaired, ...]
+) -> Repaired | None:
+    """The repair that inserted step `seq` as `final` holds it: the first taken
+    one whose script holds that step exactly, so a later repair that rewrote it
+    is the one cited. None when no repair holds it, which a step that ran has
+    no way to be, since a taken repair keeps what ran."""
+    step = next((each for each in final.steps if each.seq == seq), None)
+    return next(
+        (
+            repaired
+            for repaired in repairs
+            if repaired.script is not None and step in repaired.script.steps
+        ),
+        None,
+    )
 
 
 def _subject(repaired: Repaired) -> _Subject:

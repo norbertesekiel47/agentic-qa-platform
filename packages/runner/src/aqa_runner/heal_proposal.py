@@ -47,13 +47,14 @@ def final_script(
 def rebinds(
     committed: CompiledScript, repairs: tuple[Repaired, ...]
 ) -> Iterator[tuple[str, Repaired]]:
-    """Each change a taken repair made to a target's locators, in order: the
-    target's name, and the repair."""
+    """Each change a taken repair made to the locators a target had, in order:
+    the target's name, and the repair. Adding a target binds nothing anew."""
     previous = committed
     for repaired in repairs:
         if (script := repaired.script) is not None:
             for name, target in script.targets.items():
-                if target.locators != previous.targets[name].locators:
+                was = previous.targets.get(name)
+                if was is not None and target.locators != was.locators:
                     yield name, repaired
             previous = script
 
@@ -80,9 +81,10 @@ def proposal_lines(
     repairs: tuple[Repaired, ...],
 ) -> tuple[str, ...]:
     """What `aqa run` prints of a proposal: its id, each rebound target's meaning
-    and the element it is bound to, then the diff. The role and name are the
-    page's own ARIA, so a decoy can match them, and a reviewer's evidence is the
-    locator diff (ADR-0024's #244 amendment)."""
+    and the element it is bound to, then the diff, which also shows each target
+    the heal added and each step it inserted. The role and name are the page's
+    own ARIA, so a decoy can match them, and a reviewer's evidence is the diff
+    (ADR-0024's #244 and #246 amendments)."""
     final = final_script(committed, repairs)
     bound = {
         name: "" if repaired.basis is None else repaired.basis.said

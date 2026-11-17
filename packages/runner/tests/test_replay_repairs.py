@@ -382,7 +382,7 @@ def test_a_repair_that_edits_the_script_it_was_handed_is_checked_against_the_com
 ) -> None:
     run = repairing(tmp_path, adding_a_target)
 
-    problem = "/targets/extra: a heal adds no target"
+    problem = "/targets/extra: a heal adds a target only for a click it inserts"
     assert repairs(run) == [("1", MISSES, (problem,), None)]
     assert run.committed.model_dump(mode="json") == run.before
 
@@ -913,7 +913,7 @@ def test_a_refusals_problems_are_scanned_before_they_are_recorded(
 
     run = repairing(tmp_path, naming_a_target(SLASHED), spec_at=secret_spec_at)
 
-    problem = "/targets/[SECRET:TEST_PASSWORD]: a heal adds no target"
+    problem = "/targets/[SECRET:TEST_PASSWORD]: a heal adds a target only for a click it inserts"
     assert repairs(run) == [("1", MISSES, (problem,), None)]
     assert held(tmp_path, pointer(SLASHED), run) == []
 

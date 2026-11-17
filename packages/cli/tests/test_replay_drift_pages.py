@@ -11,7 +11,11 @@ from pathlib import Path
 
 import pytest
 from aqa_core.compiled import CompiledScript
+from aqa_core.heal_patch import heal_patch_problems
+from aqa_core.project import load_compiled, load_project
+from aqa_runner.publication import published_text
 
+from packages.cli.tests import heal_apply_fixtures as heal_apply
 from packages.cli.tests.test_explore_runs import record_in
 from packages.cli.tests.test_replay import (
     SECONDS,
@@ -24,8 +28,10 @@ from packages.cli.tests.test_replay import (
 from packages.runner.tests.drift_fixtures import (
     BUTTON,
     DETAILS,
+    DISMISSED_PATCH,
     IN_VIEW,
     SHIPPING,
+    dismissed,
     order_spec,
     page,
     serving,
@@ -295,3 +301,39 @@ def test_a_modal_over_a_checked_target_is_expectation_violated_and_exits_1(
         ("http_5xx", "pass", None, None),
         ("broken_images", "pass", None, None),
     ]
+
+
+def test_the_modal_repairs_proposal_applied_replays_strictly_on_the_modal_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The proposal a run that dismissed the modal makes (#325), applied as a
+    person accepts it: strict replay then clicks the dismiss button itself."""
+    root = tmp_path / "qa"
+    target = heal_apply.committed(root)
+    config = load_project(root).config
+    before = load_compiled(target, config)
+    proposal = heal_apply.recorded(root, DISMISSED_PATCH)
+
+    applied = heal_apply.apply(root, monkeypatch, proposal)
+
+    assert applied.exit_code == 0, applied.output
+    assert applied.stdout == (
+        f"applied {proposal} order: {target}\n  /targets/no_thanks\n  /steps/0\n"
+    )
+    assert target.read_text() == published_text(dismissed(before))
+    after = load_compiled(target, config)
+    assert heal_patch_problems(before, after) == []
+
+    with serving(page("modal")) as app:
+        result = replay(monkeypatch, on(app, root / "order.spec.md"))
+
+    assert result.exit_code == 0, result.output
+    # The record beside the one that holds the proposal.
+    [record] = [
+        each for each in (root / ".aqa" / "runs").iterdir() if each.name != "a-run"
+    ]
+    assert re.fullmatch(
+        rf"passed order: {SECONDS}, \$0\n  run viewer: aqa report {record.name}\n",
+        result.stdout,
+    )
+    assert result.stderr == ""
