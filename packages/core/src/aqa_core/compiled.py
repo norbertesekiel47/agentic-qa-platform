@@ -641,6 +641,47 @@ class ContrastMin(_Assertion):
     min_ratio: Annotated[float, Field(ge=1, le=21, allow_inf_nan=False)]
 
 
+# A baseline's path below `.compiled/baselines/` (ADR-0025's #324 amendment):
+# names joined by /, each of ASCII letters, digits, ., _ or - and none
+# starting with ., the last ending in .png. So no path is absolute, climbs
+# out with .., has an empty name or a backslash, or names a hidden file.
+_NAME = r"[A-Za-z0-9_-][A-Za-z0-9._-]*"
+_BASELINE = re.compile(rf"(?:{_NAME}/)*{_NAME}\.png")
+
+
+def _baseline(path: str) -> str:
+    if not _BASELINE.fullmatch(path):
+        raise ValueError(
+            f"{path!r} is not a baseline path: write names joined by /, each of "
+            "ASCII letters, digits, ., _ or - and none starting with ., the last "
+            "ending in .png, such as checkout-expired-card/pay_button.png; it is "
+            "read below .compiled/baselines/"
+        )
+    return path
+
+
+BaselinePath = Annotated[NonEmpty, AfterValidator(_baseline)]
+
+
+class PixelDiff(_Assertion):
+    """The target's crop of the page's masked screenshot matches the PNG
+    committed at `baseline`, which `baseline_sha256` pins: at most
+    `max_diff_ratio` of its pixels differ, a pixel differing when one of its
+    channels differs by more than `pixel_threshold` (ADR-0025's #324
+    amendment)."""
+
+    check: Literal["pixel_diff"]
+    target: NonEmpty
+    baseline: BaselinePath
+    baseline_sha256: _Sha256
+    # A share below 1, an integer or a fraction: at 1 the check could never
+    # fail.
+    max_diff_ratio: Annotated[float, Field(ge=0, lt=1, allow_inf_nan=False)]
+    # Below 255, the largest channel difference, at which no pixel could
+    # differ.
+    pixel_threshold: Annotated[StrictInt, Field(ge=0, le=254)]
+
+
 class ModelVerify(_Assertion):
     """A `visual: model` expectation judged by the verifier role on the page's
     masked screenshot, with the target's element cited: only `aqa replay
@@ -661,6 +702,7 @@ Assertion = Annotated[
     | ProbeEqualsBaseline
     | VisibleUnoccluded
     | ContrastMin
+    | PixelDiff
     | ModelVerify,
     Field(discriminator="check"),
 ]
@@ -671,8 +713,8 @@ Assertion = Annotated[
 # its target isn't asserted for a heal patch, a subject contract doesn't
 # count it, and its drift goes to no repair, since only a verified replay,
 # which never heals, runs one (ADR-0024's #256 amendment).
-TargetCheck = TextInTarget | NotVisible | VisibleUnoccluded | ContrastMin
-PositiveCheck = TextInTarget | VisibleUnoccluded | ContrastMin
+TargetCheck = TextInTarget | NotVisible | VisibleUnoccluded | ContrastMin | PixelDiff
+PositiveCheck = TextInTarget | VisibleUnoccluded | ContrastMin | PixelDiff
 
 
 class ExpectationCoverage(StrictModel):

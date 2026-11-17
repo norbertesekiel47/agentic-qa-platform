@@ -1,6 +1,7 @@
 """Screenshots a run may save (ADR-0034, ADR-0035; SECURITY §5):
-`take_screenshot` makes a `Screenshot`, which nothing else can make, and
-`RunRecord.write_screenshot` saves one.
+`take_screenshot` makes a `Screenshot`, which nothing else can make but a
+crop of one (`Screenshot.cropped`, #324), and `RunRecord.write_screenshot`
+saves one.
 
 Until `fill_secret` hands the page a test secret's value in the browser
 session, a screenshot is the live page's. From then on it is a render of
@@ -46,6 +47,7 @@ from pydantic import AfterValidator, Base64Bytes, TypeAdapter, ValidationError
 
 from aqa_runner import ocr
 from aqa_runner.browser_session import BrowserSession
+from aqa_runner.pixel_diff import Rectangle, cropped_png
 from aqa_runner.redaction import Redactor
 
 # How long the live page's snapshot, and then its scrub and render, may
@@ -365,9 +367,10 @@ class ScreenshotWithheldError(Exception):
 
 @dataclass(frozen=True)
 class Screenshot:
-    """A PNG `take_screenshot` made, and the scan of the session it made it
-    in, which a record that saves it must share. Only `take_screenshot`
-    makes one, so a record never holds an image no capture scrubbed."""
+    """A PNG `take_screenshot` made, or a crop of one, and the scan of the
+    session it was made in, which a record that saves it must share. Only
+    `take_screenshot` and `cropped` make one, so a record never holds an
+    image no capture scrubbed."""
 
     png: bytes = field(repr=False)
     redactor: Redactor = field(repr=False)
@@ -376,6 +379,16 @@ class Screenshot:
     def __post_init__(self, _key: object) -> None:
         if _key is not _CAPTURED:
             raise TypeError("only take_screenshot makes a Screenshot")
+
+    def cropped(self, rectangle: Rectangle) -> Screenshot:
+        """The pixels of this screenshot at `rectangle`, as a screenshot of
+        their own with its scan: `pixel_diff`'s crop (ADR-0033's #324
+        amendment). It shows only less of an image its capture checked, so it
+        isn't OCR-checked again; a rectangle reaching past the image raises
+        ValueError."""
+        return Screenshot(
+            cropped_png(self.png, rectangle), self.redactor, _key=_CAPTURED
+        )
 
 
 async def take_screenshot(

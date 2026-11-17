@@ -13,6 +13,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Literal
 
 from aqa_core.compiled import (
@@ -56,6 +57,7 @@ from aqa_runner.evaluation import (
     MARGIN_SECONDS,
     AssertionResult,
     Evaluation,
+    KeepCrop,
     Verify,
     bounded,
     capture_baselines,
@@ -70,6 +72,7 @@ from aqa_runner.evidence import (
     Shots,
     capture_evidence,
     held_screenshot,
+    save_crop,
 )
 from aqa_runner.invariants import InvariantResult, invariant_results
 from aqa_runner.locators import Miss, Resolved
@@ -113,8 +116,12 @@ class RunSetup:
     saves a screenshot in its evidence, which only `strict_replay` asks for
     (#251), whether each compiled step's page is captured before it runs
     and saved as the "before" of a step that fails, which only
-    `strict_replay` asks for, when `--before-screenshots` does (#314), and
-    the verifier of a verified replay, if this is one (#256)."""
+    `strict_replay` asks for, when `--before-screenshots` does (#314), the
+    verifier of a verified replay, if this is one (#256), and the spec root
+    whose `.compiled/baselines/` holds each `pixel_diff` check's baseline,
+    which only `strict_replay` gives (#324). With `screenshots`, a
+    `pixel_diff` check that fails or whose baseline is refused saves its
+    crop too."""
 
     spec: Spec
     config: ProjectConfig
@@ -124,6 +131,7 @@ class RunSetup:
     screenshots: bool = False
     before_screenshots: bool = False
     verify: Verify | None = None
+    spec_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -363,6 +371,8 @@ async def _replayed(
             script.probe_baselines,
             every_locator=every_locator,
             verify=setup.verify,
+            spec_root=setup.spec_root,
+            keep_crop=_crops(setup, script),
         ),
         script.model_copy(deep=True),
     )
@@ -481,6 +491,17 @@ async def _replayed(
         () if handing is None else tuple(handing.repaired),
         shots,
     )
+
+
+def _crops(setup: RunSetup, script: CompiledScript) -> KeepCrop | None:
+    """What saves a `pixel_diff` check's crop in `setup.record`, by the
+    check's index in `script`'s assertions (`evidence.save_crop`), when
+    `setup.screenshots` asks for one; else None."""
+    if not setup.screenshots:
+        return None
+    indexes = {check.id: index for index, check in enumerate(script.assertions)}
+    record = setup.record
+    return lambda check, crop: save_crop(record, indexes[check.id], crop)
 
 
 async def _evaluated(

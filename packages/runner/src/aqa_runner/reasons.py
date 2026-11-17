@@ -37,6 +37,7 @@ from aqa_runner.locator_generation import (
     LocatorError,
     NegativeCheckError,
 )
+from aqa_runner.pixel_diff import PixelDiffRefusedError
 from aqa_runner.redaction import Redacted, Redactor, error_text
 from aqa_runner.run_record import RefusedWriteError
 from aqa_runner.secret_fields import SecretNotFilledError, SecretRefusedError
@@ -65,6 +66,7 @@ type Raised = (
     | network.UnrecordedRequestError
     | UnsupportedVisualFrameError
     | ContrastRefusedError
+    | PixelDiffRefusedError
     | RefusedWriteError
     | RefError
     | LocatorError
@@ -176,6 +178,7 @@ def _owned(error: Raised, *, withheld: bool) -> str | None:
         | SecretNotFilledError
         | network.WindowsOverflowError
         | ContrastRefusedError
+        | PixelDiffRefusedError
         | RefusedWriteError
         | RefError
         | LocatorError,

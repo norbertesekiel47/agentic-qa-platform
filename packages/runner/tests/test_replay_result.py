@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from aqa_core.compiled import Click, CompiledScript, ContrastMin, Target
+from aqa_core.compiled import Click, CompiledScript, ContrastMin, PixelDiff, Target
 from aqa_core.config import ProjectConfig
 from aqa_core.spec import InvariantName, Spec
 from aqa_runner.egress import InfrastructureEvent
@@ -531,6 +531,40 @@ def test_a_failed_contrast_min_is_a_visual_violation(tmp_path: Path) -> None:
 
     verdict = judged(
         ending(with_contrast(made(tmp_path)), assertions=(failed,)), "assertion", "a5"
+    )
+
+    assert verdict["verdict"] == "expectation_violated"
+    assert verdict["finding"] == {
+        "category": "visual",
+        "title": "The save button shows",
+        "repro_steps": [0, 1],
+    }
+
+
+def with_pixel_diff(run: Made) -> Made:
+    """`run`, its script checking too, as a5, the save button's pixels
+    against a baseline, for its second expectation."""
+    check = PixelDiff.model_validate(
+        {
+            "id": "a5",
+            "expect_index": 1,
+            "check": "pixel_diff",
+            "target": "save",
+            "baseline": "replay/save.png",
+            "baseline_sha256": "sha256:" + "0" * 64,
+            "max_diff_ratio": 0,
+            "pixel_threshold": 0,
+        }
+    )
+    assertions = [*run.script.assertions, check]
+    return replace(run, script=run.script.model_copy(update={"assertions": assertions}))
+
+
+def test_a_failed_pixel_diff_is_a_visual_violation(tmp_path: Path) -> None:
+    failed = AssertionResult("a5", "failed", locator_index=0)
+
+    verdict = judged(
+        ending(with_pixel_diff(made(tmp_path)), assertions=(failed,)), "assertion", "a5"
     )
 
     assert verdict["verdict"] == "expectation_violated"

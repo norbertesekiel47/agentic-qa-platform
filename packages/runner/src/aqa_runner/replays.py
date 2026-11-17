@@ -8,6 +8,7 @@ pilot replay through here, each opening its own browser, proxy and record
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
+from pathlib import Path
 
 from aqa_core.compiled import CompiledScript
 from aqa_core.config import ProjectConfig
@@ -31,8 +32,11 @@ class Replaying:
     the screenshots its evidence saves, which only `strict_replay` asks
     for: one at each step that drifts or fails (#251), and with
     `before_screenshots`, the page as each step that fails found it (#314;
-    `executor.RunSetup`); and, in a verified replay, the verifier each
-    `model_verify` check goes to (#256)."""
+    `executor.RunSetup`); in a verified replay, the verifier each
+    `model_verify` check goes to (#256); and the spec root whose
+    `.compiled/baselines/` holds each `pixel_diff` check's baseline, which
+    only `strict_replay` gives: explore's confirmation and the bench pilot
+    have no baselines place (#324)."""
 
     spec: Spec
     config: ProjectConfig
@@ -41,6 +45,7 @@ class Replaying:
     screenshots: bool = False
     before_screenshots: bool = False
     verify: Verify | None = None
+    spec_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -71,8 +76,9 @@ async def replay_run(
     screenshots `replaying` asks for, as only `strict_replay`'s does: one in
     the evidence of a step that drifts or fails (#251), and with
     `replaying.before_screenshots`, the "before" of a step that fails (#314);
-    and with each `model_verify` check handed to the verifier `replaying`
-    has, if any (#256).
+    with each `model_verify` check handed to the verifier `replaying`
+    has, if any (#256); and with each `pixel_diff` check's baseline read
+    below `replaying.spec_root`, if it has one (#324).
     A failed reset raises `ResetFailedError` before `opening` is entered, so
     no browser starts before the reset passed. What replay raises reaches
     `opening`'s exit, so the caller can tell it before what it opened
@@ -94,6 +100,7 @@ async def replay_run(
                 replaying.screenshots,
                 replaying.before_screenshots,
                 replaying.verify,
+                replaying.spec_root,
             ),
             chromium=opened.chromium,
             proxy=opened.proxy,
