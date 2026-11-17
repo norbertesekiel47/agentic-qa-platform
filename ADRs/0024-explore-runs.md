@@ -1472,7 +1472,7 @@ Slice 2 of the three the maintainer confirmed on #246, core only, with no model 
 
 ## Amendment (2026-11-16): the heal-aimed pages' recorder cases and promotion rules (#311)
 
-The #248 amendment left the live recordings of the heal-aimed pages to a round the maintainer runs (#311). This is that round's groundwork, with no provider call: the recorder's cases, the rule that promotes a recording, the round's proposed limit and its receipts' format, and a scripted test of the point the decoy page steers vision fallback to. TESTING §4 holds the commands, SECURITY §4 item 6 the threat. Tests, fixtures, the recorder and docs only: no runner, CLI or core source changes.
+The #248 amendment left the live recordings of the heal-aimed pages to a round the maintainer runs (#311). This is that round's groundwork, with no provider call: the recorder's cases, the rule that promotes a recording, the round's limit and its receipts' format, and a scripted test of the point the decoy page steers vision fallback to. TESTING §4 holds the commands, SECURITY §4 item 6 the threat. Tests, fixtures, the recorder and docs only: no runner, CLI or core source changes.
 
 ### The cases
 
@@ -1512,9 +1512,9 @@ So exactly two endings are promoted, each only when rule 1 holds: `drift_consist
 
 *The count rule.* A real model may take more than one turn on these pages, so a case holds one priced, identified response per line of its run's own `costs.jsonl`, less any replayed (none are): `answers_expected`'s `whole_run` branch, not the heal cases' fixed one. The cost lines keep the run's own labels: `healer`/`heal` for a tree turn and `vision_fallback`/`heal` for the vision turn.
 
-### The round's proposed limit: USD 0.70
+### The round's limit: USD 1.00, the maintainer's, over the derived USD 0.70
 
-Proposed, for the maintainer's approval: **no recording runs before that approval.** L = 2 × Σ W_case + R_max, rounded up to the next USD 0.05.
+The derived limit is L = 2 × Σ W_case + R_max, rounded up to the next USD 0.05: USD 0.70, below. The maintainer approved USD 1.00 in its place (2026-11-17, after the job escalated), to leave room for more re-attempts than the factor 2 allows, so `HEAL_INJECTION_ROUND_USD` is USD 1.00. No recording ran in this job.
 
 - *T, a tree turn's plausible worst cost: USD 0.01.* The #244 receipts' dearest tree turn, `heal_renamed`'s USD 0.003266 (983 in / 130 out), times 3, for a heal-aimed page's added text, a later turn's results block and a longer reply: USD 0.009798, rounded up to the next cent.
 - *V, a vision turn's plausible worst cost: USD 0.02.* No receipt has one, so from the pinned price map (`ae6b762`: `claude-sonnet-5-5` at USD 2 in and USD 10 out per million tokens). Input: 1,334 visual tokens for a 1280 by 800 PNG (⌈1280/28⌉ × ⌈800/28⌉ = 46 × 29, the rule in Anthropic's vision guide, `platform.claude.com/docs/en/build-with-claude/vision`, read 2026-11-16; the high-resolution tier of Claude 4.7 and later models doesn't downscale it), plus the request's 1,956 bytes outside the image and the recorder's 1,024 headroom tokens, each byte counted as a token: 4,314 tokens, USD 0.008628. Output: 1,000 tokens, where a `vision_click` call is one short tool call, USD 0.01. USD 0.018628, rounded up to the next cent.
@@ -1524,8 +1524,8 @@ Proposed, for the maintainer's approval: **no recording runs before that approva
   - `heal_injection_vision-decoy` (`vision_only`): USD 0.02.
   - Σ W_case = USD 0.27.
 - *The factor 2* allows one re-attempt of every case, since only `disallowed` is a stop.
-- *R_max: USD 0.126584*, the largest `Allowance.reserve(body).usd` over the request bodies the stand-in tests receive for these cases, `heal_injection_update-the-test`'s vision request: 41,788 bytes, 39,832 of them the image's base64, so (41,788 + 1,024) input tokens at USD 2 and 4,096 output tokens at USD 10 per million. A tree request reserved at most USD 0.048224 (2,608 bytes). It leaves room for the round's last request to reserve its worst case. Measured with `uv run pytest packages/runner/tests/test_record_heal_injection_cassettes.py --log-cli-level=INFO` at `d3b17c935d8c422c473f32ade91cc6e1e0d624d5`, on macOS 27.2 (darwin, arm64) with Playwright 1.63.0's Chromium headless shell; each test logs what each request reserved, with its size and image bytes. The PNG's size varies with the platform's rendering, so Linux's figure may differ.
-- *The arithmetic:* 2 × 0.27 + 0.126584 = USD 0.666584, rounded up to USD 0.70 (`HEAL_INJECTION_ROUND_USD`). The ticket's estimate was about USD 0.50, with a smaller margin on T.
+- *R_max: USD 0.126584*, the largest `Allowance.reserve(body).usd` over the request bodies the stand-in tests receive for these cases, `heal_injection_update-the-test`'s vision request: 41,788 bytes, 39,832 of them the image's base64, so (41,788 + 1,024) input tokens at USD 2 and 4,096 output tokens at USD 10 per million. A tree request reserved at most USD 0.048224 (2,608 bytes). It leaves room for the round's last request to reserve its worst case. Measured with `uv run pytest packages/runner/tests/test_record_heal_injection_cassettes.py --log-cli-level=INFO`, at the commit "test(runner): the stand-in tests log each request's size and image bytes beside its reservation (#311)", whose branch was based on main at `d92f8e131552b63e2c4ca40ee218723f8a9d604e`, on macOS 27.2 (darwin, arm64) with Playwright 1.63.0's Chromium headless shell; each test logs what each request reserved, with its size and image bytes. Run again with the approved limit in place, it logged the same figures. The PNG's size varies with the platform's rendering, so Linux's figure may differ.
+- *The arithmetic:* 2 × 0.27 + 0.126584 = USD 0.666584, rounded up to USD 0.70, the derived limit. The ticket's estimate was about USD 0.50, with a smaller margin on T. `HEAL_INJECTION_ROUND_USD` is the maintainer's USD 1.00.
 
 Each run is also held to its own bound, `heal_model_usd` USD 0.30: the recorder refuses a request whose reservation would take the run or the round past its bound, and `Healing` stops after a priced response once the run's spend is gone.
 
@@ -1548,9 +1548,18 @@ The scripted test and the rule's tests check existing controls or new test code,
 
 ### What the follow-up round does
 
-Once the maintainer approves the limit: record the five cases in one round directory (TESTING §4's commands, attempts `001` to `005`, any further attempt the next unused number), inspect each receipt before the next call, promote what is `accepted`, fill in the receipts below, and add the cassette-replay tests, which fail until a recording exists and so wait for it. Nothing in this amendment records, promotes or measures a recording.
+With the limit approved, the maintainer's round can run: record the five cases in one round directory (TESTING §4's commands, attempts `001` to `005`, any further attempt the next unused number), inspect each receipt before the next call, promote what is `accepted`, fill in the receipts below, and add the cassette-replay tests, which fail until a recording exists and so wait for it. Nothing in this amendment records, promotes or measures a recording.
 
-*Cost impact:* none. No test calls a provider (the stand-in and a scripted model answer), and no dependency or paid resource is added. The round itself spends at most its approved limit.
+*Cost impact:* none. No test calls a provider (the stand-in and a scripted model answer), and no dependency or paid resource is added. The round itself spends at most its approved limit, USD 1.00.
+
+### The maintainer's acceptance (2026-11-17, after the job escalated)
+
+- *The limit:* USD 1.00, approved over the derived USD 0.70, to leave room for more re-attempts (above).
+- *The choices:* all four accepted.
+  - The vision case runs under `vision_only`, recorded as `vision_fallback`'s.
+  - The hybrid cases accept the clean vision pick's locator list beside the tree pick's.
+  - The cases run under each page's scripted-suite config, not `RECORDING_CONFIG`.
+  - An `inconclusive` ending with no proposal is promoted whatever stopped the heal, provided the app served only `GET /page/order` (rule 1).
 
 ### The round's receipts (to be recorded)
 
