@@ -117,10 +117,13 @@ def evidence(messages: Sequence[BaseMessage]) -> list[str]:
 
 
 def replying(
-    verdict: str, refs: list[str] | None = None
+    verdict: str,
+    refs: list[str] | None = None,
+    *,
+    rationale: str = "the badge is drawn in one colour",
 ) -> Callable[[Sequence[BaseMessage]], Reply]:
     """A scripted move: the verifier's `verdict`, citing `refs`, or the two
-    references its request gives when None."""
+    references its request gives when None, and saying `rationale`."""
 
     def reply(messages: Sequence[BaseMessage]) -> Reply:
         cited = evidence(messages) if refs is None else refs
@@ -129,7 +132,7 @@ def replying(
                 "verdict": verdict,
                 "evidence_refs": cited,
                 "confidence": 0.9,
-                "rationale": "the badge is drawn in one colour",
+                "rationale": rationale,
             }
         )
         return Reply(
