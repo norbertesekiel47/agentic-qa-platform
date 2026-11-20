@@ -1,11 +1,12 @@
 """A step a repair inserted shows, as it runs, that it changed nothing (#246;
 ADR-0024's #246 amendment): its own settle window ended `idle`, the egress
 proxy heard every write and read none, no tunnel was open, and the page's main
-frame didn't navigate. Otherwise the step fails and the run stops,
-`inconclusive`, with no proposal. The rule alone, on hand-made windows; then
-`replays.replay_run(..., repair=...)` in real Chromium, with scripted repairs
-that insert a step before the drifted toggle's, on pages composed from #240's
-moved page. No model and no cassette."""
+frame didn't navigate. While it runs, the proxy holds every write, so none
+reaches the app, and a held one fails it too (#332). Otherwise the step fails
+and the run stops, `inconclusive`, with no proposal. The rule alone, on
+hand-made windows; then `replays.replay_run(..., repair=...)` in real Chromium,
+with scripted repairs that insert a step before the drifted toggle's, on pages
+composed from #240's moved page. No model and no cassette."""
 
 import asyncio
 import json
@@ -293,10 +294,11 @@ INCONCLUSIVE: tuple[object, ...] = ("inconclusive", 3, None, [])
 
 
 def test_a_post_from_an_inserted_click_stops_the_run(tmp_path: Path) -> None:
+    """The egress proxy holds the POST, so the app never sees it (#332)."""
     run = replayed(tmp_path, inserting(CLICK_CONTACT), html=contact_does(POST))
 
-    assert ("POST", "/write/inserted") in run.seen
-    assert run.outcomes() == [(0, "completed", None), (3, "failed", UNSHOWN + WROTE)]
+    assert ("POST", "/write/inserted") not in run.seen
+    assert run.outcomes() == [(0, "completed", None), (3, "failed", UNSHOWN + HELD)]
     failed = run.result.steps[-1]
     assert (failed.window is None, failed.locator_index, failed.settled) == (
         False,
@@ -307,7 +309,25 @@ def test_a_post_from_an_inserted_click_stops_the_run(tmp_path: Path) -> None:
     assert run.result.assertions == STOPPED
     assert run.states() == STOPPED_STATES
     assert run.ended() == INCONCLUSIVE
-    assert run.verdict(3) == ("inconclusive", UNSHOWN + WROTE)
+    assert run.verdict(3) == ("inconclusive", UNSHOWN + HELD)
+    # The fetch rejects uncaught, and Chromium logs the empty response: the
+    # hold's doing, which no invariant counts.
+    assert not any(each.outcome == "violated" for each in run.result.invariants)
+
+
+# What the contact button opens when it is clicked: a WebSocket, whose CONNECT
+# the egress proxy holds.
+OPEN_SOCKET = "new WebSocket(`ws://${location.host}/held/socket`)"
+
+
+def test_a_websocket_an_inserted_click_opens_is_held_and_no_tunnel(
+    tmp_path: Path,
+) -> None:
+    run = replayed(tmp_path, inserting(CLICK_CONTACT), html=contact_does(OPEN_SOCKET))
+
+    assert not any(path == "/held/socket" for _, path in run.seen)
+    assert run.outcomes() == [(0, "completed", None), (3, "failed", UNSHOWN + HELD)]
+    assert run.ended() == INCONCLUSIVE
 
 
 def test_an_inserted_press_on_a_page_that_never_settles_stops_the_run(
@@ -382,7 +402,7 @@ def test_an_inserted_step_that_also_hits_an_egress_block_ends_egress_blocked(
 
     run = replayed(tmp_path, inserting(CLICK_CONTACT), html=html)
 
-    assert run.outcomes() == [(0, "completed", None), (3, "failed", UNSHOWN + WROTE)]
+    assert run.outcomes() == [(0, "completed", None), (3, "failed", UNSHOWN + HELD)]
     assert run.ended() == ("egress_blocked", 6, None, [])
 
 
@@ -393,7 +413,7 @@ def test_an_inserted_step_after_a_violated_invariant_ends_expectation_violated(
 
     run = replayed(tmp_path, inserting(PRESS_ENTER), html=enter_does(POST, broken))
 
-    assert run.outcomes() == [(0, "completed", None), (3, "failed", UNSHOWN + WROTE)]
+    assert run.outcomes() == [(0, "completed", None), (3, "failed", UNSHOWN + HELD)]
     assert run.ended() == ("expectation_violated", 1, None, [])
 
 
@@ -530,3 +550,23 @@ def test_a_committed_replay_safe_step_that_writes_in_a_repaired_run_completes(
     assert run.result.steps[-1].window is not None
     assert run.result.steps[-1].window.wrote
     assert run.result.outcome == "passed"
+
+
+def test_the_hold_lifts_once_the_inserted_step_is_judged(tmp_path: Path) -> None:
+    """The committed contact click after the inserted press writes, and the
+    app sees it: no committed step is held (#332)."""
+    run = replayed(
+        tmp_path,
+        inserting(PRESS_TAB),
+        html=contact_does(POST),
+        script=TOGGLE_THEN_CONTACT,
+    )
+
+    assert ("POST", "/write/inserted") in run.seen
+    assert run.outcomes() == [
+        (0, "completed", None),
+        (3, "completed", None),
+        (1, "completed", None),
+        (2, "completed", None),
+    ]
+    assert run.ended()[:2] == ("drift_consistent", 7)
