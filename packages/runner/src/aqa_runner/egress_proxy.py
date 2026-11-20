@@ -1,8 +1,11 @@
 """The egress proxy: an HTTP forward proxy on loopback that is the browser's
 only way out (ADR-0026 and its 2026-10-01 amendment on the egress proxy;
-SECURITY.md §7). It asks the run's egress gate for every connection, and the
-gate's policy makes every allowlist decision.
+SECURITY.md §7). It asks the run's egress gate for every connection it doesn't
+hold, and the gate's policy makes every allowlist decision.
 
+- While the open phase holds writes (`EgressProxy.hold_writes`, ADR-0024's #332
+  amendment), every write it reads is refused before the gate is asked, as a
+  refused one is answered, and never counted in its traffic.
 - A plain request arrives in absolute form, one per browser connection: the
   response says `Connection: close`, so a failure never lands on a reused
   connection, which Chromium would answer by sending the request again. A
@@ -199,8 +202,11 @@ class _Phase:
     plain_uncertain: int = 0
     tunnel_uncertain: int = 0
     ending: bool = False
-    # Told of each write the phase reads, before it goes on (`watch`).
-    watchers: list[Callable[[bytes], None]] = field(default_factory=list)
+    # Whether each write the phase reads is held (`hold_writes`).
+    holding: bool = False
+    # Told of each write the phase reads, and whether it is held, before it
+    # goes on (`watch`).
+    watchers: list[Callable[[bytes, bool], None]] = field(default_factory=list)
 
     def classify(self, exchange: _Exchange) -> None:
         if exchange.sent and exchange.tunnel:
@@ -281,16 +287,30 @@ class EgressProxy:
         await self._end(phase, None, None, None)
         return PhaseTraffic(phase.plain_uncertain, phase.tunnel_uncertain)
 
-    def watch(self, on_write: Callable[[bytes], None]) -> None:
+    def watch(self, on_write: Callable[[bytes, bool], None]) -> None:
         """Tell `on_write` the method of each write request the open phase
         reads from the browser, any method but GET, HEAD or OPTIONS, a
-        CONNECT included, before it is forwarded or refused, until the phase
-        has ended: the browser's only way out hears what Playwright's page
-        events miss (ADR-0025's #54 amendment). A later phase starts
-        unwatched."""
+        CONNECT included, and whether the phase holds it (`hold_writes`),
+        before it is forwarded, refused or held, until the phase has ended:
+        the browser's only way out hears what Playwright's page events miss
+        (ADR-0025's #54 amendment). A later phase starts unwatched."""
         if self._phase is None or self._phase.ending:
             raise RuntimeError("the egress proxy is between phases")
         self._phase.watchers.append(on_write)
+
+    def hold_writes(self, holding: bool) -> None:
+        """Hold every write request the open phase reads from now on, or,
+        not `holding`, stop (ADR-0024's #332 amendment). A held write is
+        refused before the gate is asked, so nothing is looked up, pinned or
+        recorded there and nothing reaches the upstream: a plain request's
+        connection closes with nothing sent, and a CONNECT's tunnel fails
+        with 403, as a refused one's do. It counts in no `PhaseTraffic`.
+        Reads go on as before, and so does a tunnel opened before. A phase
+        starts not holding, and its hold ends with it; between phases, or
+        while one is ending, this raises."""
+        if self._phase is None or self._phase.ending:
+            raise RuntimeError("the egress proxy is between phases")
+        self._phase.holding = holding
 
     def ended_traffic(self) -> PhaseTraffic:
         """What the last phase opened left uncertain, once it has ended,
@@ -388,9 +408,9 @@ class EgressProxy:
     ) -> None:
         """One browser connection: one plain request, or one tunnel. A request
         the proxy can't read, a refusal or an upstream failure (both recorded
-        by the gate), or a browser that went away ends it, with nothing more
-        sent. The listener closes the connection. However it ends, its
-        exchange counts in the phase whose listener accepted it."""
+        by the gate), a held write, or a browser that went away ends it, with
+        nothing more sent. The listener closes the connection. However it
+        ends, its exchange counts in the phase whose listener accepted it."""
         browser = Peer(h11.Connection(h11.SERVER), reader, writer)
         exchange = _Exchange()
         try:
@@ -402,12 +422,19 @@ class EgressProxy:
             ):
                 request = await browser.next()
                 if isinstance(request, h11.Request):
-                    if request.method not in _READS:
+                    write = request.method not in _READS
+                    # Read once, as the watchers are told, so a hold switched
+                    # on with a step's window holds every write read after.
+                    held = write and phase.holding
+                    if write:
                         for heard in phase.watchers:
-                            heard(request.method)
+                            heard(request.method, held)
                     exchange.tunnel = request.method == b"CONNECT"
-                    serve = self._tunnel if exchange.tunnel else self._forward
-                    await serve(request, browser, exchange)
+                    if held:
+                        await _hold(browser, tunnel=exchange.tunnel)
+                    else:
+                        serve = self._tunnel if exchange.tunnel else self._forward
+                        await serve(request, browser, exchange)
         finally:
             phase.classify(exchange)
 
@@ -616,6 +643,14 @@ async def _carry(
     with contextlib.suppress(OSError):
         while data := await read():
             await write(data)
+
+
+async def _hold(browser: Peer, *, tunnel: bool) -> None:
+    """Answer a held write as a refused one is answered: a CONNECT's tunnel
+    fails with 403, and a plain request gets nothing, its connection closed."""
+    if tunnel:
+        await browser.next()  # CONNECT's EndOfMessage
+        await _fail_tunnel(browser, 403)
 
 
 async def _fail_tunnel(browser: Peer, status: int) -> None:

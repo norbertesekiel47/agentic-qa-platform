@@ -29,7 +29,7 @@ from playwright.async_api import ElementHandle, Error, Page
 from pydantic_core import PydanticSerializationError
 
 from aqa_runner import reasons
-from aqa_runner.admission import Targeted, accepted
+from aqa_runner.admission import Targeted, admissible
 from aqa_runner.binding import is_among, same_element
 from aqa_runner.bound_secrets import BoundSecret
 from aqa_runner.browser_session import BrowserSession
@@ -82,6 +82,10 @@ _UNHEARD: Final = (
     "network: the egress proxy didn't hear every write from the step's dispatch on"
 )
 _WROTE: Final = "network: a write request"
+# A write the egress proxy held while the step ran (ADR-0024's #332 amendment).
+_HELD: Final = (
+    "network: a write request, held by the egress proxy, so it never reached the app"
+)
 _TUNNEL: Final = (
     "network: an encrypted or WebSocket connection was open, which the egress "
     "proxy can't read"
@@ -269,13 +273,16 @@ class Handing:
         the loader's rules, which a `model_copy` skips; the heal-patch
         validator, against `committed`; what ran stays as it ran
         (`_ran_problems`), since the run goes on after it; replay's own
-        admission (`accepted`); and the record, which checks the document as
-        written and refuses one that spells a bound value, so nothing runs
-        that isn't recorded. The refusal is recorded through the same check,
-        which raises `RefusedWriteError` when the document still spells a
-        value once its problems are scanned: a miss or a scan's marker can.
-        The validator searches text checks' patterns in a child process, so it
-        runs off the loop, which keeps the proxy serving."""
+        admission (`admissible`), the one `aqa heal apply` runs, so an added
+        target, which carries no contract, is refused when a subject row
+        governs its meaning (ADR-0024's #332 amendment); and the
+        record, which checks the document as written and refuses one that
+        spells a bound value, so nothing runs that isn't recorded. The
+        refusal is recorded through the same check, which raises
+        `RefusedWriteError` when the document still spells a value once its
+        problems are scanned: a miss or a scan's marker can. The validator
+        searches text checks' patterns in a child process, so it runs off the
+        loop, which keeps the proxy serving."""
         record = self.record
         name = f"repairs/{at.key}.json"
         clean = require_clean(record.redactor, name)
@@ -298,7 +305,7 @@ class Handing:
             if not problems:
                 problems = _ran_problems(patched, in_use, ran, at)
             if not problems:
-                accepted(patched, self.spec)
+                admissible(patched, self.spec, self.config)
                 taken = Repaired(at, misses, (), patched, offered.basis)
                 record.write(name, _repair_record(taken), check=clean)
                 return taken
@@ -450,12 +457,16 @@ def inserted_failure(
     and whose settling ended `settled`, didn't show it changed nothing, or None
     when it did (ADR-0024's #246 amendment): settling ended `idle`, the egress
     proxy heard every write from the window's opening on and read none, no
-    tunnel was open, and the page's main frame didn't navigate. Each that
-    fails is named, scanned with `redactor`, the session's. A step that kept
-    no window or no settling fails with that alone, since nothing else can be
-    read: missing evidence never passes it. Only the step's own window
-    counts: the one before belongs to the step that opened it, and later ones
-    open after the next step ran."""
+    tunnel was open, and the page's main frame didn't navigate. A write the
+    proxy held, as it holds each one the step sends (ADR-0024's #332
+    amendment), fails it too, in words of its own; a write it let go on,
+    which a working hold leaves none of, keeps the plain words, so a hold
+    missed still fails closed. Each that fails is named, scanned with
+    `redactor`, the session's. A step that kept no window or no settling
+    fails with that alone, since nothing else can be read: missing evidence
+    never passes it. Only the step's own window counts: the one before
+    belongs to the step that opened it, and later ones open after the next
+    step ran."""
     if window is None or settled is None:
         return redactor.redact(_UNSHOWN + _UNKEPT)
     unshown = [
@@ -464,6 +475,7 @@ def inserted_failure(
             (_BUSY, settled != "idle"),
             (_UNHEARD, not window.heard),
             (_WROTE, window.wrote),
+            (_HELD, window.held),
             (_TUNNEL, window.tunnelled),
             (_NAVIGATED, window.navigated),
         )

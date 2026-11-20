@@ -2,8 +2,8 @@
 amendments; ADR-0026's #53 P9+P10 amendment): the steps and checks M1 can run,
 each secret the spec references with a value, and no bound value spelled where
 the run would write or use it. The executor runs this, `aqa replay` and
-`aqa explore` call it, and a repair's script passes `accepted` too
-(`aqa_runner.repairs`).
+`aqa explore` call it, and a repair's script passes `admissible` too, as
+`aqa heal apply`'s does (`aqa_runner.repairs`; ADR-0024's #332 amendment).
 
 Admission is strict unless `aqa replay --mode verified` asks for verified
 admission (ADR-0024's #256 amendment): strict refuses a spec with any
