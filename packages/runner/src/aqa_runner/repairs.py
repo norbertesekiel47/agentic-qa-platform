@@ -274,8 +274,8 @@ class Handing:
         validator, against `committed`; what ran stays as it ran
         (`_ran_problems`), since the run goes on after it; replay's own
         admission (`admissible`), the one `aqa heal apply` runs, so an added
-        target whose meaning a subject row governs is refused unless it
-        carries that row's contract (ADR-0024's #332 amendment); and the
+        target, which carries no contract, is refused when a subject row
+        governs its meaning (ADR-0024's #332 amendment); and the
         record, which checks the document as written and refuses one that
         spells a bound value, so nothing runs that isn't recorded. The
         refusal is recorded through the same check, which raises
