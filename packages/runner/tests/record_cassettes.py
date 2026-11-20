@@ -52,6 +52,8 @@ from packages.runner.tests.executor_fixtures import serving_app
 from packages.runner.tests.heal_fixtures import HEAL_CASES, heal_recorded, heal_spec
 from packages.runner.tests.injection_fixtures import CASES as INJECTION_CASES
 from packages.runner.tests.injection_fixtures import explored_case
+from packages.runner.tests.m2_plan_fixtures import CASE as M2_CASE
+from packages.runner.tests.m2_plan_fixtures import disallowed, m2_spec
 from packages.runner.tests.test_anthropic_client import (
     CLICK_PROMPT,
     PLAIN_PROMPT,
@@ -692,6 +694,16 @@ async def _asked(
     return routed.calls, accepted, None, None
 
 
+async def _asked_m2(
+    _name: str, router: ModelRouter, spec: Spec
+) -> tuple[tuple[CostRecord, ...], bool, None, str | None]:
+    """The M2 checks' plan (#327): its priced calls, and whether it is the
+    usable plan its oracle wants, or, in fixed words, why not."""
+    planned = await make_plan(router, spec)
+    why = disallowed(planned)
+    return planned.routed.calls, why is None, None, why
+
+
 type Runner = Callable[
     [str, ModelRouter, Spec],
     Coroutine[Any, Any, tuple[tuple[CostRecord, ...], bool, Ending | None, str | None]],
@@ -724,6 +736,7 @@ CASES: Final[Mapping[str, RecordedCase]] = {
     "plan_post-comment": _PLANNED,
     "plan_favorite-article": _PLANNED,
     "plan_publish-article": _PLANNED,
+    M2_CASE: RecordedCase(_asked_m2, round_usd=PLANS_ROUND_USD),
     EXPLORE: RecordedCase(_explored_fixture, round_usd=ROUND_USD, whole_run=True),
     **dict.fromkeys(
         INJECTED,
@@ -1102,7 +1115,9 @@ def record(
     if not key:
         raise ValueError("recording needs ANTHROPIC_API_KEY")
     attempt.mkdir(parents=True)
-    if name.startswith("plan_"):
+    if name == M2_CASE:
+        spec = m2_spec(attempt / "qa")
+    elif name.startswith("plan_"):
         spec = pilot(name.removeprefix("plan_"), attempt / "qa")
     elif name == EXPLORE:
         spec = fixture(attempt / "qa")
