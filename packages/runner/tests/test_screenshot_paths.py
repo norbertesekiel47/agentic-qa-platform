@@ -26,7 +26,7 @@ from aqa_core.config import ProjectConfig
 from aqa_runner import executor
 from aqa_runner.browser_session import BrowserSession, launched_browser
 from aqa_runner.egress_proxy import EgressProxy
-from aqa_runner.evidence import Held, Shot
+from aqa_runner.evidence import Held, Shot, held_screenshot
 from aqa_runner.executor import Dispatch, RunResult, RunSetup, StepResult
 from aqa_runner.heal import Healing
 from aqa_runner.locator_generation import register_identity_engine
@@ -283,12 +283,11 @@ def test_a_before_screenshot_with_nothing_filled_saves_no_image_of_the_value(
     # there, before anything is filled (SECURITY §5): each capture is the live
     # page's, and the OCR check withholds both.
     staging(monkeypatch, sites, "css-escape", failing=True, fill=False)
-    held = executor.held_screenshot
     filled: list[bool] = []
 
     async def spied(session: BrowserSession) -> Held:
         filled.append(session.secret_filled)
-        return await held(session)
+        return await held_screenshot(session)
 
     monkeypatch.setattr(executor, "held_screenshot", spied)
 
