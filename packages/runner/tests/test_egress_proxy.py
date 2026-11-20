@@ -9,7 +9,7 @@ import struct
 from typing import Any
 
 import pytest
-from aqa_runner.egress import Connection, EgressGate
+from aqa_runner.egress import Connection, EgressGate, EgressPolicy
 from aqa_runner.egress_proxy import (
     KEPT_ATTEMPTS,
     BlockedAttempt,
@@ -21,6 +21,7 @@ from aqa_runner.egress_proxy import (
 
 from packages.runner.tests.document_fixtures import until
 from packages.runner.tests.egress_fixtures import (
+    Resolver,
     Seen,
     connect,
     exchange,
@@ -719,8 +720,8 @@ def sent(method: str, url: str) -> bytes:
 def test_a_watched_phase_hears_each_write_before_it_goes_on() -> None:
     # ADR-0025's #54 amendment: a write is any method but GET, HEAD or
     # OPTIONS, as sent, and a CONNECT, which opens a tunnel.
-    async def scenario() -> tuple[list[tuple[bytes, int]], list[int]]:
-        heard: list[tuple[bytes, int]] = []
+    async def scenario() -> tuple[list[tuple[bytes, bool, int]], list[int]]:
+        heard: list[tuple[bytes, bool, int]] = []
         befores: list[int] = []
         async with raw_upstream(NO_CONTENT) as upstream:
             start = f"http://127.0.0.1:{upstream.port}"
@@ -728,7 +729,9 @@ def test_a_watched_phase_hears_each_write_before_it_goes_on() -> None:
             async with EgressProxy(gate(allowed=(start,))) as proxy:
                 # What the upstream had received when the proxy told of each.
                 proxy.watch(
-                    lambda method: heard.append((method, len(upstream.received)))
+                    lambda method, held: heard.append(
+                        (method, held, len(upstream.received))
+                    )
                 )
                 for method in ("GET", "HEAD", "OPTIONS", "POST", "patch", "DELETE"):
                     befores.append(len(upstream.received))
@@ -740,10 +743,17 @@ def test_a_watched_phase_hears_each_write_before_it_goes_on() -> None:
 
     heard, befores = asyncio.run(scenario())
 
-    assert [method for method, _ in heard] == [b"POST", b"patch", b"DELETE", b"CONNECT"]
+    assert [method for method, _, _ in heard] == [
+        b"POST",
+        b"patch",
+        b"DELETE",
+        b"CONNECT",
+    ]
     # Each write was heard while the upstream held only what came before it.
-    assert [at for _, at in heard[:3]] == befores[3:]
+    assert [at for _, _, at in heard[:3]] == befores[3:]
     assert befores[3] > 0
+    # Nothing holds a write unless the phase is holding (#332).
+    assert not any(held for _, held, _ in heard)
 
 
 def test_watching_between_phases_is_refused_and_a_new_phase_starts_unwatched() -> None:
@@ -753,14 +763,14 @@ def test_watching_between_phases_is_refused_and_a_new_phase_starts_unwatched() -
         async with raw_upstream(NO_CONTENT) as upstream:
             start = f"http://127.0.0.1:{upstream.port}"
             async with EgressProxy(gate(allowed=(start,))) as proxy:
-                proxy.watch(first.append)
+                proxy.watch(lambda method, _: first.append(method))
                 await exchange(proxy, sent("POST", f"{start}/one"))
                 await proxy.end_phase()
                 with pytest.raises(RuntimeError, match="between phases"):
-                    proxy.watch(second.append)
+                    proxy.watch(lambda method, _: second.append(method))
                 await proxy.begin_phase()
                 await exchange(proxy, sent("POST", f"{start}/unwatched"))
-                proxy.watch(second.append)
+                proxy.watch(lambda method, _: second.append(method))
                 await exchange(proxy, sent("PUT", f"{start}/two"))
                 await proxy.end_phase()
         return first, second
@@ -780,7 +790,173 @@ def test_watching_a_phase_as_it_ends_is_refused() -> None:
                 ending = asyncio.create_task(proxy.end_phase())
                 await asyncio.sleep(0)
                 with pytest.raises(RuntimeError, match="between phases"):
-                    proxy.watch(lambda _: None)
+                    proxy.watch(lambda *_: None)
+                traffic = await ending
+                writer.close()
+                return traffic
+
+    assert asyncio.run(scenario()) == PhaseTraffic(1, 0)
+
+
+# The write hold (ADR-0024's #332 amendment): while the open phase holds, every
+# write it reads is refused before the gate is asked, and reads go on.
+
+
+def request_lines(received: bytes) -> list[tuple[bytes, bytes]]:
+    """Each request line in what an upstream received: its method and target."""
+    return [
+        (method, target)
+        for line in received.split(b"\r\n")
+        if line.endswith(b" HTTP/1.1")
+        for method, target, _ in [line.split(b" ")]
+    ]
+
+
+def test_a_holding_phase_holds_each_write_and_forwards_each_read() -> None:
+    async def scenario() -> dict[str, Any]:
+        heard: list[tuple[bytes, bool]] = []
+        async with raw_upstream(NO_CONTENT) as upstream:
+            target = f"127.0.0.1:{upstream.port}"
+            start = f"http://{target}"
+            egress = gate(allowed=(start,))
+            async with EgressProxy(egress) as proxy:
+                proxy.watch(lambda method, held: heard.append((method, held)))
+                proxy.hold_writes(True)
+                writes = [
+                    await exchange(proxy, sent(method, f"{start}/write"))
+                    for method in ("POST", "PUT", "patch", "DELETE")
+                ]
+                # Bytes for the upstream, which an open tunnel would carry.
+                tunnel = await exchange(
+                    proxy, connect(target) + b"GET /tunnelled HTTP/1.1\r\n\r\n"
+                )
+                reads = [
+                    await exchange(proxy, sent(method, f"{start}/read"))
+                    for method in ("GET", "HEAD", "OPTIONS")
+                ]
+                blocked = proxy.egress_blocks(()).blocked
+                traffic = await proxy.end_phase()
+            return {
+                "heard": heard,
+                "writes": writes,
+                "tunnel": tunnel,
+                "reads": reads,
+                "received": request_lines(bytes(upstream.received)),
+                "egress": egress,
+                "blocked": blocked,
+                "traffic": traffic,
+            }
+
+    ran = asyncio.run(scenario())
+
+    assert ran["writes"] == [b"", b"", b"", b""]
+    assert ran["tunnel"].startswith(b"HTTP/1.1 403 ")
+    assert all(read.startswith(b"HTTP/1.1 204 ") for read in ran["reads"])
+    assert ran["received"] == [
+        (b"GET", b"/read"),
+        (b"HEAD", b"/read"),
+        (b"OPTIONS", b"/read"),
+    ]
+    assert ran["heard"] == [
+        (b"POST", True),
+        (b"PUT", True),
+        (b"patch", True),
+        (b"DELETE", True),
+        (b"CONNECT", True),
+    ]
+    assert ran["egress"].refusals == []
+    assert ran["egress"].infrastructure_events == []
+    assert not ran["blocked"]
+    assert ran["traffic"] == PhaseTraffic(0, 0)
+
+
+def test_a_held_write_never_asks_the_gate() -> None:
+    """No lookup, no pin and no refusal: a host the gate would refuse, and a
+    name it would look up, are held alike."""
+    resolver = Resolver({"app.example.test": ["127.0.0.1"]})
+    policy = EgressPolicy(
+        allowed_origins=("http://app.example.test",),
+        subresource_hosts=(),
+        private_origins=("http://app.example.test",),
+    )
+    egress = EgressGate(policy, resolve=resolver)
+
+    async def scenario() -> list[bytes]:
+        async with EgressProxy(egress) as proxy:
+            proxy.hold_writes(True)
+            return [
+                await exchange(proxy, sent("POST", "http://app.example.test/write")),
+                await exchange(proxy, sent("POST", "http://evil.example.test/write")),
+                await exchange(proxy, connect("evil.example.test:443")),
+            ]
+
+    answers = asyncio.run(scenario())
+
+    assert answers[:2] == [b"", b""]
+    assert answers[2].startswith(b"HTTP/1.1 403 ")
+    assert resolver.lookups == {}
+    assert egress.refusals == []
+    assert egress.infrastructure_events == []
+
+
+def test_a_hold_starts_and_ends_within_a_phase() -> None:
+    async def scenario() -> tuple[list[bytes], list[tuple[bytes, bytes]]]:
+        async with raw_upstream(NO_CONTENT) as upstream:
+            start = f"http://127.0.0.1:{upstream.port}"
+            async with EgressProxy(gate(allowed=(start,))) as proxy:
+                before = await exchange(proxy, sent("POST", f"{start}/before"))
+                proxy.hold_writes(True)
+                during = await exchange(proxy, sent("POST", f"{start}/during"))
+                proxy.hold_writes(False)
+                after = await exchange(proxy, sent("POST", f"{start}/after"))
+                await proxy.end_phase()
+            return [before, during, after], request_lines(bytes(upstream.received))
+
+    answers, received = asyncio.run(scenario())
+
+    assert [answer[:13] for answer in answers] == [
+        b"HTTP/1.1 204 ",
+        b"",
+        b"HTTP/1.1 204 ",
+    ]
+    assert received == [(b"POST", b"/before"), (b"POST", b"/after")]
+
+
+def test_a_new_phase_starts_unheld_and_a_hold_between_phases_is_refused() -> None:
+    async def scenario() -> tuple[bytes, list[tuple[bytes, bytes]]]:
+        async with raw_upstream(NO_CONTENT) as upstream:
+            start = f"http://127.0.0.1:{upstream.port}"
+            async with EgressProxy(gate(allowed=(start,))) as proxy:
+                proxy.hold_writes(True)
+                await proxy.end_phase()
+                with pytest.raises(RuntimeError, match="between phases"):
+                    proxy.hold_writes(True)
+                with pytest.raises(RuntimeError, match="between phases"):
+                    proxy.hold_writes(False)
+                await proxy.begin_phase()
+                answer = await exchange(proxy, sent("POST", f"{start}/next"))
+                await proxy.end_phase()
+            return answer, request_lines(bytes(upstream.received))
+
+    answer, received = asyncio.run(scenario())
+
+    assert answer.startswith(b"HTTP/1.1 204 ")
+    assert received == [(b"POST", b"/next")]
+
+
+def test_holding_a_phase_as_it_ends_is_refused() -> None:
+    async def scenario() -> PhaseTraffic:
+        async with raw_upstream() as silent:
+            start = f"http://127.0.0.1:{silent.port}"
+            async with EgressProxy(gate(allowed=(start,))) as proxy:
+                # A request the upstream never answers keeps the phase ending.
+                _, writer = await proxy_client(proxy)
+                writer.write(get(f"{start}/"))
+                await until(lambda: b"\r\n\r\n" in silent.received)
+                ending = asyncio.create_task(proxy.end_phase())
+                await asyncio.sleep(0)
+                with pytest.raises(RuntimeError, match="between phases"):
+                    proxy.hold_writes(True)
                 traffic = await ending
                 writer.close()
                 return traffic

@@ -276,16 +276,16 @@ def test_a_write_the_proxy_reads_as_the_phase_ends_raises_the_published_flag(
 ) -> None:
     # After the browser has closed, while ending the phase joins every
     # connection, the proxy may still read a request the browser sent.
-    told: list[Callable[[bytes], None]] = []
+    told: list[Callable[[bytes, bool], None]] = []
     watch, end = EgressProxy.watch, EgressProxy.end_phase
 
-    def telling(proxy: EgressProxy, on_write: Callable[[bytes], None]) -> None:
+    def telling(proxy: EgressProxy, on_write: Callable[[bytes, bool], None]) -> None:
         told.append(on_write)
         watch(proxy, on_write)
 
     async def ending(proxy: EgressProxy) -> PhaseTraffic:
         for on_write in told:
-            on_write(b"POST")
+            on_write(b"POST", False)
         told.clear()
         return await end(proxy)
 
