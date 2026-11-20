@@ -51,6 +51,7 @@ UNHEARD = (
     "network: the egress proxy didn't hear every write from the step's dispatch on"
 )
 WROTE = "network: a write request"
+HELD = "network: a write request, held by the egress proxy, so it never reached the app"
 TUNNEL = (
     "network: an encrypted or WebSocket connection was open, which the egress "
     "proxy can't read"
@@ -66,6 +67,7 @@ UNKEPT = "settle: the step kept no settle window or settling to read"
         pytest.param(Window(heard=True), "timeout", BUSY, id="busy"),
         pytest.param(Window(heard=False), "idle", UNHEARD, id="unheard"),
         pytest.param(Window(heard=True, wrote=True), "idle", WROTE, id="wrote"),
+        pytest.param(Window(heard=True, held=True), "idle", HELD, id="held"),
         pytest.param(
             Window(heard=True, tunnelled=True), "idle", TUNNEL, id="tunnelled"
         ),
@@ -100,10 +102,10 @@ def test_a_step_that_kept_no_window_or_settling_fails_with_nothing_else_read(
 
 
 def test_several_faults_are_listed_in_a_fixed_order() -> None:
-    window = Window(heard=False, wrote=True, tunnelled=True, navigated=True)
+    window = Window(heard=False, wrote=True, held=True, tunnelled=True, navigated=True)
 
     assert inserted_failure(window, "timeout", NO_SECRETS) == (
-        UNSHOWN + f"{BUSY}; {UNHEARD}; {WROTE}; {TUNNEL}; {NAVIGATED}"
+        UNSHOWN + f"{BUSY}; {UNHEARD}; {WROTE}; {HELD}; {TUNNEL}; {NAVIGATED}"
     )
 
 

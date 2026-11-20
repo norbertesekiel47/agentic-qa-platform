@@ -82,6 +82,10 @@ _UNHEARD: Final = (
     "network: the egress proxy didn't hear every write from the step's dispatch on"
 )
 _WROTE: Final = "network: a write request"
+# A write the egress proxy held while the step ran (ADR-0024's #332 amendment).
+_HELD: Final = (
+    "network: a write request, held by the egress proxy, so it never reached the app"
+)
 _TUNNEL: Final = (
     "network: an encrypted or WebSocket connection was open, which the egress "
     "proxy can't read"
@@ -450,12 +454,16 @@ def inserted_failure(
     and whose settling ended `settled`, didn't show it changed nothing, or None
     when it did (ADR-0024's #246 amendment): settling ended `idle`, the egress
     proxy heard every write from the window's opening on and read none, no
-    tunnel was open, and the page's main frame didn't navigate. Each that
-    fails is named, scanned with `redactor`, the session's. A step that kept
-    no window or no settling fails with that alone, since nothing else can be
-    read: missing evidence never passes it. Only the step's own window
-    counts: the one before belongs to the step that opened it, and later ones
-    open after the next step ran."""
+    tunnel was open, and the page's main frame didn't navigate. A write the
+    proxy held, as it holds each one the step sends (ADR-0024's #332
+    amendment), fails it too, in words of its own; a write it let go on,
+    which a working hold leaves none of, keeps the plain words, so a hold
+    missed still fails closed. Each that fails is named, scanned with
+    `redactor`, the session's. A step that kept no window or no settling
+    fails with that alone, since nothing else can be read: missing evidence
+    never passes it. Only the step's own window counts: the one before
+    belongs to the step that opened it, and later ones open after the next
+    step ran."""
     if window is None or settled is None:
         return redactor.redact(_UNSHOWN + _UNKEPT)
     unshown = [
@@ -464,6 +472,7 @@ def inserted_failure(
             (_BUSY, settled != "idle"),
             (_UNHEARD, not window.heard),
             (_WROTE, window.wrote),
+            (_HELD, window.held),
             (_TUNNEL, window.tunnelled),
             (_NAVIGATED, window.navigated),
         )
