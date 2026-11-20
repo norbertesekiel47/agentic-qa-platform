@@ -87,9 +87,12 @@ SECRET_FORMATS = cast(
 # USD 0.402050 already spent, #55's round included (the #53 P21b amendment).
 RUN_USD = Decimal("0.20")
 ROUND_USD = Decimal("0.597950")
-# The plan cases' round (#55): the six plan cassettes, each request
-# reserving its worst case as the explore case's do.
-PLANS_ROUND_USD = Decimal("0.17")
+# The plan cases' round (#55): the plan cassettes, each request reserving
+# its worst case as the explore case's do. Proposed for #327's round, awaiting
+# the maintainer's approval: the seven plan cases, each possibly retried
+# once, need USD 0.264792 to admit every request in order, up from #55's USD
+# 0.17 (ADR-0024's #327 amendment has the derivation).
+PLANS_ROUND_USD = Decimal("0.27")
 # Input tokens a request may use beyond its body's bytes: the tool and
 # output-format preambles and the framing, which the body doesn't spell.
 HEADROOM_TOKENS = 1024

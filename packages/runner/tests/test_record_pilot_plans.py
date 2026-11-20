@@ -244,7 +244,7 @@ def test_a_pilot_case_past_the_plans_round_is_refused_before_it_is_sent(
     library.mkdir()
     earlier = tmp_path / "round" / "000"
     earlier.mkdir(parents=True)
-    spend = {"spent_usd": "0.15", "overrun": False}
+    spend = {"spent_usd": "0.25", "overrun": False}
     (earlier / "receipt.json").write_text(json.dumps({"spend": spend}))
     attempt = tmp_path / "round" / "001"
 
@@ -317,5 +317,5 @@ def test_a_pilot_case_is_sent_once_with_the_sdks_retries_off(
     assert len(sent) == 1
     receipt = json.loads((attempt / "receipt.json").read_text())
     assert receipt["spend"]["refused"] is False
-    assert receipt["spend"]["round_left_usd"] == "0.17"
+    assert receipt["spend"]["round_left_usd"] == "0.27"
     assert not (library / "plan_login.yaml").exists()
