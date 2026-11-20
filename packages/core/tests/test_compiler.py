@@ -72,6 +72,7 @@ GOT = {
 }
 PROBED = {"check": "probe_equals", "probe": "count", "value": 1}
 BASELINE = {"check": "probe_equals_baseline", "probe": "count"}
+PIXELS = {"check": "pixel_diff", "target_meaning": COUNT}
 
 
 def expectation(index: int, *checks: dict[str, Any]) -> dict[str, Any]:
@@ -142,6 +143,16 @@ def test_unsupported_features_name_each_baseline_probe_check_and_no_condition() 
         ),
     )
     assert unsupported_features(PLAN) == ()
+
+
+def test_unsupported_features_name_each_pixel_diff_check() -> None:
+    # Exploring can't make its baseline, so it refuses the plan rather than
+    # compile another check in its place (ADR-0024's #327 amendment).
+    pixels = plan(expectation(0, URL), expectation(1, COUNTED, PIXELS))
+
+    assert unsupported_features(pixels) == (
+        "a3 (expect[1], pixel_diff): exploring can't compile a pixel_diff check yet",
+    )
 
 
 def test_contracts_by_meaning_gives_each_planned_meaning_its_rows_contract() -> None:
@@ -683,6 +694,14 @@ def test_a_zero_step_path_with_a_baseline_check_fails_by_name(tmp_path: Path) ->
     )
     assert problems(tmp_path / "with-steps", planned=baseline, bound=bound) == (
         unsupported,
+    )
+
+
+def test_a_bound_pixel_diff_check_fails_the_compile_by_name(tmp_path: Path) -> None:
+    pixels = plan(EXPECTATIONS[0], expectation(1, PIXELS), *EXPECTATIONS[2:])
+
+    assert problems(tmp_path, planned=pixels) == (
+        "a3 (expect[1], pixel_diff): exploring can't compile a pixel_diff check yet",
     )
 
 

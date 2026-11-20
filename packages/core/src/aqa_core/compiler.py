@@ -116,14 +116,20 @@ def assertion_for(
     return _ASSERTION.validate_python(fields)
 
 
+# The planned checks exploring can't compile yet: a baseline probe check
+# (ADR-0024's D35), and a `pixel_diff`, whose baseline only a person makes
+# (ADR-0024's #327 amendment).
+_UNEXPLORABLE: Final = frozenset({"probe_equals_baseline", "pixel_diff"})
+
+
 def unsupported_features(plan: CoveragePlan) -> tuple[str, ...]:
-    """A line for each baseline probe check in `plan`, which exploring can't
-    compile yet (ADR-0024's D35): explore refuses such a plan before the
-    browser opens."""
+    """A line for each check in `plan` that exploring can't compile yet, a
+    baseline probe check or a `pixel_diff`: explore refuses such a plan
+    before the browser opens, and never compiles another check instead."""
     return tuple(
         f"{check_id} (expect[{index}], {check.check}): exploring can't compile a {check.check} check yet"
         for check_id, (index, check) in planned_checks(plan).items()
-        if check.check == "probe_equals_baseline"
+        if check.check in _UNEXPLORABLE
     )
 
 
@@ -471,7 +477,8 @@ def _assertions(
     has_steps: bool,
 ) -> tuple[list[Assertion], list[str]]:
     """Each bound check's assertion, in plan order, and what's wrong with the
-    checks. Baseline checks are `unsupported_features`' to name."""
+    checks. Baseline and `pixel_diff` checks are `unsupported_features`' to
+    name."""
     assertions: list[Assertion] = []
     problems: list[str] = []
     if path.bound.keys() - planned_checks(plan).keys():
@@ -483,6 +490,8 @@ def _assertions(
                 problems.append(
                     f"{where}: a path with no steps has no step to capture its baseline before"
                 )
+            continue
+        if check.check == "pixel_diff":
             continue
         if check_id not in path.bound:
             problems.append(f"{where}: never bound")

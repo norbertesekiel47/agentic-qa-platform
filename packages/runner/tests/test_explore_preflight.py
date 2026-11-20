@@ -291,6 +291,23 @@ UNKEPT = {
             ),
         ],
     ),
+    # Refused by name, never compiled as another check (ADR-0024's #327
+    # amendment).
+    "a pixel_diff check": Unkept(
+        plan_of(
+            {
+                "subject": STATUS,
+                "claim": "looks as it did when it was reviewed",
+                "checks": [{"check": "pixel_diff", "target_meaning": STATUS}],
+            }
+        ),
+        SHOP,
+        ProjectConfig(),
+        [
+            "the plan has checks exploring can't keep",
+            "a1 (expect[0], pixel_diff): exploring can't compile a pixel_diff check yet",
+        ],
+    ),
     "a subject contract": Unkept(
         plan_of(
             {
