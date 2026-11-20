@@ -176,17 +176,17 @@ def planned_checks(plan: CoveragePlan) -> dict[str, tuple[int, PlannedCheck]]:
 
 
 # A ratio an expectation's text states, a decimal literal N in ratio form:
-# "N:1" or "N to 1", or N after "contrast" or "ratio" with only "ratio",
-# "of", "is", "at least" or "minimum" between them, as in "a contrast ratio
-# of at least 4.5". So a version such as "WCAG 2.1", a count such as "the 3
-# buttons" or a section number states none (ADR-0024's #327 amendment, the
-# maintainer's tightening).
+# "N:1" or "N to 1", or N directly after "contrast ratio of" or "contrast
+# ratio of at least" and not the first term of another ratio, such as "4 to
+# 3". So a version such as "WCAG 2.1", a count such as "the 3 buttons", a
+# section number or an aspect ratio such as "16:9" states none (ADR-0024's
+# #327 amendment, the maintainer's tightening).
 _DECIMAL = r"[0-9]+(?:\.[0-9]+)?"
 _END = r"(?![0-9]|\.[0-9])"
 _RATIO = re.compile(
     rf"(?<![0-9.])(?P<to_one>{_DECIMAL})\s*(?::|\bto\b)\s*1{_END}"
-    rf"|\b(?:contrast|ratio)(?:\s+(?:ratio|of|is|at\s+least|minimum))*"
-    rf"\s+(?P<worded>{_DECIMAL}){_END}",
+    rf"|\bcontrast\s+ratio\s+of(?:\s+at\s+least)?\s+(?P<worded>{_DECIMAL}){_END}"
+    r"(?!\s*(?::|\bto\b)\s*[0-9])",
     re.IGNORECASE,
 )
 # What a contrast_min misfit tells the plan to do instead.

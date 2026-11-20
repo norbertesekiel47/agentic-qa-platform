@@ -557,8 +557,9 @@ def test_an_unmarked_expectation_with_a_model_verify_does_not_fit() -> None:
     )
 
 
-# A ratio is stated in ratio form, "N:1" or "N to 1", or after contrast or
-# ratio wording (ADR-0024's #327 amendment, the maintainer's tightening).
+# A ratio is stated in ratio form, "N:1" or "N to 1", or as N directly after
+# "contrast ratio of" or "contrast ratio of at least" (ADR-0024's #327
+# amendment, the maintainer's tightening).
 @pytest.mark.parametrize(
     ("text", "ratio"),
     [
@@ -569,6 +570,7 @@ def test_an_unmarked_expectation_with_a_model_verify_does_not_fit() -> None:
         ("The notice's text has a contrast of 3.0 to 1", 3),
         ("The notice's text has a contrast ratio of at least 4.5", 4.5),
         ("The notice's text has a Contrast Ratio of 7", 7),
+        ("The notice's text has a contrast ratio of 4.5 against its background", 4.5),
     ],
 )
 def test_a_contrast_min_whose_ratio_the_expectation_states_fits(
@@ -607,6 +609,28 @@ def test_a_contrast_min_whose_ratio_the_expectation_states_fits(
             "The notice in section 4.5 of the order page is legible",
             4.5,
             "a contrast_min min_ratio of 4.5 is not a ratio the expectation states",
+        ),
+        # A number after contrast or ratio wording is no ratio unless it is
+        # N:1, N to 1, or directly after "contrast ratio of (at least)".
+        (
+            "The contrast of 3 buttons is 4.5:1",
+            3,
+            "a contrast_min min_ratio of 3 is not a ratio the expectation states",
+        ),
+        (
+            "Contrast is 2.1 compliant",
+            2.1,
+            "a contrast_min min_ratio of 2.1 is not a ratio the expectation states",
+        ),
+        (
+            "The banner keeps an aspect ratio of 16:9",
+            16,
+            "a contrast_min min_ratio of 16 is not a ratio the expectation states",
+        ),
+        (
+            "The banner's text keeps a contrast ratio of 4 to 3",
+            4,
+            "a contrast_min min_ratio of 4 is not a ratio the expectation states",
         ),
         (
             "The notice's text meets 4.5:1",
