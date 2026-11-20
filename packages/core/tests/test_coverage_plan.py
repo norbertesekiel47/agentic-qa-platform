@@ -3,9 +3,10 @@ each expectation's subject and the checks that establish its claim, or why no
 check can, the conditions the plan requires, and the hash that freezes it."""
 
 import hashlib
-from typing import Any
+from typing import Any, get_type_hints
 
 import pytest
+from aqa_core.compiled import ContrastMin, ContrastRatio
 from aqa_core.coverage_plan import (
     CoveragePlan,
     PlannedCheck,
@@ -18,7 +19,7 @@ from aqa_core.coverage_plan import (
 from aqa_core.spec import SpecContext, SpecFrontmatter
 from pydantic import ValidationError
 
-# One planned check of each of M1's nine types, with exactly the fields its
+# One planned check of each of the twelve types, with exactly the fields its
 # type takes (DATA_MODEL §7's compiled fields, less what compiling adds).
 OF_EACH_TYPE: dict[str, dict[str, Any]] = {
     "text_visible": {"text": "card has expired"},
@@ -41,6 +42,9 @@ OF_EACH_TYPE: dict[str, dict[str, Any]] = {
     "probe_equals": {"probe": "orders_count", "value": 0},
     "probe_equals_baseline": {"probe": "orders_count"},
     "visible_unoccluded": {"target_meaning": "the payment step's submit button"},
+    "contrast_min": {"target_meaning": "the order's shipping notice", "min_ratio": 4.5},
+    "model_verify": {"target_meaning": "the order's product photo"},
+    "pixel_diff": {"target_meaning": "the store logo in the page header"},
 }
 
 # A valid value for every field a check may take.
@@ -53,6 +57,7 @@ ANY_VALUE: dict[str, Any] = {
     "method": "DELETE",
     "url_pattern": "/api/x",
     "status_class": "4xx",
+    "min_ratio": 3,
 }
 
 TEXT_OR_PATTERN = {"text", "pattern"}
@@ -122,12 +127,8 @@ def test_a_text_check_takes_text_or_pattern_exactly_one(
         planned(check, **others, **fields)
 
 
-@pytest.mark.parametrize(
-    "check", ["pixel_diff", "contrast_min", "model_verify", "text"]
-)
-def test_only_m1s_nine_check_types_can_be_planned(check: str) -> None:
-    # pixel_diff, contrast_min and model_verify arrive in M2: an expectation
-    # that needs one is planned as unsupported instead.
+@pytest.mark.parametrize("check", ["text", "contrast", "probe_baseline"])
+def test_only_the_twelve_check_types_can_be_planned(check: str) -> None:
     with pytest.raises(ValidationError) as error:
         planned(check, text="Pay")
 
@@ -206,21 +207,44 @@ def test_an_expectation_index_is_never_negative() -> None:
     assert [detail["loc"] for detail in error.value.errors()] == [("expect_index",)]
 
 
-@pytest.mark.parametrize("needs", ["pixel_diff", "contrast_min", "model_verify", None])
-def test_an_unsupported_expectation_says_what_it_needs(needs: str | None) -> None:
-    unsupported = {"reason": "the claim is about how the button looks", "needs": needs}
+@pytest.mark.parametrize("ratio", [1, 4.5, 21])
+def test_a_planned_contrast_min_takes_any_ratio_its_compiled_check_takes(
+    ratio: float,
+) -> None:
+    made = planned("contrast_min", target_meaning="the notice", min_ratio=ratio)
 
-    made = expectation(unsupported=unsupported)
+    assert made.min_ratio == ratio
+
+
+@pytest.mark.parametrize("ratio", [0.99, 21.5, float("inf"), float("nan"), "4.5"])
+def test_a_planned_contrast_min_refuses_a_ratio_its_compiled_check_refuses(
+    ratio: object,
+) -> None:
+    with pytest.raises(ValidationError) as error:
+        planned("contrast_min", target_meaning="the notice", min_ratio=ratio)
+
+    assert [detail["loc"] for detail in error.value.errors()] == [("min_ratio",)]
+
+
+def test_a_planned_ratio_and_a_compiled_one_are_one_type() -> None:
+    # One alias, not a copy, so the two can't drift apart.
+    planned_ratio = get_type_hints(PlannedCheck, include_extras=True)["min_ratio"]
+    compiled_ratio = get_type_hints(ContrastMin, include_extras=True)["min_ratio"]
+
+    assert compiled_ratio is ContrastRatio
+    assert planned_ratio == ContrastRatio | None
+
+
+def test_an_unsupported_expectation_says_why() -> None:
+    made = expectation(unsupported={"reason": "only a person can tell"})
 
     assert made.unsupported is not None
-    assert made.unsupported.needs == needs
+    assert made.unsupported.reason == "only a person can tell"
     assert made.checks == ()
 
 
-@pytest.mark.parametrize("needs", ["visible_unoccluded", "a model", ""])
-def test_an_unsupported_expectation_needs_an_m2_check_or_nothing_named(
-    needs: str,
-) -> None:
+@pytest.mark.parametrize("needs", ["pixel_diff", "contrast_min", "model_verify", None])
+def test_an_unsupported_expectation_takes_no_needs(needs: str | None) -> None:
     with pytest.raises(ValidationError) as error:
         expectation(unsupported={"reason": "no check", "needs": needs})
 
@@ -315,13 +339,12 @@ def test_a_required_conditions_kind_is_reload_or_left_out() -> None:
 
 
 # Each changes one thing the plan_hash covers: a subject, a claim, a check, an
-# unsupported expectation's reason and need, and a required condition.
+# unsupported expectation's reason, and a required condition.
 CHANGES: dict[str, dict[str, Any]] = {
     "subject": {"subject": "the payment step's pay button"},
     "claim": {"claim": "visible"},
     "check": {"checks": [{**PAY_BUTTON, "target_meaning": "the pay button"}]},
     "unsupported": {"checks": [], "unsupported": {"reason": "looks"}},
-    "needs": {"checks": [], "unsupported": {"reason": "looks", "needs": "pixel_diff"}},
 }
 
 
@@ -404,7 +427,7 @@ def checkout_plan(*entries: dict[str, Any]) -> CoveragePlan:
 COVERED = (
     entry(0, checks=[ERROR_SHOWN]),
     entry(1, checks=[NO_NEW_ORDER]),
-    entry(2, unsupported={"reason": "a colour", "needs": "pixel_diff"}),
+    entry(2, unsupported={"reason": "a colour"}),
 )
 
 
@@ -451,27 +474,18 @@ def test_a_fully_covered_plan_has_nothing_uncovered() -> None:
     assert uncovered(checkout_plan(*covered), CHECKOUT) == ()
 
 
-@pytest.mark.parametrize(
-    ("needs", "named"),
-    [
-        (None, "no M1 check can establish it"),
-        ("pixel_diff", "pixel_diff"),
-        ("contrast_min", "contrast_min"),
-        ("model_verify", "model_verify"),
-    ],
-)
-def test_each_uncovered_expectation_is_named_with_its_reason_and_need(
-    needs: str | None, named: str
-) -> None:
-    unsupported = {"reason": "the claim is about a colour", "needs": needs}
+def test_each_uncovered_expectation_is_named_with_its_reason() -> None:
+    unsupported = {"reason": "the claim is about a colour"}
     entries = (COVERED[0], COVERED[1], entry(2, unsupported=unsupported))
 
     lines = uncovered(checkout_plan(*entries), CHECKOUT)
 
-    assert len(lines) == 1
-    assert lines[0].startswith('expect[2] "The Pay button keeps its brand colour"')
-    assert named in lines[0]
-    assert "the claim is about a colour" in lines[0]
+    assert lines == (
+        (
+            'expect[2] "The Pay button keeps its brand colour": no check can '
+            "establish it: the claim is about a colour"
+        ),
+    )
 
 
 def test_uncovered_refuses_a_plan_that_does_not_fit_its_spec() -> None:
@@ -512,7 +526,7 @@ def test_planned_checks_number_every_check_in_plan_order_from_a1() -> None:
                         "expect_index": 1,
                         "subject": "the banner",
                         "claim": "is brand blue",
-                        "unsupported": {"reason": "a colour", "needs": "pixel_diff"},
+                        "unsupported": {"reason": "a colour"},
                     },
                     {
                         "expect_index": 2,

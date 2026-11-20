@@ -13,6 +13,7 @@ from typing import Annotated, Final, Literal, Self
 from pydantic import Field, StrictInt, model_validator
 
 from aqa_core.compiled import (
+    ContrastRatio,
     HttpMethod,
     NormalizedText,
     ProbeValue,
@@ -29,8 +30,7 @@ from aqa_core.schema import (
 )
 from aqa_core.spec import SpecFrontmatter, canonical_hash
 
-# M1's check types (#41). pixel_diff, contrast_min and model_verify arrive in
-# M2; until then an expectation that needs one is unsupported.
+# M1's check types (#41), then the three M2 checks a plan names (#327).
 CheckType = Literal[
     "text_visible",
     "text_in_target",
@@ -41,17 +41,19 @@ CheckType = Literal[
     "probe_equals",
     "probe_equals_baseline",
     "visible_unoccluded",
+    "contrast_min",
+    "model_verify",
+    "pixel_diff",
 ]
-
-# The M2 checks an unsupported expectation may name as what it needs.
-M2Check = Literal["pixel_diff", "contrast_min", "model_verify"]
 
 _NETWORK = frozenset({"method", "url_pattern", "status_class"})
 _TEXT_OR_PATTERN = frozenset({"text", "pattern"})
 
 # The fields each check type needs beyond `check`. These are DATA_MODEL §7's
 # compiled fields, less what compiling adds, with a target named by its
-# meaning rather than by an ID.
+# meaning rather than by an ID. Compiling sets a `pixel_diff`'s tolerances
+# and baseline: a spec states none, and a plan never picks one (ADR-0024's
+# #327 amendment).
 _FIELDS_OF: Final[Mapping[CheckType, frozenset[str]]] = {
     "text_visible": frozenset(),
     "text_in_target": frozenset({"target_meaning"}),
@@ -62,6 +64,9 @@ _FIELDS_OF: Final[Mapping[CheckType, frozenset[str]]] = {
     "probe_equals": frozenset({"probe", "value"}),
     "probe_equals_baseline": frozenset({"probe"}),
     "visible_unoccluded": frozenset({"target_meaning"}),
+    "contrast_min": frozenset({"target_meaning", "min_ratio"}),
+    "model_verify": frozenset({"target_meaning"}),
+    "pixel_diff": frozenset({"target_meaning"}),
 }
 # The check types that also take `text` or `pattern`, exactly one.
 _TEXT_CHECKS: Final = frozenset({"text_visible", "text_in_target"})
@@ -84,6 +89,9 @@ class PlannedCheck(StrictModel):
     method: HttpMethod | None = None
     url_pattern: PythonRegex | None = None
     status_class: StatusClass | None = None
+    # A `contrast_min`'s ratio: one the expectation states, never one the
+    # plan chooses (`misfits`).
+    min_ratio: ContrastRatio | None = None
 
     @model_validator(mode="after")
     def _its_types_fields(self) -> Self:
@@ -109,11 +117,9 @@ class PlannedCheck(StrictModel):
 
 
 class Unsupported(StrictModel):
-    """Why no M1 check can establish an expectation's claim, and the M2 check
-    it needs, if one would."""
+    """Why no check can establish an expectation's claim."""
 
     reason: NonEmpty
-    needs: M2Check | None = None
 
 
 class PlannedExpectation(StrictModel):
@@ -191,24 +197,15 @@ def misfits(plan: CoveragePlan, frontmatter: SpecFrontmatter) -> tuple[str, ...]
     return tuple(found)
 
 
-# What an unsupported expectation needs, as its line says it.
-_NEED_LINES: Final[Mapping[M2Check | None, str]] = {
-    None: "no M1 check can establish it",
-    "pixel_diff": "it needs pixel_diff, which M2 adds",
-    "contrast_min": "it needs contrast_min, which M2 adds",
-    "model_verify": "it needs a model to judge it (model_verify), which M2 adds",
-}
-
-
 def uncovered(plan: CoveragePlan, frontmatter: SpecFrontmatter) -> tuple[str, ...]:
-    """A line naming each expectation `plan` can't cover: its index, its text,
-    what it needs and why. A plan that doesn't fit its spec (`misfits`) is a
-    ValueError: its entries may name no expectation."""
+    """A line naming each expectation `plan` can't cover: its index, its text
+    and why. A plan that doesn't fit its spec (`misfits`) is a ValueError: its
+    entries may name no expectation."""
     if found := misfits(plan, frontmatter):
         raise ValueError(f"the plan doesn't fit its spec: {'; '.join(found)}")
     return tuple(
         f'expect[{planned.expect_index}] "{frontmatter.expect[planned.expect_index].text}": '
-        f"{_NEED_LINES[planned.unsupported.needs]}: {planned.unsupported.reason}"
+        f"no check can establish it: {planned.unsupported.reason}"
         for planned in plan.expectations
         if planned.unsupported is not None
     )

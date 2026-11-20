@@ -728,7 +728,7 @@ def test_an_unsupported_expectation_fails_the_compile_naming_it(tmp_path: Path) 
 
     assert problems(tmp_path, planned=planned, bound=bound) == (
         (
-            'expect[3] "Reading the count sends no write": no M1 check can establish '
+            'expect[3] "Reading the count sends no write": no check can establish '
             "it: no M1 check reads it"
         ),
     )

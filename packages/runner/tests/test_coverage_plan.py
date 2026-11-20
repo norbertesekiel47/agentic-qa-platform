@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, get_args
 
 import pytest
-from aqa_core.coverage_plan import CheckType, CoveragePlan, M2Check, PlannedCheck
+from aqa_core.coverage_plan import CheckType, CoveragePlan, PlannedCheck
 from aqa_core.model_costs import CostRecord, Usage
 from aqa_core.project import load_project
 from aqa_core.spec import Spec
@@ -212,10 +212,10 @@ def test_the_plan_request_keeps_the_specs_own_characters(tmp_path: Path) -> None
     assert "Le paiement a échoué, la carte a expiré" in str(human.content)
 
 
-def test_the_instructions_name_every_check_type_and_every_need() -> None:
+def test_the_instructions_name_every_check_type() -> None:
     # The prompt states what the response format allows; a check type added
     # to the plan model must be added here too.
-    for name in (*get_args(CheckType), *get_args(M2Check)):
+    for name in get_args(CheckType):
         assert name in INSTRUCTIONS, name
 
 

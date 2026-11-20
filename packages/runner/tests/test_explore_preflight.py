@@ -268,7 +268,7 @@ UNKEPT = {
         [
             "an expectation has no establishing check",
             (
-                'expect[0] "The shop says the name was saved": no M1 check can '
+                'expect[0] "The shop says the name was saved": no check can '
                 "establish it: only a person can tell"
             ),
         ],
