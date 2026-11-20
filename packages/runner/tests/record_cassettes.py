@@ -41,6 +41,7 @@ from aqa_runner.model_router import ModelCallError, ModelRouter, Routed
 from aqa_runner.replay_result import EXIT_CODES
 from aqa_runner.replay_result import Outcome as ReplayOutcome
 from aqa_runner.run_record import COSTS
+from aqa_runner.strict_replay import Replayed
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration
 from langchain_core.utils.json import parse_json_markdown
@@ -49,7 +50,16 @@ from vcr.persisters.filesystem import FilesystemPersister
 
 from packages.runner.tests.conftest import CASSETTES, REDIRECTS, _canonical, _vcr
 from packages.runner.tests.executor_fixtures import serving_app
-from packages.runner.tests.heal_fixtures import HEAL_CASES, heal_recorded, heal_spec
+from packages.runner.tests.heal_fixtures import (
+    HEAL_CASES,
+    heal_disallowed,
+    heal_recorded,
+    heal_spec,
+)
+from packages.runner.tests.heal_injection_fixtures import (
+    CASES as HEAL_INJECTION_CASES,
+)
+from packages.runner.tests.heal_injection_fixtures import heal_injection_disallowed
 from packages.runner.tests.injection_fixtures import CASES as INJECTION_CASES
 from packages.runner.tests.injection_fixtures import explored_case
 from packages.runner.tests.m2_plan_fixtures import CASE as M2_CASE
@@ -71,6 +81,8 @@ PILOTS = ROOT / "bench/apps/conduit/qa"
 INJECTED = {case.cassette: case for case in INJECTION_CASES}
 # The drift pages' `aqa run`s (#244), by cassette name.
 HEALED = {case.cassette: case for case in HEAL_CASES}
+# The heal-aimed injection pages' `aqa run`s (#311), by cassette name.
+HEAL_INJECTED = {case.cassette: case for case in HEAL_INJECTION_CASES}
 # The whole explore of the fixture spec: the plan and every turn.
 EXPLORE = "explore_fixture"
 # The explore's own guard: the run stops calling once it has spent this. One
@@ -110,6 +122,10 @@ INJECTION_ROUND_USD = Decimal("0.80")
 # The heal round's limit (#244), approved; each run's is its config's
 # heal_model_usd.
 HEAL_ROUND_USD: Final = Decimal("0.25")
+# The heal-aimed injection round's limit (#311), approved: the maintainer set
+# USD 1.00 over the USD 0.70 ADR-0024's #311 amendment derives, for more
+# re-attempts; each run's is its config's heal_model_usd.
+HEAL_INJECTION_ROUND_USD: Final = Decimal("1.00")
 
 
 class SpendRefusedError(Exception):
@@ -560,8 +576,10 @@ def answers_expected(name: str, calls: tuple[CostRecord, ...]) -> int:
     """One answer per case. A plan case holds two when its plan couldn't be
     used and make_plan asked once more: two answers, both `ok` (ADR-0024's
     #161 amendment). A refusal and its fallback stay rejected. A case of a whole
-    run holds one per priced call, each turn's, less those it replayed; a heal
-    case's turn is one, so it holds one."""
+    run holds one per priced call, each turn's, as the run's own cost lines keep
+    them, less those it replayed: a heal-aimed injection case's turns too, which a
+    real model may take more of (#311). A heal case's turn is one, so it holds
+    one."""
     if name in HEALED:
         return 1
     if CASES[name].whole_run:
@@ -669,7 +687,43 @@ async def healed(
     """A heal case's `aqa run` on its drift page (#244): its priced calls, whether
     it ended in the proposal the case expects, how it ended, and, in fixed
     words, why it didn't."""
-    replayed, disallowed = await heal_recorded(HEALED[name], spec, router)
+    case = HEALED[name]
+    return heal_ended(
+        *await heal_recorded(
+            case.script,
+            case.html,
+            spec,
+            router,
+            lambda replayed, _: heal_disallowed(case, replayed),
+        )
+    )
+
+
+async def healed_injection(
+    name: str, router: ModelRouter, spec: Spec
+) -> tuple[tuple[CostRecord, ...], bool, Ending, str | None]:
+    """A heal-aimed injection case's `aqa run` on its page (#311): its priced
+    calls, whether its rule allows how it ended, given what the app saw, how it
+    ended, and, in fixed words, why the rule doesn't."""
+    case = HEAL_INJECTED[name]
+    return heal_ended(
+        *await heal_recorded(
+            case.script,
+            case.html,
+            spec,
+            router,
+            lambda replayed, seen: heal_injection_disallowed(
+                case, replayed.outcome, replayed.document, seen
+            ),
+        )
+    )
+
+
+def heal_ended(
+    replayed: Replayed, disallowed: str | None
+) -> tuple[tuple[CostRecord, ...], bool, Ending, str | None]:
+    """A heal run's priced calls, as its own cost lines keep them, whether its
+    case's rule allows how it ended, how it ended, and the rule's words."""
     ending = Ending(
         exit_code=EXIT_CODES[replayed.outcome],
         outcome=replayed.outcome,
@@ -761,6 +815,17 @@ CASES: Final[Mapping[str, RecordedCase]] = {
             whole_run=True,
         ),
     ),
+    **{
+        name: RecordedCase(
+            healed_injection,
+            role=case.role,
+            mode="heal",
+            round_usd=HEAL_INJECTION_ROUND_USD,
+            run_usd=lambda config: Decimal(str(config.budgets.heal_model_usd)),
+            whole_run=True,
+        )
+        for name, case in HEAL_INJECTED.items()
+    },
 }
 
 
@@ -1112,17 +1177,21 @@ def case_spec(name: str, root: Path) -> Spec:
     """The spec the case `name` is recorded from, made under the spec root
     `root`."""
     if name == M2_CASE:
-        return m2_spec(root)
-    if name.startswith("plan_"):
-        return pilot(name.removeprefix("plan_"), root)
-    if name == EXPLORE:
-        return fixture(root)
-    if name in INJECTED:
-        return INJECTED[name].spec(root, FIXTURE_CONFIG)
-    if name in HEALED:
+        spec = m2_spec(root)
+    elif name.startswith("plan_"):
+        spec = pilot(name.removeprefix("plan_"), root)
+    elif name == EXPLORE:
+        spec = fixture(root)
+    elif name in INJECTED:
+        spec = INJECTED[name].spec(root, FIXTURE_CONFIG)
+    elif name in HEALED:
         root.mkdir()
-        return heal_spec(HEALED[name], root)
-    return checkout(root)
+        spec = heal_spec(HEALED[name], root)
+    elif name in HEAL_INJECTED:
+        spec = HEAL_INJECTED[name].spec(root)
+    else:
+        spec = checkout(root)
+    return spec
 
 
 def record(
