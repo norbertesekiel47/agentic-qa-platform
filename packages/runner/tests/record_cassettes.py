@@ -1105,6 +1105,23 @@ def fixture(root: Path) -> Spec:
     )
 
 
+def case_spec(name: str, root: Path) -> Spec:
+    """The spec the case `name` is recorded from, made under the spec root
+    `root`."""
+    if name == M2_CASE:
+        return m2_spec(root)
+    if name.startswith("plan_"):
+        return pilot(name.removeprefix("plan_"), root)
+    if name == EXPLORE:
+        return fixture(root)
+    if name in INJECTED:
+        return INJECTED[name].spec(root, FIXTURE_CONFIG)
+    if name in HEALED:
+        root.mkdir()
+        return heal_spec(HEALED[name], root)
+    return checkout(root)
+
+
 def record(
     name: str, attempt: Path, *, library: Path = CASSETTES
 ) -> tuple[CostRecord, ...]:
@@ -1115,19 +1132,7 @@ def record(
     if not key:
         raise ValueError("recording needs ANTHROPIC_API_KEY")
     attempt.mkdir(parents=True)
-    if name == M2_CASE:
-        spec = m2_spec(attempt / "qa")
-    elif name.startswith("plan_"):
-        spec = pilot(name.removeprefix("plan_"), attempt / "qa")
-    elif name == EXPLORE:
-        spec = fixture(attempt / "qa")
-    elif name in INJECTED:
-        spec = INJECTED[name].spec(attempt / "qa", FIXTURE_CONFIG)
-    elif name in HEALED:
-        (attempt / "qa").mkdir()
-        spec = heal_spec(HEALED[name], attempt / "qa")
-    else:
-        spec = checkout(attempt / "qa")
+    spec = case_spec(name, attempt / "qa")
     config = load_config(spec.path.parent / "config.yaml")
     if name == "plain_with_effort":
         config = config.model_copy(

@@ -17,7 +17,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Final, cast
 from urllib.parse import urlsplit
 
 import langsmith
@@ -217,6 +217,30 @@ BY_DESIGN = "# HAND-WRITTEN RESPONSES, BY DESIGN"
 ANTHROPIC_HOST = "api.anthropic.com"
 # Variables that would send a replayed call somewhere a cassette never saw.
 REDIRECTS = ("ANTHROPIC_API_URL", "ANTHROPIC_BASE_URL")
+# The cassettes whose recorded request is no longer the one the adapter sends,
+# each awaiting the maintainer's re-record (ADR-0024's #327 amendment). The
+# `cassette` fixture marks a test that replays one expected to fail while it
+# doesn't replay, and fails the test once it does, so no name outlives its
+# recording; test_awaiting_rerecord.py holds the set to the requests.
+AWAITING_RERECORD: Final = frozenset(
+    {
+        "coverage_plan",
+        "plan_login",
+        "plan_read-article",
+        "plan_post-comment",
+        "plan_favorite-article",
+        "plan_publish-article",
+        "plan_m2-checks",
+        "explore_fixture",
+        "explore_injection_hijack",
+        "explore_injection_decoy-success",
+        "explore_injection_decoy-after-failure",
+        "explore_injection_steering",
+        "explore_injection_steering-secret",
+    }
+)
+# What a test of an awaiting cassette that didn't replay ends with.
+AWAITED: Final = pytest.xfail.Exception  # ADR-0024's #327 amendment
 
 
 @dataclass
@@ -292,6 +316,49 @@ def _sending(played: Any) -> list[dict[str, Any]]:
 
         setattr(played, name, kept)
     return sent
+
+
+def _refusals(played: Any) -> list[Any]:
+    """Every request VCR refuses through `played`, a cassette in use, kept
+    as it refuses it, so a refusal the code under test catches still counts.
+    vcr 8.3.0's stubs call the cassette's `filter_request` only on their way
+    to that refusal, when no recorded interaction matches; this wraps it."""
+    refused: list[Any] = []
+    filter_request = played.filter_request
+
+    def kept(request: Any) -> Any:
+        filtered = filter_request(request)
+        if filtered:
+            refused.append(filtered)
+        return filtered
+
+    played.filter_request = kept
+    return refused
+
+
+def _end_if_awaiting(
+    path: Path,
+    played: Any,
+    refused: list[Any],
+    error: BaseException | None,
+    *,
+    awaiting: bool,
+) -> None:
+    """When the cassette at `path` replays under a name in AWAITING_RERECORD
+    (`awaiting`), end its test: expected to fail when it didn't replay (no
+    file, a request with no match, or a recorded response never played),
+    whatever the block raised (`error`), and failed when it did, so its name
+    leaves the set. Otherwise, nothing."""
+    if not awaiting:
+        return
+    name = path.stem
+    replayed = path.exists() and played is not None and played.all_played
+    if not replayed or refused:
+        reason = f"cassettes/{name}.yaml awaits the maintainer's re-record ({name})"
+        pytest.xfail(reason)  # ADR-0024's #327 amendment: AWAITING_RERECORD
+    raise AssertionError(
+        f"cassettes/{name}.yaml replays again: remove it from AWAITING_RERECORD"
+    ) from error
 
 
 def _refused_request(error: BaseException | None) -> Any | None:
@@ -455,7 +522,10 @@ def cassette(
     still leaves the new file, so read `git diff` on the cassettes before
     committing them). `replay_only` keeps a test that isn't about the API's
     answers (tracing, the fixture's own failures) from ever recording; `library`
-    is the directory the cassette lives in."""
+    is the directory the cassette lives in. A name in AWAITING_RERECORD that
+    doesn't replay (no file, a request with no match, or a response never
+    played) marks the test expected to fail, whatever the block raised, and
+    one that replays fails it."""
     request.getfixturevalue("quiet_tracing")
 
     @contextmanager
@@ -464,6 +534,7 @@ def cassette(
     ) -> Iterator[Recording]:
         path = library / f"{name}.yaml"
         recording_now = _in_record_mode(path, replay_only=replay_only)
+        awaiting = name in AWAITING_RERECORD and not recording_now
         directory = library
         if recording_now:
             if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -477,6 +548,8 @@ def cassette(
             for variable in REDIRECTS:
                 monkeypatch.delenv(variable, raising=False)
         recording = Recording()
+        played: Any = None
+        refusals: list[Any] = []
         try:
             with (
                 _kept_off_the_network(name, recording_now=recording_now),
@@ -485,8 +558,10 @@ def cassette(
                 ) as played,
             ):
                 sent = _sending(played)
+                refusals = _refusals(played)
                 yield recording
         except Exception as error:
+            _end_if_awaiting(path, played, refusals, error, awaiting=awaiting)
             if (refused := _refused_request(error)) is not None:
                 raise AssertionError(
                     f"cassettes/{name}.yaml has no response for a request the adapter "
@@ -494,6 +569,7 @@ def cassette(
                     f"body was {_canonical(refused.body)}"
                 ) from error
             raise
+        _end_if_awaiting(path, played, refusals, None, awaiting=awaiting)
         recording.sent = sent
         recording.responses = [
             json.loads(response["body"]["string"]) for response in played.responses
