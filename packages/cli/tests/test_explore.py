@@ -305,10 +305,6 @@ SPEC_PROBLEMS = {
         ),
         "secret NOT_DECLARED is not declared",
     ),
-    "visual: model": (
-        SPEC.replace("visual: deterministic", "visual: model"),
-        "visual: model is a spec error",
-    ),
     "disable without inherit": (
         SPEC.replace(
             "---\n\nNotes",
@@ -330,6 +326,60 @@ def test_each_spec_problem_exits_5_names_it_and_calls_no_model(
 
     assert result.exit_code == 5, result.output
     assert named in result.stderr
+    assert factory.built == []
+    assert not (tmp_path / "qa" / ".aqa").exists()
+
+
+# SPEC with its second expectation marked for a model to judge, and a plan
+# that checks it so (ADR-0024's #327 amendment).
+JUDGED_SPEC = SPEC.replace("visual: deterministic", "visual: model")
+JUDGED_PLAN = plan_with(
+    [
+        PLAN.expectations[0].model_dump(exclude_none=True),
+        {
+            "expect_index": 1,
+            "subject": "the payment step's submit button",
+            "claim": "visible and not covered",
+            "checks": [
+                {
+                    "check": "model_verify",
+                    "target_meaning": "the payment step's submit button",
+                }
+            ],
+        },
+    ]
+)
+
+
+def test_plan_only_plans_a_spec_with_a_visual_model_expectation(
+    tmp_path: Path, run: Run
+) -> None:
+    spec = project(tmp_path / "qa", spec=JUDGED_SPEC)
+
+    result, factory = run(
+        [str(spec), "--plan-only"], **{SONNET: FakeClient(reply(parsed=JUDGED_PLAN))}
+    )
+
+    assert result.exit_code == 0, result.output
+    assert factory.built == [("anthropic", SONNET, None)]
+    assert result.stdout.startswith(f"planned checkout: plan {plan_hash(JUDGED_PLAN)}")
+    record = record_of(tmp_path / "qa")
+    assert (record["outcome"], record["reasons"]) == ("planned", [])
+    assert record["plan"]["expectations"][1]["checks"] == [
+        {"check": "model_verify", "target_meaning": "the payment step's submit button"}
+    ]
+
+
+def test_exploring_a_spec_with_a_visual_model_expectation_exits_5_with_no_model(
+    tmp_path: Path, run: Run
+) -> None:
+    spec = project(tmp_path / "qa", spec=JUDGED_SPEC)
+
+    result, factory = run([str(spec)])
+
+    assert result.exit_code == 5, result.output
+    assert "expect[1].visual: visual: model is a spec error" in result.stderr
+    assert "--plan-only" in result.stderr
     assert factory.built == []
     assert not (tmp_path / "qa" / ".aqa").exists()
 

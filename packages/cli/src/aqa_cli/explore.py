@@ -6,8 +6,8 @@ browser.
 Everything the command line names is resolved first: the spec root, the
 spec and the project config, the start origin and each budget `--budget`
 lays over the config's. A problem with any of them is a spec error (exit 5),
-and so is an expectation marked `visual: model`, which explore can't plan or
-confirm yet (`admission.explorable`).
+and so, unless `--plan-only`, is an expectation marked `visual: model`, which
+explore can plan but can't explore or confirm yet (`admission.explorable`).
 Then, unless `--force`, a compiled script that is up to date is kept, with
 no model call and no browser: it loads, was compiled from the spec and the
 subject contracts as they are, agrees with them, as replay's contract check
@@ -257,7 +257,6 @@ def _plan(spec_path: Path, url: str | None) -> None:
     """Write the spec's coverage plan to a run record, and stop."""
     try:
         root, spec, config, _ = resolve(spec_path, url)
-        explorable(spec)
         router = _router(config)
     except SpecError as error:
         stop("spec_error", str(spec_path), "nothing was planned", error.problems)

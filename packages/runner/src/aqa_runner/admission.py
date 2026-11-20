@@ -237,14 +237,15 @@ def _model_marks(script: CompiledScript, spec: Spec, mode: Mode) -> Iterator[str
 
 def explorable(spec: Spec) -> None:
     """`SpecError` naming each of `spec`'s expectations marked `visual:
-    model`, which explore can't plan or confirm yet: only `aqa replay --mode
-    verified` checks one, of a script written by hand (ADR-0024's #256
-    amendment). `aqa explore` asks this before any model, record or
-    browser."""
+    model`, which explore can plan but can't explore or confirm yet: only
+    `aqa replay --mode verified` checks one, of a script written by hand
+    (ADR-0024's #256 and #327 amendments). `aqa explore` asks this before any
+    model, record or browser, and `aqa explore --plan-only` doesn't."""
     if problems := [
         f"{spec.path}: expect[{index}].visual: visual: model is a spec error for "
-        "aqa explore, which can't plan or confirm a model-assisted check yet; "
-        "only aqa replay --mode verified checks one (ADR-0024)"
+        "aqa explore, which can plan the spec with --plan-only but can't explore "
+        "or confirm a model-assisted check yet; only aqa replay --mode verified "
+        "checks one (ADR-0024)"
         for index, expectation in enumerate(spec.frontmatter.expect)
         if expectation.visual == "model"
     ]:
