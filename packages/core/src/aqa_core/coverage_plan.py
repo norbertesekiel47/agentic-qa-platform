@@ -7,7 +7,8 @@ These models are also the response format the navigator's model fills, and
 their docstrings reach it as the format's descriptions: editing one changes
 the plan's request and its cassette (TESTING §4)."""
 
-from collections.abc import Mapping
+import re
+from collections.abc import Iterator, Mapping
 from typing import Annotated, Final, Literal, Self
 
 from pydantic import Field, StrictInt, model_validator
@@ -28,7 +29,7 @@ from aqa_core.schema import (
     NonEmpty,
     StrictModel,
 )
-from aqa_core.spec import SpecFrontmatter, canonical_hash
+from aqa_core.spec import Expectation, SpecFrontmatter, canonical_hash
 
 # M1's check types (#41), then the three M2 checks a plan names (#327).
 CheckType = Literal[
@@ -174,10 +175,51 @@ def planned_checks(plan: CoveragePlan) -> dict[str, tuple[int, PlannedCheck]]:
     return {f"a{n}": pair for n, pair in enumerate(numbered, start=1)}
 
 
+# A number as an expectation's text writes it, a decimal literal: "4.5:1"
+# and "4.5 to 1" both state 4.5, and 1.
+_NUMBER = re.compile(r"[0-9]+(?:\.[0-9]+)?")
+# What a contrast_min misfit tells the plan to do instead.
+_STATE_IT = "write the ratio the expectation states, or unsupported when it states none"
+
+
+def _entry_misfits(
+    planned: PlannedExpectation, expectation: Expectation
+) -> Iterator[str]:
+    """Why one entry doesn't fit its expectation: a `visual: model` one
+    takes exactly one `model_verify` check, an `unsupported` entry holding
+    none, and no other expectation takes one; and a `contrast_min`'s ratio is
+    above 1 and one the expectation's text states, so the plan never picks a
+    threshold (ADR-0024's #327 amendment)."""
+    where = f"expect[{planned.expect_index}]"
+    verifying = sum(check.check == "model_verify" for check in planned.checks)
+    if expectation.visual == "model" and verifying != 1:
+        yield (
+            f"{where}: the spec marks it visual: model, so it takes exactly one "
+            f"model_verify check, not {verifying}"
+        )
+    if expectation.visual != "model" and verifying:
+        yield (
+            f"{where}: only an expectation the spec marks visual: model takes a "
+            "model_verify check"
+        )
+    stated = {float(number) for number in _NUMBER.findall(expectation.text)}
+    for ratio in (check.min_ratio for check in planned.checks):
+        if ratio is None:
+            continue
+        if ratio <= 1:
+            yield f"{where}: a contrast_min min_ratio of {ratio:g} can never fail: {_STATE_IT}"
+        elif ratio not in stated:
+            yield (
+                f"{where}: a contrast_min min_ratio of {ratio:g} is not a number "
+                f"the expectation states: {_STATE_IT}"
+            )
+
+
 def misfits(plan: CoveragePlan, frontmatter: SpecFrontmatter) -> tuple[str, ...]:
     """Why `plan` doesn't fit the spec it was written for: it must have one
-    entry per expectation, in the spec's order, and read only probes the spec
-    declares. Empty when it fits."""
+    entry per expectation, in the spec's order, read only probes the spec
+    declares, and fit each expectation's own rules (`_entry_misfits`). Empty
+    when it fits."""
     found: list[str] = []
     indexes = [planned.expect_index for planned in plan.expectations]
     count = len(frontmatter.expect)
@@ -193,6 +235,12 @@ def misfits(plan: CoveragePlan, frontmatter: SpecFrontmatter) -> tuple[str, ...]
         for planned in plan.expectations
         for check in planned.checks
         if check.probe is not None and check.probe not in declared
+    )
+    found.extend(
+        misfit
+        for planned in plan.expectations
+        if planned.expect_index < count
+        for misfit in _entry_misfits(planned, frontmatter.expect[planned.expect_index])
     )
     return tuple(found)
 

@@ -378,6 +378,42 @@ def test_a_retry_whose_fallback_fails_keeps_every_billed_record(tmp_path: Path) 
     assert raised.value.__cause__ is failure
 
 
+def test_a_model_verify_on_an_unmarked_expectation_is_asked_for_once_more(
+    tmp_path: Path,
+) -> None:
+    # Expectation 1 isn't marked visual: model, so its entry takes no
+    # model_verify check (`misfits`).
+    judged = {
+        "check": "model_verify",
+        "target_meaning": "the payment step's submit button",
+    }
+    second = PLAN.expectations[1].model_dump(exclude_none=True)
+    verified = CoveragePlan.model_validate(
+        {
+            "expectations": [
+                PLAN.expectations[0].model_dump(exclude_none=True),
+                {**second, "checks": [*second["checks"], judged]},
+            ],
+            "requires": [],
+        }
+    )
+    spec = checkout(tmp_path / "qa")
+    client = FakeClient(reply(parsed=verified), reply(parsed=PLAN))
+
+    planned, _ = plan_with(spec, client)
+
+    assert (planned.plan, planned.problems) == (PLAN, ())
+    [_, (retry, _, _)] = client.calls
+    assert retry[-1] == HumanMessage(
+        content=(
+            "That plan can't be used:\n"
+            "- expect[1]: only an expectation the spec marks visual: model takes a "
+            "model_verify check\n"
+            "Write the whole plan again: fix each of these, and keep the rest as it is."
+        )
+    )
+
+
 def test_a_plan_lists_its_misfits_before_its_circular_targets(tmp_path: Path) -> None:
     both = CoveragePlan(
         expectations=with_first_check(

@@ -468,6 +468,159 @@ def test_a_probe_check_names_a_probe_the_spec_declares() -> None:
     assert "orders_count" in found[0]
 
 
+# A spec with an expectation a model judges, one it doesn't, and one that
+# states a contrast ratio, as `contrast(text)` writes it.
+def judged_spec(contrast: str = "The notice's text meets 4.5:1") -> SpecFrontmatter:
+    return SpecFrontmatter.model_validate(
+        {
+            "id": "order",
+            "goal": "A customer opens their order.",
+            "preconditions": {"start_url": "/"},
+            "expect": [
+                {"text": "The product photo shows red shoes", "visual": "model"},
+                "The shipping notice says when the order ships",
+                contrast,
+            ],
+        },
+        context=SpecContext(file_id="order", declared_secrets=frozenset()),
+    )
+
+
+JUDGED = {"check": "model_verify", "target_meaning": "the order's product photo"}
+PHOTO_SHOWN = {"check": "visible_unoccluded", "target_meaning": "the product photo"}
+SHIPS = {
+    "check": "text_in_target",
+    "target_meaning": "the order's shipping notice",
+    "text": "ships",
+}
+
+
+def contrast(ratio: float) -> dict[str, Any]:
+    return {
+        "check": "contrast_min",
+        "target_meaning": "the order's shipping notice",
+        "min_ratio": ratio,
+    }
+
+
+def judged_plan(
+    photo: dict[str, Any], notice: dict[str, Any], ratio: float = 4.5
+) -> CoveragePlan:
+    return checkout_plan(
+        entry(0, **photo), entry(1, **notice), entry(2, checks=[contrast(ratio)])
+    )
+
+
+@pytest.mark.parametrize(
+    "photo",
+    [
+        {"checks": [JUDGED]},
+        # Other checks beside it are neither required nor refused.
+        {"checks": [PHOTO_SHOWN, JUDGED]},
+    ],
+)
+def test_a_marked_expectation_with_one_model_verify_fits(photo: dict[str, Any]) -> None:
+    assert misfits(judged_plan(photo, {"checks": [SHIPS]}), judged_spec()) == ()
+
+
+@pytest.mark.parametrize(
+    ("photo", "held"),
+    [
+        ({"checks": [PHOTO_SHOWN]}, 0),
+        ({"unsupported": {"reason": "only a person can tell"}}, 0),
+        ({"checks": [JUDGED, {**JUDGED, "target_meaning": "the photo's frame"}]}, 2),
+    ],
+)
+def test_a_marked_expectation_without_exactly_one_model_verify_does_not_fit(
+    photo: dict[str, Any], held: int
+) -> None:
+    found = misfits(judged_plan(photo, {"checks": [SHIPS]}), judged_spec())
+
+    assert found == (
+        (
+            "expect[0]: the spec marks it visual: model, so it takes exactly one "
+            f"model_verify check, not {held}"
+        ),
+    )
+
+
+def test_an_unmarked_expectation_with_a_model_verify_does_not_fit() -> None:
+    notice = {"checks": [SHIPS, {**JUDGED, "target_meaning": "the shipping notice"}]}
+
+    found = misfits(judged_plan({"checks": [JUDGED]}, notice), judged_spec())
+
+    assert found == (
+        (
+            "expect[1]: only an expectation the spec marks visual: model takes a "
+            "model_verify check"
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "ratio"),
+    [
+        ("The notice's text meets 4.5 to 1", 4.5),
+        ("The notice's text meets at least 4.5:1", 4.5),
+        ("The notice's text has a contrast of 7:1 or more", 7),
+        ("The notice's text has a contrast of 3.0 to 1", 3),
+    ],
+)
+def test_a_contrast_min_whose_ratio_the_expectation_states_fits(
+    text: str, ratio: float
+) -> None:
+    plan = judged_plan({"checks": [JUDGED]}, {"checks": [SHIPS]}, ratio)
+
+    assert misfits(plan, judged_spec(text)) == ()
+
+
+@pytest.mark.parametrize(
+    ("text", "ratio", "why"),
+    [
+        (
+            "The notice's text meets at least 4.5:1",
+            3,
+            "a contrast_min min_ratio of 3 is not a number the expectation states",
+        ),
+        (
+            "The notice's text is easy to read",
+            4.5,
+            "a contrast_min min_ratio of 4.5 is not a number the expectation states",
+        ),
+        (
+            "The notice's text meets 4.5:1",
+            1,
+            "a contrast_min min_ratio of 1 can never fail",
+        ),
+    ],
+)
+def test_a_contrast_min_whose_ratio_the_expectation_does_not_state_does_not_fit(
+    text: str, ratio: float, why: str
+) -> None:
+    plan = judged_plan({"checks": [JUDGED]}, {"checks": [SHIPS]}, ratio)
+
+    assert misfits(plan, judged_spec(text)) == (
+        (
+            f"expect[2]: {why}: write the ratio the expectation states, or "
+            "unsupported when it states none"
+        ),
+    )
+
+
+def test_an_entry_past_the_specs_last_expectation_is_named_by_its_order() -> None:
+    entries = (
+        entry(0, checks=[JUDGED]),
+        entry(1, checks=[SHIPS]),
+        entry(2, checks=[contrast(4.5)]),
+        entry(3, checks=[JUDGED, contrast(2)]),
+    )
+
+    found = misfits(checkout_plan(*entries), judged_spec())
+
+    assert len(found) == 1
+    assert "[0, 1, 2, 3]" in found[0]
+
+
 def test_a_fully_covered_plan_has_nothing_uncovered() -> None:
     covered = (COVERED[0], COVERED[1], entry(2, checks=[ERROR_SHOWN]))
 
