@@ -219,6 +219,42 @@ def test_the_instructions_name_every_check_type() -> None:
         assert name in INSTRUCTIONS, name
 
 
+def test_the_instructions_say_how_to_plan_the_m2_checks() -> None:
+    # The ratio is the expectation's, and model_verify goes where the spec
+    # marks visual: model (ADR-0024's #327 amendment); no check is left for a
+    # later milestone with what it needs.
+    assert (
+        "- contrast_min: the WCAG contrast ratio of the text of the element "
+        "target_meaning names, against what is behind it, is at least min_ratio, "
+        "from 1 to 21.\n"
+    ) in INSTRUCTIONS
+    assert "Never choose a ratio: when the expectation states none, write " in (
+        INSTRUCTIONS
+    )
+    assert (
+        "An expectation marked visual: model gets exactly one model_verify check"
+    ) in INSTRUCTIONS
+    assert "write unsupported instead, with a reason.\n" in INSTRUCTIONS
+    assert "in needs" not in INSTRUCTIONS
+
+
+def test_the_plan_request_carries_an_expectations_visual_model_mark(
+    tmp_path: Path,
+) -> None:
+    marked = "{ text: The receipt shows a green tick, visual: model }"
+
+    _, human = plan_request(checkout(tmp_path / "qa", expectation=marked))
+
+    assert isinstance(human.content, str)
+    assert json.loads(human.content)["expect"] == [
+        {"text": "The receipt shows a green tick", "visual": "model"},
+        {
+            "text": "The Pay button is visible and not covered",
+            "visual": "deterministic",
+        },
+    ]
+
+
 # A plan for the checkout spec, as the model might write it.
 PLAN = CoveragePlan.model_validate(
     {
