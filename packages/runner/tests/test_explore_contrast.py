@@ -17,6 +17,7 @@ from aqa_core.project import load_compiled, load_spec
 from aqa_runner import explore
 from aqa_runner.explore import Explored
 from aqa_runner.model_router import ModelRouter
+from aqa_runner.replays import replay_run
 from langchain_core.messages import BaseMessage
 from playwright.async_api import async_playwright
 
@@ -82,7 +83,6 @@ def explored(
         f"expect:\n  - {LEGIBLE}\n---\n"
     )
     spec = load_spec(path, CONFIG)
-    replay_run = explore.replay_run
 
     async def counted(*args: Any, **kwargs: Any) -> Any:
         confirming.append(len(client.requests))
