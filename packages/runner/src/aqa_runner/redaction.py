@@ -607,8 +607,21 @@ def error_text(
     else:
         assembled = f"{type(error).__name__}: {selected}"
     line = redactor.redact(assembled).split("\n", 1)[0]
-    escaped = "".join(
+    return redactor.redact(_escaped(line), limit=REASON_CHARS)
+
+
+def one_line(text: str, redactor: Redactor) -> Redacted:
+    """`text`, which the model or the page chose, as a record keeps it:
+    scanned, its whitespace folded to single spaces, each non-printable
+    character escaped as `error_text` escapes a reason's, and cut to
+    `REASON_CHARS`. The escaped text is scanned again before the cut, since
+    escaping can write a bound value's characters."""
+    scanned = redactor.redact(text)
+    return redactor.redact(_escaped(" ".join(scanned.split())), limit=REASON_CHARS)
+
+
+def _escaped(text: str) -> str:
+    return "".join(
         char if char.isprintable() else char.encode("unicode_escape").decode("ascii")
-        for char in line
+        for char in text
     )
-    return redactor.redact(escaped, limit=REASON_CHARS)
