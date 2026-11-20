@@ -259,25 +259,41 @@ def heal_spec(case: HealCase, root: Path) -> Spec:
     return load_spec(path, load_config(root / "config.yaml"))
 
 
+# Why a recording isn't what its case records, in fixed words: its proposal binds
+# another element, or it ended as its case doesn't allow (`unallowed`).
+ANOTHER_ELEMENT = "its proposal binds another element than this case's"
+
+
+def unallowed(outcome: str) -> str:
+    return f"it ended {outcome}, which this case doesn't allow"
+
+
 def heal_disallowed(case: HealCase, replayed: Replayed) -> str | None:
     """Why `replayed` isn't what `case` records, in fixed words, or None."""
     proposal = replayed.document.get("heal_proposal")
     if not isinstance(proposal, dict):
-        return f"it ended {replayed.outcome}, which this case doesn't allow"
+        return unallowed(replayed.outcome)
     [change] = proposal["patch"]
     if change["value"] != case.locators:
-        return "its proposal binds another element than this case's"
+        return ANOTHER_ELEMENT
     return None
 
 
+# Why a recorded run isn't what its case records, given how it ended and each
+# request the app saw, in fixed words, or None.
+type HealRule = Callable[[Replayed, list[tuple[str, str]]], str | None]
+
+
 async def heal_recorded(
-    case: HealCase, spec: Spec, router: ModelRouter
+    script: CompiledScript, html: str, spec: Spec, router: ModelRouter, rule: HealRule
 ) -> tuple[Replayed, str | None]:
-    """`case`'s `aqa run` with `router`, in real Chromium against the fixture app
-    serving its page: how it ended, and why that isn't what `case` records."""
+    """`script`'s `aqa run` of `spec` with `router`, in real Chromium against the
+    fixture app serving `html`: a heal case's (#244) or a heal-aimed injection
+    case's (#311). How it ended, and why `rule`, handed that and what the app saw,
+    says it isn't what its case records."""
     root = spec.path.parent
     config = load_config(root / "config.yaml")
-    script = fx.for_spec(case.script, spec)
+    script = fx.for_spec(script, spec)
 
     def heal(spending: Spending) -> Healing:
         budgets = config.budgets
@@ -289,10 +305,10 @@ async def heal_recorded(
             config.heal.perception,
         )
 
-    with serving(case.html) as app:
+    with serving(html) as app:
         blob = blob_sha(published_text(script).encode())
         run = StrictRun(root, spec, config, app.origin, script, {}, blob)
         async with async_playwright() as playwright:
             await register_identity_engine(playwright)
             replayed = await strict_replay(run, playwright, NO_SECRETS, heal=heal)
-    return replayed, heal_disallowed(case, replayed)
+    return replayed, rule(replayed, app.seen)
