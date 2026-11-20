@@ -21,7 +21,15 @@ from packages.cli.tests.heal_apply_fixtures import (
     files,
     recorded,
 )
-from packages.runner.tests.drift_fixtures import NO_THANKS, SHIPPING
+from packages.runner.tests.drift_fixtures import (
+    DISMISSED_PATCH,
+    GOVERNED,
+    NO_THANKS,
+    SHIPPING,
+    SUBJECT_CONFIG,
+    SUMMARY,
+    UNCONTRACTED,
+)
 
 # What a refusal says after the first line, by why.
 EDITED = "the proposal doesn't match its id, so it was edited after its run"
@@ -403,3 +411,44 @@ def test_a_refusal_escapes_control_characters(
         "  /targets/\\x1b[31mred: a heal adds a target only for a click it inserts\n"
         in result.stderr
     )
+
+
+def governed_meaning(patch: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """`patch`, `DISMISSED_PATCH`, with the target it adds given the summary's
+    meaning, which the config's subject row governs."""
+    added, *rest = patch
+    value = {**added["value"], "semantic": SUMMARY["semantic"]}
+    return [{**added, "value": value}, *rest]
+
+
+def test_an_added_target_with_a_governed_meaning_is_refused_as_the_seam_refuses_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same problem in the same words as `repairs/<key>.json` records at
+    the seam (#332): both run replay's admission."""
+    root = tmp_path / "qa"
+    committed(root, GOVERNED)
+    (root / "config.yaml").write_text(SUBJECT_CONFIG)
+    proposal = recorded(root, governed_meaning(DISMISSED_PATCH))
+    before = files(tmp_path)
+
+    result = apply(root, monkeypatch, proposal)
+
+    assert result.exit_code == 5, result.output
+    assert result.stderr == (
+        f"spec_error {proposal}: nothing was applied\n  {UNCONTRACTED}\n"
+    )
+    assert files(tmp_path) == before
+
+
+def test_an_added_target_with_its_own_meaning_applies_under_the_subject_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "qa"
+    committed(root, GOVERNED)
+    (root / "config.yaml").write_text(SUBJECT_CONFIG)
+    proposal = recorded(root, DISMISSED_PATCH)
+
+    result = apply(root, monkeypatch, proposal)
+
+    assert result.exit_code == 0, result.output

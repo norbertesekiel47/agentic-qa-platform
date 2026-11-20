@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict, Unpack
 from urllib.parse import urlsplit
 
 import pytest
@@ -222,20 +222,30 @@ class Inserting:
         ]
 
 
+class Shots(TypedDict, total=False):
+    """The screenshots a replay's evidence saves, as `Replaying` takes them."""
+
+    screenshots: bool
+    before_screenshots: bool
+
+
 def replayed(
     tmp_path: Path,
     offer: Callable[[Drift], CompiledScript],
     *,
     html: str,
     script: CompiledScript = WITH_CONTACT,
-    screenshots: bool = False,
-    before_screenshots: bool = False,
+    config_yaml: str | None = None,
+    **shots: Unpack[Shots],
 ) -> Inserting:
     """`script` replayed with every locator on `html`, for the order spec, with
     a repair that offers what `offer` gives for each drift; with `screenshots`,
-    as `strict_replay` asks for them, and with `before_screenshots`, as
-    `--before-screenshots` does."""
+    as `strict_replay` asks for them, with `before_screenshots`, as
+    `--before-screenshots` does, and with `config_yaml`, the project config's
+    text, in place of the one `order_spec` writes."""
     path = order_spec(tmp_path / "qa", SHIPPING)
+    if config_yaml is not None:
+        (path.parent / "config.yaml").write_text(config_yaml)
     config = load_config(path.parent / "config.yaml")
     spec = load_spec(path, config)
     committed = fx.for_spec(script, spec)
@@ -255,14 +265,7 @@ def replayed(
                 yield Opened(playwright.chromium, proxy, record)
 
         async def scenario() -> RunResult:
-            replaying = Replaying(
-                spec,
-                config,
-                app.origin,
-                run_gate,
-                screenshots=screenshots,
-                before_screenshots=before_screenshots,
-            )
+            replaying = Replaying(spec, config, app.origin, run_gate, **shots)
             # No replay test may hang the suite.
             async with asyncio.timeout(60):
                 return await replay_run(

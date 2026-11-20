@@ -29,7 +29,7 @@ from playwright.async_api import ElementHandle, Error, Page
 from pydantic_core import PydanticSerializationError
 
 from aqa_runner import reasons
-from aqa_runner.admission import Targeted, accepted
+from aqa_runner.admission import Targeted, admissible
 from aqa_runner.binding import is_among, same_element
 from aqa_runner.bound_secrets import BoundSecret
 from aqa_runner.browser_session import BrowserSession
@@ -273,13 +273,16 @@ class Handing:
         the loader's rules, which a `model_copy` skips; the heal-patch
         validator, against `committed`; what ran stays as it ran
         (`_ran_problems`), since the run goes on after it; replay's own
-        admission (`accepted`); and the record, which checks the document as
-        written and refuses one that spells a bound value, so nothing runs
-        that isn't recorded. The refusal is recorded through the same check,
-        which raises `RefusedWriteError` when the document still spells a
-        value once its problems are scanned: a miss or a scan's marker can.
-        The validator searches text checks' patterns in a child process, so it
-        runs off the loop, which keeps the proxy serving."""
+        admission (`admissible`), the one `aqa heal apply` runs, so an added
+        target whose meaning a subject row governs is refused unless it
+        carries that row's contract (ADR-0024's #332 amendment); and the
+        record, which checks the document as written and refuses one that
+        spells a bound value, so nothing runs that isn't recorded. The
+        refusal is recorded through the same check, which raises
+        `RefusedWriteError` when the document still spells a value once its
+        problems are scanned: a miss or a scan's marker can. The validator
+        searches text checks' patterns in a child process, so it runs off the
+        loop, which keeps the proxy serving."""
         record = self.record
         name = f"repairs/{at.key}.json"
         clean = require_clean(record.redactor, name)
@@ -302,7 +305,7 @@ class Handing:
             if not problems:
                 problems = _ran_problems(patched, in_use, ran, at)
             if not problems:
-                accepted(patched, self.spec)
+                admissible(patched, self.spec, self.config)
                 taken = Repaired(at, misses, (), patched, offered.basis)
                 record.write(name, _repair_record(taken), check=clean)
                 return taken
