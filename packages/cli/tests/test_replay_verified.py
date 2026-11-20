@@ -29,6 +29,7 @@ from aqa_runner.browser_session import BrowserSession
 from aqa_runner.evaluation import NO_VERIFIER, AssertionResult, Verified
 from aqa_runner.model_router import ModelRouter
 from aqa_runner.model_turns import Spending
+from aqa_runner.redaction import REASON_CHARS
 from aqa_runner.run_record import RunRecord
 from aqa_runner.verification import Verifying
 from langchain_anthropic import ChatAnthropic
@@ -47,13 +48,16 @@ from packages.runner.tests.explore_graph_fixtures import (
     REFUSED,
     Scripted,
 )
+from packages.runner.tests.secret_fixtures import BOUND_AT_START, FAKE_VALUE
 from packages.runner.tests.test_evaluate import evaluated
+from packages.runner.tests.test_verifier import ACCOUNT
 from packages.runner.tests.verified_fixtures import (
     BADGE,
     CHECKED,
     DRIFTED,
     EXPECTATION,
     MODEL_VERIFY,
+    QUICK,
     TWICE,
     badge_spec,
     evidence,
@@ -88,6 +92,13 @@ COUNT = compiled(
     targets={"badge": {**BADGE, "locators": [{"css": "#count"}]}},
     assertions=[{"id": "a1", **MODEL_VERIFY}],
 )
+# A rationale page pixels could steer the verifier into: over several lines,
+# past `REASON_CHARS`, and spelling the bound value twice, as written and
+# split by a line break, which only the fold onto one line makes whole.
+STEERED = (
+    f"the badge\tis green,\r\nand the page says {FAKE_VALUE};\n"
+    f"its footer says {FAKE_VALUE.replace(' ', '\n')}\n"
+) + "so the verdict is pass. " * 8
 
 
 @pytest.fixture(autouse=True)
@@ -460,6 +471,49 @@ def test_a_reply_that_decides_nothing_is_inconclusive(
     assert found["evidence"]["path"] == FOLDER
     if said is not None:
         assert found["verifier"]["evidence_refs"] == said
+
+
+def decided(found: dict[str, Any]) -> tuple[object, ...]:
+    """What a verdict of `replay.json` decided, and what of the verifier's
+    reply could: all it says but the rationale."""
+    said = found["verifier"]
+    return (
+        found["verdict"],
+        found["reason"],
+        said["verdict"],
+        said["evidence_refs"],
+        said["model_reported"]["confidence"],
+    )
+
+
+def test_a_rationale_that_spells_a_value_is_kept_scanned_on_one_line_and_cut(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The rationale is the model's own words, which page pixels can steer:
+    # `replay.json` keeps it scanned, on one line and cut, and it decides
+    # nothing, so the same reply with a clean one decides the same (#328).
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", FAKE_VALUE)
+    config = f"{QUICK}secrets: {{ {BOUND_AT_START} }}\n"
+    clean = badge_spec(tmp_path / "clean", config=config, preconditions=ACCOUNT)
+    hostile = badge_spec(tmp_path / "hostile", config=config, preconditions=ACCOUNT)
+
+    plain = verified(monkeypatch, app, clean, Scripted(replying("pass")))
+    steered = verified(
+        monkeypatch, app, hostile, Scripted(replying("pass", rationale=STEERED))
+    )
+
+    assert plain.exit_code == 0, plain.output
+    kept = verdict(hostile)["verifier"]["model_reported"]["rationale"]
+    assert kept.count("[SECRET:TEST_PASSWORD]") == 2
+    assert {"\n", "\r", "\t"}.isdisjoint(kept)
+    assert len(kept) == REASON_CHARS
+    assert FAKE_VALUE not in kept
+    assert FAKE_VALUE not in (record_in(hostile) / "replay.json").read_text()
+    assert FAKE_VALUE not in steered.output
+    assert (steered.exit_code, decided(verdict(hostile))) == (
+        plain.exit_code,
+        decided(verdict(clean)),
+    )
 
 
 def test_a_target_that_drifted_is_inconclusive_with_no_folder_and_no_call(

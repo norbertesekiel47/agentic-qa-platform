@@ -9,8 +9,10 @@ one up; the replay then reaches the path's captures through its own code. No
 saved image shows the bound value, each shows the page's marker, and a case
 not marked `withholds` saves each the path takes. Each case is captured once a
 path, twice on the "before" path, at scale 1: #171's own suite captures each
-8 times and covers scale 2. Real Chromium, sandboxed, on the OS that runs
-it."""
+8 times and covers scale 2. One case whose page shows the value itself also
+takes the "before" path with nothing filled, so both its captures are the
+live page's, and the OCR check withholds them (#328). Real Chromium,
+sandboxed, on the OS that runs it."""
 
 import asyncio
 from collections.abc import Awaitable, Callable, Iterator
@@ -24,7 +26,7 @@ from aqa_core.config import ProjectConfig
 from aqa_runner import executor
 from aqa_runner.browser_session import BrowserSession, launched_browser
 from aqa_runner.egress_proxy import EgressProxy
-from aqa_runner.evidence import Shot
+from aqa_runner.evidence import Held, Shot, held_screenshot
 from aqa_runner.executor import Dispatch, RunResult, RunSetup, StepResult
 from aqa_runner.heal import Healing
 from aqa_runner.locator_generation import register_identity_engine
@@ -82,15 +84,23 @@ def sites(monkeypatch: pytest.MonkeyPatch) -> Iterator[Sites]:
 
 
 async def staged(
-    session: BrowserSession, sites: Sites, name: str, served: dict[str, str]
+    session: BrowserSession,
+    sites: Sites,
+    name: str,
+    served: dict[str, str],
+    *,
+    fill: bool = True,
 ) -> Window:
     """The case's page with its bound value in and its attack started, as
-    `test_screenshots.attack` sets one up: the window of its last action."""
+    `test_screenshots.attack` sets one up: the window of its last action.
+    Without `fill`, only the page, served with the value: nothing filled."""
     case = CASES[name]
     filled = secret(sites, case.binding)
     value = filled.value.get_secret_value()
     served["value"] = value
     window = await session.navigate(f"{sites.app}/shot/{name}")
+    if not fill:
+        return window
     if case.into in ("page", "cross-site"):
         trigger = await element(session, "#trigger")
         window = await session.fill_secret(trigger, secret(sites, "TRIGGER"))
@@ -115,10 +125,16 @@ async def staged(
 
 
 def staging(
-    monkeypatch: pytest.MonkeyPatch, sites: Sites, name: str, *, failing: bool
+    monkeypatch: pytest.MonkeyPatch,
+    sites: Sites,
+    name: str,
+    *,
+    failing: bool,
+    fill: bool = True,
 ) -> None:
     """Make the start step's dispatch set the case's page up instead of
-    loading the start URL, and, when `failing`, step 1's dispatch raise."""
+    loading the start URL, filled unless not `fill` (`staged`), and, when
+    `failing`, step 1's dispatch raise."""
     dispatched = executor.dispatched
 
     async def staged_dispatch(
@@ -129,7 +145,7 @@ def staging(
     ) -> StepResult:
         async def stage() -> Window:
             served = await serve_cases(session.page, sites.other)
-            return await staged(session, sites, name, served)
+            return await staged(session, sites, name, served, fill=fill)
 
         async def fail() -> Window:
             raise Error("fake failure of the step's action")
@@ -258,3 +274,35 @@ def test_no_saved_evidence_screenshot_shows_a_bound_value_whatever_the_page_does
         assert [each.path is not None for each in shots] == [True] * len(shots), [
             each.withheld for each in shots
         ]
+
+
+def test_a_before_screenshot_with_nothing_filled_saves_no_image_of_the_value(
+    sites: Sites, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A page whose own CSS shows the bound value, which the app's server put
+    # there, before anything is filled (SECURITY §5): each capture is the live
+    # page's, and the OCR check withholds both.
+    staging(monkeypatch, sites, "css-escape", failing=True, fill=False)
+    filled: list[bool] = []
+
+    async def spied(session: BrowserSession) -> Held:
+        filled.append(session.secret_filled)
+        return await held_screenshot(session)
+
+    monkeypatch.setattr(executor, "held_screenshot", spied)
+
+    result, pixels = asyncio.run(replayed(sites, tmp_path, "before"))
+
+    assert [(step.seq, step.outcome) for step in result.steps] == [
+        (0, "completed"),
+        (1, "failed"),
+    ]
+    assert filled
+    assert not any(filled)
+    for each in (result.shots.get(1), result.before_shots.get(1)):
+        assert isinstance(each, Shot)
+        assert (each.path, each.withheld) == (
+            None,
+            "the image's text spells a bound value",
+        )
+    assert pixels == []

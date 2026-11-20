@@ -1,7 +1,9 @@
 """Evidence (ADR-0026, Evidence, and its #50 B amendment): what a run keeps
 of each step, under `evidence/<seq>/` in the record it is given, of a heal's
-first look, under `heals/<key>/`, and of a verified replay's look for each
-`model_verify` check, under `verified/assertion-<index>/`. Replay
+first look, under `heals/<key>/`, of a verified replay's look for each
+`model_verify` check, under `verified/assertion-<index>/`, and a strict
+replay's crop for a `pixel_diff` check that failed or whose baseline was
+refused, under `pixel_diff/assertion-<index>/` (`save_crop`). Replay
 (`aqa_runner.executor`), exploring (#53), heal (`aqa_runner.heal`) and the
 verifier (`aqa_runner.verification`) all save it here.
 
@@ -176,6 +178,15 @@ async def held_screenshot(session: BrowserSession) -> Held:
         return _OFF_ORIGIN
     except DocumentChangedError:
         return _FRAMES_CHANGED
+
+
+def save_crop(record: RunRecord, index: int, crop: Screenshot) -> Shot:
+    """Save `crop`, a `pixel_diff` check's (`Screenshot.cropped`), as
+    `pixel_diff/assertion-<index>/crop.png` in `record`, `index` the check's
+    place in the script's assertions, since an id may hold `/`: what a
+    person copies to make the check's baseline (ADR-0033's #324 amendment).
+    A write the record refuses raises."""
+    return _saved(record, f"pixel_diff/assertion-{index}", "crop", crop)
 
 
 def _saved(record: RunRecord, folder: str, name: str, held: Held) -> Shot:

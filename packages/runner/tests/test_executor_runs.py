@@ -464,6 +464,17 @@ CONTRAST_SHOWN = {
     "target": "shown",
     "min_ratio": 4.5,
 }
+# And one of its pixels, against a baseline.
+PIXEL_DIFF_SHOWN = {
+    "id": "a1",
+    "expect_index": 0,
+    "check": "pixel_diff",
+    "target": "shown",
+    "baseline": "replay/shown.png",
+    "baseline_sha256": "sha256:" + "0" * 64,
+    "max_diff_ratio": 0,
+    "pixel_threshold": 0,
+}
 
 
 @pytest.mark.parametrize(
@@ -486,6 +497,7 @@ CONTRAST_SHOWN = {
             "in_viewport": True,
         },
         CONTRAST_SHOWN,
+        PIXEL_DIFF_SHOWN,
     ],
 )
 def test_replay_refuses_a_listed_expectations_target_without_its_contract_before_the_browser(
@@ -524,6 +536,26 @@ def test_a_listed_expectation_checked_only_by_contrast_min_takes_its_targets_con
             }
         },
         assertions=[CONTRAST_SHOWN],
+    )
+
+    assert contract_problems(stamped(script, SUBJECT_CONFIG), SUBJECT_CONFIG) == []
+
+
+def test_a_listed_expectation_checked_only_by_pixel_diff_takes_its_targets_contract() -> (
+    None
+):
+    script = compiled(
+        [],
+        targets={
+            "shown": {
+                "semantic": "the form",
+                "locators": [
+                    {**by_role("button", "Save"), "scope": {"css": "div.banner"}}
+                ],
+                "contract": {"region": "div.banner", "part": "a.author"},
+            }
+        },
+        assertions=[PIXEL_DIFF_SHOWN],
     )
 
     assert contract_problems(stamped(script, SUBJECT_CONFIG), SUBJECT_CONFIG) == []

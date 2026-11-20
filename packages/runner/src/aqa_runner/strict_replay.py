@@ -3,7 +3,10 @@ ADR-0024's #238 and #244 amendments): a run record and an egress gate, then the
 spec's reset hook and the script replayed through `replays.replay_run`, in a
 fresh browser on the caller's driver, a step that drifts or fails saving its
 masked screenshot as evidence (#251), and, when `--before-screenshots` asks, a
-step that fails saving the page as it found it beside it (#314); then the run's
+step that fails saving the page as it found it beside it (#314); each
+`pixel_diff` check compared with its baseline below the spec root's
+`.compiled/baselines/`, one that fails or whose baseline is refused saving its
+crop (#324); then the run's
 `run.json`, what the run viewer reads of it (#249), and its `replay.json`
 (`replay_result.present`), whose outcome decides. With no `heal`, a strict
 replay, nothing here builds a model client. With one, what `aqa run` gives, a
@@ -148,6 +151,7 @@ async def strict_replay(
         screenshots=True,
         before_screenshots=before_screenshots,
         verify=None if verifying is None else verifying.verify,
+        spec_root=run.root,
     )
     opening = partial(_opened, playwright, proxy, record)
     result: RunResult | None = None

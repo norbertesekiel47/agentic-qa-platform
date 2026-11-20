@@ -19,6 +19,7 @@ from aqa_core.compiled import (
     ContrastMin,
     ModelVerify,
     NetworkNone,
+    PixelDiff,
     Target,
     TextInTarget,
     TextVisible,
@@ -334,9 +335,8 @@ def test_a_navigate_url_is_a_path_held_to_start_urls_rules(url: str) -> None:
     ("part", "index", "field", "value"),
     [
         ("steps", 0, "action", "hover"),
-        # A check whose fields DATA_MODEL §7 doesn't give yet: pixel_diff
-        # gets them with a follow-up to #254.
-        ("assertions", 5, "check", "pixel_diff"),
+        # A name that isn't a check type.
+        ("assertions", 5, "check", "pixel_match"),
     ],
 )
 def test_an_unknown_action_or_check_is_refused_by_name(
@@ -415,6 +415,157 @@ def test_a_contrast_min_check_breaking_its_rule_is_refused(
     [(location, found, _)] = errors(script)
 
     assert (location, found) == (("assertions", 6, "contrast_min", field), kind)
+
+
+# A pixel_diff check of the pay button, which the example doesn't use.
+PIXEL_DIFF: dict[str, Any] = {
+    "id": "a7",
+    "expect_index": 4,
+    "check": "pixel_diff",
+    "target": "pay_button",
+    "baseline": "checkout-expired-card/pay_button.png",
+    "baseline_sha256": "sha256:" + "ab" * 32,
+    "max_diff_ratio": 0.05,
+    "pixel_threshold": 16,
+}
+
+
+@pytest.mark.parametrize("ratio", [0, 0.05])
+def test_a_pixel_diff_check_loads(ratio: float) -> None:
+    script = example()
+    script["assertions"].append(PIXEL_DIFF | {"max_diff_ratio": ratio})
+
+    compiled = CompiledScript.model_validate_json(json.dumps(script))
+
+    assert compiled.assertions[-1] == PixelDiff(
+        id="a7",
+        expect_index=4,
+        check="pixel_diff",
+        target="pay_button",
+        baseline="checkout-expired-card/pay_button.png",
+        baseline_sha256="sha256:" + "ab" * 32,
+        max_diff_ratio=ratio,
+        pixel_threshold=16,
+    )
+    # Adding a check leaves the format at schema version 1.
+    assert compiled.schema_version == 1
+
+
+@pytest.mark.parametrize(
+    ("change", "field", "kind"),
+    [
+        ({"max_diff_ratio": -0.01}, "max_diff_ratio", "greater_than_equal"),
+        ({"max_diff_ratio": 1}, "max_diff_ratio", "less_than"),
+        ({"max_diff_ratio": 1.5}, "max_diff_ratio", "less_than"),
+        ({"max_diff_ratio": True}, "max_diff_ratio", "float_type"),
+        ({"max_diff_ratio": "0.1"}, "max_diff_ratio", "float_type"),
+        ({"max_diff_ratio": float("nan")}, "max_diff_ratio", "finite_number"),
+        ({"max_diff_ratio": float("inf")}, "max_diff_ratio", "finite_number"),
+        ({"pixel_threshold": -1}, "pixel_threshold", "greater_than_equal"),
+        ({"pixel_threshold": 255}, "pixel_threshold", "less_than_equal"),
+        ({"pixel_threshold": 1.0}, "pixel_threshold", "int_type"),
+        ({"pixel_threshold": True}, "pixel_threshold", "int_type"),
+        ({"baseline": ""}, "baseline", "string_too_short"),
+        ({"baseline_sha256": "ab" * 32}, "baseline_sha256", "string_pattern_mismatch"),
+        (
+            {"baseline_sha256": "sha256:" + "AB" * 32},
+            "baseline_sha256",
+            "string_pattern_mismatch",
+        ),
+        (
+            {"baseline_sha256": "sha256:" + "a" * 63},
+            "baseline_sha256",
+            "string_pattern_mismatch",
+        ),
+        ({"pixel_threshold": None}, "pixel_threshold", "missing"),
+        ({"baseline": None}, "baseline", "missing"),
+        ({"min_ratio": 4.5}, "min_ratio", "extra_forbidden"),
+    ],
+    ids=[
+        "ratio below 0",
+        "ratio 1",
+        "ratio above 1",
+        "ratio a boolean",
+        "ratio a string",
+        "ratio NaN",
+        "ratio Infinity",
+        "threshold below 0",
+        "threshold 255",
+        "threshold a float",
+        "threshold a boolean",
+        "empty baseline",
+        "sha256 unprefixed",
+        "sha256 uppercase",
+        "sha256 of 63 digits",
+        "no pixel_threshold",
+        "no baseline",
+        "unknown field",
+    ],
+)
+def test_a_pixel_diff_check_breaking_its_rule_is_refused(
+    change: dict[str, object], field: str, kind: str
+) -> None:
+    # None stands for a field left out: the check names exactly its own.
+    check = {
+        key: value for key, value in (PIXEL_DIFF | change).items() if value is not None
+    }
+    script = example()
+    script["assertions"].append(check)
+
+    [(location, found, _)] = errors(script)
+
+    assert (location, found) == (("assertions", 6, "pixel_diff", field), kind)
+
+
+@pytest.mark.parametrize(
+    "baseline",
+    [
+        "/x.png",
+        "../x.png",
+        "a/../x.png",
+        "./x.png",
+        "a//x.png",
+        "a\\x.png",
+        ".x.png",
+        "a/.b/x.png",
+        "x.jpg",
+        "x.PNG",
+        "x.png/",
+        "ünï.png",
+    ],
+)
+def test_a_pixel_diff_baseline_is_a_relative_path_of_plain_names_to_a_png(
+    baseline: str,
+) -> None:
+    script = example()
+    script["assertions"].append(PIXEL_DIFF | {"baseline": baseline})
+
+    [(location, kind, message)] = errors(script)
+
+    assert (location, kind) == (
+        ("assertions", 6, "pixel_diff", "baseline"),
+        "value_error",
+    )
+    assert message == (
+        f"{baseline!r} is not a baseline path: write names joined by /, each of "
+        "ASCII letters, digits, ., _ or - and none starting with ., the last "
+        "ending in .png, such as checkout-expired-card/pay_button.png; it is "
+        "read below .compiled/baselines/"
+    )
+
+
+@pytest.mark.parametrize(
+    "baseline", ["x.png", "a/b-c_d.e/x.png", "checkout-expired-card/pay_button.png"]
+)
+def test_a_pixel_diff_baseline_path_of_plain_names_loads(baseline: str) -> None:
+    script = example()
+    script["assertions"].append(PIXEL_DIFF | {"baseline": baseline})
+
+    compiled = CompiledScript.model_validate_json(json.dumps(script))
+
+    check = compiled.assertions[-1]
+    assert isinstance(check, PixelDiff)
+    assert check.baseline == baseline
 
 
 def with_model_verify(**fields: object) -> dict[str, Any]:

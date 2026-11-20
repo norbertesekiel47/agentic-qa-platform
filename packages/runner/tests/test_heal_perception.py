@@ -45,6 +45,8 @@ from packages.runner.tests.test_heal_vision import (
     CANVAS,
     CLICKED,
     FILLED,
+    FOREIGN,
+    FRAMED,
     INSIDE,
     ON_THE_MOVED_TOGGLE,
     SECRET_CONFIG,
@@ -52,6 +54,7 @@ from packages.runner.tests.test_heal_vision import (
     WITH_A_LOGIN,
     clicking,
     costs,
+    drawing,
     vision_record,
 )
 from packages.runner.tests.test_replay_repairs import secret_spec_at
@@ -176,6 +179,56 @@ def test_a_vision_only_heal_after_a_fill_gives_up_with_no_call(
     costed = run.record / "costs.jsonl"
     assert not costed.exists() or costed.read_text() == ""
     assert not (run.record / "heals/2/vision.json").exists()
+
+
+def test_a_vision_only_heal_takes_no_screenshot_of_a_page_that_holds_a_frame_left_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`hybrid`'s guard (`test_heal_vision.py`) on the vision turn that is the
+    drift's first: the snapshot leaves out a frame on no allowed origin, and a
+    live screenshot would show it, so none is taken and nothing is sent."""
+    taken: list[object] = []
+
+    async def counted(session: Any) -> Screenshot:
+        taken.append(session)
+        return await take_screenshot(session)
+
+    monkeypatch.setattr(heal, "take_screenshot", counted)
+    html = CANVAS.replace("<footer>", f"{FOREIGN}<footer>")
+
+    run = healed(tmp_path, html=html, config=perceiving("vision_only"))
+
+    assert basis(run).said == FRAMED
+    assert taken == []
+    assert run.client.requests == []
+    costed = run.record / "costs.jsonl"
+    assert not costed.exists() or costed.read_text() == ""
+    assert not (run.record / "heals/1/vision.json").exists()
+
+
+def test_a_vision_only_screenshot_ocr_withholds_ends_the_heal_with_no_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`hybrid`'s guard (`test_heal_vision.py`) on the vision turn that is the
+    drift's first: the canvas draws the bound value, the OCR check withholds
+    the screenshot, and nothing is sent."""
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", RED_VALUE)
+
+    run = healed(
+        tmp_path,
+        spec_at=secret_spec_at,
+        html=drawing(RED_VALUE),
+        config=perceiving("vision_only", SECRET_CONFIG),
+    )
+
+    assert basis(run).said == (
+        "vision fallback: the screenshot was withheld: "
+        "the image's text spells a bound value"
+    )
+    assert run.client.requests == []
+    costed = run.record / "costs.jsonl"
+    assert not costed.exists() or costed.read_text() == ""
+    assert not (run.record / "heals/1/vision.json").exists()
 
 
 def test_a_vision_only_request_says_no_tree_turn_ran(tmp_path: Path) -> None:

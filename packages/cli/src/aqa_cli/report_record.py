@@ -15,14 +15,14 @@ import math
 import os
 import re
 import stat
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Final
 
+from aqa_core import unlinked
 from aqa_core.compiled import CompiledScript
 from aqa_core.heal_patch import (
     HealProposal,
@@ -33,6 +33,7 @@ from aqa_core.heal_patch import (
 from aqa_core.model_costs import CostRecord
 from aqa_core.project import SpecError
 from aqa_core.schema import StrictModel
+from aqa_core.unlinked import Unread
 from aqa_runner.heal_proposal import diff
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, ValidationError
 
@@ -46,10 +47,8 @@ class Gap(StrEnum):
     NOT_ONE = "the proposal isn't one aqa run writes"
 
 
-# A directory below the run's, and a file, each opened only if it isn't a link.
-# The file is opened without blocking, so a FIFO in a record never stalls it.
-_FOLDER: Final = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-_FILE: Final = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+# What a file `aqa_core.unlinked` read nothing of shows.
+_GAPS: Final = {Unread.ABSENT: Gap.ABSENT, Unread.BROKEN: Gap.BROKEN}
 # The paths `replay.json` may cite (DATA_MODEL §7), and the files a link names in
 # each: an evidence folder's three, and a heal's turns and first look.
 _EVIDENCE: Final = re.compile(r"evidence/[0-9]+")
@@ -64,53 +63,20 @@ _NOT_IN_AN_INTENT: Final = {"seq", "side_effect", "side_effect_basis", "satisfie
 VERDICTS: Final = ("pass", "expectation_violated", "inconclusive", "drift_consistent")
 
 
-@contextmanager
-def _folder(run: Path, folders: Sequence[str]) -> Iterator[int]:
-    """The directory `folders` names below `run`, open, each step through no link."""
-    handle = os.open(run, _FOLDER)
-    try:
-        for folder in folders:
-            inner = os.open(folder, _FOLDER, dir_fd=handle)
-            os.close(handle)
-            handle = inner
-        yield handle
-    finally:
-        os.close(handle)
-
-
 def read_below(run: Path, name: str) -> bytes | Gap:
     """The bytes of the regular file `name`, a relative path of names below the
-    run's directory `run`, reached through no link; `Gap.ABSENT` when it or a
-    directory on the way doesn't exist, and `Gap.BROKEN` for a link, anything but a
-    regular file, or an `OSError`."""
-    *folders, leaf = name.split("/")
-    try:
-        with _folder(run, folders) as folder:
-            file = os.open(leaf, _FILE, dir_fd=folder)
-            try:
-                if not stat.S_ISREG(os.fstat(file).st_mode):
-                    return Gap.BROKEN
-                return _whole(file)
-            finally:
-                os.close(file)
-    except FileNotFoundError:
-        return Gap.ABSENT
-    except OSError:
-        return Gap.BROKEN
-
-
-def _whole(file: int) -> bytes:
-    chunks = []
-    while chunk := os.read(file, 1 << 16):
-        chunks.append(chunk)
-    return b"".join(chunks)
+    run's directory `run`, reached through no link (`aqa_core.unlinked`);
+    `Gap.ABSENT` when it or a directory on the way doesn't exist, and
+    `Gap.BROKEN` for a link, anything but a regular file, or an `OSError`."""
+    raw = unlinked.read_below(run, name)
+    return _GAPS[raw] if isinstance(raw, Unread) else raw
 
 
 def _regular(run: Path, name: str) -> bool:
     """Whether `name` below `run` is a regular file reached through no link."""
     *folders, leaf = name.split("/")
     try:
-        with _folder(run, folders) as folder:
+        with unlinked.folder(run, folders) as folder:
             found = os.stat(leaf, dir_fd=folder, follow_symlinks=False)
     except OSError:
         return False
@@ -121,7 +87,10 @@ def _files(run: Path, name: str) -> list[str]:
     """The names of the regular files, not links, in the directory `name` below
     `run`, sorted; none when it can't be listed."""
     try:
-        with _folder(run, name.split("/")) as folder, os.scandir(folder) as found:
+        with (
+            unlinked.folder(run, name.split("/")) as folder,
+            os.scandir(folder) as found,
+        ):
             return sorted(e.name for e in found if e.is_file(follow_symlinks=False))
     except OSError:
         return []

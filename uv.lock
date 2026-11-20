@@ -148,6 +148,7 @@ dependencies = [
     { name = "langgraph" },
     { name = "langsmith" },
     { name = "onnxruntime" },
+    { name = "pillow" },
     { name = "playwright" },
     { name = "rapidocr" },
 ]
@@ -161,6 +162,7 @@ requires-dist = [
     { name = "langgraph", specifier = "==1.2.12" },
     { name = "langsmith", specifier = "==0.14.1" },
     { name = "onnxruntime", specifier = "==1.31.0" },
+    { name = "pillow", specifier = "==13.0.0" },
     { name = "playwright", specifier = "==1.63.0" },
     { name = "rapidocr", specifier = "==3.10.0" },
 ]

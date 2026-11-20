@@ -48,6 +48,7 @@ from packages.runner.tests.test_replay_result import (
     the_click,
     violated,
     with_contrast,
+    with_pixel_diff,
 )
 
 
@@ -220,6 +221,18 @@ def test_an_assertion_on_a_rebound_target_that_fails_is_a_violation_citing_the_h
 
 def test_a_contrast_min_on_a_rebound_target_cites_the_heal(tmp_path: Path) -> None:
     run = with_contrast(made(tmp_path))
+    failed = AssertionResult("a5", "failed", locator_index=0)
+
+    end = ending(run, assertions=(failed,), **healing_the_step(run))
+
+    entry = judged(end, "assertion", "a5")
+    assert entry["verdict"] == "expectation_violated"
+    assert entry["finding"]["category"] == "visual"
+    assert entry["heal"] == HEAL_CITED
+
+
+def test_a_pixel_diff_on_a_rebound_target_cites_the_heal(tmp_path: Path) -> None:
+    run = with_pixel_diff(made(tmp_path))
     failed = AssertionResult("a5", "failed", locator_index=0)
 
     end = ending(run, assertions=(failed,), **healing_the_step(run))
