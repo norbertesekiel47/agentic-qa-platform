@@ -557,13 +557,18 @@ def test_an_unmarked_expectation_with_a_model_verify_does_not_fit() -> None:
     )
 
 
+# A ratio is stated in ratio form, "N:1" or "N to 1", or after contrast or
+# ratio wording (ADR-0024's #327 amendment, the maintainer's tightening).
 @pytest.mark.parametrize(
     ("text", "ratio"),
     [
+        ("The notice's text meets 4.5:1", 4.5),
         ("The notice's text meets 4.5 to 1", 4.5),
-        ("The notice's text meets at least 4.5:1", 4.5),
+        ("The notice's text meets at least 4.5 : 1 against its background", 4.5),
         ("The notice's text has a contrast of 7:1 or more", 7),
         ("The notice's text has a contrast of 3.0 to 1", 3),
+        ("The notice's text has a contrast ratio of at least 4.5", 4.5),
+        ("The notice's text has a Contrast Ratio of 7", 7),
     ],
 )
 def test_a_contrast_min_whose_ratio_the_expectation_states_fits(
@@ -580,12 +585,28 @@ def test_a_contrast_min_whose_ratio_the_expectation_states_fits(
         (
             "The notice's text meets at least 4.5:1",
             3,
-            "a contrast_min min_ratio of 3 is not a number the expectation states",
+            "a contrast_min min_ratio of 3 is not a ratio the expectation states",
         ),
         (
             "The notice's text is easy to read",
             4.5,
-            "a contrast_min min_ratio of 4.5 is not a number the expectation states",
+            "a contrast_min min_ratio of 4.5 is not a ratio the expectation states",
+        ),
+        # A version number and a count are numbers, but no ratio.
+        (
+            "The notice's text meets WCAG 2.1 AA contrast",
+            2.1,
+            "a contrast_min min_ratio of 2.1 is not a ratio the expectation states",
+        ),
+        (
+            "The 3 buttons' labels have a contrast of 4.5 to 1",
+            3,
+            "a contrast_min min_ratio of 3 is not a ratio the expectation states",
+        ),
+        (
+            "The notice in section 4.5 of the order page is legible",
+            4.5,
+            "a contrast_min min_ratio of 4.5 is not a ratio the expectation states",
         ),
         (
             "The notice's text meets 4.5:1",

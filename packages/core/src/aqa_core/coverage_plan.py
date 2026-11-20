@@ -175,9 +175,20 @@ def planned_checks(plan: CoveragePlan) -> dict[str, tuple[int, PlannedCheck]]:
     return {f"a{n}": pair for n, pair in enumerate(numbered, start=1)}
 
 
-# A number as an expectation's text writes it, a decimal literal: "4.5:1"
-# and "4.5 to 1" both state 4.5, and 1.
-_NUMBER = re.compile(r"[0-9]+(?:\.[0-9]+)?")
+# A ratio an expectation's text states, a decimal literal N in ratio form:
+# "N:1" or "N to 1", or N after "contrast" or "ratio" with only "ratio",
+# "of", "is", "at least" or "minimum" between them, as in "a contrast ratio
+# of at least 4.5". So a version such as "WCAG 2.1", a count such as "the 3
+# buttons" or a section number states none (ADR-0024's #327 amendment, the
+# maintainer's tightening).
+_DECIMAL = r"[0-9]+(?:\.[0-9]+)?"
+_END = r"(?![0-9]|\.[0-9])"
+_RATIO = re.compile(
+    rf"(?<![0-9.])(?P<to_one>{_DECIMAL})\s*(?::|\bto\b)\s*1{_END}"
+    rf"|\b(?:contrast|ratio)(?:\s+(?:ratio|of|is|at\s+least|minimum))*"
+    rf"\s+(?P<worded>{_DECIMAL}){_END}",
+    re.IGNORECASE,
+)
 # What a contrast_min misfit tells the plan to do instead.
 _STATE_IT = "write the ratio the expectation states, or unsupported when it states none"
 
@@ -188,8 +199,8 @@ def _entry_misfits(
     """Why one entry doesn't fit its expectation: a `visual: model` one
     takes exactly one `model_verify` check, an `unsupported` entry holding
     none, and no other expectation takes one; and a `contrast_min`'s ratio is
-    above 1 and one the expectation's text states, so the plan never picks a
-    threshold (ADR-0024's #327 amendment)."""
+    above 1 and a ratio the expectation's text states (`_RATIO`), so the plan
+    never picks a threshold (ADR-0024's #327 amendment)."""
     where = f"expect[{planned.expect_index}]"
     verifying = sum(check.check == "model_verify" for check in planned.checks)
     if expectation.visual == "model" and verifying != 1:
@@ -202,7 +213,10 @@ def _entry_misfits(
             f"{where}: only an expectation the spec marks visual: model takes a "
             "model_verify check"
         )
-    stated = {float(number) for number in _NUMBER.findall(expectation.text)}
+    stated = {
+        float(found["to_one"] or found["worded"])
+        for found in _RATIO.finditer(expectation.text)
+    }
     for ratio in (check.min_ratio for check in planned.checks):
         if ratio is None:
             continue
@@ -210,7 +224,7 @@ def _entry_misfits(
             yield f"{where}: a contrast_min min_ratio of {ratio:g} can never fail: {_STATE_IT}"
         elif ratio not in stated:
             yield (
-                f"{where}: a contrast_min min_ratio of {ratio:g} is not a number "
+                f"{where}: a contrast_min min_ratio of {ratio:g} is not a ratio "
                 f"the expectation states: {_STATE_IT}"
             )
 

@@ -198,7 +198,7 @@ def test_a_misfit_gets_its_one_retry_and_the_oracles_second_plan_is_promoted(
     [_, second] = interactions(library / f"{CASE}.yaml")
     correction = json.loads(second["request"]["body"])["messages"][-1]["content"]
     assert (
-        "- expect[0]: a contrast_min min_ratio of 3 is not a number the "
+        "- expect[0]: a contrast_min min_ratio of 3 is not a ratio the "
         "expectation states"
     ) in correction
     assert len(stand_in.sent) == 2
