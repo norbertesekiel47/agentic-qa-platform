@@ -630,6 +630,11 @@ class VisibleUnoccluded(_Assertion):
     in_viewport: StrictBool
 
 
+# Any ratio two colours can have, an integer or a fraction: a compiled
+# `contrast_min`'s, and a planned one's (`aqa_core.coverage_plan`).
+ContrastRatio = Annotated[float, Field(ge=1, le=21, allow_inf_nan=False)]
+
+
 class ContrastMin(_Assertion):
     """The WCAG contrast ratio of the target's rendered text against what is
     behind it, computed from styles, is at least `min_ratio` (ADR-0025's
@@ -637,8 +642,7 @@ class ContrastMin(_Assertion):
 
     check: Literal["contrast_min"]
     target: NonEmpty
-    # Any ratio two colours can have, an integer or a fraction.
-    min_ratio: Annotated[float, Field(ge=1, le=21, allow_inf_nan=False)]
+    min_ratio: ContrastRatio
 
 
 # A baseline's path below `.compiled/baselines/` (ADR-0025's #324 amendment):

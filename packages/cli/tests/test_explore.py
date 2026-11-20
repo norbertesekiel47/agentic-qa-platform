@@ -91,16 +91,14 @@ def plan_with(entries: list[dict[str, Any]]) -> CoveragePlan:
     return CoveragePlan.model_validate({"expectations": entries, "requires": []})
 
 
-def unsupported(
-    needs: str | None, reason: str = "it is about how it looks"
-) -> CoveragePlan:
+def unsupported(reason: str = "it is about how it looks") -> CoveragePlan:
     """PLAN, with expectation 1 unsupported."""
     first = PLAN.expectations[0].model_dump(exclude_none=True)
     second = {
         "expect_index": 1,
         "subject": "the payment step's submit button",
         "claim": "keeps its brand colour",
-        "unsupported": {"reason": reason, "needs": needs},
+        "unsupported": {"reason": reason},
     }
     return plan_with([first, second])
 
@@ -237,7 +235,7 @@ def test_an_expectation_the_plan_cannot_cover_exits_5_and_is_named(
     tmp_path: Path, run: Run
 ) -> None:
     spec = project(tmp_path / "qa")
-    plan = unsupported(None)
+    plan = unsupported()
 
     result, _ = run(
         [str(spec), "--plan-only"], **{SONNET: FakeClient(reply(parsed=plan))}
@@ -245,7 +243,7 @@ def test_an_expectation_the_plan_cannot_cover_exits_5_and_is_named(
 
     assert result.exit_code == 5, result.output
     assert 'expect[1] "The Pay button is visible and not covered"' in result.stderr
-    assert "no M1 check can establish it" in result.stderr
+    assert "no check can establish it" in result.stderr
     assert "it is about how it looks" in result.stderr
     record = record_of(tmp_path / "qa")
     assert record["outcome"] == "spec_error"
@@ -253,21 +251,6 @@ def test_an_expectation_the_plan_cannot_cover_exits_5_and_is_named(
     assert record["reasons"][1].startswith('expect[1] "The Pay button')
     # What it cost is printed too, not only kept in the record.
     assert f"cost: ${record['calls'][0]['cost_usd']}" in result.stderr
-
-
-@pytest.mark.parametrize("needs", ["pixel_diff", "contrast_min"])
-def test_an_expectation_that_needs_an_m2_check_exits_5_and_names_it(
-    tmp_path: Path, run: Run, needs: str
-) -> None:
-    spec = project(tmp_path / "qa")
-
-    result, _ = run(
-        [str(spec), "--plan-only"],
-        **{SONNET: FakeClient(reply(parsed=unsupported(needs)))},
-    )
-
-    assert result.exit_code == 5, result.output
-    assert f"it needs {needs}" in result.stderr
 
 
 def test_a_model_written_reason_is_printed_with_its_control_characters_visible(
@@ -278,7 +261,7 @@ def test_a_model_written_reason_is_printed_with_its_control_characters_visible(
     # separator, and each kind of bidi control: a mark, an embedding or
     # override, an isolate.
     reason = "one\ntwo \x1b[31mred\x9b0m \u2028 \u061c\u200e\u200f \u202e \u2067"
-    plan = unsupported(None, reason=reason)
+    plan = unsupported(reason=reason)
 
     result, _ = run(
         [str(spec), "--plan-only"], **{SONNET: FakeClient(reply(parsed=plan))}
@@ -322,10 +305,6 @@ SPEC_PROBLEMS = {
         ),
         "secret NOT_DECLARED is not declared",
     ),
-    "visual: model": (
-        SPEC.replace("visual: deterministic", "visual: model"),
-        "visual: model is a spec error",
-    ),
     "disable without inherit": (
         SPEC.replace(
             "---\n\nNotes",
@@ -347,6 +326,60 @@ def test_each_spec_problem_exits_5_names_it_and_calls_no_model(
 
     assert result.exit_code == 5, result.output
     assert named in result.stderr
+    assert factory.built == []
+    assert not (tmp_path / "qa" / ".aqa").exists()
+
+
+# SPEC with its second expectation marked for a model to judge, and a plan
+# that checks it so (ADR-0024's #327 amendment).
+JUDGED_SPEC = SPEC.replace("visual: deterministic", "visual: model")
+JUDGED_PLAN = plan_with(
+    [
+        PLAN.expectations[0].model_dump(exclude_none=True),
+        {
+            "expect_index": 1,
+            "subject": "the payment step's submit button",
+            "claim": "visible and not covered",
+            "checks": [
+                {
+                    "check": "model_verify",
+                    "target_meaning": "the payment step's submit button",
+                }
+            ],
+        },
+    ]
+)
+
+
+def test_plan_only_plans_a_spec_with_a_visual_model_expectation(
+    tmp_path: Path, run: Run
+) -> None:
+    spec = project(tmp_path / "qa", spec=JUDGED_SPEC)
+
+    result, factory = run(
+        [str(spec), "--plan-only"], **{SONNET: FakeClient(reply(parsed=JUDGED_PLAN))}
+    )
+
+    assert result.exit_code == 0, result.output
+    assert factory.built == [("anthropic", SONNET, None)]
+    assert result.stdout.startswith(f"planned checkout: plan {plan_hash(JUDGED_PLAN)}")
+    record = record_of(tmp_path / "qa")
+    assert (record["outcome"], record["reasons"]) == ("planned", [])
+    assert record["plan"]["expectations"][1]["checks"] == [
+        {"check": "model_verify", "target_meaning": "the payment step's submit button"}
+    ]
+
+
+def test_exploring_a_spec_with_a_visual_model_expectation_exits_5_with_no_model(
+    tmp_path: Path, run: Run
+) -> None:
+    spec = project(tmp_path / "qa", spec=JUDGED_SPEC)
+
+    result, factory = run([str(spec)])
+
+    assert result.exit_code == 5, result.output
+    assert "expect[1].visual: visual: model is a spec error" in result.stderr
+    assert "--plan-only" in result.stderr
     assert factory.built == []
     assert not (tmp_path / "qa" / ".aqa").exists()
 

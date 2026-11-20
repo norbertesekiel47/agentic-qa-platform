@@ -7,12 +7,14 @@ These models are also the response format the navigator's model fills, and
 their docstrings reach it as the format's descriptions: editing one changes
 the plan's request and its cassette (TESTING §4)."""
 
-from collections.abc import Mapping
+import re
+from collections.abc import Iterator, Mapping
 from typing import Annotated, Final, Literal, Self
 
 from pydantic import Field, StrictInt, model_validator
 
 from aqa_core.compiled import (
+    ContrastRatio,
     HttpMethod,
     NormalizedText,
     ProbeValue,
@@ -27,10 +29,9 @@ from aqa_core.schema import (
     NonEmpty,
     StrictModel,
 )
-from aqa_core.spec import SpecFrontmatter, canonical_hash
+from aqa_core.spec import Expectation, SpecFrontmatter, canonical_hash
 
-# M1's check types (#41). pixel_diff, contrast_min and model_verify arrive in
-# M2; until then an expectation that needs one is unsupported.
+# M1's check types (#41), then the three M2 checks a plan names (#327).
 CheckType = Literal[
     "text_visible",
     "text_in_target",
@@ -41,17 +42,19 @@ CheckType = Literal[
     "probe_equals",
     "probe_equals_baseline",
     "visible_unoccluded",
+    "contrast_min",
+    "model_verify",
+    "pixel_diff",
 ]
-
-# The M2 checks an unsupported expectation may name as what it needs.
-M2Check = Literal["pixel_diff", "contrast_min", "model_verify"]
 
 _NETWORK = frozenset({"method", "url_pattern", "status_class"})
 _TEXT_OR_PATTERN = frozenset({"text", "pattern"})
 
 # The fields each check type needs beyond `check`. These are DATA_MODEL §7's
 # compiled fields, less what compiling adds, with a target named by its
-# meaning rather than by an ID.
+# meaning rather than by an ID. Compiling sets a `pixel_diff`'s tolerances
+# and baseline: a spec states none, and a plan never picks one (ADR-0024's
+# #327 amendment).
 _FIELDS_OF: Final[Mapping[CheckType, frozenset[str]]] = {
     "text_visible": frozenset(),
     "text_in_target": frozenset({"target_meaning"}),
@@ -62,6 +65,9 @@ _FIELDS_OF: Final[Mapping[CheckType, frozenset[str]]] = {
     "probe_equals": frozenset({"probe", "value"}),
     "probe_equals_baseline": frozenset({"probe"}),
     "visible_unoccluded": frozenset({"target_meaning"}),
+    "contrast_min": frozenset({"target_meaning", "min_ratio"}),
+    "model_verify": frozenset({"target_meaning"}),
+    "pixel_diff": frozenset({"target_meaning"}),
 }
 # The check types that also take `text` or `pattern`, exactly one.
 _TEXT_CHECKS: Final = frozenset({"text_visible", "text_in_target"})
@@ -84,6 +90,9 @@ class PlannedCheck(StrictModel):
     method: HttpMethod | None = None
     url_pattern: PythonRegex | None = None
     status_class: StatusClass | None = None
+    # A `contrast_min`'s ratio: one the expectation states, never one the
+    # plan chooses (`misfits`).
+    min_ratio: ContrastRatio | None = None
 
     @model_validator(mode="after")
     def _its_types_fields(self) -> Self:
@@ -109,11 +118,9 @@ class PlannedCheck(StrictModel):
 
 
 class Unsupported(StrictModel):
-    """Why no M1 check can establish an expectation's claim, and the M2 check
-    it needs, if one would."""
+    """Why no check can establish an expectation's claim."""
 
     reason: NonEmpty
-    needs: M2Check | None = None
 
 
 class PlannedExpectation(StrictModel):
@@ -168,10 +175,65 @@ def planned_checks(plan: CoveragePlan) -> dict[str, tuple[int, PlannedCheck]]:
     return {f"a{n}": pair for n, pair in enumerate(numbered, start=1)}
 
 
+# A ratio an expectation's text states, a decimal literal N in ratio form:
+# "N:1" or "N to 1", or N directly after "contrast ratio of" or "contrast
+# ratio of at least" and not the first term of another ratio, such as "4 to
+# 3". So a version such as "WCAG 2.1", a count such as "the 3 buttons", a
+# section number or an aspect ratio such as "16:9" states none (ADR-0024's
+# #327 amendment, the maintainer's tightening).
+_DECIMAL = r"[0-9]+(?:\.[0-9]+)?"
+_END = r"(?![0-9]|\.[0-9])"
+_RATIO = re.compile(
+    rf"(?<![0-9.])(?P<to_one>{_DECIMAL})\s*(?::|\bto\b)\s*1{_END}"
+    rf"|\bcontrast\s+ratio\s+of(?:\s+at\s+least)?\s+(?P<worded>{_DECIMAL}){_END}"
+    r"(?!\s*(?::|\bto\b)\s*[0-9])",
+    re.IGNORECASE,
+)
+# What a contrast_min misfit tells the plan to do instead.
+_STATE_IT = "write the ratio the expectation states, or unsupported when it states none"
+
+
+def _entry_misfits(
+    planned: PlannedExpectation, expectation: Expectation
+) -> Iterator[str]:
+    """Why one entry doesn't fit its expectation: a `visual: model` one
+    takes exactly one `model_verify` check, an `unsupported` entry holding
+    none, and no other expectation takes one; and a `contrast_min`'s ratio is
+    above 1 and a ratio the expectation's text states (`_RATIO`), so the plan
+    never picks a threshold (ADR-0024's #327 amendment)."""
+    where = f"expect[{planned.expect_index}]"
+    verifying = sum(check.check == "model_verify" for check in planned.checks)
+    if expectation.visual == "model" and verifying != 1:
+        yield (
+            f"{where}: the spec marks it visual: model, so it takes exactly one "
+            f"model_verify check, not {verifying}"
+        )
+    if expectation.visual != "model" and verifying:
+        yield (
+            f"{where}: only an expectation the spec marks visual: model takes a "
+            "model_verify check"
+        )
+    stated = {
+        float(found["to_one"] or found["worded"])
+        for found in _RATIO.finditer(expectation.text)
+    }
+    for ratio in (check.min_ratio for check in planned.checks):
+        if ratio is None:
+            continue
+        if ratio <= 1:
+            yield f"{where}: a contrast_min min_ratio of {ratio:g} can never fail: {_STATE_IT}"
+        elif ratio not in stated:
+            yield (
+                f"{where}: a contrast_min min_ratio of {ratio:g} is not a ratio "
+                f"the expectation states: {_STATE_IT}"
+            )
+
+
 def misfits(plan: CoveragePlan, frontmatter: SpecFrontmatter) -> tuple[str, ...]:
     """Why `plan` doesn't fit the spec it was written for: it must have one
-    entry per expectation, in the spec's order, and read only probes the spec
-    declares. Empty when it fits."""
+    entry per expectation, in the spec's order, read only probes the spec
+    declares, and fit each expectation's own rules (`_entry_misfits`). Empty
+    when it fits."""
     found: list[str] = []
     indexes = [planned.expect_index for planned in plan.expectations]
     count = len(frontmatter.expect)
@@ -188,27 +250,24 @@ def misfits(plan: CoveragePlan, frontmatter: SpecFrontmatter) -> tuple[str, ...]
         for check in planned.checks
         if check.probe is not None and check.probe not in declared
     )
+    found.extend(
+        misfit
+        for planned in plan.expectations
+        if planned.expect_index < count
+        for misfit in _entry_misfits(planned, frontmatter.expect[planned.expect_index])
+    )
     return tuple(found)
 
 
-# What an unsupported expectation needs, as its line says it.
-_NEED_LINES: Final[Mapping[M2Check | None, str]] = {
-    None: "no M1 check can establish it",
-    "pixel_diff": "it needs pixel_diff, which M2 adds",
-    "contrast_min": "it needs contrast_min, which M2 adds",
-    "model_verify": "it needs a model to judge it (model_verify), which M2 adds",
-}
-
-
 def uncovered(plan: CoveragePlan, frontmatter: SpecFrontmatter) -> tuple[str, ...]:
-    """A line naming each expectation `plan` can't cover: its index, its text,
-    what it needs and why. A plan that doesn't fit its spec (`misfits`) is a
-    ValueError: its entries may name no expectation."""
+    """A line naming each expectation `plan` can't cover: its index, its text
+    and why. A plan that doesn't fit its spec (`misfits`) is a ValueError: its
+    entries may name no expectation."""
     if found := misfits(plan, frontmatter):
         raise ValueError(f"the plan doesn't fit its spec: {'; '.join(found)}")
     return tuple(
         f'expect[{planned.expect_index}] "{frontmatter.expect[planned.expect_index].text}": '
-        f"{_NEED_LINES[planned.unsupported.needs]}: {planned.unsupported.reason}"
+        f"no check can establish it: {planned.unsupported.reason}"
         for planned in plan.expectations
         if planned.unsupported is not None
     )

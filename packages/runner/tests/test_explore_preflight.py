@@ -268,7 +268,7 @@ UNKEPT = {
         [
             "an expectation has no establishing check",
             (
-                'expect[0] "The shop says the name was saved": no M1 check can '
+                'expect[0] "The shop says the name was saved": no check can '
                 "establish it: only a person can tell"
             ),
         ],
@@ -289,6 +289,23 @@ UNKEPT = {
                 "a1 (expect[0], probe_equals_baseline): exploring can't compile a "
                 "probe_equals_baseline check yet"
             ),
+        ],
+    ),
+    # Refused by name, never compiled as another check (ADR-0024's #327
+    # amendment).
+    "a pixel_diff check": Unkept(
+        plan_of(
+            {
+                "subject": STATUS,
+                "claim": "looks as it did when it was reviewed",
+                "checks": [{"check": "pixel_diff", "target_meaning": STATUS}],
+            }
+        ),
+        SHOP,
+        ProjectConfig(),
+        [
+            "the plan has checks exploring can't keep",
+            "a1 (expect[0], pixel_diff): exploring can't compile a pixel_diff check yet",
         ],
     ),
     "a subject contract": Unkept(

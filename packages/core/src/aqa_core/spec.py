@@ -121,9 +121,10 @@ class Preconditions(StrictModel):
 
 class Expectation(StrictModel):
     """One expectation: a plain string, or `{ text, visual }`. One marked
-    `visual: model` parses, and only `aqa replay --mode verified` checks it:
-    every other command's admission refuses it (`aqa_runner.admission`,
-    ADR-0024's #256 amendment)."""
+    `visual: model` parses, `aqa explore --plan-only` plans it, and only `aqa
+    replay --mode verified` checks it: every other command's admission
+    refuses it (`aqa_runner.admission`, ADR-0024's #256 and #327
+    amendments)."""
 
     text: NonEmpty
     visual: Literal["deterministic", "model"] = "deterministic"

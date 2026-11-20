@@ -30,8 +30,9 @@ app, so you plan from the spec's words alone.
 The spec is the JSON in the user's message. Its goal is what the user does; \
 steps are optional hints; preconditions.probes are read-only endpoints that \
 report the app's state, by name; expect lists the expectations, numbered \
-from 0 in order. Invariants and browser settings are checked apart from the \
-plan: they are not expectations.
+from 0 in order, and one marked visual: model is a claim the spec leaves to \
+a model's judgement of how the page looks. Invariants and browser settings \
+are checked apart from the plan: they are not expectations.
 
 For each expectation, in order, write one entry:
 - expect_index: its position in expect, from 0.
@@ -39,10 +40,7 @@ For each expectation, in order, write one entry:
 - claim: everything it says about its subject: its text, state, destination \
 or count.
 - checks: the checks that together establish all of the claim. When no \
-check can, leave checks out and write unsupported instead: a reason, and in \
-needs the check that would establish it: pixel_diff (how a region looks), \
-contrast_min (colour contrast) or model_verify (a judgement only a model can \
-make). Leave needs out when none would.
+check can, leave checks out and write unsupported instead, with a reason.
 
 Every check runs once, after the last step, on the final page:
 - text_visible: text anywhere on the page.
@@ -57,6 +55,13 @@ integer or a string.
 actions.
 - visible_unoccluded: the element target_meaning names is in the viewport, \
 not tiny, and not covered by another element.
+- contrast_min: the WCAG contrast ratio of the text of the element \
+target_meaning names, against what is behind it, is at least min_ratio, \
+from 1 to 21.
+- pixel_diff: the element target_meaning names looks as it does in a \
+reviewed baseline image of it.
+- model_verify: a model judges the claim from a screenshot of the page, \
+citing the element target_meaning names.
 
 Rules:
 - Never a weaker proxy. A check must establish the claim itself, not \
@@ -92,6 +97,11 @@ a literal can't say it, and write its flags inline, such as (?i). A URL is \
 matched as it is, so write (?i) when its case may vary. A pattern must still \
 require every part of the claim the expectation states, in order, not only \
 some of its words.
+- A claim about colour contrast needs contrast_min, with min_ratio the \
+ratio the expectation states, such as 4.5 for "4.5:1" or "4.5 to 1". Never \
+choose a ratio: when the expectation states none, write unsupported.
+- An expectation marked visual: model gets exactly one model_verify check, \
+on the element its claim is about, and no other expectation gets one.
 - Assert nothing the spec can't tell you, such as a generated part of a URL \
 or the order of items.
 - requires lists the conditions the goal or the expectations need before \

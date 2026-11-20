@@ -62,6 +62,8 @@ from packages.runner.tests.heal_injection_fixtures import (
 from packages.runner.tests.heal_injection_fixtures import heal_injection_disallowed
 from packages.runner.tests.injection_fixtures import CASES as INJECTION_CASES
 from packages.runner.tests.injection_fixtures import explored_case
+from packages.runner.tests.m2_plan_fixtures import CASE as M2_CASE
+from packages.runner.tests.m2_plan_fixtures import disallowed, m2_spec
 from packages.runner.tests.test_anthropic_client import (
     CLICK_PROMPT,
     PLAIN_PROMPT,
@@ -97,9 +99,12 @@ SECRET_FORMATS = cast(
 # USD 0.402050 already spent, #55's round included (the #53 P21b amendment).
 RUN_USD = Decimal("0.20")
 ROUND_USD = Decimal("0.597950")
-# The plan cases' round (#55): the six plan cassettes, each request
-# reserving its worst case as the explore case's do.
-PLANS_ROUND_USD = Decimal("0.17")
+# The plan cases' round (#55): the plan cassettes, each request reserving
+# its worst case as the explore case's do. For #327's round the maintainer
+# approved USD 0.40 (2026-11-20), over the derived USD 0.27, for headroom for
+# a second retry: the seven plan cases, each possibly retried once, need USD
+# 0.264792 to admit every request in order (ADR-0024's #327 amendment).
+PLANS_ROUND_USD = Decimal("0.40")
 # Input tokens a request may use beyond its body's bytes: the tool and
 # output-format preambles and the framing, which the body doesn't spell.
 HEADROOM_TOKENS = 1024
@@ -746,6 +751,16 @@ async def _asked(
     return routed.calls, accepted, None, None
 
 
+async def _asked_m2(
+    _name: str, router: ModelRouter, spec: Spec
+) -> tuple[tuple[CostRecord, ...], bool, None, str | None]:
+    """The M2 checks' plan (#327): its priced calls, and whether it is the
+    usable plan its oracle wants, or, in fixed words, why not."""
+    planned = await make_plan(router, spec)
+    why = disallowed(planned)
+    return planned.routed.calls, why is None, None, why
+
+
 type Runner = Callable[
     [str, ModelRouter, Spec],
     Coroutine[Any, Any, tuple[tuple[CostRecord, ...], bool, Ending | None, str | None]],
@@ -778,6 +793,7 @@ CASES: Final[Mapping[str, RecordedCase]] = {
     "plan_post-comment": _PLANNED,
     "plan_favorite-article": _PLANNED,
     "plan_publish-article": _PLANNED,
+    M2_CASE: RecordedCase(_asked_m2, round_usd=PLANS_ROUND_USD),
     EXPLORE: RecordedCase(_explored_fixture, round_usd=ROUND_USD, whole_run=True),
     **dict.fromkeys(
         INJECTED,
@@ -1157,6 +1173,27 @@ def fixture(root: Path) -> Spec:
     )
 
 
+def case_spec(name: str, root: Path) -> Spec:
+    """The spec the case `name` is recorded from, made under the spec root
+    `root`."""
+    if name == M2_CASE:
+        spec = m2_spec(root)
+    elif name.startswith("plan_"):
+        spec = pilot(name.removeprefix("plan_"), root)
+    elif name == EXPLORE:
+        spec = fixture(root)
+    elif name in INJECTED:
+        spec = INJECTED[name].spec(root, FIXTURE_CONFIG)
+    elif name in HEALED:
+        root.mkdir()
+        spec = heal_spec(HEALED[name], root)
+    elif name in HEAL_INJECTED:
+        spec = HEAL_INJECTED[name].spec(root)
+    else:
+        spec = checkout(root)
+    return spec
+
+
 def record(
     name: str, attempt: Path, *, library: Path = CASSETTES
 ) -> tuple[CostRecord, ...]:
@@ -1167,19 +1204,7 @@ def record(
     if not key:
         raise ValueError("recording needs ANTHROPIC_API_KEY")
     attempt.mkdir(parents=True)
-    if name.startswith("plan_"):
-        spec = pilot(name.removeprefix("plan_"), attempt / "qa")
-    elif name == EXPLORE:
-        spec = fixture(attempt / "qa")
-    elif name in INJECTED:
-        spec = INJECTED[name].spec(attempt / "qa", FIXTURE_CONFIG)
-    elif name in HEALED:
-        (attempt / "qa").mkdir()
-        spec = heal_spec(HEALED[name], attempt / "qa")
-    elif name in HEAL_INJECTED:
-        spec = HEAL_INJECTED[name].spec(attempt / "qa")
-    else:
-        spec = checkout(attempt / "qa")
+    spec = case_spec(name, attempt / "qa")
     config = load_config(spec.path.parent / "config.yaml")
     if name == "plain_with_effort":
         config = config.model_copy(

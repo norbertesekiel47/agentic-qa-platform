@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, get_args
 
 import pytest
-from aqa_core.coverage_plan import CheckType, CoveragePlan, M2Check, PlannedCheck
+from aqa_core.coverage_plan import CheckType, CoveragePlan, PlannedCheck
 from aqa_core.model_costs import CostRecord, Usage
 from aqa_core.project import load_project
 from aqa_core.spec import Spec
@@ -212,11 +212,47 @@ def test_the_plan_request_keeps_the_specs_own_characters(tmp_path: Path) -> None
     assert "Le paiement a échoué, la carte a expiré" in str(human.content)
 
 
-def test_the_instructions_name_every_check_type_and_every_need() -> None:
+def test_the_instructions_name_every_check_type() -> None:
     # The prompt states what the response format allows; a check type added
     # to the plan model must be added here too.
-    for name in (*get_args(CheckType), *get_args(M2Check)):
+    for name in get_args(CheckType):
         assert name in INSTRUCTIONS, name
+
+
+def test_the_instructions_say_how_to_plan_the_m2_checks() -> None:
+    # The ratio is the expectation's, and model_verify goes where the spec
+    # marks visual: model (ADR-0024's #327 amendment); no check is left for a
+    # later milestone with what it needs.
+    assert (
+        "- contrast_min: the WCAG contrast ratio of the text of the element "
+        "target_meaning names, against what is behind it, is at least min_ratio, "
+        "from 1 to 21.\n"
+    ) in INSTRUCTIONS
+    assert "Never choose a ratio: when the expectation states none, write " in (
+        INSTRUCTIONS
+    )
+    assert (
+        "An expectation marked visual: model gets exactly one model_verify check"
+    ) in INSTRUCTIONS
+    assert "write unsupported instead, with a reason.\n" in INSTRUCTIONS
+    assert "in needs" not in INSTRUCTIONS
+
+
+def test_the_plan_request_carries_an_expectations_visual_model_mark(
+    tmp_path: Path,
+) -> None:
+    marked = "{ text: The receipt shows a green tick, visual: model }"
+
+    _, human = plan_request(checkout(tmp_path / "qa", expectation=marked))
+
+    assert isinstance(human.content, str)
+    assert json.loads(human.content)["expect"] == [
+        {"text": "The receipt shows a green tick", "visual": "model"},
+        {
+            "text": "The Pay button is visible and not covered",
+            "visual": "deterministic",
+        },
+    ]
 
 
 # A plan for the checkout spec, as the model might write it.
@@ -376,6 +412,42 @@ def test_a_retry_whose_fallback_fails_keeps_every_billed_record(tmp_path: Path) 
 
     assert [record.status for record in raised.value.records] == ["ok", "refusal"]
     assert raised.value.__cause__ is failure
+
+
+def test_a_model_verify_on_an_unmarked_expectation_is_asked_for_once_more(
+    tmp_path: Path,
+) -> None:
+    # Expectation 1 isn't marked visual: model, so its entry takes no
+    # model_verify check (`misfits`).
+    judged = {
+        "check": "model_verify",
+        "target_meaning": "the payment step's submit button",
+    }
+    second = PLAN.expectations[1].model_dump(exclude_none=True)
+    verified = CoveragePlan.model_validate(
+        {
+            "expectations": [
+                PLAN.expectations[0].model_dump(exclude_none=True),
+                {**second, "checks": [*second["checks"], judged]},
+            ],
+            "requires": [],
+        }
+    )
+    spec = checkout(tmp_path / "qa")
+    client = FakeClient(reply(parsed=verified), reply(parsed=PLAN))
+
+    planned, _ = plan_with(spec, client)
+
+    assert (planned.plan, planned.problems) == (PLAN, ())
+    [_, (retry, _, _)] = client.calls
+    assert retry[-1] == HumanMessage(
+        content=(
+            "That plan can't be used:\n"
+            "- expect[1]: only an expectation the spec marks visual: model takes a "
+            "model_verify check\n"
+            "Write the whole plan again: fix each of these, and keep the rest as it is."
+        )
+    )
 
 
 def test_a_plan_lists_its_misfits_before_its_circular_targets(tmp_path: Path) -> None:

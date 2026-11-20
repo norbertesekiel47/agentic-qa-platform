@@ -9,6 +9,7 @@ import threading
 import traceback
 import warnings
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -18,14 +19,24 @@ import httpx
 import pytest
 import yaml
 from aqa_core.model_costs import CostRecord
+from aqa_core.model_roles import RoutedModel
 from aqa_core.spec import Spec
 from aqa_runner.model_router import ModelCallError, ModelRouter, Routed
 
 from packages.runner.tests import record_cassettes as recorder
-from packages.runner.tests.conftest import CASSETTES, Endpoint, _canonical
+from packages.runner.tests.conftest import Endpoint, Recording, _canonical
 from packages.runner.tests.record_cassettes import record
+from packages.runner.tests.test_anthropic_client import (
+    ask_for_a_verdict,
+    ask_plainly_at_high_effort,
+    ask_with_tools,
+)
 from packages.runner.tests.test_cassettes import HELLO, RECORDING_KEY
-from packages.runner.tests.test_coverage_plan import PLAN
+from packages.runner.tests.test_coverage_plan import (
+    PLAN,
+    checkout,
+    plan_through_the_adapter,
+)
 
 pytestmark = pytest.mark.usefixtures("reset_tracing")
 
@@ -200,31 +211,44 @@ def test_recording_accounts_for_an_sdk_retry_response_with_usage(
     assert receipt["unpriced_responses"] == []
 
 
-@pytest.mark.parametrize(
-    "name", ["coverage_plan", "tools", "structured_output", "plain_with_effort"]
-)
+# How the test that replays each named case's cassette sends its request.
+REPLAYS: dict[str, Callable[[RoutedModel, Path], object]] = {
+    "coverage_plan": lambda _, root: plan_through_the_adapter(checkout(root)),
+    "tools": lambda model, _: ask_with_tools(model),
+    "structured_output": lambda model, _: ask_for_a_verdict(model),
+    "plain_with_effort": lambda model, _: ask_plainly_at_high_effort(model),
+}
+
+
+@pytest.mark.parametrize("name", REPLAYS)
 def test_named_cases_match_replay_requests_and_keep_attempts(
-    capture_paths: Callable[[Mapping[str, object]], tuple[Path, Path]], name: str
+    capture_paths: Callable[[Mapping[str, object]], tuple[Path, Path]],
+    cassette: Callable[..., AbstractContextManager[Recording]],
+    sonnet: RoutedModel,
+    tmp_path: Path,
+    name: str,
 ) -> None:
-    [original] = yaml.safe_load((CASSETTES / f"{name}.yaml").read_text())[
-        "interactions"
-    ]
-    attempt, library = capture_paths(json.loads(original["response"]["body"]["string"]))
+    # The request replay sends and the answer it gets, through the cassette
+    # fixture, so a cassette awaiting its re-record awaits here too
+    # (ADR-0024's #327 amendment).
+    with cassette(name, replay_only=True) as replayed:
+        REPLAYS[name](sonnet, tmp_path / "replayed" / "qa")
+    [original] = replayed.sent
+    [answer] = replayed.responses
+    attempt, library = capture_paths(answer)
     costs = record(name, attempt, library=library)
 
     assert len(costs) == 1
     candidate = (attempt / f"{name}.yaml").read_text()
     assert (library / f"{name}.yaml").read_text() == candidate
     [captured] = yaml.safe_load(candidate)["interactions"]
-    assert json.loads(captured["request"]["body"]) == json.loads(
-        original["request"]["body"]
-    )
+    assert json.loads(captured["request"]["body"]) == original
     assert captured["request"]["uri"] == "https://api.anthropic.com/v1/messages"
     assert RECORDING_KEY not in candidate
     receipt = (attempt / "receipt.json").read_text()
     assert json.loads(receipt)["case"] == name
     intent = json.loads((attempt / "intent.json").read_text())
-    assert intent["model"] == json.loads(original["request"]["body"])["model"]
+    assert intent["model"] == original["model"]
     assert intent["effort"] == ("high" if name == "plain_with_effort" else None)
     assert len(intent["source_sha"]) == 40
     assert intent["started_at"] < json.loads(receipt)["finished_at"]
