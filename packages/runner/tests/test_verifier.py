@@ -25,6 +25,7 @@ from pydantic import ValidationError
 from packages.runner.tests.explore_graph_fixtures import Scripted
 from packages.runner.tests.result_redaction_fixtures import browsing, fake_secret
 from packages.runner.tests.secret_fixtures import BOUND_AT_START, FAKE_VALUE
+from packages.runner.tests.test_vision_fallback import PNG_HEAD
 from packages.runner.tests.verified_fixtures import badge_spec, page, serving
 
 WELL_FORMED = {
@@ -212,3 +213,39 @@ def test_a_verifier_request_that_still_spells_a_value_is_never_sent(
         "a request still spelled a bound value after its scans, so it wasn't sent",
     )
     assert not (record / "costs.jsonl").exists()
+
+
+def test_the_verifier_exempts_no_screenshot_from_the_send_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Bound, the base64 every 1280 by 800 PNG begins with: the verifier's
+    # image spells it, and the send check reads that image byte for byte,
+    # since the verifier hands it no screenshot to skip.
+    monkeypatch.setenv("AQA_SECRET_TEST_PASSWORD", PNG_HEAD)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-the-verifier-tests")
+    client = Scripted()
+    monkeypatch.setattr(replay_module, "AnthropicClient", client)
+    spec = badge_spec(
+        tmp_path / "qa",
+        config=f"budgets: {{ resolve_seconds: 2 }}\nsecrets: {{ {BOUND_AT_START} }}\n",
+        preconditions=ACCOUNT,
+    )
+
+    with serving(page("green")) as app:
+        result = typer.testing.CliRunner().invoke(
+            aqa, ["replay", "--mode", "verified", str(spec), "--url", app.origin]
+        )
+
+    assert result.exit_code == 3, result.output
+    assert client.requests == []
+    [record] = (tmp_path / "qa/.aqa/runs").iterdir()
+    document = json.loads((record / "replay.json").read_text())
+    [verdict] = [v for v in document["verdicts"] if v.get("assertion") == "a1"]
+    assert (verdict["verdict"], verdict["reason"]) == (
+        "inconclusive",
+        "a request still spelled a bound value after its scans, so it wasn't sent",
+    )
+    assert not (record / "costs.jsonl").exists()
+    # Captured, through the OCR check, and spelling the value.
+    saved = (record / "verified/assertion-0/screenshot.png").read_bytes()
+    assert base64.b64encode(saved).decode().startswith(PNG_HEAD)

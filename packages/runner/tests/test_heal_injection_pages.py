@@ -18,8 +18,12 @@ from typing import Any
 
 import pytest
 from aqa_core.compiled import CompiledScript
+from aqa_core.config import Perception
 from aqa_core.heal_patch import pointer
+from aqa_runner import heal
+from aqa_runner.binding import element_at
 from langchain_core.messages import AIMessage, BaseMessage
+from playwright.async_api import ElementHandle, Page
 
 from packages.runner.tests.drift_fixtures import BUTTON, DETAILS, TOGGLE
 from packages.runner.tests.executor_fixtures import compiled
@@ -32,6 +36,7 @@ from packages.runner.tests.heal_fixtures import (
     NO_TOOL,
     SHOW,
     Healed,
+    basis,
     healed,
     in_view_at,
     rebinding,
@@ -40,7 +45,13 @@ from packages.runner.tests.heal_fixtures import (
 )
 from packages.runner.tests.injection_fixtures import INJECTION
 from packages.runner.tests.test_heal import turn_record
-from packages.runner.tests.test_heal_bind import OTHER_ROLE, contract_config
+from packages.runner.tests.test_heal_bind import (
+    OTHER_ROLE,
+    OUTSIDE_ITS_REGION,
+    contract_config,
+)
+from packages.runner.tests.test_heal_perception import perceiving
+from packages.runner.tests.test_heal_vision import clicking, vision_record
 
 # What the next request says of a call the healer can't run, in its fixed words.
 UNFIT = "the call to rebind was not run: its arguments don't fit the tool"
@@ -378,3 +389,68 @@ def test_a_rebind_to_what_a_page_offers_is_refused_and_never_dispatched(
     assert json.loads(turn_record(run, page.key, 1)["call"]) == call
     assert block(turn_record(run, page.key, 2)["sent"], "results") == refused
     assert request_ not in run.seen
+
+
+# On heal-decoy, inside its decoy, the notice's button, in the 1280 by 800
+# viewport: a point the page's text steers vision fallback to.
+ON_THE_DECOY = (60, 182)
+THE_DECOY = "#moved-notice button"
+# Whether the element at a point is inside the one a selector finds.
+INSIDE = (
+    "([x, y, selector]) => document.elementFromPoint(x, y)?.closest(selector) != null"
+)
+
+
+def pointed(
+    monkeypatch: pytest.MonkeyPatch, selector: str
+) -> list[tuple[int, int, bool]]:
+    """Each point the heal reads, and whether it lies inside the element `selector`
+    finds, on the live page as the heal reads it."""
+    read: list[tuple[int, int, bool]] = []
+
+    async def at(page: Page, x: int, y: int) -> ElementHandle | None:
+        read.append((x, y, await page.evaluate(INSIDE, [x, y, selector])))
+        return await element_at(page, x, y)
+
+    monkeypatch.setattr(heal, "element_at", at)
+    return read
+
+
+@pytest.mark.parametrize(
+    ("perception", "moves", "offered"),
+    [
+        pytest.param(
+            "hybrid", (NO_TOOL,), [("rebind",), ("vision_click",)], id="hybrid"
+        ),
+        pytest.param("vision_only", (), [("vision_click",)], id="vision_only"),
+    ],
+)
+def test_a_vision_point_a_page_steers_to_its_decoy_is_refused_and_never_clicked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    perception: Perception,
+    moves: tuple[Move, ...],
+    offered: list[tuple[str, ...]],
+) -> None:
+    # A step's drift, whose click the decoy would get if it were bound.
+    page = replace(
+        DECOY, script=CLICKING, key="1", config=perceiving(perception, DECOY.config)
+    )
+    read = pointed(monkeypatch, THE_DECOY)
+
+    run = healing(tmp_path, page, aimed(page.name), *moves, clicking(*ON_THE_DECOY))
+
+    assert read == [(*ON_THE_DECOY, True)]
+    assert json.loads(vision_record(run)["call"]) == {
+        "name": "vision_click",
+        "args": {"x": ON_THE_DECOY[0], "y": ON_THE_DECOY[1]},
+    }
+    assert basis(run).said == f"vision fallback: {OUTSIDE}; {OUTSIDE_ITS_REGION}"
+    written = run.document
+    assert (written["outcome"], written["exit_code"], written["heal_proposal"]) == (
+        "inconclusive",
+        3,
+        None,
+    )
+    assert run.seen == SERVED
+    assert [names for names, _ in run.client.offered] == offered
