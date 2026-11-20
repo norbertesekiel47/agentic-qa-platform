@@ -2,6 +2,7 @@ import hashlib
 import json
 import threading
 from collections.abc import Callable
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -14,7 +15,13 @@ from aqa_core.price_map import vendored
 from aqa_core.project import load_project
 
 from packages.runner.tests.conftest import Endpoint
-from packages.runner.tests.record_cassettes import answers_expected, record
+from packages.runner.tests.record_cassettes import (
+    CASES,
+    PLANS_ROUND_USD,
+    answers_expected,
+    plan_case,
+    record,
+)
 from packages.runner.tests.test_cassettes import HELLO, RECORDING_KEY
 from packages.runner.tests.test_pilot_plan_oracles import (
     EXAMPLES,
@@ -233,6 +240,26 @@ def test_only_a_plan_cases_two_ok_answers_are_its_retry() -> None:
     ] == [2, 1, 1]
 
 
+def test_the_plan_round_is_held_to_the_maintainers_usd_0_40() -> None:
+    # Approved on #327 (2026-11-20) over the derived USD 0.27, for headroom
+    # for a second retry (ADR-0024's #327 amendment).
+    planned = {name: CASES[name].round_usd for name in CASES if plan_case(name)}
+
+    assert Decimal("0.40") == PLANS_ROUND_USD
+    assert planned == dict.fromkeys(
+        [
+            "coverage_plan",
+            "plan_login",
+            "plan_read-article",
+            "plan_post-comment",
+            "plan_favorite-article",
+            "plan_publish-article",
+            "plan_m2-checks",
+        ],
+        Decimal("0.40"),
+    )
+
+
 def test_a_pilot_case_past_the_plans_round_is_refused_before_it_is_sent(
     monkeypatch: pytest.MonkeyPatch, serve: Callable[..., Endpoint], tmp_path: Path
 ) -> None:
@@ -244,7 +271,7 @@ def test_a_pilot_case_past_the_plans_round_is_refused_before_it_is_sent(
     library.mkdir()
     earlier = tmp_path / "round" / "000"
     earlier.mkdir(parents=True)
-    spend = {"spent_usd": "0.25", "overrun": False}
+    spend = {"spent_usd": "0.38", "overrun": False}
     (earlier / "receipt.json").write_text(json.dumps({"spend": spend}))
     attempt = tmp_path / "round" / "001"
 
@@ -317,5 +344,5 @@ def test_a_pilot_case_is_sent_once_with_the_sdks_retries_off(
     assert len(sent) == 1
     receipt = json.loads((attempt / "receipt.json").read_text())
     assert receipt["spend"]["refused"] is False
-    assert receipt["spend"]["round_left_usd"] == "0.27"
+    assert receipt["spend"]["round_left_usd"] == "0.40"
     assert not (library / "plan_login.yaml").exists()
