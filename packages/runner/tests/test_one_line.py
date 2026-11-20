@@ -40,6 +40,15 @@ def test_a_value_only_the_escape_spells_is_redacted(value: str, said: str) -> No
     assert one_line(said, bound(value)) == "said [SECRET:FAKE_ESCAPE]"
 
 
+def test_a_value_the_fold_makes_whole_is_redacted_before_the_escape() -> None:
+    # The text writes the value's space as U+0085, and the value holds U+13430,
+    # whose escape no scan reads as the character: only a scan of the folded
+    # text, before the escape, finds it.
+    kept = one_line("said ab\U00013430\x85cd", bound("ab\U00013430 cd"))
+
+    assert kept == "said [SECRET:FAKE_ESCAPE]"
+
+
 def test_the_escaped_text_is_scanned_before_the_cut() -> None:
     kept = one_line(f"{PADDING}fake\x9btail", bound(r"fake\x9btail"))
 

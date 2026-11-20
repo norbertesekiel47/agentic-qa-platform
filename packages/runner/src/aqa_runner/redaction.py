@@ -614,10 +614,13 @@ def one_line(text: str, redactor: Redactor) -> Redacted:
     """`text`, which the model or the page chose, as a record keeps it:
     scanned, its whitespace folded to single spaces, each non-printable
     character escaped as `error_text` escapes a reason's, and cut to
-    `REASON_CHARS`. The escaped text is scanned again before the cut, since
+    `REASON_CHARS`. The folded text is scanned before the escape, since
+    folding can make a value whole that the escape then spells in a form no
+    scan reads; and the escaped text is scanned again before the cut, since
     escaping can write a bound value's characters."""
     scanned = redactor.redact(text)
-    return redactor.redact(_escaped(" ".join(scanned.split())), limit=REASON_CHARS)
+    folded = redactor.redact(" ".join(scanned.split()))
+    return redactor.redact(_escaped(folded), limit=REASON_CHARS)
 
 
 def _escaped(text: str) -> str:
