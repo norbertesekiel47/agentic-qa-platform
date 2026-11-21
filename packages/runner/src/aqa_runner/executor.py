@@ -87,6 +87,7 @@ from aqa_runner.repairs import (
     added_target_refusal,
     inserted_failure,
     rebind_refusal,
+    tunnelled_refusal,
 )
 from aqa_runner.run_record import STEPS, RefusedWriteError, RunRecord, require_clean
 from aqa_runner.secret_fields import SecretRefusedError
@@ -706,7 +707,9 @@ async def _run(
 ) -> StepResult | None:
     """Capture baselines before resolving, recording or dispatching `step`.
     None when the run was interrupted during capture or resolution, so no
-    next action is dispatched."""
+    next action is dispatched. A step a repair inserted fails before its
+    intent while the session has a tunnel open
+    (`_dispatched_unless_tunnelled`)."""
     try:
         await capture_baselines(run.evaluation, step.seq)
     except (
@@ -725,14 +728,31 @@ async def _run(
         return (
             None
             if interrupted()
-            else await dispatched(
+            else await _dispatched_unless_tunnelled(
                 session,
-                run.setup.record,
+                run,
                 Dispatch(step.seq, intent_action(step), step.side_effect, wait),
                 lambda: _untargeted(session, step, run.setup.start),
             )
         )
     return await _run_targeted(session, run, step, interrupted)
+
+
+async def _dispatched_unless_tunnelled(
+    session: BrowserSession,
+    run: _Replay,
+    dispatch: Dispatch,
+    act: Callable[[], Awaitable[Window]],
+) -> StepResult:
+    """`dispatch`'s step recorded and dispatched in `run`'s record
+    (`dispatched`), unless a repair inserted it and the session already has a
+    tunnel open: then it fails before its intent (`repairs.tunnelled_refusal`),
+    with no `await` between the check and the intent's line."""
+    inserted = all(each.seq != dispatch.seq for each in run.committed.steps)
+    refused = tunnelled_refusal(session, inserted=inserted)
+    if refused is not None:
+        return StepResult(dispatch.seq, "failed", error=refused)
+    return await dispatched(session, run.setup.record, dispatch, act)
 
 
 def _shown(
@@ -769,7 +789,8 @@ async def _run_targeted(
     closed there unless `step` is a replay-safe click a repair inserted, the one
     step the heal-patch validator lets act on it
     (`repairs.added_target_refusal`); that click is judged once it settled
-    (`_shown`)."""
+    (`_shown`). Any step a repair inserted fails before its intent while the
+    session has a tunnel open (`_dispatched_unless_tunnelled`)."""
     budget = run.setup.config.budgets.resolve_seconds
     try:
         found = await look_for(session, run.evaluation, step.target, "action")
@@ -801,9 +822,9 @@ async def _run_targeted(
             return StepResult(step.seq, "failed", error=refused)
     if interrupted():
         return None
-    return await dispatched(
+    return await _dispatched_unless_tunnelled(
         session,
-        run.setup.record,
+        run,
         Dispatch(
             step.seq,
             intent_action(step),

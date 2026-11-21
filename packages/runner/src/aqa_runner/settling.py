@@ -209,6 +209,13 @@ class Traffic:
         self._main_frame = page.main_frame
         page.on("framenavigated", self._navigated)
 
+    @property
+    def tunnelled(self) -> bool:
+        """Whether the egress proxy has told this session of a CONNECT it
+        didn't hold, one its gate then refused included: a tunnel may be
+        open, so it stays true (ADR-0024's #335 amendment)."""
+        return self._tunnelled
+
     def proxied(self, method: bytes, held: bool) -> None:
         """A write request the egress proxy read, `method` as sent, which joins
         the window of the latest action, as the page's own requests do: as

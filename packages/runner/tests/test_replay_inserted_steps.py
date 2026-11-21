@@ -390,12 +390,44 @@ SOCKET = MOVED + "<script>new WebSocket(`ws://${location.host}/held/socket`);</s
 
 
 def test_an_inserted_press_under_an_open_tunnel_stops_the_run(tmp_path: Path) -> None:
+    """Refused before its intent, since the session already has a tunnel (#335)."""
     run = replayed(tmp_path, inserting(PRESS_TAB), html=SOCKET)
 
-    assert run.outcomes() == [(0, "completed", None), (3, "failed", UNSHOWN + TUNNEL)]
+    assert run.outcomes() == [(0, "completed", None), (3, "failed", TUNNELLED)]
     assert run.result.assertions == STOPPED
-    assert run.states() == STOPPED_STATES
+    assert run.states() == [(0, "intent"), (0, "completed")]
     assert run.ended() == INCONCLUSIVE
+
+
+# Why a step a repair inserted didn't run once the session had a tunnel open
+# (ADR-0024's #335 amendment).
+TUNNELLED = (
+    "a repair inserted this step while an encrypted or WebSocket connection was "
+    "open, which the egress proxy can't read or hold, so the step did not run"
+)
+
+
+def test_an_inserted_click_on_a_tunnelled_session_is_refused_before_its_intent(
+    tmp_path: Path,
+) -> None:
+    """Nothing is dispatched, so the app never sees the click's request."""
+    html = contact_does("fetch('/did/inserted')", SOCKET)
+
+    run = replayed(tmp_path, inserting(CLICK_CONTACT), html=html)
+
+    assert run.outcomes() == [(0, "completed", None), (3, "failed", TUNNELLED)]
+    assert run.states() == [(0, "intent"), (0, "completed")]
+    assert ("GET", "/did/inserted") not in run.seen
+    assert run.result.assertions == STOPPED
+    assert run.ended() == INCONCLUSIVE
+
+
+def test_committed_steps_run_on_a_tunnelled_session(tmp_path: Path) -> None:
+    """Only a step a repair inserted is refused under a tunnel."""
+    run = replayed(tmp_path, lambda drift: rebound(drift.script), html=SOCKET)
+
+    assert run.outcomes() == [(0, "completed", None), (1, "completed", None)]
+    assert run.ended()[:2] == ("drift_consistent", 7)
 
 
 def test_an_inserted_step_that_also_hits_an_egress_block_ends_egress_blocked(

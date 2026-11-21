@@ -92,6 +92,12 @@ _TUNNEL: Final = (
 )
 _NAVIGATED: Final = "page: the page's main frame navigated"
 _UNKEPT: Final = "settle: the step kept no settle window or settling to read"
+# Why a step a repair inserted didn't run once the session had a tunnel open,
+# in fixed words (ADR-0024's #335 amendment).
+_TUNNELLED: Final = (
+    "a repair inserted this step while an encrypted or WebSocket connection was "
+    "open, which the egress proxy can't read or hold, so the step did not run"
+)
 
 
 @dataclass(frozen=True)
@@ -398,6 +404,18 @@ def added_target_refusal(
     if isinstance(step, Click) and not step.side_effect and inserted:
         return None
     return redactor.redact(_UNVOUCHED)
+
+
+def tunnelled_refusal(session: BrowserSession, *, inserted: bool) -> Redacted | None:
+    """Why a step a repair `inserted` may not run on `session`, or None, read
+    right before its intent, with no `await` between, so a refusal leaves
+    nothing to resolve (ADR-0024's #335 amendment): the session already has a
+    tunnel open (`BrowserSession.tunnelled`), whose bytes the egress proxy
+    can't read or hold, so the step's write could reach the app. A committed
+    step is never refused this way. Scanned with the session's redactor."""
+    if inserted and session.tunnelled:
+        return session.redactor.redact(_TUNNELLED)
+    return None
 
 
 async def _refusal(

@@ -200,6 +200,14 @@ class BrowserSession:
         return self._secret_filled
 
     @property
+    def tunnelled(self) -> bool:
+        """Whether a tunnel (https or a WebSocket), whose requests and
+        messages the egress proxy can't read or hold, may be open in this
+        session: true from the first CONNECT the proxy told it of and didn't
+        hold, for the rest of the session (`settling.Traffic.tunnelled`)."""
+        return self._traffic.tunnelled
+
+    @property
     def document_changes(self) -> int:
         """How many times any of the page's frames has navigated or been
         removed: a part described before the count moved is void."""
