@@ -516,6 +516,33 @@ def test_a_rationale_that_spells_a_value_is_kept_scanned_on_one_line_and_cut(
     )
 
 
+def test_a_rationale_with_controls_is_kept_escaped_and_decides_nothing(
+    app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `replay.json` writes every character past U+001F as it comes, so a bidi
+    # override or a C1 control the model repeats is escaped before (#334).
+    clean = badge_spec(tmp_path / "clean")
+    hostile = badge_spec(tmp_path / "hostile")
+
+    plain = verified(monkeypatch, app, clean, Scripted(replying("pass")))
+    steered = verified(
+        monkeypatch,
+        app,
+        hostile,
+        Scripted(replying("pass", rationale="the badge \u202eis green\x9b")),
+    )
+
+    assert plain.exit_code == 0, plain.output
+    written = (record_in(hostile) / "replay.json").read_text()
+    assert {"\u202e", "\x9b"}.isdisjoint(written)
+    kept = verdict(hostile)["verifier"]["model_reported"]["rationale"]
+    assert kept == r"the badge \u202eis green\x9b"
+    assert (steered.exit_code, decided(verdict(hostile))) == (
+        plain.exit_code,
+        decided(verdict(clean)),
+    )
+
+
 def test_a_target_that_drifted_is_inconclusive_with_no_folder_and_no_call(
     app: App, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

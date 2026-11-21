@@ -15,7 +15,7 @@ from pydantic import AfterValidator, Field, StrictStr
 from aqa_runner.evaluation import Verified, VerifierSaid
 from aqa_runner.model_router import Routed
 from aqa_runner.model_turns import block
-from aqa_runner.redaction import REASON_CHARS, Redacted, Redactor
+from aqa_runner.redaction import Redactor, one_line
 from aqa_runner.screenshots import Screenshot
 
 # The verifier's system prompt. Static: a change to it changes every verifier
@@ -115,8 +115,8 @@ def judged(routed: Routed, cited: frozenset[str], redactor: Redactor) -> Verifie
     """What `routed`'s reply decides of a check whose request gave the two
     references `cited`: nothing, unless it parsed and cites exactly them, as a
     set; then the verifier's own verdict, `inconclusive` with a reason of ours.
-    Nothing the model wrote reaches a reason; what it said is kept scanned and
-    on one line, as its own report."""
+    Nothing the model wrote reaches a reason; what it said is kept as
+    `one_line` keeps it, as its own report."""
     reply = routed.parsed
     if routed.outcome != "ok" or not isinstance(reply, VerifierVerdict):
         return Verified(
@@ -125,19 +125,12 @@ def judged(routed: Routed, cited: frozenset[str], redactor: Redactor) -> Verifie
         )
     said = VerifierSaid(
         reply.verdict,
-        tuple(_line(ref, redactor) for ref in reply.evidence_refs),
+        tuple(one_line(ref, redactor) for ref in reply.evidence_refs),
         reply.confidence,
-        _line(reply.rationale, redactor),
+        one_line(reply.rationale, redactor),
     )
     if set(reply.evidence_refs) != cited:
         return Verified("inconclusive", MISCITED, said)
     if reply.verdict == "inconclusive":
         return Verified("inconclusive", UNJUDGED, said)
     return Verified(reply.verdict, None, said)
-
-
-def _line(text: str, redactor: Redactor) -> Redacted:
-    """`text`, which the model chose, scanned, on one line and cut, as a
-    record keeps it."""
-    scanned = redactor.redact(text)
-    return redactor.redact(" ".join(scanned.split()), limit=REASON_CHARS)

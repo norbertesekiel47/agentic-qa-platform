@@ -70,7 +70,7 @@ from aqa_runner.model_turns import (
     unspelled,
 )
 from aqa_runner.reasons import UnansweredError
-from aqa_runner.redaction import REASON_CHARS, Redacted, Redactor
+from aqa_runner.redaction import Redacted, Redactor, one_line
 from aqa_runner.repairs import (
     Basis,
     Drift,
@@ -260,12 +260,6 @@ class _Heal:
     @property
     def folder(self) -> str:
         return f"heals/{self.drift.at.key}"
-
-    def line(self, text: str) -> Redacted:
-        """`text`, which the page or the model chose, scanned, on one line and
-        cut, as a record keeps it."""
-        scanned = self.redactor.redact(text)
-        return self.redactor.redact(" ".join(scanned.split()), limit=REASON_CHARS)
 
     def gave_up(self, stop: _Stop) -> Offer:
         # A stop of the whole run is the model's or the record's: no config edit.
@@ -473,7 +467,9 @@ async def _picked(
         return _Stop(_unlooked(context, error))
     except (RefError, DocumentChangedError, Error) as error:
         return f"rebind did not run: {reasons.reason(error, context.redactor)}"
-    reported = ModelReported(call.confidence, context.line(call.rationale))
+    reported = ModelReported(
+        call.confidence, one_line(call.rationale, context.redactor)
+    )
     return await _bound(context, seen, reported)
 
 
@@ -669,7 +665,7 @@ def _offered(
     rebound = script.targets[name].model_copy(update={"locators": locators})
     offered = script.model_copy(update={"targets": {**script.targets, name: rebound}})
     named = f' "{seen.name}"' if seen.name else ""
-    bound_as = context.line(f"{seen.role or 'element'}{named}")
+    bound_as = one_line(f"{seen.role or 'element'}{named}", context.redactor)
     return Offer(offered, Basis(bound_as, reported, None, context.folder, context.shot))
 
 

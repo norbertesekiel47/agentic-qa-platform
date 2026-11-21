@@ -495,6 +495,17 @@ def test_the_rationale_is_kept_on_one_line_and_cut(tmp_path: Path) -> None:
     assert len(reported.rationale) == 200
 
 
+def test_the_rationale_is_kept_with_its_controls_escaped(tmp_path: Path) -> None:
+    said = "it moved \u202eleft\x9b"
+
+    run = healed(tmp_path, rebinding("button", "Show details", rationale=said))
+
+    reported = basis(run).model_reported
+    assert reported is not None
+    assert reported.rationale == r"it moved \u202eleft\x9b"
+    assert basis(run).said == 'button "Show details"'
+
+
 @pytest.mark.parametrize(
     ("moves", "config", "cost_lines"),
     [

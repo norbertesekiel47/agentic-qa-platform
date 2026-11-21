@@ -14,12 +14,20 @@ import typer.testing
 from aqa_cli import replay as replay_module
 from aqa_cli.main import app as aqa
 from aqa_runner import verification
+from aqa_runner.evaluation import Verified
 from aqa_runner.evidence import Asked, Shots, capture_evidence, held_screenshot
+from aqa_runner.model_router import Routed
 from aqa_runner.redaction import NO_SECRETS, Redactor
 from aqa_runner.run_record import RunRecord
 from aqa_runner.screenshots import Screenshot, take_screenshot
-from aqa_runner.verifier import VERIFY_INSTRUCTIONS, VerifierVerdict, verify_request
-from langchain_core.messages import BaseMessage, HumanMessage
+from aqa_runner.verifier import (
+    MISCITED,
+    VERIFY_INSTRUCTIONS,
+    VerifierVerdict,
+    judged,
+    verify_request,
+)
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import ValidationError
 
 from packages.runner.tests.explore_graph_fixtures import Scripted
@@ -81,6 +89,26 @@ def test_the_schema_the_model_is_sent_requires_every_field() -> None:
         "expectation_violated",
         "inconclusive",
     ]
+
+
+def test_a_reply_is_kept_escaped_and_decides_as_its_raw_references_say() -> None:
+    # What the model wrote keeps no bidi or C1 control raw, while the check of
+    # its citations reads the references as it gave them (#334).
+    cited = frozenset({PATH, "e2"})
+
+    def judging(refs: list[str]) -> Verified:
+        said = {"evidence_refs": refs, "rationale": "the badge \u202eis green\x9b"}
+        reply = VerifierVerdict.model_validate(WELL_FORMED | said)
+        return judged(Routed(AIMessage(content=""), reply, "ok", ()), cited, NO_SECRETS)
+
+    decided = judging([PATH, "e2"])
+    assert (decided.verdict, decided.reason) == ("pass", None)
+    assert decided.said is not None
+    assert decided.said.rationale == r"the badge \u202eis green\x9b"
+    miscited = judging([PATH, "e2", "e3\u202e"])
+    assert (miscited.verdict, miscited.reason) == ("inconclusive", MISCITED)
+    assert miscited.said is not None
+    assert miscited.said.evidence_refs == (PATH, "e2", r"e3\u202e")
 
 
 def test_a_request_takes_only_a_screenshot_take_screenshot_made() -> None:
