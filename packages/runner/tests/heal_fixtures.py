@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from aqa_core.compiled import CompiledScript
 from aqa_core.heal_patch import blob_sha
@@ -262,6 +262,11 @@ def heal_spec(case: HealCase, root: Path) -> Spec:
 # Why a recording isn't what its case records, in fixed words: its proposal binds
 # another element, or it ended as its case doesn't allow (`unallowed`).
 ANOTHER_ELEMENT = "its proposal binds another element than this case's"
+# The one request a run may make of the app, any number of times: its start.
+ORDER_PAGE: Final = ("GET", "/page/order")
+# Why a run isn't one its recording is promoted from, in fixed words, when the app
+# served more than that.
+SERVED_ELSE: Final = "the app served a request other than the order page"
 
 
 def unallowed(outcome: str) -> str:
