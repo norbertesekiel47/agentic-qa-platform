@@ -6,9 +6,11 @@ nothing, the run ends `drift_consistent` and its proposal adds the target and th
 step. The same repair with one planted fault is refused and proposes nothing.
 Behind the validator, replay fails any other step through an added target before
 its intent, shown with a fault planted in the validator (the maintainer's
-backstop). `replays.replay_run(..., repair=...)` in real Chromium, with no model
-and no cassette."""
+backstop). An added target whose meaning a subject row governs is refused at the
+seam, as `aqa heal apply` refuses it (#332). `replays.replay_run(...,
+repair=...)` in real Chromium, with no model and no cassette."""
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -25,6 +27,10 @@ from packages.runner.tests.drift_fixtures import (
     DETAILS,
     DISMISS,
     DISMISSED_PATCH,
+    GOVERNED,
+    SUBJECT_CONFIG,
+    SUMMARY,
+    UNCONTRACTED,
     dismissed,
     dismissing,
     page,
@@ -235,4 +241,49 @@ def test_the_backstop_lets_an_inserted_replay_safe_click_through(
         (2, "completed"),
         (1, "completed"),
     ]
+    assert run.ended()[:2] == ("drift_consistent", 7)
+
+
+def meaning_the_summary(drift: Drift) -> CompiledScript:
+    """`dismissing()`'s script, with the dismiss button given the summary's
+    meaning, which the config's subject row governs."""
+    script = dismissing()(drift)
+    no_thanks = script.targets["no_thanks"].model_copy(
+        update={"semantic": SUMMARY["semantic"]}
+    )
+    return script.model_copy(
+        update={"targets": {**script.targets, "no_thanks": no_thanks}}
+    )
+
+
+def test_an_added_target_with_a_governed_meaning_is_refused_at_the_seam(
+    tmp_path: Path,
+) -> None:
+    """Replay's own admission at the seam, as `aqa heal apply` runs it: the
+    inserted click never runs (#332)."""
+    run = replayed(
+        tmp_path,
+        meaning_the_summary,
+        html=MODAL,
+        script=GOVERNED,
+        config_yaml=SUBJECT_CONFIG,
+    )
+
+    repaired = json.loads((run.record / "repairs/1.json").read_text())
+    assert repaired["problems"] == [UNCONTRACTED]
+    assert 2 not in {seq for seq, _ in run.states()}
+    assert run.ended() == INCONCLUSIVE
+    _, reason = run.verdict(1)
+    assert isinstance(reason, str)
+    assert UNCONTRACTED in reason
+
+
+def test_an_added_target_with_its_own_meaning_heals_under_the_subject_row(
+    tmp_path: Path,
+) -> None:
+    """The same config and script: only the governed meaning is refused."""
+    run = replayed(
+        tmp_path, dismissing(), html=MODAL, script=GOVERNED, config_yaml=SUBJECT_CONFIG
+    )
+
     assert run.ended()[:2] == ("drift_consistent", 7)

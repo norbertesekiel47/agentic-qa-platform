@@ -1,11 +1,12 @@
 """Fixtures the drift pages' tests share (#240): an order page whose toggle
 shows its details, five drifts of it, each one change (the toggle moved,
 renamed, removed or drawn in a canvas (#252), or a modal over the page), the
-scripts recorded against the order page, and the scripted repair that
-dismisses the modal (#325). Later tickets compose a page from these rather
-than edit one. Imported by its path, as pytest names the runner's test
+scripts recorded against the order page, the scripted repair that dismisses
+the modal (#325), and a subject row that governs the summary (#332). Later
+tickets compose a page from these rather than edit one. Imported by its path, as pytest names the runner's test
 modules (TESTING.md §1, Shared egress fixtures)."""
 
+import json
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -13,6 +14,8 @@ from typing import Any, Final
 from unittest.mock import patch
 
 from aqa_core.compiled import Click, CompiledScript, Step, Target
+from aqa_core.config import ProjectConfig
+from aqa_core.project import contracts_fingerprint
 from aqa_runner.repairs import Drift, StepAt
 
 from packages.runner.tests.executor_fixtures import (
@@ -119,6 +122,40 @@ DISMISSED_PATCH: Final[list[dict[str, Any]]] = [
         },
     },
 ]
+
+
+# One subject row on the order spec's expectation, whose region holds the
+# summary, the config that holds it as `order_spec` writes one, and `DETAILS`
+# under it: the summary carries the row's contract, and the script was
+# compiled under those contracts (#332).
+SUBJECTS: Final = [{"spec": "order", "expect": 0, "region": "main#order", "part": "p"}]
+SUBJECT_CONFIG: Final = (
+    f"budgets: {{ resolve_seconds: 1 }}\nsubjects: {json.dumps(SUBJECTS)}\n"
+)
+GOVERNED = DETAILS.model_copy(
+    update={
+        "spec_id": "order",
+        "targets": {
+            **DETAILS.targets,
+            "summary": Target.model_validate(
+                {
+                    **SUMMARY,
+                    "contract": {"region": "main#order", "part": "p", "leaf": False},
+                }
+            ),
+        },
+        "compiled_by": DETAILS.compiled_by.model_copy(
+            update={
+                "subject_contracts": contracts_fingerprint(
+                    ProjectConfig.model_validate({"subjects": SUBJECTS}), "order"
+                )
+            }
+        ),
+    }
+)
+# What the seam and `aqa heal apply` both say of a target that shares the
+# summary's meaning without its contract.
+UNCONTRACTED: Final = "targets.no_thanks: lacks subject contract for order expect 0"
 
 
 def dismissed(

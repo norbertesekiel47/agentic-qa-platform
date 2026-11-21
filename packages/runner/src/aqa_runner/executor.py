@@ -291,7 +291,11 @@ async def replay(
     (`repairs.added_target_refusal`). A step a repair
     inserted, once it completed, must show from its own settle window that
     it changed nothing, or it fails, its completion on disk, and the run
-    stops there (`repairs.inserted_failure`)."""
+    stops there (`repairs.inserted_failure`). From that window's opening
+    until the step is judged, the run's egress proxy holds every write the
+    browser sends, so none reaches the app, and a held one fails the step
+    (ADR-0024's #332 amendment); the hold ends however the step does, and
+    holds nothing of any other step."""
     try:
         replayed = await _replayed(
             script, setup, gate, every_locator, chromium=chromium, proxy=proxy
@@ -436,7 +440,18 @@ async def _replayed(
             before = (
                 await held_screenshot(session) if setup.before_screenshots else None
             )
-            result = _shown(run, await _run(session, run, step, interrupted), redactor)
+            # A step a repair inserted runs with every write held from its
+            # window's opening until it is judged, however it ends: nothing
+            # else in the run is held (ADR-0024's #332 amendment).
+            session.hold_writes(
+                all(each.seq != step.seq for each in run.committed.steps)
+            )
+            try:
+                result = _shown(
+                    run, await _run(session, run, step, interrupted), redactor
+                )
+            finally:
+                session.hold_writes(False)
             if result is None:
                 break
             # One repair per drifted step: a step that drifts again after its

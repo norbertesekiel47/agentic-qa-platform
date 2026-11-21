@@ -178,6 +178,12 @@ class BrowserSession:
         # Before the page's first navigation: `open_browser_session` hands
         # over a blank page.
         self._traffic = Traffic(page, redactor)
+        # The egress proxy this session hears (`watch`); whether the next
+        # window opens with it holding every write, and whether this session
+        # switched its hold on (`hold_writes`).
+        self._egress: EgressProxy | None = None
+        self._hold_asked = False
+        self._holding = False
         # https://playwright.dev/python/docs/api/class-page#page-event-crash
         self._crashed = False
         page.on("crash", self._note_crash)
@@ -331,7 +337,7 @@ class BrowserSession:
             origin = navigable_origin(url)
             if origin not in self._policy.allowed_origins:
                 raise self._refuse(PolicyEvent("navigation", url, origin))
-            window = self._traffic.next_window()
+            window = self._next_window()
             # https://playwright.dev/python/docs/api/class-page#page-goto
             await self.page.goto(url)
             await self._require_allowed_page()
@@ -342,7 +348,7 @@ class BrowserSession:
         and check the page it lands on."""
         async with self._turn:
             await self._require_allowed_page()
-            window = self._traffic.next_window()
+            window = self._next_window()
             # https://playwright.dev/python/docs/api/class-page#page-reload
             await self.page.reload()
             await self._require_allowed_page()
@@ -355,7 +361,7 @@ class BrowserSession:
         async with self._turn:
             await self._require_actionable(element)
             await self._require_hit_check(element)
-            window = self._traffic.next_window()
+            window = self._next_window()
             # https://playwright.dev/python/docs/api/class-elementhandle#element-handle-click
             await element.click()
             return window
@@ -371,7 +377,7 @@ class BrowserSession:
         has the focus by then, and another origin's frame can take it."""
         async with self._turn:
             await self._require_actionable(element)
-            window = self._traffic.next_window()
+            window = self._next_window()
             if not await element.evaluate(FILL, value):
                 raise Error(
                     "fill: the element didn't take the value: it takes no text, "
@@ -441,7 +447,7 @@ class BrowserSession:
         once the page and the element's frame are checked."""
         async with self._turn:
             await self._require_actionable(element)
-            window = self._traffic.next_window()
+            window = self._next_window()
             # A string matches an option's value or its label:
             # https://playwright.dev/python/docs/api/class-elementhandle#element-handle-select-option
             await element.select_option(option)
@@ -484,7 +490,7 @@ class BrowserSession:
                 finally:
                     if focused is not None:
                         await focused.dispose()
-            window = self._traffic.next_window()
+            window = self._next_window()
             # https://playwright.dev/python/docs/api/class-keyboard#keyboard-press
             await self.page.keyboard.press(key)
             return window
@@ -505,10 +511,49 @@ class BrowserSession:
 
     def watch(self, egress: EgressProxy) -> None:
         """Hear each write request `egress`'s open phase reads, in the window
-        of the latest action (`aqa_runner.settling.Traffic.proxied`). Only a
-        window opened after this is `heard` (ADR-0025's #54 amendment)."""
-        egress.watch(self._traffic.proxied)
+        of the latest action (`aqa_runner.settling.Traffic.proxied`), held or
+        not. Only a window opened after this is `heard` (ADR-0025's #54
+        amendment). The first write the proxy holds stops the invariant
+        observers, in the same call: Chromium's console entry for it, and
+        whatever the page does about its failure, are the hold's doing, not
+        the app's (ADR-0024's #332 amendment). `egress` is the proxy whose
+        hold `hold_writes` switches."""
+        egress.watch(self._proxied)
+        self._egress = egress
         self._traffic.heard = True
+
+    def _proxied(self, method: bytes, held: bool) -> None:
+        self._traffic.proxied(method, held)
+        if held:
+            self.invariant_observers.stop()
+
+    def hold_writes(self, holding: bool) -> None:
+        """Whether the next action's settle window opens with the egress
+        proxy `watch` gave holding every write (`EgressProxy.hold_writes`),
+        from the same moment, so no write the proxy reads falls between the
+        two. Not `holding`, no later window asks for it, and a hold this
+        session switched on ends. Only a step a repair inserted asks for
+        one (ADR-0024's #332 amendment)."""
+        self._hold_asked = holding
+        if not holding and self._holding:
+            self._holding = False
+            self._watched().hold_writes(False)
+
+    def _next_window(self) -> Window:
+        """A new settle window (`Traffic.next_window`), which every request
+        from now on joins, and, when `hold_writes` asked for it, the egress
+        proxy holding every write from now on: nothing awaits between the
+        two."""
+        window = self._traffic.next_window()
+        if self._hold_asked:
+            self._watched().hold_writes(True)
+            self._holding = True
+        return window
+
+    def _watched(self) -> EgressProxy:
+        if self._egress is None:
+            raise RuntimeError("the session watches no egress proxy to hold writes")
+        return self._egress
 
     def console_log(self, window: Window) -> Records[ConsoleEntry]:
         """`window`'s console messages as they stand now
@@ -748,7 +793,7 @@ class BrowserSession:
         """`fill_secret`'s checks, then its fill: the fill's settle window, or
         None when the field didn't take the value."""
         await self._require_secret_binding(element, secret)
-        window = self._traffic.next_window()
+        window = self._next_window()
         # Before the page has it: a fill that fails partway can leave part of it.
         self._secret_filled = True
         filled = await element.evaluate(FILL, secret.value.get_secret_value())

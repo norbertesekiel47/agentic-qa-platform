@@ -1,8 +1,9 @@
 """The four invariants (DATA_MODEL §6; ADR-0024, Settling, and its #47
 amendment): what the session's page did, besides what its assertions check,
 that keeps a run from passing. They are observed from before the page's
-first navigation to the end of the attempt, reloads included, and the
-spec's `invariants` decide, once the run is over, which of them count.
+first navigation to the end of the attempt, reloads included, or until the
+egress proxy first holds a write the page sent (ADR-0024's #332 amendment),
+and the spec's `invariants` decide, once the run is over, which of them count.
 
 - `console_errors`: console messages of type `error`, Chromium's own
   "Failed to load resource" entries included, from every frame of the page
@@ -109,6 +110,8 @@ class Observers:
         # (measured), so every one of their errors is that load's; an image
         # error at the URL after a newer load has started is the newer one's.
         self._refused_hops: dict[str, None] = {}
+        # Set by `stop`; sticky.
+        self._stopped = False
 
     @classmethod
     async def watch(cls, page: Page, policy: EgressPolicy) -> Self:
@@ -222,8 +225,15 @@ class Observers:
             and refused_attempt(url, self._policy, "") is not None
         )
 
+    def stop(self) -> None:
+        """Record nothing more for any invariant: the egress proxy held a
+        write the page sent, and what the page shows from then on can be the
+        hold's doing (ADR-0024's #332 amendment). What was seen stays."""
+        self._stopped = True
+
     def _add(self, name: InvariantName, what: str) -> None:
-        self.seen[name].add(what[:TEXT_CHARS])
+        if not self._stopped:
+            self.seen[name].add(what[:TEXT_CHARS])
 
 
 def _load_key(url: str) -> str:

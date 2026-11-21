@@ -91,9 +91,11 @@ class Window:
     is when one last started or ended (`time.monotonic`). `heard`: whether
     the egress proxy's phase told the session of every write request from
     the window's opening on; `wrote`, whether it read one meanwhile, any
-    method but GET, HEAD or OPTIONS, from any page or worker; `tunnelled`,
-    whether a tunnel (https or a WebSocket), whose requests and messages it
-    can't read, had opened by then (ADR-0025's #54 amendment); `navigated`,
+    method but GET, HEAD or OPTIONS, from any page or worker, and let it go
+    on; `held`, whether it read one it held, so it never reached the app, a
+    CONNECT included (ADR-0024's #332 amendment); `tunnelled`, whether a
+    tunnel (https or a WebSocket), whose requests and messages it can't
+    read, had opened by then (ADR-0025's #54 amendment); `navigated`,
     whether Playwright reported a navigation of the page's main frame
     meanwhile, a same-document one included (ADR-0024's #246 amendment). No
     field retains a live Playwright object."""
@@ -104,6 +106,7 @@ class Window:
     changed_at: float = field(default_factory=time.monotonic)
     heard: bool = False
     wrote: bool = False
+    held: bool = False
     tunnelled: bool = False
     navigated: bool = False
 
@@ -206,11 +209,15 @@ class Traffic:
         self._main_frame = page.main_frame
         page.on("framenavigated", self._navigated)
 
-    def proxied(self, method: bytes) -> None:
+    def proxied(self, method: bytes, held: bool) -> None:
         """A write request the egress proxy read, `method` as sent, which joins
-        the window of the latest action, as the page's own requests do. A
-        CONNECT opens a tunnel, and every window from then on is tunnelled."""
-        if method == b"CONNECT":
+        the window of the latest action, as the page's own requests do: as
+        `held` when the proxy held it, a CONNECT included, since a held one
+        opens no tunnel. A CONNECT it let go on opens a tunnel, and every
+        window from then on is tunnelled."""
+        if held:
+            self._window.held = True
+        elif method == b"CONNECT":
             self._tunnelled = self._window.tunnelled = True
         else:
             self._window.wrote = True
