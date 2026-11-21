@@ -23,6 +23,8 @@ from aqa_core.project import load_config, load_spec
 from aqa_runner import executor, settling
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.evaluation import AssertionResult
+from aqa_runner.evidence import Shots as Saved
+from aqa_runner.evidence import capture_evidence
 from aqa_runner.executor import RunResult, StepResult
 from aqa_runner.locator_generation import register_identity_engine
 from aqa_runner.redaction import NO_SECRETS, Redactor
@@ -605,3 +607,42 @@ def test_the_hold_lifts_once_the_inserted_step_is_judged(tmp_path: Path) -> None
         (2, "completed", None),
     ]
     assert run.ended()[:2] == ("drift_consistent", 7)
+
+
+# A write the page sends once it is told to, and a click that keeps a request
+# open, so settling's wait runs out and the inserted step fails.
+LATER = "fetch('/write/later', {method: 'POST'}).catch(() => 0)"
+HOLDS_A_GET_OPEN = "fetch('/held/later')"
+
+
+def test_the_hold_stays_on_after_a_failed_inserted_step_until_the_session_closes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page writes once the failed step was judged, as its evidence is
+    saved: the proxy still holds the write, on the failed step's window, and
+    the step keeps the reason it was judged with (#335)."""
+    monkeypatch.setattr(settling, "SETTLE_SECONDS", 2)
+    windows: list[Window] = []
+
+    async def writing_later(*args: Any, **kwargs: Any) -> Saved:
+        _, session, folder, *_ = args
+        if folder == "evidence/3":
+            # The fetch settles once the proxy has held or forwarded the
+            # write, and it tells the session first.
+            async with asyncio.timeout(10):
+                await session.page.evaluate(LATER)
+            windows.append(session.windows()[-1])
+        return await capture_evidence(*args, **kwargs)
+
+    monkeypatch.setattr(executor, "capture_evidence", writing_later)
+
+    run = replayed(
+        tmp_path, inserting(CLICK_CONTACT), html=contact_does(HOLDS_A_GET_OPEN)
+    )
+
+    assert ("POST", "/write/later") not in run.seen
+    assert run.outcomes() == [(0, "completed", None), (3, "failed", UNSHOWN + BUSY)]
+    assert windows == [run.result.steps[-1].window]
+    assert (windows[0].held, windows[0].wrote) == (True, False)
+    assert run.verdict(3) == ("inconclusive", UNSHOWN + BUSY)
+    assert run.ended() == INCONCLUSIVE

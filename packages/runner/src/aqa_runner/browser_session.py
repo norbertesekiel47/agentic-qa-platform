@@ -540,12 +540,22 @@ class BrowserSession:
         proxy `watch` gave holding every write (`EgressProxy.hold_writes`),
         from the same moment, so no write the proxy reads falls between the
         two. Not `holding`, no later window asks for it, and a hold this
-        session switched on ends. Only a step a repair inserted asks for
-        one (ADR-0024's #332 amendment)."""
+        session switched on ends: the replay lifts it so only after a step a
+        repair inserted that passed its judgment, and otherwise keeps it
+        (`keep_hold`). Only a step a repair inserted asks for one (ADR-0024's
+        #332 and #335 amendments)."""
         self._hold_asked = holding
         if not holding and self._holding:
             self._holding = False
             self._watched().hold_writes(False)
+
+    def keep_hold(self) -> None:
+        """Withdraw what `hold_writes` asked for, so no later window opens
+        held, and leave a hold this session already switched on as it is:
+        on until the egress proxy's phase ends, which ends it, after this
+        session has closed (ADR-0024's #335 amendment). A write held
+        meanwhile joins the latest window, as any does."""
+        self._hold_asked = False
 
     def _next_window(self) -> Window:
         """A new settle window (`Traffic.next_window`), which every request

@@ -294,9 +294,14 @@ async def replay(
     it changed nothing, or it fails, its completion on disk, and the run
     stops there (`repairs.inserted_failure`). From that window's opening
     until the step is judged, the run's egress proxy holds every write the
-    browser sends, so none reaches the app, and a held one fails the step
-    (ADR-0024's #332 amendment); the hold ends however the step does, and
-    holds nothing of any other step."""
+    browser sends, so none reaches the app unless a tunnel opened before
+    carries it, and a held one fails the step (ADR-0024's #332 amendment).
+    The hold lifts once the step passed. Otherwise no later window asks for
+    it, and one switched on stays on until the session closes, so what the
+    page sends once a failed step was judged is held too; the run stops
+    there, so it holds nothing of any other step (ADR-0024's #335
+    amendment). A step a repair inserted fails before its intent while the
+    session already has a tunnel open (`repairs.tunnelled_refusal`)."""
     try:
         replayed = await _replayed(
             script, setup, gate, every_locator, chromium=chromium, proxy=proxy
@@ -441,18 +446,7 @@ async def _replayed(
             before = (
                 await held_screenshot(session) if setup.before_screenshots else None
             )
-            # A step a repair inserted runs with every write held from its
-            # window's opening until it is judged, however it ends: nothing
-            # else in the run is held (ADR-0024's #332 amendment).
-            session.hold_writes(
-                all(each.seq != step.seq for each in run.committed.steps)
-            )
-            try:
-                result = _shown(
-                    run, await _run(session, run, step, interrupted), redactor
-                )
-            finally:
-                session.hold_writes(False)
+            result = await _held_while_judged(session, run, step, interrupted)
             if result is None:
                 break
             # One repair per drifted step: a step that drifts again after its
@@ -507,6 +501,32 @@ async def _replayed(
         () if handing is None else tuple(handing.repaired),
         shots,
     )
+
+
+async def _held_while_judged(
+    session: BrowserSession,
+    run: _Replay,
+    step: Targeted | Untargeted,
+    interrupted: Callable[[], bool],
+) -> StepResult | None:
+    """`step` run (`_run`) and judged (`_shown`). A step a repair inserted runs
+    with every write held from its window's opening until it is judged:
+    nothing else in the run is held (ADR-0024's #332 amendment). The hold
+    lifts only once it passed, so before its evidence and anything of the next
+    step. However else it ends, failed, drifted, interrupted, raised or
+    cancelled, no later window asks for a hold, and one switched on stays on
+    until the session closes (ADR-0024's #335 amendment)."""
+    session.hold_writes(all(each.seq != step.seq for each in run.committed.steps))
+    result = None
+    try:
+        ran = await _run(session, run, step, interrupted)
+        result = _shown(run, ran, session.redactor)
+    finally:
+        if result is not None and result.outcome == "completed":
+            session.hold_writes(False)
+        else:
+            session.keep_hold()
+    return result
 
 
 def _crops(setup: RunSetup, script: CompiledScript) -> KeepCrop | None:
