@@ -293,9 +293,9 @@ async def heal_recorded(
     script: CompiledScript, html: str, spec: Spec, router: ModelRouter, rule: HealRule
 ) -> tuple[Replayed, str | None]:
     """`script`'s `aqa run` of `spec` with `router`, in real Chromium against the
-    fixture app serving `html`: a heal case's (#244) or a heal-aimed injection
-    case's (#311). How it ended, and why `rule`, handed that and what the app saw,
-    says it isn't what its case records."""
+    fixture app serving `html`: a heal case's (#244), a heal-aimed injection case's
+    (#311) or the removed-page case's (#338). How it ended, and why `rule`, handed
+    that and what the app saw, says it isn't what its case records."""
     root = spec.path.parent
     config = load_config(root / "config.yaml")
     script = fx.for_spec(script, spec)
@@ -317,6 +317,31 @@ async def heal_recorded(
             await register_identity_engine(playwright)
             replayed = await strict_replay(run, playwright, NO_SECRETS, heal=heal)
     return replayed, rule(replayed, app.seen)
+
+
+@dataclass(frozen=True)
+class RemovedCase:
+    """The removed-page recording (#338): its cassette, the script and the
+    expectation it is compiled from, the page it drifts on, and its config."""
+
+    cassette: str
+    script: CompiledScript
+    expectation: str
+    html: str
+    config: str
+
+    def spec(self, root: Path) -> Spec:
+        """The order spec under the spec root `root`, with this case's config."""
+        path = order_spec(root, self.expectation)
+        (root / "config.yaml").write_text(self.config)
+        return load_spec(path, load_config(root / "config.yaml"))
+
+
+# The removed page under its scripted suite's config, so `hybrid` and `heal_turns`
+# 6: a vision turn's request reserves more than `RECORDING_CONFIG`'s run bound.
+REMOVED_CASE: Final = RemovedCase(
+    "heal_removed", DETAILS, SHIPPING, page("removed"), BUDGETS
+)
 
 
 # Why a run of the removed-page case isn't one its recording is promoted from, in

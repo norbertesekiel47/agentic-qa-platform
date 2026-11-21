@@ -52,8 +52,10 @@ from packages.runner.tests.conftest import CASSETTES, REDIRECTS, _canonical, _vc
 from packages.runner.tests.executor_fixtures import serving_app
 from packages.runner.tests.heal_fixtures import (
     HEAL_CASES,
+    REMOVED_CASE,
     heal_disallowed,
     heal_recorded,
+    heal_removed_disallowed,
     heal_spec,
 )
 from packages.runner.tests.heal_injection_fixtures import (
@@ -81,6 +83,8 @@ INJECTED = {case.cassette: case for case in INJECTION_CASES}
 HEALED = {case.cassette: case for case in HEAL_CASES}
 # The heal-aimed injection pages' `aqa run`s (#311), by cassette name.
 HEAL_INJECTED = {case.cassette: case for case in HEAL_INJECTION_CASES}
+# The removed drift page's `aqa run` (#338), by cassette name.
+HEAL_REMOVED = {REMOVED_CASE.cassette: REMOVED_CASE}
 # The whole explore of the fixture spec: the plan and every turn.
 EXPLORE = "explore_fixture"
 # The explore's own guard: the run stops calling once it has spent this. One
@@ -121,6 +125,9 @@ HEAL_ROUND_USD: Final = Decimal("0.25")
 # USD 1.00 over the USD 0.70 ADR-0024's #311 amendment derives, for more
 # re-attempts; each run's is its config's heal_model_usd.
 HEAL_INJECTION_ROUND_USD: Final = Decimal("1.00")
+# The removed-page round's limit (#338), derived in ADR-0024's #338 amendment and
+# awaiting the maintainer's approval; its run's is its config's heal_model_usd.
+HEAL_REMOVED_ROUND_USD: Final = Decimal("0.25")
 
 
 class SpendRefusedError(Exception):
@@ -573,8 +580,9 @@ def answers_expected(name: str, calls: tuple[CostRecord, ...]) -> int:
     #161 amendment). A refusal and its fallback stay rejected. A case of a whole
     run holds one per priced call, each turn's, as the run's own cost lines keep
     them, less those it replayed: a heal-aimed injection case's turns too, which a
-    real model may take more of (#311). A heal case's turn is one, so it holds
-    one."""
+    real model may take more of (#311), and the removed-page case's, a tree turn and
+    a vision turn when the first finds nothing (#338). A heal case's turn is one, so
+    it holds one."""
     if name in HEALED:
         return 1
     if CASES[name].whole_run:
@@ -714,6 +722,26 @@ async def healed_injection(
     )
 
 
+async def healed_removed(
+    name: str, router: ModelRouter, spec: Spec
+) -> tuple[tuple[CostRecord, ...], bool, Ending, str | None]:
+    """The removed-page case's `aqa run` on its drift page (#338): its priced calls,
+    whether its rule allows how it ended, given what the app saw, how it ended,
+    and, in fixed words, why the rule doesn't."""
+    case = HEAL_REMOVED[name]
+    return heal_ended(
+        *await heal_recorded(
+            case.script,
+            case.html,
+            spec,
+            router,
+            lambda replayed, seen: heal_removed_disallowed(
+                replayed.outcome, replayed.document, seen
+            ),
+        )
+    )
+
+
 def heal_ended(
     replayed: Replayed, disallowed: str | None
 ) -> tuple[tuple[CostRecord, ...], bool, Ending, str | None]:
@@ -810,6 +838,17 @@ CASES: Final[Mapping[str, RecordedCase]] = {
         )
         for name, case in HEAL_INJECTED.items()
     },
+    **dict.fromkeys(
+        HEAL_REMOVED,
+        RecordedCase(
+            healed_removed,
+            role="healer",
+            mode="heal",
+            round_usd=HEAL_REMOVED_ROUND_USD,
+            run_usd=lambda config: Decimal(str(config.budgets.heal_model_usd)),
+            whole_run=True,
+        ),
+    ),
 }
 
 
@@ -1178,6 +1217,8 @@ def record(
         spec = heal_spec(HEALED[name], attempt / "qa")
     elif name in HEAL_INJECTED:
         spec = HEAL_INJECTED[name].spec(attempt / "qa")
+    elif name in HEAL_REMOVED:
+        spec = HEAL_REMOVED[name].spec(attempt / "qa")
     else:
         spec = checkout(attempt / "qa")
     config = load_config(spec.path.parent / "config.yaml")
