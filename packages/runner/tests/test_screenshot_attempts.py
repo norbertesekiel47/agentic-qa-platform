@@ -163,6 +163,34 @@ def test_a_capture_devtools_never_takes_is_withheld_after_every_attempt(
     assert sessions.detached == sessions.opened
 
 
+# The page stops answering once DevTools has answered the fault, as a page a
+# failed step left can: the detach after the fault waits on it, and the
+# capture's bound, which hasn't cancelled anything yet, cancels the detach.
+def test_a_detach_after_the_fault_that_never_answers_withholds_it_within_the_bound(
+    sites: Sites, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(screenshots, "CAPTURE_SECONDS", 0.5)
+    uncapturing(monkeypatch, 1)
+
+    async def unanswered(_: CDPSession) -> None:
+        await asyncio.Event().wait()
+
+    async def scenario() -> tuple[str, list[Path], int]:
+        async with browsing(sites) as session:
+            await serve_cases(session.page, sites.other)
+            await session.navigate(f"{sites.app}/shot/plain")
+            monkeypatch.setattr(CDPSession, "detach", unanswered)
+            # The test's own limit, which a detach outside the bound runs into.
+            async with asyncio.timeout(10):
+                return await withheld(session, RunRecord.create(tmp_path))
+
+    assert asyncio.run(scenario()) == (
+        "the page's snapshot, its scrub or its render took over 0.5 s",
+        [],
+        0,
+    )
+
+
 # The page as `test_screenshot_ocr.py`'s `reflected` shows a value.
 REFLECTED = (
     "<!doctype html><meta charset=utf-8>"
