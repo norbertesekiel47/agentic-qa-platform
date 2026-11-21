@@ -6,12 +6,12 @@ test modules (TESTING.md §1, Shared egress fixtures)."""
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from aqa_core.compiled import CompiledScript
 from aqa_core.heal_patch import blob_sha
@@ -262,6 +262,11 @@ def heal_spec(case: HealCase, root: Path) -> Spec:
 # Why a recording isn't what its case records, in fixed words: its proposal binds
 # another element, or it ended as its case doesn't allow (`unallowed`).
 ANOTHER_ELEMENT = "its proposal binds another element than this case's"
+# The one request a run may make of the app, any number of times: its start.
+ORDER_PAGE: Final = ("GET", "/page/order")
+# Why a run isn't one its recording is promoted from, in fixed words, when the app
+# served more than that.
+SERVED_ELSE: Final = "the app served a request other than the order page"
 
 
 def unallowed(outcome: str) -> str:
@@ -288,9 +293,9 @@ async def heal_recorded(
     script: CompiledScript, html: str, spec: Spec, router: ModelRouter, rule: HealRule
 ) -> tuple[Replayed, str | None]:
     """`script`'s `aqa run` of `spec` with `router`, in real Chromium against the
-    fixture app serving `html`: a heal case's (#244) or a heal-aimed injection
-    case's (#311). How it ended, and why `rule`, handed that and what the app saw,
-    says it isn't what its case records."""
+    fixture app serving `html`: a heal case's (#244), a heal-aimed injection case's
+    (#311) or the removed-page case's (#338). How it ended, and why `rule`, handed
+    that and what the app saw, says it isn't what its case records."""
     root = spec.path.parent
     config = load_config(root / "config.yaml")
     script = fx.for_spec(script, spec)
@@ -312,3 +317,73 @@ async def heal_recorded(
             await register_identity_engine(playwright)
             replayed = await strict_replay(run, playwright, NO_SECRETS, heal=heal)
     return replayed, rule(replayed, app.seen)
+
+
+@dataclass(frozen=True)
+class RemovedCase:
+    """The removed-page recording (#338): its cassette, the script and the
+    expectation it is compiled from, the page it drifts on, and its config."""
+
+    cassette: str
+    script: CompiledScript
+    expectation: str
+    html: str
+    config: str
+
+    def spec(self, root: Path) -> Spec:
+        """The order spec under the spec root `root`, with this case's config."""
+        path = order_spec(root, self.expectation)
+        (root / "config.yaml").write_text(self.config)
+        return load_spec(path, load_config(root / "config.yaml"))
+
+
+# The removed page under its scripted suite's config, so `hybrid` and `heal_turns`
+# 6, whose run bound leaves room for the vision turn after costlier tree turns, as
+# `RECORDING_CONFIG`'s may not (ADR-0024's #338 amendment).
+REMOVED_CASE: Final = RemovedCase(
+    "heal_removed", DETAILS, SHIPPING, page("removed"), BUDGETS
+)
+
+
+# Why a run of the removed-page case isn't one its recording is promoted from, in
+# fixed words, with `SERVED_ELSE`, `unallowed` and `with_a_proposal`.
+NO_REBOUND_FINDING: Final = (
+    "it ended expectation_violated with no finding that lists the rebound step"
+)
+
+
+def with_a_proposal(outcome: str) -> str:
+    return f"it ended {outcome} with a proposal"
+
+
+def heal_removed_disallowed(
+    outcome: str, document: Mapping[str, object], seen: Sequence[tuple[str, str]]
+) -> str | None:
+    """Why a run of the removed-page case (#338) that ended `outcome`, whose
+    `replay.json` is `document`, while the app saw each request in `seen`, isn't one
+    its recording is promoted from, in fixed words, checked in this order, or None.
+    Only the order page is served; then `inconclusive` (3) or `expectation_violated`
+    (1), with no proposal: the model found nothing, or rebound a best guess whose
+    checks then failed, and a finding lists the rebound step."""
+    if any(request != ORDER_PAGE for request in seen):
+        return SERVED_ELSE
+    if outcome not in {"inconclusive", "expectation_violated"}:
+        return unallowed(outcome)
+    if document.get("heal_proposal") is not None:
+        return with_a_proposal(outcome)
+    if outcome == "expectation_violated" and not lists_the_rebound_step(document):
+        return NO_REBOUND_FINDING
+    return None
+
+
+def lists_the_rebound_step(document: Mapping[str, object]) -> bool:
+    """Whether a verdict in `document` has a finding whose `rebound_steps` holds
+    step 1, the toggle's click, the one step the heal rebinds."""
+    verdicts = document.get("verdicts")
+    if not isinstance(verdicts, list):
+        return False
+    for verdict in verdicts:
+        match verdict:
+            case {"finding": {"rebound_steps": [*steps]}} if 1 in steps:
+                return True
+    return False
