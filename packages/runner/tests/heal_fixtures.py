@@ -6,7 +6,7 @@ test modules (TESTING.md §1, Shared egress fixtures)."""
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from decimal import Decimal
@@ -317,3 +317,47 @@ async def heal_recorded(
             await register_identity_engine(playwright)
             replayed = await strict_replay(run, playwright, NO_SECRETS, heal=heal)
     return replayed, rule(replayed, app.seen)
+
+
+# Why a run of the removed-page case isn't one its recording is promoted from, in
+# fixed words, with `SERVED_ELSE`, `unallowed` and `with_a_proposal`.
+NO_REBOUND_FINDING: Final = (
+    "it ended expectation_violated with no finding that lists the rebound step"
+)
+
+
+def with_a_proposal(outcome: str) -> str:
+    return f"it ended {outcome} with a proposal"
+
+
+def heal_removed_disallowed(
+    outcome: str, document: Mapping[str, object], seen: Sequence[tuple[str, str]]
+) -> str | None:
+    """Why a run of the removed-page case (#338) that ended `outcome`, whose
+    `replay.json` is `document`, while the app saw each request in `seen`, isn't one
+    its recording is promoted from, in fixed words, checked in this order, or None.
+    Only the order page is served; then `inconclusive` (3) or `expectation_violated`
+    (1), with no proposal: the model found nothing, or rebound a best guess whose
+    checks then failed, and a finding lists the rebound step."""
+    if any(request != ORDER_PAGE for request in seen):
+        return SERVED_ELSE
+    if outcome not in {"inconclusive", "expectation_violated"}:
+        return unallowed(outcome)
+    if document.get("heal_proposal") is not None:
+        return with_a_proposal(outcome)
+    if outcome == "expectation_violated" and not lists_the_rebound_step(document):
+        return NO_REBOUND_FINDING
+    return None
+
+
+def lists_the_rebound_step(document: Mapping[str, object]) -> bool:
+    """Whether a verdict in `document` has a finding whose `rebound_steps` holds
+    step 1, the toggle's click, the one step the heal rebinds."""
+    verdicts = document.get("verdicts")
+    if not isinstance(verdicts, list):
+        return False
+    for verdict in verdicts:
+        match verdict:
+            case {"finding": {"rebound_steps": [*steps]}} if 1 in steps:
+                return True
+    return False
