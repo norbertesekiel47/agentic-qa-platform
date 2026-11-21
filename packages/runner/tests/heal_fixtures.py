@@ -75,6 +75,25 @@ def rebinding(
     )
 
 
+def uncovering(
+    role: str,
+    name: str,
+    *,
+    confidence: float = 0.9,
+    rationale: str = "it closes the dialog",
+) -> Move:
+    """A move that picks, to click first, the element the request's snapshot
+    gives `role` and `name` (#335)."""
+    return tool(
+        "uncover",
+        lambda messages: {
+            "ref": ref(messages, role, name),
+            "confidence": confidence,
+            "rationale": rationale,
+        },
+    )
+
+
 SHOW = rebinding("button", "Show details", confidence=0.9, rationale="it moved")
 NO_TOOL = answer(AIMessage(content="nothing on this page fits"))
 # Vision fallback's reply naming no point (#252): a tree turn that found no

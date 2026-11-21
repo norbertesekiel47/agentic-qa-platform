@@ -141,16 +141,29 @@ type At = StepAt | AssertionAt
 @dataclass(frozen=True)
 class Drift:
     """Where a replay paused, for its repair: a deep copy of what drifted;
-    each locator's miss; a deep copy of the script in use, the committed one
-    or an earlier repair's, so an edit to either reaches nothing replay holds;
-    the live session, which the repair observes through and dispatches nothing
-    with; and whether something has interrupted the run by now."""
+    each locator's miss, which says whether its target is covered (`covered`);
+    a deep copy of the script in use, the committed one or an earlier
+    repair's, so an edit to either reaches nothing replay holds; the live
+    session, which the repair observes through and dispatches nothing with;
+    and whether something has interrupted the run by now."""
 
     at: At
     misses: tuple[Miss, ...]
     script: CompiledScript
     session: BrowserSession
     interrupted: Callable[[], bool]
+
+
+def covered(drift: Drift) -> StepAt | None:
+    """`drift`'s step when its target is covered, or None (ADR-0024's #335
+    amendment): every locator found it, and none could act on it, as under a
+    dialog. A disabled target, or one hidden by CSS, that every locator finds
+    misses the same way. A check's target is never covered, since only an
+    action needs its element actionable."""
+    at = drift.at
+    if not isinstance(at, StepAt) or not drift.misses:
+        return None
+    return at if all(miss == "not actionable" for miss in drift.misses) else None
 
 
 @dataclass(frozen=True)
@@ -465,6 +478,27 @@ async def _found_alone(page: Page, element: ElementHandle, committed: Target) ->
                     return True
             finally:
                 await found.element.dispose()
+    return False
+
+
+async def found_by_the_script(
+    page: Page, element: ElementHandle, script: CompiledScript
+) -> bool:
+    """Whether some locator of a target of `script`, alone, under that target's
+    own contract, finds `element` for an assertion, which needs it attached,
+    not actionable (ADR-0024's #335 amendment). A heal adds a target only for
+    an element none finds, so it never names a committed target's element
+    under a new name, and never the covered target itself."""
+    for target in script.targets.values():
+        for locator in target.locators:
+            alone = target.model_copy(update={"locators": (locator,)})
+            found = await resolve(page, alone, "assertion")
+            if isinstance(found, Resolved):
+                try:
+                    if await same_element(element, found.element):
+                        return True
+                finally:
+                    await found.element.dispose()
     return False
 
 
