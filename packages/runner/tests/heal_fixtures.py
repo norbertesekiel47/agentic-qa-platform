@@ -338,7 +338,8 @@ class RemovedCase:
 
 
 # The removed page under its scripted suite's config, so `hybrid` and `heal_turns`
-# 6: a vision turn's request reserves more than `RECORDING_CONFIG`'s run bound.
+# 6, whose run bound leaves room for the vision turn after costlier tree turns, as
+# `RECORDING_CONFIG`'s may not (ADR-0024's #338 amendment).
 REMOVED_CASE: Final = RemovedCase(
     "heal_removed", DETAILS, SHIPPING, page("removed"), BUDGETS
 )
