@@ -58,10 +58,10 @@ CAPTURE_SECONDS = 5.0
 # How many whole captures `take_screenshot` makes at most when DevTools
 # answers a live one `UNCAPTURED`, and for nothing else (#337), with
 # CAPTURE_PAUSE_SECONDS between them. Each has its own bounds, so the worst
-# case is 2 x CAPTURE_SECONDS + 0.25 s = 10.25 s live and
-# 2 x 2 x CAPTURE_SECONDS + 0.25 s = 20.25 s rendered, plus OCR_SECONDS
-# (5 s) once in a run that binds a secret: 15.25 s and 25.25 s (ADR-0034's
-# #337 amendment).
+# case is CAPTURE_ATTEMPTS x CAPTURE_SECONDS + 0.25 s = 10.25 s live and
+# CAPTURE_ATTEMPTS x 2 x CAPTURE_SECONDS + 0.25 s = 20.25 s rendered, plus
+# OCR_SECONDS (5 s) once in a run that binds a secret: 15.25 s and 25.25 s
+# (ADR-0034's #337 amendment).
 CAPTURE_ATTEMPTS = 2
 
 # How long `take_screenshot` waits before it makes a capture DevTools
