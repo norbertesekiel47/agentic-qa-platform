@@ -48,7 +48,12 @@ from packages.runner.tests.explore_graph_fixtures import (
     Scripted,
     calling,
 )
-from packages.runner.tests.heal_fixtures import NO_POINT, NO_TOOL, rebinding
+from packages.runner.tests.heal_fixtures import (
+    NO_POINT,
+    NO_TOOL,
+    rebinding,
+    uncovering,
+)
 from packages.runner.tests.secret_fixtures import (
     BOUND_AT_START,
     OTHER_FAKE_VALUE,
@@ -279,6 +284,82 @@ def test_a_drifted_assertion_target_heals_into_a_proposal_and_exits_7(
         result = run(monkeypatch, [str(spec), "--url", app.origin], Scripted(case.pick))
         assert (record_of(spec) / "repairs/assertion-0.json").exists()
         assert_healed_and_applies(spec, app, result, case, monkeypatch)
+
+
+# What the heal adds on the modal page (#335): a target for the dialog's dismiss
+# button, meaning what our code writes, and a replay-safe click on it, first.
+UNCOVERING = {
+    "semantic": (
+        "the element a heal clicks to uncover the button that shows the order's details"
+    ),
+    "locators": [
+        {"role": "button", "name": "No thanks"},
+        {"css": "button", "scope": {"css": "#overlay"}},
+    ],
+}
+UNCOVERING_CLICK = {
+    "seq": 2,
+    "side_effect": False,
+    "satisfies": [],
+    "action": "click",
+    "target": "uncover_2",
+}
+
+
+def test_a_covered_step_heals_into_a_click_it_inserts_and_exits_7(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On the modal page, the healer's model picks the dialog's "No thanks",
+    and the proposal adds a target for it and a click on it before the
+    toggle's step: applied, strict replay runs it and passes (#335)."""
+    spec = order_at(tmp_path / "qa")
+    before = compiled_of(spec).read_text()
+
+    with serving(page("modal")) as app:
+        result = run(
+            monkeypatch,
+            [str(spec), "--url", app.origin],
+            Scripted(uncovering("button", "No thanks")),
+        )
+        assert result.exit_code == 7, result.output
+        document = replay_json(spec)
+        assert (document["mode"], document["outcome"], document["exit_code"]) == (
+            "run",
+            "drift_consistent",
+            7,
+        )
+        proposal = document["heal_proposal"]
+        assert proposal["patch"] == [
+            {"op": "add", "path": "/targets/uncover_2", "value": UNCOVERING},
+            {"op": "add", "path": "/steps/0", "value": UNCOVERING_CLICK},
+        ]
+        assert f"  heal proposal {proposal['id']}:\n" in result.stderr
+        # An added target binds nothing anew, so no line says what was bound.
+        assert "): bound " not in result.stderr
+        assert compiled_of(spec).read_text() == before
+        monkeypatch.chdir(spec.parent)
+        applied = typer.testing.CliRunner().invoke(
+            aqa, ["heal", "apply", proposal["id"]]
+        )
+        assert applied.exit_code == 0, applied.output
+        after = compiled_of(spec).read_text()
+        expected = json.loads(before)
+        expected["targets"]["uncover_2"] = UNCOVERING
+        expected["steps"].insert(0, UNCOVERING_CLICK)
+        assert json.loads(after) == expected
+        assert printed_diff(result) == list(
+            difflib.unified_diff(
+                before.splitlines(),
+                after.splitlines(),
+                "a/.compiled/order.json",
+                "b/.compiled/order.json",
+                lineterm="",
+            )
+        )
+        replayed = typer.testing.CliRunner().invoke(
+            aqa, ["replay", str(spec), "--url", app.origin]
+        )
+        assert replayed.exit_code == 0, replayed.output
 
 
 def test_a_run_line_says_the_outcome_time_cost_and_record(

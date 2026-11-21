@@ -23,6 +23,8 @@ from aqa_core.project import load_config, load_spec
 from aqa_runner import executor, settling
 from aqa_runner.egress_proxy import EgressProxy
 from aqa_runner.evaluation import AssertionResult
+from aqa_runner.evidence import Shots as Saved
+from aqa_runner.evidence import capture_evidence
 from aqa_runner.executor import RunResult, StepResult
 from aqa_runner.locator_generation import register_identity_engine
 from aqa_runner.redaction import NO_SECRETS, Redactor
@@ -390,12 +392,44 @@ SOCKET = MOVED + "<script>new WebSocket(`ws://${location.host}/held/socket`);</s
 
 
 def test_an_inserted_press_under_an_open_tunnel_stops_the_run(tmp_path: Path) -> None:
+    """Refused before its intent, since the session already has a tunnel (#335)."""
     run = replayed(tmp_path, inserting(PRESS_TAB), html=SOCKET)
 
-    assert run.outcomes() == [(0, "completed", None), (3, "failed", UNSHOWN + TUNNEL)]
+    assert run.outcomes() == [(0, "completed", None), (3, "failed", TUNNELLED)]
     assert run.result.assertions == STOPPED
-    assert run.states() == STOPPED_STATES
+    assert run.states() == [(0, "intent"), (0, "completed")]
     assert run.ended() == INCONCLUSIVE
+
+
+# Why a step a repair inserted didn't run once the session had a tunnel open
+# (ADR-0024's #335 amendment).
+TUNNELLED = (
+    "a repair inserted this step while an encrypted or WebSocket connection was "
+    "open, which the egress proxy can't read or hold, so the step did not run"
+)
+
+
+def test_an_inserted_click_on_a_tunnelled_session_is_refused_before_its_intent(
+    tmp_path: Path,
+) -> None:
+    """Nothing is dispatched, so the app never sees the click's request."""
+    html = contact_does("fetch('/did/inserted')", SOCKET)
+
+    run = replayed(tmp_path, inserting(CLICK_CONTACT), html=html)
+
+    assert run.outcomes() == [(0, "completed", None), (3, "failed", TUNNELLED)]
+    assert run.states() == [(0, "intent"), (0, "completed")]
+    assert ("GET", "/did/inserted") not in run.seen
+    assert run.result.assertions == STOPPED
+    assert run.ended() == INCONCLUSIVE
+
+
+def test_committed_steps_run_on_a_tunnelled_session(tmp_path: Path) -> None:
+    """Only a step a repair inserted is refused under a tunnel."""
+    run = replayed(tmp_path, lambda drift: rebound(drift.script), html=SOCKET)
+
+    assert run.outcomes() == [(0, "completed", None), (1, "completed", None)]
+    assert run.ended()[:2] == ("drift_consistent", 7)
 
 
 def test_an_inserted_step_that_also_hits_an_egress_block_ends_egress_blocked(
@@ -573,3 +607,42 @@ def test_the_hold_lifts_once_the_inserted_step_is_judged(tmp_path: Path) -> None
         (2, "completed", None),
     ]
     assert run.ended()[:2] == ("drift_consistent", 7)
+
+
+# A write the page sends once it is told to, and a click that keeps a request
+# open, so settling's wait runs out and the inserted step fails.
+LATER = "fetch('/write/later', {method: 'POST'}).catch(() => 0)"
+HOLDS_A_GET_OPEN = "fetch('/held/later')"
+
+
+def test_the_hold_stays_on_after_a_failed_inserted_step_until_the_session_closes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page writes once the failed step was judged, as its evidence is
+    saved: the proxy still holds the write, on the failed step's window, and
+    the step keeps the reason it was judged with (#335)."""
+    monkeypatch.setattr(settling, "SETTLE_SECONDS", 2)
+    windows: list[Window] = []
+
+    async def writing_later(*args: Any, **kwargs: Any) -> Saved:
+        _, session, folder, *_ = args
+        if folder == "evidence/3":
+            # The fetch settles once the proxy has held or forwarded the
+            # write, and it tells the session first.
+            async with asyncio.timeout(10):
+                await session.page.evaluate(LATER)
+            windows.append(session.windows()[-1])
+        return await capture_evidence(*args, **kwargs)
+
+    monkeypatch.setattr(executor, "capture_evidence", writing_later)
+
+    run = replayed(
+        tmp_path, inserting(CLICK_CONTACT), html=contact_does(HOLDS_A_GET_OPEN)
+    )
+
+    assert ("POST", "/write/later") not in run.seen
+    assert run.outcomes() == [(0, "completed", None), (3, "failed", UNSHOWN + BUSY)]
+    assert windows == [run.result.steps[-1].window]
+    assert (windows[0].held, windows[0].wrote) == (True, False)
+    assert run.verdict(3) == ("inconclusive", UNSHOWN + BUSY)
+    assert run.ended() == INCONCLUSIVE
