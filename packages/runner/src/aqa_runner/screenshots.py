@@ -450,8 +450,22 @@ async def take_screenshot(
     the attempt that took it returned. When the last attempt is answered the
     same, a DevTools call failed; any other ending is the capture's at once,
     with its own reason."""
+
+    async def attempted() -> bytes:
+        # A whole new capture, every check with it, after each attempt
+        # DevTools answers `UNCAPTURED`; any other ending, and the last
+        # attempt's, is the capture's own.
+        for _ in range(CAPTURE_ATTEMPTS - 1):
+            try:
+                return await _captured(session, record_refusal=record_refusal)
+            except Error as error:
+                if not _uncaptured(error):
+                    raise
+            await asyncio.sleep(CAPTURE_PAUSE_SECONDS)
+        return await _captured(session, record_refusal=record_refusal)
+
     try:
-        png = await _attempted(session, record_refusal=record_refusal)
+        png = await attempted()
     except TimeoutError:
         reason = f"the page's snapshot, its scrub or its render took over {CAPTURE_SECONDS} s"
     except Error:
@@ -505,20 +519,6 @@ def _read(png: bytes, redactor: Redactor) -> bool:
             raise
         except Exception as error:
             raise _EngineFailedError from error
-
-
-async def _attempted(session: BrowserSession, *, record_refusal: bool) -> bytes:
-    """`_captured`'s image, made whole again `CAPTURE_PAUSE_SECONDS` after
-    each attempt DevTools answers `UNCAPTURED`, up to `CAPTURE_ATTEMPTS` in
-    all. Any other ending, and the last attempt's, is the capture's own."""
-    for _ in range(CAPTURE_ATTEMPTS - 1):
-        try:
-            return await _captured(session, record_refusal=record_refusal)
-        except Error as error:
-            if not _uncaptured(error):
-                raise
-        await asyncio.sleep(CAPTURE_PAUSE_SECONDS)
-    return await _captured(session, record_refusal=record_refusal)
 
 
 def _uncaptured(error: Error) -> bool:
