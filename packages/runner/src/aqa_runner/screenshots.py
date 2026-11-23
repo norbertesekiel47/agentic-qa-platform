@@ -55,6 +55,32 @@ from aqa_runner.redaction import Redactor
 # (ADR-0034).
 CAPTURE_SECONDS = 5.0
 
+# How many whole captures `take_screenshot` makes at most when DevTools
+# answers a live one `UNCAPTURED`, and for nothing else (#337), with
+# CAPTURE_PAUSE_SECONDS between them. Each has its own bounds, so the worst
+# case is CAPTURE_ATTEMPTS x CAPTURE_SECONDS + 0.25 s = 10.25 s live and
+# CAPTURE_ATTEMPTS x 2 x CAPTURE_SECONDS + 0.25 s = 20.25 s rendered, plus
+# OCR_SECONDS (5 s) once in a run that binds a secret: 15.25 s and 25.25 s
+# (ADR-0034's #337 amendment).
+CAPTURE_ATTEMPTS = 2
+
+# How long `take_screenshot` waits before it makes a capture DevTools
+# answered `UNCAPTURED` again. Under the load that reproduced the fault, a
+# new capture at once was answered the same in 9 of 13 cases, and one made
+# 0.25 s later in none of 13 (LAB_NOTES, 2026-11-20).
+CAPTURE_PAUSE_SECONDS = 0.25
+
+# What Playwright 1.63 raises, word for word, when the live capture's
+# `Page.captureScreenshot`, the only one this module sends itself, finds the
+# page's surface empty: Chromium 153 copies it after a forced redraw, and
+# again five times at once, and under CPU load the renderer's frame isn't
+# there yet (LAB_NOTES, 2026-11-20). The render's capture is Playwright's
+# `page.screenshot`, whose errors start with its own name, so none is this.
+UNCAPTURED = (
+    "CDPSession.send: Protocol error (Page.captureScreenshot): "
+    "Unable to capture screenshot"
+)
+
 # The largest archive a capture scrubs. On CI's runner, the slowest host
 # measured, a page of text this size takes up to 2.4 s to snapshot, scrub
 # and render, half of CAPTURE_SECONDS (ADR-0034). A larger one is withheld
@@ -415,9 +441,31 @@ async def take_screenshot(
     is withheld too when the image's text, as OCR reads it, spells a bound
     value, is over `aqa_runner.ocr.TEXT_CAP`, or takes over `OCR_SECONDS` to
     read, or when the OCR engine raises, a missing model file included
-    (ADR-0035's #251 amendment)."""
+    (ADR-0035's #251 amendment).
+
+    A live capture DevTools answers `UNCAPTURED`, as Chromium does under CPU
+    load, is made again, whole, `CAPTURE_PAUSE_SECONDS` later, up to
+    `CAPTURE_ATTEMPTS` in all (#337). The bounds hold per attempt,
+    `CAPTURE_SECONDS` for each, and the OCR check runs once, on the image
+    the attempt that took it returned. When the last attempt is answered the
+    same, a DevTools call failed; any other ending is the capture's at once,
+    with its own reason."""
+
+    async def attempted() -> bytes:
+        # A whole new capture, every check with it, after each attempt
+        # DevTools answers `UNCAPTURED`; any other ending, and the last
+        # attempt's, is the capture's own.
+        for _ in range(CAPTURE_ATTEMPTS - 1):
+            try:
+                return await _captured(session, record_refusal=record_refusal)
+            except Error as error:
+                if not _uncaptured(error):
+                    raise
+            await asyncio.sleep(CAPTURE_PAUSE_SECONDS)
+        return await _captured(session, record_refusal=record_refusal)
+
     try:
-        png = await _captured(session, record_refusal=record_refusal)
+        png = await attempted()
     except TimeoutError:
         reason = f"the page's snapshot, its scrub or its render took over {CAPTURE_SECONDS} s"
     except Error:
@@ -471,6 +519,12 @@ def _read(png: bytes, redactor: Redactor) -> bool:
             raise
         except Exception as error:
             raise _EngineFailedError from error
+
+
+def _uncaptured(error: Error) -> bool:
+    # Only compared: the message, which can hold the page's URL, is kept
+    # nowhere.
+    return error.message == UNCAPTURED
 
 
 async def _captured(session: BrowserSession, *, record_refusal: bool) -> bytes:
@@ -532,9 +586,16 @@ async def _devtools(page: Page) -> AsyncIterator[CDPSession]:
     Detached only once its calls have answered: a busy page never answers
     `detach` either, and the bound that cancelled a call cancels nothing
     again. A session left behind by a call that failed ends with its page
-    (`document_origins.isolated_origin`, LAB_NOTES 2026-11-01)."""
+    (`document_origins.isolated_origin`, LAB_NOTES 2026-11-01), but for one
+    whose capture DevTools answered `UNCAPTURED`: that call has answered, and
+    the capture's bound, which has cancelled nothing yet, bounds the detach."""
     devtools = await page.context.new_cdp_session(page)
-    yield devtools
+    try:
+        yield devtools
+    except Error as error:
+        if _uncaptured(error):
+            await devtools.detach()
+        raise
     await devtools.detach()
 
 
