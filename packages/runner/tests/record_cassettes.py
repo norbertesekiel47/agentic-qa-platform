@@ -1190,6 +1190,7 @@ def record(
     )
     role_name = CASES[name].role
     role = resolve_roles(config, vendored())[role_name]
+    root = spec.path.parent
     intent = {
         "case": name,
         "source_sha": subprocess.check_output(
@@ -1200,9 +1201,14 @@ def record(
         "provider": role.model.provider,
         "model": role.model.name,
         "effort": role.effort,
+        # Every file under the spec root, by its path from there: a verified
+        # case's published script too (#339).
         "inputs": {
-            path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in sorted(spec.path.parent.iterdir())
+            path.relative_to(root).as_posix(): hashlib.sha256(
+                path.read_bytes()
+            ).hexdigest()
+            for path in sorted(root.rglob("*"))
+            if path.is_file()
         },
     }
     (attempt / "intent.json").write_text(json.dumps(intent, indent=2) + "\n")
