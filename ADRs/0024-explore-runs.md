@@ -1603,3 +1603,93 @@ The maintainer decided the hold on #246 (2026-11-16): writes are held during an 
 - *`aqa run` on the modal page still ends `inconclusive`.* The healer still has only `rebind`, so the proof is scripted repairs at the seam in real Chromium, as in slices 1 and 2. #246 stays open for the follow-up, #335.
 - **Tests.** `packages/runner/tests/test_egress_proxy.py`, over raw sockets: the hold refuses `POST`, `PUT`, `patch`, `DELETE` and a `CONNECT` and forwards `GET`, `HEAD` and `OPTIONS`, with nothing refused, recorded, blocked or counted; it never asks the gate, a lookup included; it starts and ends within a phase; a new phase starts unheld; and switching it between phases or as one ends raises. These failed, seven of them, before the switch existed. `packages/runner/tests/test_replay_inserted_steps.py`, in real Chromium: the held phrase on hand-made windows and in the fixed order; the inserted click's POST held, its fetch's uncaught rejection counting against no invariant; a WebSocket an inserted click opens held, not a tunnel; an egress block (6) and an earlier violation (1) still deciding; and the hold lifting, so the committed contact click after an inserted press reaches the app. With the hold never switched on, the app received the POST and the WebSocket's handshake request, and the egress-block and earlier-violation runs failed the step with `network: a write request`. With the observers never stopped, the POST's run ended `expectation_violated` (1); with the hold never lifted, the committed click's POST never reached the app. `packages/runner/tests/test_replay_inserted_targets.py`: the modal page under a subject row on the summary, where the repair's added target with the summary's meaning is refused at the seam with `contract_problems`' problem and its click never runs, and with its own meaning heals (7). With `accepted` left in place of `admissible`, `repairs/1.json` held no problem and the governed-meaning click was dispatched, its intent and completion in `steps.jsonl`. `packages/cli/tests/test_heal_apply_refusals.py`: `aqa heal apply` refuses the same patch in the same words, exit 5, and applies it with the target's own meaning; with `contract_problems` planted to find nothing, it applied the governed patch. No cost impact: no model call, dependency or paid resource.
 - **The maintainer's acceptance** (#332, 2026-11-20, after the job escalated). Accepted: the invariant cut-off, so the first held write stops all four invariant observers and a violation the page shows after it ends the run 3, not 1; and all four choices above, as recorded: the switch on the proxy's phase, flipped in `BrowserSession._next_window`; a held request that looks refused to the page; a held write that is never an egress block, so a run whose held write named a host the gate would refuse ends 3, not 6; and the seam calling `admissible`. SECURITY §4 item 4 says plainly that a tunnel opened before the hold carries an inserted step's write to the app on an app served over https or after any WebSocket, and the security review's two hardening ideas are carried to #335.
+
+## Amendment (2026-11-23): the verified cassettes' recorder cases and promotion rule (#339)
+
+The #256 amendment wrote `verified_pass` and `verified_violated` by hand and left their live recording to a round the maintainer runs. This is that round's groundwork, with no provider call: the recorder's two cases, the rule that promotes a recording, the round's limit and its receipts' format. TESTING §4 holds the commands. Tests, fixtures, the recorder and docs only: no runner, CLI or core source changes.
+
+### The cases
+
+`record_cassettes.CASES` gets two cases, each one `aqa replay --mode verified` of the badge spec on its page. The runner, `verified_fixtures.verified_recorded`, makes the CLI's run in process: it serves the page with `verified_fixtures.serving`, reads the published `.compiled/badge.json` with `load_compiled`, registers the identity engine and calls `strict_replay(StrictRun(...), playwright, NO_SECRETS, verify=...)`, whose `verify` builds a `Verifying` as `aqa_cli.replay._verifier` does, on the router `record()` builds, with the SDK's retries off. Each case has `role="verifier"`, `mode="verified"`, `whole_run=True`, the round's limit `VERIFIED_ROUND_USD`, and its config's `verified_model_usd` as its run's bound, USD 0.30. The cases and the rule are in `packages/runner/tests/verified_fixtures.py`; the recorder's `VERIFIED` maps each case's name to its case, and its runner returns through `heal_ended`.
+
+| Case | Page | Script | Config | The ending it records | Recorded as |
+|---|---|---|---|---|---|
+| `verified_pass` | `green.html` | `CHECKED` | `QUICK`, so `verified_model_usd` 0.30 | `passed` (0), a1 `pass` | `verifier`/`verified` |
+| `verified_violated` | `red.html` | `CHECKED` | `QUICK` | `expectation_violated` (1), a1 `expectation_violated` with a `visual` finding | `verifier`/`verified` |
+
+`verified_no_evidence` is not a case: a real model can't be asked for a reply with no `evidence_refs`, so it stays hand-written by design.
+
+`record()` writes each case's spec root as `test_verified_cassette.replayed` writes it, `badge_spec(root, case.script, config=case.config)`, with the published script under `.compiled/`. `intent.json`'s `inputs` now hashes every file under the spec root, recursively, keyed by its path from there, so a verified attempt lists `.compiled/badge.json`. Every other case's spec root holds no subdirectory when the intent is written, so its `inputs` are unchanged byte for byte; `test_record_pilot_plans.py` holds the pilots' to their two flat names.
+
+### Options weighed
+
+- *The citation order.* (a) `judged`'s set: the two references in either order, a duplicate allowed. (b) Exactly `[screenshot path, badge ref]`, in that order. The intake names "the saved screenshot's path, then the badge's ref", and `test_verified_cassette` asserts that ordered list, so a reversed reply, which passes the run, would break the replay test once promoted: (b). The order is the recorder's rule only; `judged` doesn't change.
+- *The hand-written cassettes.* (a) A new option, alternate library or guard that keeps an accepted attempt from replacing the committed hand-written file. (b) Saying plainly that it replaces the working-tree file, as every case's promotion does, while git keeps the hand-written one at HEAD and the attempt keeps its own copy for review. The intake allowed either: (b), with nothing added (below).
+- *The run.* (a) The CLI, `aqa replay --mode verified`, in process. (b) `strict_replay` called directly with the recorder's router. The CLI's `_verifier` builds an `AnthropicClient` with the SDK's retries on, and the spend bound needs each admitted request sent once (`retryless`); `heal_recorded` set the in-process precedent: (b). The replay-match test below runs the CLI on each promoted cassette, so the two can't drift apart unseen.
+- *The config.* (a) A recording config of its own. (b) The replay test's `QUICK`, so `verified_model_usd` is its default 0.30 and the spec root is the one the replay test writes. A request reserves about USD 0.06 (below), under 0.30: (b), as #311 chose each page's scripted-suite config.
+- *The published script.* (a) The script kept in memory, with a second spec writer that leaves `.compiled/` out of the spec root. (b) `badge_spec` as the replay test calls it, with `intent.json` hashing nested files, which made `record()` raise on the subdirectory before. (a) risks drifting from the replay test, and under (b) the published script becomes recorded evidence: (b).
+- *The limit's method.* #311's formula and its V, 1,000 output tokens for a short structured reply included, rather than a new method. The constant is the derived value; the maintainer may raise it at approval, as for #311.
+- *A visual finding.* Checked for the red case only, since the intake names it only for red. It is unit-tested only: no stand-in run ends `expectation_violated` without one.
+- *A second call.* The test swaps `TWICE` into the case with `monkeypatch`: with retries off, a two-assertion script is the only way a verified run calls the verifier twice. The case holds its script so a test can replace it, as #311's tests replace cases.
+- *The replay-match test.* Included: it is the only check in the repository of "as `test_verified_cassette.py` runs them", and it keeps the paid round from producing a cassette the replay test can't match.
+- *Where.* The cases and the rule go in `verified_fixtures.py`, which holds the badge fixtures and has no import cycle with `heal_fixtures`, not a new module. The round directory is `verified-339`, attempts `001` (pass) and `002` (violated), after #311's naming.
+
+### The promotion rule and the count rule
+
+`verified_fixtures.verified_disallowed` is a pure function of the case, the run's outcome, its `replay.json` document, its own cost lines and the two references its request gave: the screenshot path a1's verdict cites (`evidence.screenshot.path`), then the badge's ref in `verified/assertion-0/a11y_snapshot.yaml` (its `img "Signal" [ref=eN]` line). It returns None or one of these fixed words, checked in this order, which the receipt keeps as `disallowed`:
+
+1. `it didn't make exactly one verifier call`: the run's cost lines are not exactly one line labelled `verifier`/`verified`.
+2. `the verifier's reply didn't parse as its verdict`: that line's status isn't `ok`, or a1's verdict has no `verifier`.
+3. `the verifier's reply didn't cite exactly the screenshot, then the badge's ref`: a1's `verifier.evidence_refs` isn't exactly the two-item list `[screenshot path, badge ref]`. Other, fewer, more, duplicated and reversed references all fail; the run takes the two as a set, so it passes a reversed or duplicated pair.
+4. `it ended <outcome>, which this case doesn't allow`: the outcome isn't the case's. The words are `heal_fixtures.unallowed`'s.
+5. `it ended expectation_violated with no visual finding`: for `verified_violated` only, a1's `finding` is absent or its `category` isn't `visual`.
+
+So exactly two endings are promoted, each from one parsed reply citing exactly the two references in order: `verified_pass` ending `passed` (exit 0) with a1 `pass`, and `verified_violated` ending `expectation_violated` (exit 1) with a visual finding. A `disallowed` attempt is never promoted, and the operator stops there, never retrying, as for the other families.
+
+*The count rule.* A case holds one priced, identified response per line of its run's own `costs.jsonl`: `answers_expected`'s `whole_run` branch, unchanged. The rule allows one line, so a promoted case holds one response; a run of two calls holds two, and word 1 refuses it.
+
+### The round's limit: USD 0.15, derived, awaiting the maintainer's approval
+
+The limit is L = 2 × Σ W_case + R_max, rounded up to the next USD 0.05, #311's formula: USD 0.15. `VERIFIED_ROUND_USD` is that value, and its comment cites this amendment and the pending approval. No recording ran in this job.
+
+- *V, a verifier call's plausible worst cost: USD 0.02*, from the pinned price map, as #311's V: `claude-sonnet-5-5` at USD 2 in and USD 10 out per million tokens, the map unchanged since `9afc2774`. Input: 1,334 visual tokens for the 1280 by 800 PNG (⌈1280/28⌉ × ⌈800/28⌉ = 46 × 29, the rule #311 took from Anthropic's vision guide), plus the request's 2,190 bytes outside the image and the recorder's 1,024 headroom tokens, each byte counted as a token: 4,548 tokens, USD 0.009096. Output: 1,000 tokens for one short structured verdict, USD 0.01. USD 0.019096, rounded up to the next cent.
+- *W_case*, one attempt's plausible worst spend: one verifier call, V, for each case. Σ W_case = 2 × 0.02 = USD 0.04.
+- *The factor 2* allows one re-attempt of each case, since only `disallowed` is a stop.
+- *R_max: USD 0.060268*, the largest `Allowance.reserve(body).usd` over the request bodies the stand-in tests receive. All twelve, across the promotion, refusal and second-call tests, are 8,630 bytes, 6,440 of them the image's base64, so (8,630 + 1,024) input tokens at USD 2 and 4,096 output tokens at USD 10 per million, the figure the hand-written cassettes' request gives too. It leaves room for the round's last request to reserve its worst case.
+- *Measured* with `uv run pytest packages/runner/tests/test_record_verified_cassettes.py --log-cli-level=INFO -k "not replays"`, at the commit "test(runner): each verified stand-in test logs its requests' reservations, sizes and image bytes, for the round limit's derivation (#339)", whose branch was based on main at `19e13993d7c30803a86a595fce3d9a8c5f6400d8`, on macOS 27.2 (darwin, arm64) with Playwright 1.63.0's Chromium headless shell: 30 passed, each stand-in test logging what each request reserved, with its size and image bytes. `-k "not replays"` leaves out the file's two CLI replay tests, which fail under `--log-cli-level`, as `test_verified_cassette.py`'s CLI tests do on main (LAB_NOTES, 2026-11-23); without it they pass. The PNG's size varies with the platform's rendering, so Linux's figure may differ.
+- *The arithmetic:* 2 × 0.04 + 0.060268 = USD 0.140268, rounded up to USD 0.15, the ticket's estimate.
+
+Each run is also held to its own bound, `verified_model_usd` USD 0.30: the recorder refuses a request whose reservation would take the run or the round past its bound, and `Verifying` makes no further call once the run's spend is gone.
+
+### Red first
+
+The rule and its tests are new test code, so each was shown red with nothing committed:
+
+- The rule's unit tests in `test_record_verified_cassettes.py`, against a rule that returned None for everything: each of the 15 fixed-word cases failed, every one of the five words among them, and the two allowed shapes passed.
+- The stand-in tests against that rule: each of the nine refusal tests failed, and the promotions, the replays, the round's bound and the table passed.
+- The replay-match test with the recorder's spec planted to expect another text: both ids failed, the replay finding its recorded response unused.
+
+### Tests
+
+`packages/runner/tests/test_record_verified_cassettes.py`, against the local stand-in with a fake key and a temporary library, in real Chromium, reaching no provider. The stand-in reads the two references from each request's `<evidence>` block.
+
+- Promoted, each `accepted` with its cassette in the temporary library equal to the attempt's copy, one interaction, `disallowed` null, one response and one `verifier`/`verified` cost line: `verified_pass` (`explore` `{0, passed, None}`) and `verified_violated` (`{1, expectation_violated, None}`), each with `spend.run_usd` "0.3" and `round_left_usd` "0.15", `intent.json`'s role `verifier` and its `inputs` listing `.compiled/badge.json`, and its request's reservation logged and within both bounds.
+- Each promoted cassette replayed from the temporary library with the `cassette` fixture (`replay_only=True`) through `aqa replay --mode verified` of the same page: its one interaction played, and the exit code, outcome and a1 verdict that `test_verified_cassette.PASS` and `VIOLATED` give.
+- Never promoted, each `disallowed` with its exact words and no library cassette: other references (`verified/approved/screenshot.png`, `e404`), the screenshot alone, the two plus `e405`, and the two reversed, whose run ends `passed` (words 3); empty `evidence_refs`, an `invalid` cost line (words 2); `expectation_violated` and `inconclusive` on green and `pass` on red, each cited correctly (words 4, with the run's outcome); and `TWICE`'s two calls, whose run ends `passed` (words 1).
+- The bound: an earlier receipt that spent `VERIFIED_ROUND_USD` leaves the request refused unsent (`spend_refused`).
+- What each case is recorded as (`verifier`, `verified`, `VERIFIED_ROUND_USD`, a whole run), its cassette, page and outcome equal to `test_verified_cassette`'s, `verified_no_evidence` not in `CASES`, and the rule's unit tests over every word and both allowed shapes.
+
+### What the follow-up round does
+
+With the limit approved, the maintainer's round can run: record the two cases in one round directory (TESTING §4's commands, attempts `001` and `002`, any further attempt the next unused number), inspect each receipt before the next call, review `git diff` of each replaced cassette, and run `test_verified_cassette.py`. Then it commits each recording with the header, docstring and TESTING changes that stop calling it hand-written, or restores the hand-written file. Nothing in this amendment records, promotes or measures a recording.
+
+*Overwriting, stated plainly.* An accepted attempt replaces `packages/runner/tests/cassettes/verified_pass.yaml` or `verified_violated.yaml` in the working tree, as every case's promotion replaces its library file. The recorder commits nothing, so the hand-written cassette stays committed at HEAD until the follow-up round commits the recording. A rejected recording is undone with `git restore -- packages/runner/tests/cassettes/<name>.yaml`. No code prevents the overwrite.
+
+*Cost impact:* none in this job. No test calls a provider (the stand-in answers), and no dependency or paid resource is added. The round itself spends at most its limit, USD 0.15 as derived, or what the maintainer approves.
+
+### The round's receipts (to be recorded)
+
+| Case | Source SHA | Attempt | Outcome | Spend (USD) |
+|---|---|---|---|---|
+| `verified_pass` | | | | |
+| `verified_violated` | | | | |
