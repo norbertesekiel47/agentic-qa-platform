@@ -1623,7 +1623,7 @@ On this page the code ends a heal in one of two ways (`test_heal_verdicts.py`): 
 ### Options weighed
 
 - *The config.* (a) The heal cases' `RECORDING_CONFIG` (`heal_turns` 3, `heal_model_usd` 0.10). (b) The page's scripted-suite config, `BUDGETS`, as #311 chose its pages' and the maintainer accepted. Intake and the spec expected the vision request alone to reserve more than (a)'s USD 0.10 run bound, as the moved page's did for #311 (USD 0.120344 to 0.126584). Measured, it doesn't: the removed page holds only a heading and a button, so its screenshot is small, and its vision request, 14,280 bytes, 12,324 of them the image's base64, reserves USD 0.071568 (below). Under (a), the tree turns before it would have USD 0.028432 of the run's bound left. At T a turn (below) that admits the two tree turns `heal_turns` 3 allows before a vision turn, but a tree turn billed more, or a larger screenshot on another platform, leaves the vision request refused unsent. (b) leaves room, and is the config `test_heal_verdicts.py` pins both endings under: (b). The run-bound test keeps (a) to show the bound refusing a request, and plants a tree turn billed USD 0.044 to do it.
-- *The endings.* (a) `inconclusive` only. (b) `expectation_violated` only. (c) Both, each with no proposal. The code gives both on this page, and a real model may do either: it may find nothing, or offer the nearest button as a best guess. So (c), intake's reading; the issue's author can narrow it on the issue. `drift_consistent` is never right for a page whose toggle is gone.
+- *The endings.* (a) `inconclusive` only. (b) `expectation_violated` only. (c) Both, each with no proposal. The code gives both on this page, and a real model may do either: it may find nothing, or offer the nearest button as a best guess. So (c), intake's reading, which the maintainer accepted (below). `drift_consistent` is never right for a page whose toggle is gone.
 - *The checked finding.* (a) `expectation_violated` with no proposal, whatever caused it. (b) Also a finding that lists the rebound step. Under (a) a violation that didn't follow a rebind, such as an invariant that failed before step 1, would be promoted as the model's best guess. So (b), which fails closed.
 - *`inconclusive` and what stopped the heal.* (a) Only "found no element". (b) Whatever stopped it: no element found, a vision point refused, or the turns or the spend ran out. The maintainer accepted (b) for #311's `inconclusive` ending, and the replay's checks don't run after any of them, so (b).
 
@@ -1640,9 +1640,9 @@ So exactly two endings are promoted, each with no proposal and only when rule 1 
 
 *The count rule.* The case holds one priced, identified response per line of its run's own `costs.jsonl`, less any replayed (none are): `answers_expected`'s `whole_run` branch, not the heal cases' fixed one, and its docstring names the case. The run that ends `inconclusive` takes a tree turn and a vision turn, so two lines, each with the run's own label: `healer`/`heal` and `vision_fallback`/`heal`.
 
-### The round's limit: USD 0.25, awaiting the maintainer's approval
+### The round's limit: USD 0.25, approved
 
-The limit is #311's formula with its T and V: L = 2 × W + R_max, rounded up to the next USD 0.05. It awaits the maintainer's approval, and no recording ran in this job.
+The limit is #311's formula with its T and V: L = 2 × W + R_max, rounded up to the next USD 0.05. The maintainer approved it as derived (2026-11-22, below), and no recording ran in this job.
 
 - *T and V:* USD 0.01 for a tree turn's plausible worst cost and USD 0.02 for a vision turn's, as the #311 amendment derives them. The removed page is smaller than the heal-aimed pages, so both are conservative here.
 - *W*, one attempt's plausible worst spend: (6 − 1) × T + V = USD 0.07. `heal_turns` is 6, less one for the vision turn, which a `hybrid` heal takes only with a turn left.
@@ -1682,7 +1682,16 @@ The rule's tests and the stand-in tests check new test code, so each was shown r
 
 With the limit approved, the maintainer's round can run. It records `heal_removed` in its own round directory (TESTING §4's command, attempt `001`, any further attempt the next unused number) and inspects the receipt before another call. It promotes what is `accepted`, fills in the receipts below, and adds the cassette-replay test, which fails until a recording exists and so waits for it. Nothing in this amendment records, promotes or measures a recording.
 
-*Cost impact:* none. No test calls a provider (the stand-in answers), and no dependency or paid resource is added. Once approved, the round itself spends at most its limit, USD 0.25.
+*Cost impact:* none. No test calls a provider (the stand-in answers), and no dependency or paid resource is added. The round itself spends at most its approved limit, USD 0.25.
+
+### The maintainer's acceptance (2026-11-22, after the job escalated)
+
+- *The limit:* `HEAL_REMOVED_ROUND_USD`, USD 0.25, approved as derived: 2 × 0.07 + R_max 0.071568, rounded up to the next USD 0.05 (above).
+- *The endings:* both promoted, `inconclusive` (exit 3) and `expectation_violated` (exit 1), each with no proposal.
+  - The rebound-step check stays: `expectation_violated` is promoted only when a finding lists rebound step 1 (rule 4).
+  - `inconclusive` stays promoted whatever stopped the heal (no element found, a vision point refused, or the turns or the spend ran out), provided the app served only `GET /page/order` (rule 1).
+- *The config:* `BUDGETS` (`heal_turns` 6, USD 0.30 a run), not `RECORDING_CONFIG`.
+- *The record:* this amendment is the record of these choices. No value, rule or test changed with the acceptance.
 
 ### The round's receipts (to be recorded)
 

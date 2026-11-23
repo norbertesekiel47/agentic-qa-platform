@@ -125,8 +125,8 @@ HEAL_ROUND_USD: Final = Decimal("0.25")
 # USD 1.00 over the USD 0.70 ADR-0024's #311 amendment derives, for more
 # re-attempts; each run's is its config's heal_model_usd.
 HEAL_INJECTION_ROUND_USD: Final = Decimal("1.00")
-# The removed-page round's limit (#338), derived in ADR-0024's #338 amendment and
-# awaiting the maintainer's approval; its run's is its config's heal_model_usd.
+# The removed-page round's limit (#338), approved: the USD 0.25 ADR-0024's #338
+# amendment derives; its run's is its config's heal_model_usd.
 HEAL_REMOVED_ROUND_USD: Final = Decimal("0.25")
 
 
