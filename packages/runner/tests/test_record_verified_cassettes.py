@@ -6,7 +6,10 @@ its run ends as its page should, which the rule says in fixed words when it does
 Role, mode and allowance come from the case's row in the recorder's table. No test
 here reaches a provider."""
 
-from collections.abc import Sequence
+import json
+from collections.abc import Callable, Iterator, Sequence
+from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -14,11 +17,20 @@ from aqa_core.config import ModelRoleName, ProjectConfig
 from aqa_core.model_costs import CostRecord, Mode, Status, Usage, cost_record
 from aqa_core.model_roles import resolve_roles
 from aqa_core.price_map import vendored
+from langchain_core.messages import HumanMessage
 
-from packages.runner.tests.test_verified_cassette import SHOT
+from packages.runner.tests.provider_stand_in import Answer, Start, planned, standing_in
+from packages.runner.tests.record_cassettes import VERIFIED_ROUND_USD, record
+from packages.runner.tests.test_record_heal_cassettes import receipt, snapshot
+from packages.runner.tests.test_record_heal_injection_cassettes import (
+    promoted,
+    reserved,
+)
+from packages.runner.tests.test_verified_cassette import PASS, SHOT, VIOLATED, Case
 from packages.runner.tests.verified_fixtures import (
     CASES,
     VerifiedCase,
+    evidence,
     verified_disallowed,
 )
 
@@ -27,6 +39,68 @@ pytestmark = pytest.mark.usefixtures("reset_tracing")
 PASSING, VIOLATING = CASES
 # The two references a request gives, in its order.
 GIVEN = [SHOT, "e2"]
+
+
+@pytest.fixture
+def provider(monkeypatch: pytest.MonkeyPatch) -> Iterator[Start]:
+    with standing_in(monkeypatch) as start:
+        yield start
+
+
+@pytest.fixture
+def library(tmp_path: Path) -> Path:
+    path = tmp_path / "library"
+    path.mkdir()
+    return path
+
+
+def judging(
+    verdict: str, citing: Callable[[list[str]], list[str]] = list
+) -> Callable[[bytes], Answer]:
+    """The stand-in's answer: the verifier's `verdict`, citing what `citing`
+    makes of the two references the request gives, in its order: those two,
+    unless it says otherwise."""
+
+    def answered(body: bytes) -> Answer:
+        given = evidence([HumanMessage(content=snapshot(body))])
+        said = {
+            "verdict": verdict,
+            "evidence_refs": citing(given),
+            "confidence": 0.9,
+            "rationale": "the badge is drawn in one colour",
+        }
+        return planned(1, said)
+
+    return answered
+
+
+@pytest.mark.parametrize("case", [PASS, VIOLATED], ids=lambda c: c.cassette)
+def test_the_pages_verdict_citing_the_two_references_in_order_is_promoted(
+    provider: Start, library: Path, tmp_path: Path, case: Case
+) -> None:
+    attempt = tmp_path / "verified" / "001"
+    stand_in = provider([judging(case.verdict)])
+
+    costs = record(case.cassette, attempt, library=library)
+
+    assert promoted(case.cassette, attempt, library) == [("verifier", "verified")]
+    assert [(cost.role, cost.mode, cost.status) for cost in costs] == [
+        ("verifier", "verified", "ok")
+    ]
+    kept = receipt(attempt)
+    assert (kept["explore"], len(kept["responses"])) == (
+        {"exit_code": case.exit_code, "outcome": case.outcome, "published": None},
+        1,
+    )
+    assert (kept["spend"]["run_usd"], kept["spend"]["round_left_usd"]) == (
+        "0.3",
+        str(VERIFIED_ROUND_USD),
+    )
+    intent = json.loads((attempt / "intent.json").read_text())
+    assert intent["role"] == "verifier"
+    assert ".compiled/badge.json" in intent["inputs"]
+    [reservation] = reserved(case.cassette, attempt, stand_in.sent)
+    assert reservation <= min(Decimal("0.3"), VERIFIED_ROUND_USD)
 
 
 def line(

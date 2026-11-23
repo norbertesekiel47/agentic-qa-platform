@@ -72,6 +72,8 @@ from packages.runner.tests.test_anthropic_client import (
 from packages.runner.tests.test_coverage_plan import checkout
 from packages.runner.tests.test_explore_confirm import RESET
 from packages.runner.tests.test_explore_graph import configured, shop_spec
+from packages.runner.tests.verified_fixtures import CASES as VERIFIED_CASES
+from packages.runner.tests.verified_fixtures import verified_recorded
 
 ROOT = Path(__file__).resolve().parents[3]
 PILOTS = ROOT / "bench/apps/conduit/qa"
@@ -81,6 +83,8 @@ INJECTED = {case.cassette: case for case in INJECTION_CASES}
 HEALED = {case.cassette: case for case in HEAL_CASES}
 # The heal-aimed injection pages' `aqa run`s (#311), by cassette name.
 HEAL_INJECTED = {case.cassette: case for case in HEAL_INJECTION_CASES}
+# The badge pages' `aqa replay --mode verified`s (#339), by cassette name.
+VERIFIED = {case.cassette: case for case in VERIFIED_CASES}
 # The whole explore of the fixture spec: the plan and every turn.
 EXPLORE = "explore_fixture"
 # The explore's own guard: the run stops calling once it has spent this. One
@@ -121,6 +125,10 @@ HEAL_ROUND_USD: Final = Decimal("0.25")
 # USD 1.00 over the USD 0.70 ADR-0024's #311 amendment derives, for more
 # re-attempts; each run's is its config's heal_model_usd.
 HEAL_INJECTION_ROUND_USD: Final = Decimal("1.00")
+# The verified round's limit (#339), as ADR-0024's #339 amendment derives it,
+# awaiting the maintainer's approval; each run's is its config's
+# verified_model_usd.
+VERIFIED_ROUND_USD: Final = Decimal("0.15")
 
 
 class SpendRefusedError(Exception):
@@ -714,11 +722,21 @@ async def healed_injection(
     )
 
 
+async def verified(
+    name: str, router: ModelRouter, spec: Spec
+) -> tuple[tuple[CostRecord, ...], bool, Ending, str | None]:
+    """A verified case's `aqa replay --mode verified` of its badge page (#339): its
+    priced calls, whether its rule allows how it ended, how it ended, and, in fixed
+    words, why the rule doesn't."""
+    return heal_ended(*await verified_recorded(VERIFIED[name], spec, router))
+
+
 def heal_ended(
     replayed: Replayed, disallowed: str | None
 ) -> tuple[tuple[CostRecord, ...], bool, Ending, str | None]:
-    """A heal run's priced calls, as its own cost lines keep them, whether its
-    case's rule allows how it ended, how it ended, and the rule's words."""
+    """A heal run's priced calls, or a verified run's, as its own cost lines keep
+    them, whether its case's rule allows how it ended, how it ended, and the
+    rule's words."""
     ending = Ending(
         exit_code=EXIT_CODES[replayed.outcome],
         outcome=replayed.outcome,
@@ -810,6 +828,17 @@ CASES: Final[Mapping[str, RecordedCase]] = {
         )
         for name, case in HEAL_INJECTED.items()
     },
+    **dict.fromkeys(
+        VERIFIED,
+        RecordedCase(
+            verified,
+            role="verifier",
+            mode="verified",
+            round_usd=VERIFIED_ROUND_USD,
+            run_usd=lambda config: Decimal(str(config.budgets.verified_model_usd)),
+            whole_run=True,
+        ),
+    ),
 }
 
 
@@ -1178,6 +1207,8 @@ def record(
         spec = heal_spec(HEALED[name], attempt / "qa")
     elif name in HEAL_INJECTED:
         spec = HEAL_INJECTED[name].spec(attempt / "qa")
+    elif name in VERIFIED:
+        spec = VERIFIED[name].spec(attempt / "qa")
     else:
         spec = checkout(attempt / "qa")
     config = load_config(spec.path.parent / "config.yaml")

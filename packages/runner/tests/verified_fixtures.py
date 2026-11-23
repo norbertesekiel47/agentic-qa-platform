@@ -19,14 +19,23 @@ from typing import Final
 from unittest.mock import patch
 
 from aqa_core.compiled import CompiledScript
+from aqa_core.heal_patch import blob_sha
 from aqa_core.model_costs import CostRecord
-from aqa_core.project import load_config, load_project, load_spec
+from aqa_core.project import load_compiled, load_config, load_project, load_spec
 from aqa_core.spec import Spec
 from aqa_runner.chat_client import Reply
+from aqa_runner.locator_generation import register_identity_engine
+from aqa_runner.model_router import ModelRouter
+from aqa_runner.model_turns import Spending
 from aqa_runner.publication import published_text
+from aqa_runner.redaction import NO_SECRETS
 from aqa_runner.replay_result import Outcome
+from aqa_runner.run_record import COSTS
+from aqa_runner.strict_replay import Replayed, StrictRun, strict_replay
+from aqa_runner.verification import Verifying
 from aqa_runner.verifier import VerifierVerdict
 from langchain_core.messages import AIMessage, BaseMessage
+from playwright.async_api import async_playwright
 
 from packages.runner.tests.executor_fixtures import (
     PAGES,
@@ -190,6 +199,63 @@ def _badge(document: Mapping[str, object]) -> Mapping[str, object]:
         if isinstance(each, Mapping) and each.get("assertion") == "a1"
     ]
     return found[0] if found else {}
+
+
+# Where a verified run saves a1's evidence, and the badge's line in its snapshot.
+FOLDER: Final = "verified/assertion-0"
+BADGE_REF: Final = re.compile(rf'- img "{NAME}" \[ref=(e[0-9]+)\]')
+
+
+async def verified_recorded(
+    case: VerifiedCase, spec: Spec, router: ModelRouter
+) -> tuple[Replayed, str | None]:
+    """`case`'s `aqa replay --mode verified` of `spec`, in process, in real
+    Chromium against the fixture app serving its badge page: the run the CLI
+    makes, its verifier on `router`, whose retries the recorder turns off,
+    where the CLI's keeps the SDK's. How it ended, and why the rule says it
+    isn't what `case` records."""
+    root = spec.path.parent
+    config = load_config(root / "config.yaml")
+    published = root / ".compiled/badge.json"
+    script = load_compiled(published, config)
+
+    def verify(spending: Spending, interrupted: Callable[[], bool]) -> Verifying:
+        seconds = config.budgets.resolve_seconds
+        return Verifying(router, spending, spec, script, interrupted, seconds)
+
+    with serving(page(case.page)) as app:
+        blob = blob_sha(published.read_bytes())
+        run = StrictRun(root, spec, config, app.origin, script, {}, blob)
+        async with async_playwright() as playwright:
+            await register_identity_engine(playwright)
+            replayed = await strict_replay(run, playwright, NO_SECRETS, verify=verify)
+    costs, given = _cost_lines(replayed.record), _given(replayed)
+    return replayed, verified_disallowed(
+        case, replayed.outcome, replayed.document, costs, given
+    )
+
+
+def _cost_lines(record: Path | None) -> tuple[CostRecord, ...]:
+    """A run's priced calls, as its own cost lines keep them, read as
+    `record_cassettes.cost_lines` reads them."""
+    costs = None if record is None else record / COSTS
+    lines = costs.read_text().splitlines() if costs and costs.is_file() else []
+    return tuple(map(CostRecord.model_validate_json, lines))
+
+
+def _given(replayed: Replayed) -> list[str]:
+    """The references a1's request gave, as its run saved them: the screenshot's
+    path its verdict cites, then the badge's ref in its saved snapshot. One the
+    run didn't save is left out."""
+    cited = _badge(replayed.document).get("evidence")
+    shot = cited.get("screenshot") if isinstance(cited, Mapping) else None
+    path = shot.get("path") if isinstance(shot, Mapping) else None
+    given = [path] if isinstance(path, str) else []
+    if replayed.record is not None:
+        snapshot = replayed.record / FOLDER / "a11y_snapshot.yaml"
+        found = BADGE_REF.search(snapshot.read_text()) if snapshot.is_file() else None
+        given += [] if found is None else [found[1]]
+    return given
 
 
 def evidence(messages: Sequence[BaseMessage]) -> list[str]:
