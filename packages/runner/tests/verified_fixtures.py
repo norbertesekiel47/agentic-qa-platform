@@ -2,22 +2,29 @@
 solid block of colour on a page that renders no text, a spec whose one
 expectation is marked `visual: model`, the scripts that check it with
 `model_verify`, the verifier's scripted replies, and a PNG's pixel, read with
-the standard library. Imported by its path, as pytest names the runner's test
-modules (TESTING.md §1, Shared egress fixtures)."""
+the standard library. The recorder's verified cases (#339; ADR-0024's #339
+amendment, TESTING §4) are here too: each badge page's `aqa replay --mode
+verified`, and the rule that promotes its recording. Imported by its path, as
+pytest names the runner's test modules (TESTING.md §1, Shared egress
+fixtures)."""
 
 import re
 import struct
 import zlib
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 from unittest.mock import patch
 
 from aqa_core.compiled import CompiledScript
-from aqa_core.project import load_project
+from aqa_core.model_costs import CostRecord
+from aqa_core.project import load_config, load_project, load_spec
+from aqa_core.spec import Spec
 from aqa_runner.chat_client import Reply
 from aqa_runner.publication import published_text
+from aqa_runner.replay_result import Outcome
 from aqa_runner.verifier import VerifierVerdict
 from langchain_core.messages import AIMessage, BaseMessage
 
@@ -29,6 +36,7 @@ from packages.runner.tests.executor_fixtures import (
     serving_app,
 )
 from packages.runner.tests.explore_graph_fixtures import USAGE
+from packages.runner.tests.heal_fixtures import unallowed
 
 VERIFIED = Path(__file__).resolve().parents[3] / "tests/fixtures/pages/verified"
 # The colour each page draws its badge in, and the badge's centre in CSS
@@ -103,6 +111,85 @@ def badge_spec(
         published_text(script.model_copy(update=current))
     )
     return path
+
+
+@dataclass(frozen=True)
+class VerifiedCase:
+    """One recording (#339): its cassette, the badge page its run replays, the
+    script and config it replays with, and the outcome it must end in."""
+
+    cassette: str
+    page: str
+    script: CompiledScript
+    config: str
+    outcome: Outcome
+
+    def spec(self, root: Path) -> Spec:
+        """The badge spec under the spec root `root`, with this case's script
+        published and its config, as `test_verified_cassette` writes it."""
+        path = badge_spec(root, self.script, config=self.config)
+        return load_spec(path, load_config(root / "config.yaml"))
+
+
+CASES: Final = (
+    VerifiedCase("verified_pass", "green", CHECKED, QUICK, "passed"),
+    VerifiedCase("verified_violated", "red", CHECKED, QUICK, "expectation_violated"),
+)
+
+
+# Why a run isn't one its recording is promoted from, in fixed words, with
+# `heal_fixtures.unallowed`.
+NOT_ONE_CALL: Final = "it didn't make exactly one verifier call"
+UNPARSED: Final = "the verifier's reply didn't parse as its verdict"
+MISCITED: Final = (
+    "the verifier's reply didn't cite exactly the screenshot, then the badge's ref"
+)
+NO_VISUAL_FINDING: Final = "it ended expectation_violated with no visual finding"
+
+
+def verified_disallowed(
+    case: VerifiedCase,
+    outcome: str,
+    document: Mapping[str, object],
+    costs: Sequence[CostRecord],
+    given: Sequence[str],
+) -> str | None:
+    """Why a run of `case` that ended `outcome`, whose `replay.json` is
+    `document` and whose own cost lines are `costs`, isn't one its recording is
+    promoted from, in fixed words, checked in this order, or None. `given` is
+    the two references its request gave: the screenshot's path, then the
+    badge's ref. Only one verifier call whose reply parsed and cites exactly
+    `given`, in that order, which `judged`'s set allows otherwise; then the
+    case's outcome, and for the red page a visual finding."""
+    if [(cost.role, cost.mode) for cost in costs] != [("verifier", "verified")]:
+        return NOT_ONE_CALL
+    a1 = _badge(document)
+    said = a1.get("verifier")
+    if costs[0].status != "ok" or not isinstance(said, Mapping):
+        return UNPARSED
+    if said.get("evidence_refs") != list(given):
+        return MISCITED
+    if outcome != case.outcome:
+        return unallowed(outcome)
+    finding = a1.get("finding")
+    if outcome == "expectation_violated" and (
+        not isinstance(finding, Mapping) or finding.get("category") != "visual"
+    ):
+        return NO_VISUAL_FINDING
+    return None
+
+
+def _badge(document: Mapping[str, object]) -> Mapping[str, object]:
+    """a1's verdict in `document`, or nothing when it has none."""
+    verdicts = document.get("verdicts")
+    if not isinstance(verdicts, list):
+        return {}
+    found = [
+        each
+        for each in verdicts
+        if isinstance(each, Mapping) and each.get("assertion") == "a1"
+    ]
+    return found[0] if found else {}
 
 
 def evidence(messages: Sequence[BaseMessage]) -> list[str]:
