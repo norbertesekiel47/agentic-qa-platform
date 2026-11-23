@@ -167,9 +167,10 @@ def verified_disallowed(
     `document` and whose own cost lines are `costs`, isn't one its recording is
     promoted from, in fixed words, checked in this order, or None. `given` is
     the two references its request gave: the screenshot's path, then the
-    badge's ref. Only one verifier call whose reply parsed and cites exactly
-    `given`, in that order, which `judged`'s set allows otherwise; then the
-    case's outcome, and for the red page a visual finding."""
+    badge's ref. Only a run of one verifier call, whose reply parsed and cites
+    exactly `given` in that order (where `judged` takes them as a set), that
+    ended in the case's outcome, on the red page with a visual finding, is
+    promoted."""
     if [(cost.role, cost.mode) for cost in costs] != [("verifier", "verified")]:
         return NOT_ONE_CALL
     a1 = _badge(document)
@@ -254,7 +255,8 @@ def _given(replayed: Replayed) -> list[str]:
     if replayed.record is not None:
         snapshot = replayed.record / FOLDER / "a11y_snapshot.yaml"
         found = BADGE_REF.search(snapshot.read_text()) if snapshot.is_file() else None
-        given += [] if found is None else [found[1]]
+        if found is not None:
+            given.append(found[1])
     return given
 
 
