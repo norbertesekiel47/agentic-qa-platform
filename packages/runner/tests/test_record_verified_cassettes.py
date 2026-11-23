@@ -8,29 +8,51 @@ here reaches a provider."""
 
 import json
 from collections.abc import Callable, Iterator, Sequence
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
+import typer.testing
+import yaml
+from aqa_cli.main import app as aqa
 from aqa_core.config import ModelRoleName, ProjectConfig
 from aqa_core.model_costs import CostRecord, Mode, Status, Usage, cost_record
 from aqa_core.model_roles import resolve_roles
 from aqa_core.price_map import vendored
 from langchain_core.messages import HumanMessage
 
+from packages.runner.tests import record_cassettes
 from packages.runner.tests.provider_stand_in import Answer, Start, planned, standing_in
-from packages.runner.tests.record_cassettes import VERIFIED_ROUND_USD, record
+from packages.runner.tests.record_cassettes import (
+    VERIFIED_ROUND_USD,
+    answers_expected,
+    record,
+)
 from packages.runner.tests.test_record_heal_cassettes import receipt, snapshot
 from packages.runner.tests.test_record_heal_injection_cassettes import (
+    never_promoted,
     promoted,
     reserved,
 )
-from packages.runner.tests.test_verified_cassette import PASS, SHOT, VIOLATED, Case
+from packages.runner.tests.test_verified_cassette import (
+    PASS,
+    SHOT,
+    VIOLATED,
+    Case,
+    Cassette,
+)
 from packages.runner.tests.verified_fixtures import (
     CASES,
+    CHECKED,
+    QUICK,
+    TWICE,
     VerifiedCase,
+    badge_spec,
     evidence,
+    page,
+    serving,
     verified_disallowed,
 )
 
@@ -101,6 +123,172 @@ def test_the_pages_verdict_citing_the_two_references_in_order_is_promoted(
     assert ".compiled/badge.json" in intent["inputs"]
     [reservation] = reserved(case.cassette, attempt, stand_in.sent)
     assert reservation <= min(Decimal("0.3"), VERIFIED_ROUND_USD)
+
+
+@pytest.mark.parametrize("case", [PASS, VIOLATED], ids=lambda c: c.cassette)
+def test_each_promoted_cassette_replays_as_the_replay_test_replays_its_own(
+    provider: Start, library: Path, tmp_path: Path, cassette: Cassette, case: Case
+) -> None:
+    provider([judging(case.verdict)])
+    record(case.cassette, tmp_path / "verified" / "001", library=library)
+    spec = badge_spec(tmp_path / "qa")
+
+    with (
+        serving(page(case.page)) as app,
+        cassette(case.cassette, library=library, replay_only=True) as played,
+    ):
+        result = typer.testing.CliRunner().invoke(
+            aqa, ["replay", "--mode", "verified", str(spec), "--url", app.origin]
+        )
+
+    assert result.exit_code == case.exit_code, result.output
+    [run] = (spec.parent / ".aqa/runs").iterdir()
+    document = json.loads((run / "replay.json").read_text())
+    assert (document["mode"], document["outcome"]) == ("verified", case.outcome)
+    [a1] = [each for each in document["verdicts"] if each.get("assertion") == "a1"]
+    assert a1["verdict"] == case.verdict
+    assert len(played.sent) == len(played.responses) == 1
+
+
+@pytest.mark.parametrize(
+    ("citing", "outcome"),
+    [
+        pytest.param(
+            lambda _: ["verified/approved/screenshot.png", "e404"],
+            "inconclusive",
+            id="other_references",
+        ),
+        pytest.param(lambda given: given[:1], "inconclusive", id="fewer"),
+        pytest.param(lambda given: [*given, "e405"], "inconclusive", id="more"),
+        # The run takes the two as a set, so it passes.
+        pytest.param(lambda given: given[::-1], "passed", id="the_two_reversed"),
+    ],
+)
+def test_a_reply_citing_other_than_the_two_references_in_order_is_never_promoted(
+    provider: Start,
+    library: Path,
+    tmp_path: Path,
+    citing: Callable[[list[str]], list[str]],
+    outcome: str,
+) -> None:
+    attempt = tmp_path / "verified" / "001"
+    provider([judging("pass", citing)])
+
+    with pytest.raises(ValueError, match="disallowed"):
+        record("verified_pass", attempt, library=library)
+
+    kept = never_promoted("verified_pass", attempt, library)
+    assert kept["explore"]["outcome"] == outcome
+    assert kept["disallowed"] == (
+        "the verifier's reply didn't cite exactly the screenshot, then the badge's ref"
+    )
+
+
+def test_a_reply_citing_nothing_is_never_promoted(
+    provider: Start, library: Path, tmp_path: Path
+) -> None:
+    attempt = tmp_path / "verified" / "001"
+    provider([judging("pass", lambda _: [])])
+
+    with pytest.raises(ValueError, match="disallowed"):
+        record("verified_pass", attempt, library=library)
+
+    kept = never_promoted("verified_pass", attempt, library)
+    assert [cost["status"] for cost in kept["cost_records"]] == ["invalid"]
+    assert kept["disallowed"] == "the verifier's reply didn't parse as its verdict"
+
+
+# How a run ends on a verdict that cites the two references.
+ENDS = {
+    "pass": "passed",
+    "expectation_violated": "expectation_violated",
+    "inconclusive": "inconclusive",
+}
+
+
+@pytest.mark.parametrize(
+    ("name", "verdict"),
+    [
+        ("verified_pass", "expectation_violated"),
+        ("verified_violated", "pass"),
+        ("verified_pass", "inconclusive"),
+    ],
+)
+def test_a_cited_verdict_that_ends_the_run_otherwise_is_never_promoted(
+    provider: Start, library: Path, tmp_path: Path, name: str, verdict: str
+) -> None:
+    attempt = tmp_path / "verified" / "001"
+    provider([judging(verdict)])
+    outcome = ENDS[verdict]
+
+    with pytest.raises(ValueError, match="disallowed"):
+        record(name, attempt, library=library)
+
+    kept = never_promoted(name, attempt, library)
+    assert kept["explore"]["outcome"] == outcome
+    assert kept["disallowed"] == f"it ended {outcome}, which this case doesn't allow"
+
+
+def test_a_second_verifier_call_is_never_promoted(
+    provider: Start,
+    library: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = record_cassettes.VERIFIED["verified_pass"]
+    monkeypatch.setitem(
+        record_cassettes.VERIFIED, case.cassette, replace(case, script=TWICE)
+    )
+    attempt = tmp_path / "verified" / "001"
+    stand_in = provider([judging("pass")])
+
+    with pytest.raises(ValueError, match="disallowed"):
+        record("verified_pass", attempt, library=library)
+
+    kept = never_promoted("verified_pass", attempt, library)
+    assert kept["explore"]["outcome"] == "passed"
+    assert len(stand_in.sent) == len(kept["responses"]) == 2
+    assert kept["disallowed"] == "it didn't make exactly one verifier call"
+
+
+def test_a_verified_round_past_its_limit_refuses_the_request(
+    provider: Start, library: Path, tmp_path: Path
+) -> None:
+    earlier = tmp_path / "verified" / "000"
+    earlier.mkdir(parents=True)
+    spent = {"spend": {"spent_usd": str(VERIFIED_ROUND_USD), "overrun": False}}
+    (earlier / "receipt.json").write_text(json.dumps(spent))
+    attempt = tmp_path / "verified" / "001"
+    stand_in = provider([judging("pass")])
+
+    with pytest.raises(ValueError, match="spend_refused"):
+        record("verified_pass", attempt, library=library)
+
+    assert stand_in.sent == []
+    assert not (library / "verified_pass.yaml").exists()
+    kept = receipt(attempt)
+    assert (kept["outcome"], kept["spend"]["refused"]) == ("spend_refused", True)
+
+
+def test_each_verified_case_says_what_it_is_recorded_as() -> None:
+    names = ["verified_pass", "verified_violated"]
+
+    assert {
+        name: (case.role, case.mode, case.round_usd, case.whole_run)
+        for name, case in record_cassettes.CASES.items()
+        if name.startswith("verified_")
+    } == dict.fromkeys(names, ("verifier", "verified", VERIFIED_ROUND_USD, True))
+    assert [(case.cassette, case.page, case.outcome) for case in CASES] == [
+        (each.cassette, each.page, each.outcome) for each in (PASS, VIOLATED)
+    ]
+    assert [(case.script, case.config) for case in CASES] == [(CHECKED, QUICK)] * 2
+    assert "verified_no_evidence" not in record_cassettes.CASES
+    config = ProjectConfig.model_validate(yaml.safe_load(QUICK))
+    assert record_cassettes.CASES["verified_pass"].run_usd(config) == Decimal("0.3")
+    assert answers_expected("verified_pass", (line(),)) == 1
+    # The limit ADR-0024's #339 amendment derives, awaiting the maintainer's
+    # approval.
+    assert record_cassettes.CASES["verified_pass"].round_usd == Decimal("0.15")
 
 
 def line(
