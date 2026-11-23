@@ -172,12 +172,13 @@ def test_a_reply_citing_other_than_the_two_references_in_order_is_never_promoted
     outcome: str,
 ) -> None:
     attempt = tmp_path / "verified" / "001"
-    provider([judging("pass", citing)])
+    stand_in = provider([judging("pass", citing)])
 
     with pytest.raises(ValueError, match="disallowed"):
         record("verified_pass", attempt, library=library)
 
     kept = never_promoted("verified_pass", attempt, library)
+    reserved("verified_pass", attempt, stand_in.sent)
     assert kept["explore"]["outcome"] == outcome
     assert kept["disallowed"] == (
         "the verifier's reply didn't cite exactly the screenshot, then the badge's ref"
@@ -188,12 +189,13 @@ def test_a_reply_citing_nothing_is_never_promoted(
     provider: Start, library: Path, tmp_path: Path
 ) -> None:
     attempt = tmp_path / "verified" / "001"
-    provider([judging("pass", lambda _: [])])
+    stand_in = provider([judging("pass", lambda _: [])])
 
     with pytest.raises(ValueError, match="disallowed"):
         record("verified_pass", attempt, library=library)
 
     kept = never_promoted("verified_pass", attempt, library)
+    reserved("verified_pass", attempt, stand_in.sent)
     assert [cost["status"] for cost in kept["cost_records"]] == ["invalid"]
     assert kept["disallowed"] == "the verifier's reply didn't parse as its verdict"
 
@@ -218,13 +220,14 @@ def test_a_cited_verdict_that_ends_the_run_otherwise_is_never_promoted(
     provider: Start, library: Path, tmp_path: Path, name: str, verdict: str
 ) -> None:
     attempt = tmp_path / "verified" / "001"
-    provider([judging(verdict)])
+    stand_in = provider([judging(verdict)])
     outcome = ENDS[verdict]
 
     with pytest.raises(ValueError, match="disallowed"):
         record(name, attempt, library=library)
 
     kept = never_promoted(name, attempt, library)
+    reserved(name, attempt, stand_in.sent)
     assert kept["explore"]["outcome"] == outcome
     assert kept["disallowed"] == f"it ended {outcome}, which this case doesn't allow"
 
@@ -247,7 +250,8 @@ def test_a_second_verifier_call_is_never_promoted(
 
     kept = never_promoted("verified_pass", attempt, library)
     assert kept["explore"]["outcome"] == "passed"
-    assert len(stand_in.sent) == len(kept["responses"]) == 2
+    assert len(reserved("verified_pass", attempt, stand_in.sent)) == 2
+    assert len(kept["responses"]) == 2
     assert kept["disallowed"] == "it didn't make exactly one verifier call"
 
 
