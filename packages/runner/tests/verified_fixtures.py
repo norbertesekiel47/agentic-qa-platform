@@ -147,7 +147,7 @@ CASES: Final = (
 
 
 # Why a run isn't one its recording is promoted from, in fixed words, with
-# `heal_fixtures.unallowed`.
+# `heal_fixtures.unallowed`'s "it ended <outcome>, which this case doesn't allow".
 NOT_ONE_CALL: Final = "it didn't make exactly one verifier call"
 UNPARSED: Final = "the verifier's reply didn't parse as its verdict"
 MISCITED: Final = (
