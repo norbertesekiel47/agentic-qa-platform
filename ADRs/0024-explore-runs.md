@@ -1648,3 +1648,98 @@ The healer had one request and one tool, `rebind`, whose four cassettes replay b
 
   `test_an_inserted_press_under_an_open_tunnel_stops_the_run` now expects the refusal before its intent, with states `[(0, "intent"), (0, "completed")]`; every other existing assertion stands.
 - **The maintainer's acceptance** (#335, 2026-11-22, after the job escalated). Accepted: two requests, the separate `uncover` request and its tool, with `HEAL_INSTRUCTIONS` and `rebind` unchanged, as intake chose, with the recorder work filed as #346; the trigger, so the turn runs when every miss is `not actionable`, a disabled or CSS-hidden target included; the words written into committed compiled scripts, the name `uncover_<seq>` and the meaning `the element a heal clicks to uncover ` followed by the drifted target's `semantic`; and the target check, so a pick any target of the script already finds is refused (spec Assumption 5).
+
+## Amendment (2026-11-20): the removed drift page's recorder case and promotion rule (#338)
+
+M2's exit run (#257) has no heal cassette for `aqa run` on the removed drift page, so a keyless exit run can't cover it. This is the groundwork with no provider call, as the maintainer decided for recordings (#311, #327): the recorder's case, the rule that promotes its recording, the round's limit and its receipts' format. TESTING §4 holds the command. Tests, fixtures, the recorder and docs only: no runner, CLI or core source changes.
+
+### The case
+
+`record_cassettes.CASES` gets one case, `heal_removed`, one `aqa run` through the heal cases' path (`heal_fixtures.heal_recorded`, `strict_replay` under `drift_fixtures.serving`) of #240's removed drift page, whose toggle is gone, leaving the heading and the footer's `Contact us` button. Its row has `role="healer"`, `mode="heal"`, `whole_run=True`, the round's limit `HEAL_REMOVED_ROUND_USD`, and its config's `heal_model_usd` as its run's bound, USD 0.30.
+
+| Case | Page | Script | Expectation | Config | Perception | Recorded as |
+|---|---|---|---|---|---|---|
+| `heal_removed` | `removed` | `DETAILS` | `SHIPPING` | the scripted suite's `BUDGETS` (`heal_turns` 6, `heal_model_usd` 0.30, both defaults) | `hybrid`, the default | `healer` |
+
+The case (`heal_fixtures.REMOVED_CASE`, a frozen `RemovedCase` whose `spec(root)` writes its config and returns the order spec) and its rule live in `heal_fixtures.py`, beside the heal cases. It isn't in `HEAL_CASES`, so the heal cases keep their config, rule, one-response count and `HEAL_ROUND_USD`. `ORDER_PAGE` and `SERVED_ELSE` move from `heal_injection_fixtures.py` into `heal_fixtures.py`, which owns the shared words, and `heal_injection_fixtures.py` imports them back, so the heal-aimed cases' rule, words and limit don't change; the reverse import would form a cycle. The recorder finds the case by cassette name in `record_cassettes.HEAL_REMOVED`, and `record()` builds its spec from `spec(attempt / "qa")`. No config sets `roles`, so `healer` and `vision_fallback` resolve to the same model, `claude-sonnet-5-5`, and the vision request passes the bound's model check.
+
+On this page the code ends a heal in one of two ways (`test_heal_verdicts.py`): a rebind of `Contact us` clicks a button that shows nothing, so both of the summary's checks fail, `expectation_violated` (1) with no proposal and each finding's `rebound_steps` `[1]`; a tree reply that calls no tool, then a vision reply that names no point, ends `inconclusive` (3) with no proposal.
+
+### Options weighed
+
+- *The config.* (a) The heal cases' `RECORDING_CONFIG` (`heal_turns` 3, `heal_model_usd` 0.10). (b) The page's scripted-suite config, `BUDGETS`, as #311 chose its pages' and the maintainer accepted. Intake and the spec expected the vision request alone to reserve more than (a)'s USD 0.10 run bound, as the moved page's did for #311 (USD 0.120344 to 0.126584). Measured, it doesn't: the removed page holds only a heading and a button, so its screenshot is small, and its vision request, 14,280 bytes, 12,324 of them the image's base64, reserves USD 0.071568 (below). Under (a), the tree turns before it would have USD 0.028432 of the run's bound left. At T a turn (below) that admits the two tree turns `heal_turns` 3 allows before a vision turn, but a tree turn billed more, or a larger screenshot on another platform, leaves the vision request refused unsent. (b) leaves room, and is the config `test_heal_verdicts.py` pins both endings under: (b). The run-bound test keeps (a) to show the bound refusing a request, and plants a tree turn billed USD 0.044 to do it.
+- *The endings.* (a) `inconclusive` only. (b) `expectation_violated` only. (c) Both, each with no proposal. The code gives both on this page, and a real model may do either: it may find nothing, or offer the nearest button as a best guess. So (c), intake's reading, which the maintainer accepted (below). `drift_consistent` is never right for a page whose toggle is gone.
+- *The checked finding.* (a) `expectation_violated` with no proposal, whatever caused it. (b) Also a finding that lists the rebound step. Under (a) a violation that didn't follow a rebind, such as an invariant that failed before step 1, would be promoted as the model's best guess. So (b), which fails closed.
+- *`inconclusive` and what stopped the heal.* (a) Only "found no element". (b) Whatever stopped it: no element found, a vision point refused, or the turns or the spend ran out. The maintainer accepted (b) for #311's `inconclusive` ending, and the replay's checks don't run after any of them, so (b).
+
+### The promotion rule and the count rule
+
+`heal_fixtures.heal_removed_disallowed` is a pure function of the run's outcome, its `replay.json` document and each `(method, path)` the app saw. It returns None or one of these fixed words, checked in this order, which the receipt keeps as `disallowed`:
+
+1. `the app served a request other than the order page`: any request the app saw but `GET /page/order`, which may repeat. The words are `SERVED_ELSE`, which `heal_injection_disallowed` uses too.
+2. `it ended <outcome>, which this case doesn't allow`: an outcome other than `inconclusive` or `expectation_violated`. That is `drift_consistent`, `passed`, or an error outcome (`no_response`, `record_error`, `egress_blocked`, `unreachable`, `non_resumable`, `no_sandbox`, `reset_unsafe`). The words are `heal_disallowed`'s (`unallowed`). The rule checks the outcome before the proposal, so `drift_consistent` gets these words, as intake lists it.
+3. `it ended <outcome> with a proposal`: `inconclusive` or `expectation_violated` with a `heal_proposal` that isn't null (`with_a_proposal`). `replay_result` gives a proposal only to `drift_consistent`, so this word guards against a change there.
+4. `it ended expectation_violated with no finding that lists the rebound step`: `expectation_violated` where no entry of the document's `verdicts` has a `finding` whose `rebound_steps` holds 1, `DETAILS`' one step, the toggle's click (`NO_REBOUND_FINDING`).
+
+So exactly two endings are promoted, each with no proposal and only when rule 1 holds: `inconclusive` (exit 3), and `expectation_violated` (exit 1) with a finding that lists the rebound step. A `disallowed` attempt is never promoted, and the operator stops there, never retrying, as for the other families.
+
+*The count rule.* The case holds one priced, identified response per line of its run's own `costs.jsonl`, less any replayed (none are): `answers_expected`'s `whole_run` branch, not the heal cases' fixed one, and its docstring names the case. The run that ends `inconclusive` takes a tree turn and a vision turn, so two lines, each with the run's own label: `healer`/`heal` and `vision_fallback`/`heal`.
+
+### The round's limit: USD 0.25, approved
+
+The limit is #311's formula with its T and V: L = 2 × W + R_max, rounded up to the next USD 0.05. The maintainer approved it as derived (2026-11-22, below), and no recording ran in this job.
+
+- *T and V:* USD 0.01 for a tree turn's plausible worst cost and USD 0.02 for a vision turn's, as the #311 amendment derives them. The removed page is smaller than the heal-aimed pages, so both are conservative here.
+- *W*, one attempt's plausible worst spend: (6 − 1) × T + V = USD 0.07. `heal_turns` is 6, less one for the vision turn, which a `hybrid` heal takes only with a turn left.
+- *The factor 2* allows one re-attempt, since only `disallowed` is a stop.
+- *R_max: USD 0.071568*, the largest `Allowance.reserve(body).usd` over the request bodies the new stand-in tests send for `heal_removed`. That is the vision request of the test that ends `inconclusive`: 14,280 bytes, 12,324 of them the image's base64, so (14,280 + 1,024) input tokens at USD 2 and 4,096 output tokens at USD 10 per million (`claude-sonnet-5-5`, the pinned price map `ae6b762`). A tree request reserved at most USD 0.047182 (2,087 bytes, on the planted moved page); the removed page's reserved USD 0.047098 (2,045 bytes). It leaves room for the round's last request to reserve its worst case. Measured with `env -u ANTHROPIC_API_KEY -u AQA_RECORD_CASSETTES uv run pytest packages/runner/tests/test_record_heal_removed_cassette.py --log-cli-level=INFO`. The commit was "feat(runner): the recorder's heal_removed case, the removed drift page's aqa run under its own round limit, counted one response per cost line (#338)", `f9f2de6` on the branch before it merged, whose branch was based on main at `1a3cb68e1729dc421b79e31f6d42bfd72ebe094a`. The platform was macOS 27.2 (darwin, arm64) with Playwright 1.63.0's Chromium headless shell (`chromium_headless_shell-1243`). Each test logs what each request reserved, with its size and image bytes. The PNG's size varies with the platform's rendering, so Linux's figure may differ.
+- *The arithmetic:* 2 × 0.07 + 0.071568 = USD 0.211568, rounded up to USD 0.25, which is `HEAL_REMOVED_ROUND_USD`. The spec's estimate was about USD 0.30, from #311's R_max.
+
+Each run is also held to its own bound, `heal_model_usd` USD 0.30: the recorder refuses a request whose reservation would take the run or the round past its bound, and `Healing` stops after a priced response once the run's spend is gone.
+
+### Red first
+
+The rule's tests and the stand-in tests check new test code, so each was shown red with no production change:
+
+- The rule's unit tests in `test_record_heal_removed_cassette.py`, against a rule that returned None for everything: each of the eight fixed-word cases failed, and the three allowed shapes passed.
+- The stand-in tests, each against a planted fault in the recorder that was never committed. With the runner handing the rule no requests in place of `app.seen`, the POST's run was promoted, and the served-else test failed. With `answers_expected` counting `heal_removed` as one response, the recorded-as test and the `inconclusive` test failed. With the row's run bound the explore case's USD 0.20 in place of the config's `heal_model_usd`, the `inconclusive` test and the run-bound test failed.
+- The run-bound test, under `RECORDING_CONFIG` with a tree reply billed USD 0.00006, failed: its vision request was admitted, which is how this round found the measurement above. It now plants a tree reply billed USD 0.044.
+
+### Tests
+
+`packages/runner/tests/test_record_heal_removed_cassette.py`, against the local stand-in with a fake key in real Chromium, reaching no provider:
+
+- Promoted, each `accepted` with its cassette in a temporary library equal to the attempt's copy, `disallowed` null, and one priced, identified response per cost line:
+  - a tree reply that calls no tool and a vision reply that names no point: exit 3, no proposal, the lines `healer`/`heal` and `vision_fallback`/`heal`, two interactions, `spend.run_usd` "0.3" and `spend.round_left_usd` the limit, and the vision request's reservation above the tree request's and within both bounds;
+  - a rebind of `Contact us`: exit 1, no proposal, one `healer`/`heal` line, and both findings listing rebound step 1.
+- Never promoted, each `disallowed` with its exact words and no `heal_removed.yaml` in the library. Both plant a fault with `monkeypatch.setitem` on `record_cassettes.HEAL_REMOVED`:
+  - the moved page served under the case, with `Show details` picked: `drift_consistent`, "it ended drift_consistent, which this case doesn't allow";
+  - the removed page built in memory with `Contact us` POSTing `/write/confirm`, with `Contact us` picked: "the app served a request other than the order page".
+- The bounds:
+  - An earlier receipt that spent `HEAL_REMOVED_ROUND_USD` leaves the first request refused unsent (`spend_refused`).
+  - Under `RECORDING_CONFIG`, a tree reply that calls no tool, billed USD 0.044 within its reservation (2,000 input and 4,000 output tokens), leaves the vision request refused unsent: one request sent, `spend_refused`, `spend.refused` true and USD 0.044 spent.
+- What the case is recorded as (`healer`, `heal`, a whole run, its limit), that it is in neither `HEALED` nor `HEAL_INJECTED`, and the count rule: 2 for two `ok` lines, while `heal_moved` still gives 1.
+- The rule's unit tests over every word and allowed shape.
+
+`test_record_heal_cassettes.py` and `test_record_heal_injection_cassettes.py` don't change, and pass.
+
+### What the follow-up round does
+
+With the limit approved, the maintainer's round can run. It records `heal_removed` in its own round directory (TESTING §4's command, attempt `001`, any further attempt the next unused number) and inspects the receipt before another call. It promotes what is `accepted`, fills in the receipts below, and adds the cassette-replay test, which fails until a recording exists and so waits for it. Nothing in this amendment records, promotes or measures a recording.
+
+*Cost impact:* none. No test calls a provider (the stand-in answers), and no dependency or paid resource is added. The round itself spends at most its approved limit, USD 0.25.
+
+### The maintainer's acceptance (2026-11-22, after the job escalated)
+
+- *The limit:* `HEAL_REMOVED_ROUND_USD`, USD 0.25, approved as derived: 2 × 0.07 + R_max 0.071568, rounded up to the next USD 0.05 (above).
+- *The endings:* both promoted, `inconclusive` (exit 3) and `expectation_violated` (exit 1), each with no proposal.
+  - The rebound-step check stays: `expectation_violated` is promoted only when a finding lists rebound step 1 (rule 4).
+  - `inconclusive` stays promoted whatever stopped the heal (no element found, a vision point refused, or the turns or the spend ran out), provided the app served only `GET /page/order` (rule 1).
+- *The config:* `BUDGETS` (`heal_turns` 6, USD 0.30 a run), not `RECORDING_CONFIG`.
+- *The record:* this amendment is the record of these choices. No value, rule or test changed with the acceptance.
+
+### The round's receipts (to be recorded)
+
+| Case | Source SHA | Attempt | Outcome | Spend (USD) |
+|---|---|---|---|---|
+| `heal_removed` | | | | |

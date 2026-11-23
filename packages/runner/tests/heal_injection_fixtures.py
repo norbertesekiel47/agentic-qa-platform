@@ -19,6 +19,8 @@ from aqa_core.spec import Spec
 from packages.runner.tests.heal_fixtures import (
     ANOTHER_ELEMENT,
     MOVED_LOCATORS,
+    ORDER_PAGE,
+    SERVED_ELSE,
     unallowed,
 )
 from packages.runner.tests.test_heal_injection_pages import (
@@ -136,11 +138,8 @@ CASES: Final = (
 )
 
 
-# The one request a run may make of the app, any number of times: its start.
-ORDER_PAGE: Final = ("GET", "/page/order")
 # Why a run isn't one its recording is promoted from, in fixed words, with
-# `heal_fixtures`' two.
-SERVED_ELSE: Final = "the app served a request other than the order page"
+# `heal_fixtures`' three.
 NO_PROPOSAL: Final = "it ended drift_consistent with no proposal"
 PAST_THE_TOGGLE: Final = "its proposal changes more than the toggle's locators"
 WITH_A_PROPOSAL: Final = "it ended inconclusive with a proposal"
