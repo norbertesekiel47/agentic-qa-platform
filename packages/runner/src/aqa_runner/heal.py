@@ -1,7 +1,7 @@
 """A healer's turns on one drift (ADR-0024's #244 amendment; ADR-0006): a
 LangGraph graph per drift, whose state is plain data, with what the turns use in
 its context, never in state. So no snapshot enters a checkpoint: the only text
-that does is what the last rebind did, scanned, which can quote a page's words
+that does is what the last pick did, scanned, which can quote a page's words
 when a look's error does.
 
 Each turn looks at the page once (`session.snapshot`), sends the model the
@@ -10,6 +10,17 @@ takes back one element's ref. Deterministic code checks that element
 (`repairs.rebind_refusal`, the gate's early copy; the seam reads it again before
 any dispatch), then the generator writes its locators inside the target's
 contract. The model never writes a locator, a step or an assertion.
+
+A covered target, one every locator finds and none can act on, such as a
+button under a dialog (`repairs.covered`), gets turns of another kind
+(ADR-0024's #335 amendment): `healer.uncover_request`, with its own
+instructions and its one tool, takes back the ref of an element to click
+first. Our code refuses one any target of the script finds
+(`repairs.found_by_the_script`), writes its locators, adds a target for it
+and inserts a replay-safe click on it right before the drifted step, which the
+seam and replay judge as any repair's. No vision turn follows such a turn, a
+`vision_only` heal takes none, and no model is asked once the session has a
+tunnel open, since replay would refuse the step.
 
 The project's `heal.perception` decides how a heal sees the page (ADR-0002's
 #252 and #315 amendments). Under `hybrid`, a tree turn whose reply calls no tool
@@ -34,7 +45,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Final, Literal, TypedDict, assert_never
 
-from aqa_core.compiled import Locator, TargetCheck, TextInTarget
+from aqa_core.compiled import Click, Locator, Target, TargetCheck, TextInTarget
 from aqa_core.config import ModelRoleName, Perception
 from aqa_core.heal_patch import literal_claim_spelled, text_claims
 from langchain_core.messages import BaseMessage
@@ -51,9 +62,20 @@ from aqa_runner.browser_session import BrowserSession, RefError
 from aqa_runner.document_origins import DocumentChangedError, PolicyEventError
 from aqa_runner.evaluation import bounded, looked
 from aqa_runner.evidence import Asked, Shot, capture_evidence
-from aqa_runner.healer import Rebind, Unfit, decided, heal_request, healer_tools
+from aqa_runner.healer import (
+    Rebind,
+    Uncover,
+    Unfit,
+    decided,
+    heal_request,
+    healer_tools,
+    uncover_request,
+    uncover_tools,
+    uncovered,
+)
 from aqa_runner.locator_generation import (
     BindingRefusedError,
+    GeneratedUse,
     LocatorError,
     Seen,
     TargetUses,
@@ -77,7 +99,9 @@ from aqa_runner.repairs import (
     ModelReported,
     Offer,
     StepAt,
+    covered,
     cut_off,
+    found_by_the_script,
     rebind_refusal,
 )
 from aqa_runner.run_record import RefusedWriteError, UnrecordedCostError, require_clean
@@ -136,11 +160,29 @@ _OUTSIDE_ITS_REGION: Final = (
 )
 # A locator string past this is no stable name: a page can write any id.
 _LONGEST_STRING: Final = 100
+# Why a heal on a covered target stopped or refused a pick, in fixed words, and
+# the meaning it gives the target it adds, before the covered target's own
+# (ADR-0024's #335 amendment).
+_UNCOVERS_NONE: Final = "the healer found no element that uncovers the target"
+_TREE_ONLY: Final = (
+    "the target is covered, and only a tree turn proposes a click to uncover it, "
+    "which vision_only never takes"
+)
+_TUNNELLED: Final = (
+    "the target is covered, and an encrypted or WebSocket connection is open, so "
+    "replay would refuse a step a heal inserts, and no model was asked"
+)
+_NOT_RUN: Final = "uncover did not run: "
+_FOUND_ALREADY: Final = (
+    f"{_NOT_RUN}a target of the script already finds this element, and a heal "
+    "adds a target only for an element none finds"
+)
+_UNCOVERS: Final = "the element a heal clicks to uncover "
 
 
 class _Turns(TypedDict):
     """The graph's state, plain data a checkpoint keeps: this drift's turns
-    taken, what the last rebind did, scanned, and whether the turns are over."""
+    taken, what the last pick did, scanned, and whether the turns are over."""
 
     turn: int
     results: str
@@ -209,8 +251,10 @@ class Healing:
 
     async def repair(self, drift: Drift) -> Offer:
         """What the turns on `drift` offer (module docstring): the script it was
-        handed, with only the drifted target's locators replaced, or that
-        script, which gives up. Only defects and cancellation raise."""
+        handed, with only the drifted target's locators replaced, or, for a
+        covered target, with only a target added and a click on it inserted;
+        or that script, which gives up. Only defects and cancellation
+        raise."""
         context = _Heal(self, drift)
         graph = StateGraph(_Turns, context_schema=_Heal)
         graph.add_node("turn", _turn)
@@ -234,10 +278,10 @@ class Healing:
 @dataclass
 class _Heal:
     """The graph's context: what the turns on one drift use, never in state, and
-    what they offer, the script handed until a turn decides, which gives up. It
-    remembers what became of its first look's screenshot, for every account it
-    gives, and whether a pick was outside the subject's region, for the
-    reason."""
+    what they offer, the script handed until a turn decides, which gives up: a
+    rebind, or, for a covered target, an inserted click. It remembers what
+    became of its first look's screenshot, for every account it gives, and
+    whether a pick was outside the subject's region, for the reason."""
 
     healing: Healing
     drift: Drift
@@ -256,6 +300,11 @@ class _Heal:
     @property
     def redactor(self) -> Redactor:
         return self.drift.session.redactor
+
+    @property
+    def target(self) -> Target:
+        """The drifted target, as the script handed holds it."""
+        return self.drift.script.targets[self.drift.at.target]
 
     @property
     def folder(self) -> str:
@@ -302,6 +351,8 @@ async def _taken(context: _Heal, state: _Turns) -> _Turns | Offer | _Stop:
     snapshot = await _observed(context)
     if isinstance(snapshot, _Stop):
         return snapshot
+    if (at := covered(context.drift)) is not None:
+        return await _uncover_turn(context, state, snapshot, at)
     if "healer" not in context.healing.roles:
         return await _looked_at(context, state["turn"] + 1)
     return await _tree_turn(context, state, snapshot)
@@ -312,7 +363,15 @@ async def _tree_turn(
 ) -> _Turns | Offer | _Stop:
     """A tree turn with `snapshot`: the turn's new state, or what ends the
     turns, the vision turn among them when its reply calls no tool."""
-    reply = await _asked(context, state, snapshot)
+    target = context.target
+    messages = heal_request(
+        target.semantic,
+        target.locators,
+        state["results"],
+        snapshot,
+        redactor=context.redactor,
+    )
+    reply = await _asked(context, state, messages, healer_tools())
     if isinstance(reply, _Stop):
         return reply
     call = decided(reply)
@@ -320,6 +379,45 @@ async def _tree_turn(
         return await _looked_at(context, state["turn"] + 2)
     results = (
         call.why if isinstance(call, Unfit) else await _picked(context, call, snapshot)
+    )
+    if isinstance(results, str):
+        return _Turns(turn=state["turn"] + 1, results=results, done=False)
+    return results
+
+
+async def _uncover_turn(
+    context: _Heal, state: _Turns, snapshot: Redacted, at: StepAt
+) -> _Turns | Offer | _Stop:
+    """A turn on `at`'s covered target, with `snapshot` (ADR-0024's #335
+    amendment): a tree turn of the `healer` role, with `uncover_request` and
+    its one tool, whose pick, once checked, a step the heal inserts right
+    before `at`'s clicks first (`_uncovering`). The turn's new state, or what
+    ends the turns. No vision turn follows, under any perception: a
+    `vision_only` heal asks no model here, nor does one whose session has a
+    tunnel open, since replay would refuse the step it inserts, and a reply
+    that calls no tool gives up."""
+    if "healer" not in context.healing.roles:
+        return _Stop(_TREE_ONLY)
+    if context.session.tunnelled:
+        return _Stop(_TUNNELLED)
+    target = context.target
+    messages = uncover_request(
+        target.semantic,
+        target.locators,
+        state["results"],
+        snapshot,
+        redactor=context.redactor,
+    )
+    reply = await _asked(context, state, messages, uncover_tools())
+    if isinstance(reply, _Stop):
+        return reply
+    call = uncovered(reply)
+    if call is None:
+        return _Stop(_UNCOVERS_NONE)
+    results = (
+        call.why
+        if isinstance(call, Unfit)
+        else await _uncovering(context, call, snapshot, at)
     )
     if isinstance(results, str):
         return _Turns(turn=state["turn"] + 1, results=results, done=False)
@@ -370,16 +468,14 @@ def _unlooked(
     return f"the page couldn't be looked at: {reasons.reason(error, context.redactor)}"
 
 
-async def _asked(context: _Heal, state: _Turns, snapshot: Redacted) -> Routed | _Stop:
-    """What this turn's request got, or what stopped the turns."""
-    target = context.drift.script.targets[context.drift.at.target]
-    messages = heal_request(
-        target.semantic,
-        target.locators,
-        state["results"],
-        snapshot,
-        redactor=context.redactor,
-    )
+async def _asked(
+    context: _Heal,
+    state: _Turns,
+    messages: list[BaseMessage],
+    tools: tuple[BaseTool, ...],
+) -> Routed | _Stop:
+    """What this tree turn's request, `messages`, offering `tools`, got, or
+    what stopped the turns."""
     try:
         unspelled(context.redactor)(messages)
     except UnsentRequestError:
@@ -388,7 +484,7 @@ async def _asked(context: _Heal, state: _Turns, snapshot: Redacted) -> Routed | 
         return _Stop(_INTERRUPTED)
     number = state["turn"] + 1
     return await _called(
-        context, _Call("healer", healer_tools(), number, str(number), {}), messages
+        context, _Call("healer", tools, number, str(number), {}), messages
     )
 
 
@@ -668,20 +764,90 @@ def _offered(
     script, name = context.drift.script, context.drift.at.target
     rebound = script.targets[name].model_copy(update={"locators": locators})
     offered = script.model_copy(update={"targets": {**script.targets, name: rebound}})
+    basis = Basis(_said(context, seen), reported, None, context.folder, context.shot)
+    return Offer(offered, basis)
+
+
+def _said(context: _Heal, seen: Seen) -> Redacted:
+    """What a pick was, as its basis says it: the role and name its snapshot
+    line gave it, scanned, on one line and cut."""
     named = f' "{seen.name}"' if seen.name else ""
-    bound_as = context.line(f"{seen.role or 'element'}{named}")
-    return Offer(offered, Basis(bound_as, reported, None, context.folder, context.shot))
+    return context.line(f"{seen.role or 'element'}{named}")
+
+
+async def _uncovering(
+    context: _Heal, call: Uncover, snapshot: Redacted, at: StepAt
+) -> Offer | _Stop | str:
+    """The offer of a click on the element `call` picked by its ref, inserted
+    before `at`'s step (`_inserting`); what ends the turns, a run interrupted
+    by now or a page that won't answer or is off the allowed origins; or, for
+    the next turn's request, why not it: no snapshot gave the ref, a target of
+    the script already finds the element (`repairs.found_by_the_script`), or
+    no locator of the grammar finds it alone. The added target's locators come
+    from the generator, for an action, with no contract, never spelling a
+    bound value. Every read is bounded. Only defects and cancellation raise."""
+    if context.drift.interrupted():
+        return _Stop(_INTERRUPTED)
+    session, seconds = context.session, context.healing.seconds
+    meaning = f"{_UNCOVERS}{context.target.semantic}"
+    try:
+        seen = await bounded(seen_element(session, snapshot, call.ref), seconds)
+        async with session.observing_page() as page:
+            # Through `cut_off`, as `_generating`'s reads are.
+            found = await cut_off(
+                found_by_the_script(page, seen.element, context.drift.script), seconds
+            )
+        if found:
+            return _FOUND_ALREADY
+        locators = await _generating(
+            context,
+            seen,
+            "action",
+            lambda: TargetUses(
+                meaning,
+                checks_text=False,
+                contract=None,
+                drop=_dropping(context.redactor, []),
+            ),
+        )
+    except (PolicyEventError, UnansweredError) as error:
+        return _Stop(_unlooked(context, error))
+    except (RefError, LocatorError, DocumentChangedError, Error) as error:
+        return f"{_NOT_RUN}{reasons.reason(error, context.redactor)}"
+    reported = ModelReported(call.confidence, context.line(call.rationale))
+    added = Target(semantic=meaning, locators=locators)
+    return _inserting(context, seen, reported, at, added)
+
+
+def _inserting(
+    context: _Heal, seen: Seen, reported: ModelReported, at: StepAt, added: Target
+) -> Offer:
+    """The script handed, with `added` its last target and a replay-safe click
+    through it right before `at`'s step, and nothing else changed. Our code
+    writes the step and the name: its seq is one past the script's highest,
+    raised while `uncover_<seq>` already names a target, and the name is
+    `uncover_<seq>`, so nothing the model or the page wrote is in either."""
+    script = context.drift.script
+    seq = max(step.seq for step in script.steps) + 1
+    while f"uncover_{seq}" in script.targets:
+        seq += 1
+    name = f"uncover_{seq}"
+    click = Click(seq=seq, action="click", target=name, side_effect=False)
+    index = [step.seq for step in script.steps].index(at.step.seq)
+    offered = script.model_copy(
+        update={
+            "targets": {**script.targets, name: added},
+            "steps": (*script.steps[:index], click, *script.steps[index:]),
+        }
+    )
+    basis = Basis(_said(context, seen), reported, None, context.folder, context.shot)
+    return Offer(offered, basis)
 
 
 async def _generated(context: _Heal, seen: Seen) -> tuple[Locator, ...]:
     """The locators the generator writes for `seen`, inside the target's
     contract, of the kinds the validator holds the target's uses to, each found
-    alone (`_dropping` says which it never tries). The page changing under it
-    means another try, within the bound. Its reads go through `cut_off`: they
-    hold the element, and let go of it with a read a busy page never answers.
-    `cut_off` wraps no session call, so it leaves no session lock held, and
-    `observing_page`'s own checks read only what Chromium reports."""
-    session, seconds = context.session, context.healing.seconds
+    alone (`_dropping` says which it never tries)."""
     script, name = context.drift.script, context.drift.at.target
     target = script.targets[name]
     claims = text_claims(script).get(target.semantic, [])
@@ -690,19 +856,35 @@ async def _generated(context: _Heal, seen: Seen) -> tuple[Locator, ...]:
         isinstance(check, TargetCheck) and check.target == name
         for check in script.assertions
     )
-
-    async def once() -> tuple[Locator, ...]:
-        uses = TargetUses(
+    return await _generating(
+        context,
+        seen,
+        "assertion" if asserted else "action",
+        lambda: TargetUses(
             target.semantic,
             checks_text=bool(claims),
             contract=target.contract,
             drop=dropped,
-        )
+        ),
+    )
+
+
+async def _generating(
+    context: _Heal, seen: Seen, use: GeneratedUse, uses: Callable[[], TargetUses]
+) -> tuple[Locator, ...]:
+    """The locators a new `uses()` writes for `seen` at `use`. The page
+    changing under it means another try, within the bound. Its reads go
+    through `cut_off`: they hold the element, and let go of it with a read a
+    busy page never answers. `cut_off` wraps no session call, so it leaves no
+    session lock held, and `observing_page`'s own checks read only what
+    Chromium reports."""
+    session, seconds = context.session, context.healing.seconds
+
+    async def once() -> tuple[Locator, ...]:
+        made = uses()
         async with session.observing_page() as page:
-            index = await cut_off(
-                uses.add(page, seen, "assertion" if asserted else "action"), seconds
-            )
-        return uses.targets[index].locators
+            index = await cut_off(made.add(page, seen, use), seconds)
+        return made.targets[index].locators
 
     return await looked(once, seconds)
 

@@ -176,7 +176,7 @@ _Avoid_: step, which is an action the run dispatched
 A binding that doesn't resolve: within the wait budget, its locators don't all find the same element with the unique match its use needs, for a step or for an assertion. Drift sends the run to heal (strict `aqa replay` never heals, and reports it `inconclusive`) and says nothing yet about whether the app is broken.
 
 **Heal**:
-The part of a run that handles drift: it re-observes the page, repairs bindings, may insert replay-safe steps, and classifies the outcome as a verdict. The healer itself still inserts no step until a follow-up to #246.
+The part of a run that handles drift: it re-observes the page, repairs bindings, may insert replay-safe steps, and classifies the outcome as a verdict. For a target that every locator finds but none can act on, the healer's model picks an element to click first, and the heal inserts that replay-safe click.
 _Avoid_: auto-fix
 
 **Verdict**:
@@ -252,7 +252,7 @@ A request from the run's browser to a host that is neither an allowed origin nor
 _Avoid_: network error
 
 **Write hold**:
-The egress proxy refusing every write the browser sends, any request but a GET, HEAD or OPTIONS and every tunnel, while a step a repair inserted is between its settle window's opening and its judgment, so the app never receives it. A held write fails that step and stops the run; it is no egress block and changes no other outcome.
+The egress proxy refusing every write the browser sends, any request but a GET, HEAD or OPTIONS and every tunnel, while a step a repair inserted is between its settle window's opening and its judgment, and, after a judgment that failed it, until the session closes, so the app never receives it unless a tunnel opened before the hold carries it. A held write fails that step and stops the run; it is no egress block and changes no other outcome.
 _Avoid_: egress block (that is a request to a host the run doesn't allow)
 
 **Runner-side request**:

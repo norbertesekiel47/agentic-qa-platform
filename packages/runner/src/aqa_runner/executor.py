@@ -87,6 +87,7 @@ from aqa_runner.repairs import (
     added_target_refusal,
     inserted_failure,
     rebind_refusal,
+    tunnelled_refusal,
 )
 from aqa_runner.run_record import STEPS, RefusedWriteError, RunRecord, require_clean
 from aqa_runner.secret_fields import SecretRefusedError
@@ -293,9 +294,14 @@ async def replay(
     it changed nothing, or it fails, its completion on disk, and the run
     stops there (`repairs.inserted_failure`). From that window's opening
     until the step is judged, the run's egress proxy holds every write the
-    browser sends, so none reaches the app, and a held one fails the step
-    (ADR-0024's #332 amendment); the hold ends however the step does, and
-    holds nothing of any other step."""
+    browser sends, so none reaches the app unless a tunnel opened before
+    carries it, and a held one fails the step (ADR-0024's #332 amendment).
+    The hold lifts once the step passed. Otherwise no later window asks for
+    it, and one switched on stays on until the session closes, so what the
+    page sends once a failed step was judged is held too; the run stops
+    there, so it holds nothing of any other step (ADR-0024's #335
+    amendment). A step a repair inserted fails before its intent while the
+    session already has a tunnel open (`repairs.tunnelled_refusal`)."""
     try:
         replayed = await _replayed(
             script, setup, gate, every_locator, chromium=chromium, proxy=proxy
@@ -440,18 +446,7 @@ async def _replayed(
             before = (
                 await held_screenshot(session) if setup.before_screenshots else None
             )
-            # A step a repair inserted runs with every write held from its
-            # window's opening until it is judged, however it ends: nothing
-            # else in the run is held (ADR-0024's #332 amendment).
-            session.hold_writes(
-                all(each.seq != step.seq for each in run.committed.steps)
-            )
-            try:
-                result = _shown(
-                    run, await _run(session, run, step, interrupted), redactor
-                )
-            finally:
-                session.hold_writes(False)
+            result = await _held_while_judged(session, run, step, interrupted)
             if result is None:
                 break
             # One repair per drifted step: a step that drifts again after its
@@ -506,6 +501,32 @@ async def _replayed(
         () if handing is None else tuple(handing.repaired),
         shots,
     )
+
+
+async def _held_while_judged(
+    session: BrowserSession,
+    run: _Replay,
+    step: Targeted | Untargeted,
+    interrupted: Callable[[], bool],
+) -> StepResult | None:
+    """`step` run (`_run`) and judged (`_shown`). A step a repair inserted runs
+    with every write held from its window's opening until it is judged:
+    nothing else in the run is held (ADR-0024's #332 amendment). The hold
+    lifts only once it passed, so before its evidence and anything of the next
+    step. However else it ends, failed, drifted, interrupted, raised or
+    cancelled, no later window asks for a hold, and one switched on stays on
+    until the session closes (ADR-0024's #335 amendment)."""
+    session.hold_writes(all(each.seq != step.seq for each in run.committed.steps))
+    result = None
+    try:
+        ran = await _run(session, run, step, interrupted)
+        result = _shown(run, ran, session.redactor)
+    finally:
+        if result is not None and result.outcome == "completed":
+            session.hold_writes(False)
+        else:
+            session.keep_hold()
+    return result
 
 
 def _crops(setup: RunSetup, script: CompiledScript) -> KeepCrop | None:
@@ -706,7 +727,9 @@ async def _run(
 ) -> StepResult | None:
     """Capture baselines before resolving, recording or dispatching `step`.
     None when the run was interrupted during capture or resolution, so no
-    next action is dispatched."""
+    next action is dispatched. A step a repair inserted fails before its
+    intent while the session has a tunnel open
+    (`_dispatched_unless_tunnelled`)."""
     try:
         await capture_baselines(run.evaluation, step.seq)
     except (
@@ -725,14 +748,31 @@ async def _run(
         return (
             None
             if interrupted()
-            else await dispatched(
+            else await _dispatched_unless_tunnelled(
                 session,
-                run.setup.record,
+                run,
                 Dispatch(step.seq, intent_action(step), step.side_effect, wait),
                 lambda: _untargeted(session, step, run.setup.start),
             )
         )
     return await _run_targeted(session, run, step, interrupted)
+
+
+async def _dispatched_unless_tunnelled(
+    session: BrowserSession,
+    run: _Replay,
+    dispatch: Dispatch,
+    act: Callable[[], Awaitable[Window]],
+) -> StepResult:
+    """`dispatch`'s step recorded and dispatched in `run`'s record
+    (`dispatched`), unless a repair inserted it and the session already has a
+    tunnel open: then it fails before its intent (`repairs.tunnelled_refusal`),
+    with no `await` between the check and the intent's line."""
+    inserted = all(each.seq != dispatch.seq for each in run.committed.steps)
+    refused = tunnelled_refusal(session, inserted=inserted)
+    if refused is not None:
+        return StepResult(dispatch.seq, "failed", error=refused)
+    return await dispatched(session, run.setup.record, dispatch, act)
 
 
 def _shown(
@@ -769,7 +809,8 @@ async def _run_targeted(
     closed there unless `step` is a replay-safe click a repair inserted, the one
     step the heal-patch validator lets act on it
     (`repairs.added_target_refusal`); that click is judged once it settled
-    (`_shown`)."""
+    (`_shown`). Any step a repair inserted fails before its intent while the
+    session has a tunnel open (`_dispatched_unless_tunnelled`)."""
     budget = run.setup.config.budgets.resolve_seconds
     try:
         found = await look_for(session, run.evaluation, step.target, "action")
@@ -801,9 +842,9 @@ async def _run_targeted(
             return StepResult(step.seq, "failed", error=refused)
     if interrupted():
         return None
-    return await dispatched(
+    return await _dispatched_unless_tunnelled(
         session,
-        run.setup.record,
+        run,
         Dispatch(
             step.seq,
             intent_action(step),
